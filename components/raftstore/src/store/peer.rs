@@ -2348,7 +2348,7 @@ where
             if entry.index > min_matched {
                 entry_size += entry.get_data().len();
             }
-            if entry.get_entry_type() == EntryType::EntryConfChange {
+            if entry.get_entry_type() == EntryType::EntryConfChange || entry.get_entry_type() == EntryType::EntryConfChangeV2 {
                 return Err(box_err!(
                     "{} log gap contains conf change, skip merging.",
                     self.tag

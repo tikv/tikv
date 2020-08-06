@@ -46,7 +46,7 @@ use crate::store::peer_storage::{
     self, write_initial_apply_state, write_peer_state, ENTRY_MEM_SIZE,
 };
 use crate::store::util::{check_region_epoch, compare_region_epoch};
-use crate::store::util::{ConfChangeKind, KeysInfoFormatter, PerfContextStatistics};
+use crate::store::util::{ConfChangeKind, KeysInfoFormatter, PerfContextStatistics, ChangePeerI};
 
 use crate::observe_perf_context_type;
 use crate::report_perf_context;
@@ -184,7 +184,12 @@ where
 #[derive(Default, Debug)]
 pub struct ChangePeer {
     pub index: u64,
+    // The proposed ConfChangeV2 or (legacy) ConfChange
+    // ConfChange (if it is) will convert to ConfChangeV2
     pub conf_change: ConfChangeV2,
+    // The change peer requests come along with ConfChangeV2
+    // or (legacy) ConfChange, for ConfChange, it only contains
+    // one element
     pub changes: Vec<ChangePeerRequest>,
     pub region: Region,
 }
@@ -1626,7 +1631,9 @@ where
             |_| panic!("should not use return")
         );
 
-        let changes: Vec<_> = request.get_change_peer_v2().clone().take_changes().into();
+        // It is okay to ignore ChangePeerRequest here, because we convert 
+        // ChangePeerRequest to ChangePeerV2Request at `handle_raft_entry_conf_change`
+        let changes = request.get_change_peer_v2().get_change_peers();
         info!(
             "exec ConfChange";
             "region_id" => self.region_id(),
@@ -1637,7 +1644,7 @@ where
 
         let region = match ConfChangeKind::confchange_kind(changes.len()) {
             ConfChangeKind::LeaveJoint => self.leave_joint()?,
-            _ => self.apply_conf_change(&changes.as_slice())?,
+            _ => self.apply_conf_change(changes)?,
         };
 
         let state = if self.pending_remove {
@@ -1657,7 +1664,7 @@ where
             ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
                 index: ctx.exec_ctx.as_ref().unwrap().index,
                 conf_change: Default::default(),
-                changes,
+                changes: changes.to_vec(),
                 region,
             })),
         ))
@@ -2388,19 +2395,6 @@ where
             ApplyResult::Res(ExecResult::VerifyHash { index, hash }),
         ))
     }
-}
-
-/// Get the ChangePeerV2Request
-pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerV2Request> {
-    if !msg.has_admin_request() {
-        return None;
-    }
-    let req = msg.get_admin_request();
-    if !req.has_change_peer_v2() {
-        return None;
-    }
-    
-    Some(req.get_change_peer_v2())
 }
 
 pub fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {

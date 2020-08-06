@@ -38,7 +38,7 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
-use raft::eraftpb::{ConfChange, Entry, EntryType};
+use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raftstore::store::INIT_EPOCH_CONF_VER;
 use security::{SecurityConfig, SecurityManager};
 use tikv::config::{ConfigController, TiKvConfig};
@@ -207,7 +207,15 @@ trait DebugExecutor {
                 cmd.merge_from_bytes(&ctx).unwrap();
                 v1!("ConfChange.RaftCmdRequest: {:#?}", cmd);
             }
-            EntryType::EntryConfChangeV2 => unimplemented!(),
+            EntryType::EntryConfChangeV2 => {
+                let mut msg = ConfChangeV2::new();
+                msg.merge_from_bytes(&data).unwrap();
+                let ctx = msg.take_context();
+                v1!("ConfChangeV2: {:?}", msg);
+                let mut cmd = RaftCmdRequest::default();
+                cmd.merge_from_bytes(&ctx).unwrap();
+                v1!("ConfChangeV2.RaftCmdRequest: {:#?}", cmd);
+            },
         }
     }
 
