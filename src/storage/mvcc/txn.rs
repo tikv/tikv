@@ -502,13 +502,14 @@ impl<S: Snapshot> MvccTxn<S> {
         &mut self,
         mutation: Mutation,
         primary: &[u8],
+        secondary_keys: &Option<Vec<Vec<u8>>>,
         is_pessimistic_lock: bool,
         mut lock_ttl: u64,
         for_update_ts: TimeStamp,
         txn_size: u64,
         mut min_commit_ts: TimeStamp,
         pipelined_pessimistic_lock: bool,
-    ) -> Result<()> {
+    ) -> Result<TimeStamp> {
         if mutation.should_not_write() {
             return Err(box_err!(
                 "cannot handle checkNotExists in pessimistic prewrite"
@@ -542,12 +543,14 @@ impl<S: Snapshot> MvccTxn<S> {
                     }
                     .into());
                 }
-                return self.handle_non_pessimistic_lock_conflict(key, lock);
+                return Err(self
+                    .handle_non_pessimistic_lock_conflict(key, lock)
+                    .unwrap_err());
             } else {
                 if lock.lock_type != LockType::Pessimistic {
                     // Duplicated command. No need to overwrite the lock and data.
                     MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-                    return Ok(());
+                    return Ok(lock.min_commit_ts);
                 }
                 // The lock is pessimistic and owned by this txn, go through to overwrite it.
                 // The ttl and min_commit_ts of the lock may have been pushed forward.
@@ -564,14 +567,13 @@ impl<S: Snapshot> MvccTxn<S> {
             key,
             lock_type.unwrap(),
             primary,
-            &None,
+            secondary_keys,
             value,
             lock_ttl,
             for_update_ts,
             txn_size,
             min_commit_ts,
-        )?;
-        Ok(())
+        )
     }
 
     // TiKV may fails to write pessimistic locks due to pipelined process.
@@ -695,7 +697,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
             // Duplicated command. No need to overwrite the lock and data.
             MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-            return Ok(TimeStamp::zero());
+            return Ok(lock.min_commit_ts);
         }
 
         self.check_extra_op(&key, mutation_type, prev_write)?;
@@ -3283,6 +3285,7 @@ mod tests {
                 txn.pessimistic_prewrite(
                     mutation,
                     b"key",
+                    &None,
                     true,
                     0,
                     start_ts.into(),
@@ -3320,30 +3323,33 @@ mod tests {
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
         let cm = ConcurrencyManager::new(42.into());
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
-        let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-        txn.prewrite(
-            mutation,
-            b"key",
-            &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
-            false,
-            0,
-            4,
-            TimeStamp::zero(),
-        )
-        .unwrap();
 
-        // Now the lock has not been written to the underlying engine, but it has
-        // been stored to the concurrency manager.
-        assert!(cm
-            .read_key_check(&Key::from_raw(b"key"), |_| Err(()))
-            .is_err());
+        let do_prewrite = || {
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
+            let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+            let min_commit_ts = txn
+                .prewrite(
+                    mutation,
+                    b"key",
+                    &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+                    false,
+                    0,
+                    4,
+                    TimeStamp::zero(),
+                )
+                .unwrap();
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                engine
+                    .write(&ctx, WriteData::from_modifies(modifies))
+                    .unwrap();
+            }
+            min_commit_ts
+        };
 
-        engine
-            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
-            .unwrap();
+        assert_eq!(do_prewrite(), 43.into());
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
@@ -3354,8 +3360,65 @@ mod tests {
             lock.secondaries,
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
+
         // max_read_ts in the concurrency manager is 42, so the min_commit_ts is 43.
         assert_eq!(lock.min_commit_ts, TimeStamp::new(43));
+
+        // A duplicate prewrite request should return the min_commit_ts in the primary key
+        assert_eq!(do_prewrite(), 43.into());
+    }
+
+    #[test]
+    fn test_async_pessimistic_prewrite_primary() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
+        let cm = ConcurrencyManager::new(42.into());
+
+        must_acquire_pessimistic_lock(&engine, b"key", b"key", 2, 2);
+
+        let do_pessimistic_prewrite = || {
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
+            let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+            let min_commit_ts = txn
+                .pessimistic_prewrite(
+                    mutation,
+                    b"key",
+                    &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+                    true,
+                    0,
+                    4.into(),
+                    4,
+                    TimeStamp::zero(),
+                    false,
+                )
+                .unwrap();
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                engine
+                    .write(&ctx, WriteData::from_modifies(modifies))
+                    .unwrap();
+            }
+            min_commit_ts
+        };
+
+        assert_eq!(do_pessimistic_prewrite(), 43.into());
+
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
+        assert_eq!(lock.ts, TimeStamp::new(2));
+        assert_eq!(lock.use_async_commit, true);
+        assert_eq!(
+            lock.secondaries,
+            vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
+        );
+
+        // max_read_ts in the concurrency manager is 42, so the min_commit_ts is 43.
+        assert_eq!(lock.min_commit_ts, TimeStamp::new(43));
+
+        // A duplicate prewrite request should return the min_commit_ts in the primary key
+        assert_eq!(do_pessimistic_prewrite(), 43.into());
     }
 
     #[test]

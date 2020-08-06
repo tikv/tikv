@@ -533,6 +533,7 @@ mod tests {
             txn.pessimistic_prewrite(
                 m,
                 pk,
+                &None,
                 true,
                 0,
                 TimeStamp::default(),

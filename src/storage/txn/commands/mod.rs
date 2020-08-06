@@ -117,6 +117,11 @@ impl<T> From<TypedCommand<T>> for Command {
 impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
     fn from(mut req: PrewriteRequest) -> Self {
         let for_update_ts = req.get_for_update_ts();
+        let secondary_keys = if req.get_use_async_commit() {
+            Some(req.get_secondaries().into())
+        } else {
+            None
+        };
         if for_update_ts == 0 {
             Prewrite::new(
                 req.take_mutations().into_iter().map(Into::into).collect(),
@@ -126,11 +131,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_skip_constraint_check(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
-                if req.get_use_async_commit() {
-                    Some(req.get_secondaries().into())
-                } else {
-                    None
-                },
+                secondary_keys,
                 req.take_context(),
             )
         } else {
@@ -149,6 +150,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 for_update_ts.into(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
+                secondary_keys,
                 req.take_context(),
             )
         }
