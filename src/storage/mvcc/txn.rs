@@ -8,7 +8,7 @@ use crate::storage::{
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
-use std::fmt;
+use std::{cmp, fmt};
 use txn_types::{
     is_short_value, Key, Lock, LockType, Mutation, MutationType, OldValue, TimeStamp, TxnExtra,
     Value, Write, WriteType,
@@ -266,11 +266,6 @@ impl<S: Snapshot> MvccTxn<S> {
         if let Some(secondary_keys) = secondary_keys {
             lock.use_async_commit = true;
             lock.secondaries = secondary_keys.to_owned();
-            // We will reuse min_commit_ts for async commit for now.
-            assert!(
-                min_commit_ts.is_zero(),
-                "async commit is not yet compatible with large transactions"
-            );
 
             // This operation should not block because the latch makes sure only one thread
             // is operating on this key.
@@ -279,13 +274,13 @@ impl<S: Snapshot> MvccTxn<S> {
                     ::futures_executor::block_on(self.concurrency_manager.lock_key(&key))
                 });
 
-            let ts = key_guard.with_lock(|l| {
-                let ts = self.concurrency_manager.max_read_ts().next();
-                lock.min_commit_ts = ts;
+            async_commit_ts = key_guard.with_lock(|l| {
+                let max_read_ts = self.concurrency_manager.max_read_ts();
+                let min_commit_ts = cmp::max(cmp::max(max_read_ts, self.start_ts), for_update_ts);
+                lock.min_commit_ts = min_commit_ts;
                 *l = Some(lock.clone());
-                ts
+                min_commit_ts
             });
-            async_commit_ts = ts;
 
             self.guards.push(key_guard);
         }
