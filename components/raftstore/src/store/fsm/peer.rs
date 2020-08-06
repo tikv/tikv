@@ -1200,7 +1200,7 @@ where
                 meta.pending_snapshot_regions
                     .retain(|r| self.fsm.region_id() != r.get_id());
             } else {
-                // This snapshot may be accepted by raft-rs.;
+                // This snapshot may be accepted by raft-rs.
                 // If it's rejected by raft-rs, the snapshot region in `pending_snapshot_regions`
                 // will be removed together with the latest snapshot region after applying that snapshot.
                 // But if `regions_to_destroy` is not empty, the pending snapshot must be this msg's snapshot
