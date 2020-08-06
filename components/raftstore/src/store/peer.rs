@@ -9,6 +9,7 @@ use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, KvEngines, Snapshot, WriteOptions};
+use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
@@ -605,6 +606,7 @@ where
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -2436,6 +2438,7 @@ where
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
                 return Err(e);
             }
@@ -2835,6 +2838,7 @@ where
                 "target_peer_id" => to_peer_id,
                 "target_store_id" => to_store_id,
                 "err" => ?e,
+                "error_code" => %e.error_code(),
             );
             if to_peer_id == self.leader_id() {
                 self.leader_unreachable = true;
@@ -2868,6 +2872,7 @@ where
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -2902,6 +2907,7 @@ where
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -2952,7 +2958,8 @@ where
                 "peer_id" => self.peer.get_id(),
                 "target_peer_id" => to_peer.get_id(),
                 "target_store_id" => to_peer.get_store_id(),
-                "err" => ?e
+                "err" => ?e,
+                "error_code" => %e.error_code(),
             );
         } else {
             ctx.need_flush_trans = true;

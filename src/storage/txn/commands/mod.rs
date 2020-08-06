@@ -39,21 +39,30 @@ pub use rollback::Rollback;
 pub use scan_lock::ScanLock;
 pub use txn_heart_beat::TxnHeartBeat;
 
+#[cfg(test)]
+pub(crate) use prewrite::FORWARD_MIN_MUTATIONS_NUM;
+
+pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
+
 use std::fmt::{self, Debug, Display, Formatter};
 use std::iter::{self, FromIterator};
 use std::marker::PhantomData;
 
 use kvproto::kvrpcpb::*;
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, TimeStamp, Value, Write};
 
-use crate::storage::lock_manager::WaitTimeout;
-use crate::storage::metrics;
+use crate::storage::kv::WriteData;
+use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
+use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock};
 use crate::storage::txn::latch::{self, Latches};
+use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
     MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
     TxnStatus,
 };
-use crate::storage::Result;
+use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
+use pd_client::PdClient;
+use std::sync::Arc;
 use tikv_util::collections::HashMap;
 
 /// Store Transaction scheduler commands.
@@ -107,6 +116,11 @@ impl<T> From<TypedCommand<T>> for Command {
 impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
     fn from(mut req: PrewriteRequest) -> Self {
         let for_update_ts = req.get_for_update_ts();
+        let secondary_keys = if req.get_use_async_commit() {
+            Some(req.get_secondaries().into())
+        } else {
+            None
+        };
         if for_update_ts == 0 {
             Prewrite::new(
                 req.take_mutations().into_iter().map(Into::into).collect(),
@@ -116,11 +130,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_skip_constraint_check(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
-                if req.get_use_async_commit() {
-                    Some(req.get_secondaries().into())
-                } else {
-                    None
-                },
+                secondary_keys,
                 req.take_context(),
             )
         } else {
@@ -139,13 +149,14 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 for_update_ts.into(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
+                secondary_keys,
                 req.take_context(),
             )
         }
     }
 }
 
-impl From<PessimisticLockRequest> for TypedCommand<Result<PessimisticLockRes>> {
+impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLockRes>> {
     fn from(mut req: PessimisticLockRequest) -> Self {
         let keys = req
             .take_mutations()
@@ -205,7 +216,7 @@ impl From<BatchRollbackRequest> for TypedCommand<()> {
     }
 }
 
-impl From<PessimisticRollbackRequest> for TypedCommand<Vec<Result<()>>> {
+impl From<PessimisticRollbackRequest> for TypedCommand<Vec<StorageResult<()>>> {
     fn from(mut req: PessimisticRollbackRequest) -> Self {
         let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
@@ -315,6 +326,77 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
     }
 }
 
+#[derive(Default)]
+struct ReleasedLocks {
+    start_ts: TimeStamp,
+    commit_ts: TimeStamp,
+    hashes: Vec<u64>,
+    pessimistic: bool,
+}
+
+pub(super) struct WriteResult {
+    pub ctx: Context,
+    pub to_be_write: WriteData,
+    pub rows: usize,
+    pub pr: ProcessResult,
+    // (lock, is_first_lock, wait_timeout)
+    pub lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
+}
+
+impl ReleasedLocks {
+    pub fn new(start_ts: TimeStamp, commit_ts: TimeStamp) -> Self {
+        Self {
+            start_ts,
+            commit_ts,
+            ..Default::default()
+        }
+    }
+
+    pub fn push(&mut self, lock: Option<ReleasedLock>) {
+        if let Some(lock) = lock {
+            self.hashes.push(lock.hash);
+            if !self.pessimistic {
+                self.pessimistic = lock.pessimistic;
+            }
+        }
+    }
+
+    // Wake up pessimistic transactions that waiting for these locks.
+    pub fn wake_up<L: LockManager>(self, lock_mgr: &L) {
+        lock_mgr.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
+    }
+}
+
+type LockWritesVals = (
+    Option<MvccLock>,
+    Vec<(TimeStamp, Write)>,
+    Vec<(TimeStamp, Value)>,
+);
+
+fn find_mvcc_infos_by_key<S: Snapshot>(
+    reader: &mut MvccReader<S>,
+    key: &Key,
+    mut ts: TimeStamp,
+) -> Result<LockWritesVals> {
+    let mut writes = vec![];
+    let mut values = vec![];
+    let lock = reader.load_lock(key)?;
+    loop {
+        let opt = reader.seek_write(key, ts)?;
+        match opt {
+            Some((commit_ts, write)) => {
+                ts = commit_ts.prev();
+                writes.push((commit_ts, write));
+            }
+            None => break,
+        };
+    }
+    for (ts, v) in reader.scan_values_in_default(key)? {
+        values.push((ts, v));
+    }
+    Ok((lock, writes, values))
+}
+
 pub trait CommandExt: Display {
     fn tag(&self) -> metrics::CommandKind;
 
@@ -343,6 +425,14 @@ pub trait CommandExt: Display {
     fn write_bytes(&self) -> usize;
 
     fn gen_lock(&self, _latches: &Latches) -> latch::Lock;
+}
+
+pub struct WriteContext<'a, L: LockManager, P: PdClient + 'static> {
+    pub lock_mgr: &'a L,
+    pub pd_client: Arc<P>,
+    pub extra_op: ExtraOp,
+    pub statistics: &'a mut Statistics,
+    pub pipelined_pessimistic_lock: bool,
 }
 
 impl Command {
@@ -389,6 +479,43 @@ impl Command {
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
+        }
+    }
+
+    pub(super) fn process_read<S: Snapshot>(
+        self,
+        snapshot: S,
+        statistics: &mut Statistics,
+    ) -> Result<ProcessResult> {
+        match self {
+            Command::ScanLock(t) => t.process_read(snapshot, statistics),
+            Command::ResolveLockReadPhase(t) => t.process_read(snapshot, statistics),
+            Command::MvccByKey(t) => t.process_read(snapshot, statistics),
+            Command::MvccByStartTs(t) => t.process_read(snapshot, statistics),
+            _ => panic!("unsupported read command"),
+        }
+    }
+
+    pub(super) fn process_write<S: Snapshot, L: LockManager, P: PdClient + 'static>(
+        self,
+        snapshot: S,
+        context: WriteContext<'_, L, P>,
+    ) -> Result<WriteResult> {
+        match self {
+            Command::Prewrite(t) => t.process_write(snapshot, context),
+            Command::PrewritePessimistic(t) => t.process_write(snapshot, context),
+            Command::AcquirePessimisticLock(t) => t.process_write(snapshot, context),
+            Command::Commit(t) => t.process_write(snapshot, context),
+            Command::Cleanup(t) => t.process_write(snapshot, context),
+            Command::Rollback(t) => t.process_write(snapshot, context),
+            Command::PessimisticRollback(t) => t.process_write(snapshot, context),
+            Command::ResolveLock(t) => t.process_write(snapshot, context),
+            Command::ResolveLockLite(t) => t.process_write(snapshot, context),
+            Command::TxnHeartBeat(t) => t.process_write(snapshot, context),
+            Command::CheckTxnStatus(t) => t.process_write(snapshot, context),
+            Command::CheckSecondaryLocks(t) => t.process_write(snapshot, context),
+            Command::Pause(t) => t.process_write(snapshot, context),
+            _ => panic!("unsupported write command"),
         }
     }
 
@@ -450,4 +577,14 @@ impl Debug for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.command_ext().fmt(f)
     }
+}
+
+pub trait ReadCommand<S: Snapshot>: CommandExt {
+    fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult>;
+}
+
+pub(super) trait WriteCommand<S: Snapshot, L: LockManager, P: PdClient + 'static>:
+    CommandExt
+{
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult>;
 }

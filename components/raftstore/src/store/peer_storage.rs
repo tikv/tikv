@@ -10,6 +10,7 @@ use std::{cmp, error, u64};
 
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Mutable, Peekable, WriteBatch};
+use error_code::ErrorCodeExt;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1401,6 +1402,7 @@ where
                     "region_id" => self.get_region_id(),
                     "peer_id" => self.peer_id,
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -1419,6 +1421,7 @@ where
                     "failed to cleanup data, may leave some dirty data";
                     "region_id" => r.get_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             }
         }

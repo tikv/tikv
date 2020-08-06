@@ -10,6 +10,7 @@ use batch_system::{BasicMailbox, Fsm};
 use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt};
+use error_code::ErrorCodeExt;
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -449,6 +450,7 @@ where
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "err" => %e,
+                            "error_code" => %e.error_code(),
                         );
                     }
                 }
@@ -623,6 +625,7 @@ where
                             "peer_id" => self.fsm.peer_id(),
                             "snapshot" => ?key,
                             "err" => %e,
+                            "error_code" => %e.error_code(),
                         );
                         continue;
                     }
@@ -679,6 +682,7 @@ where
                             "peer_id" => self.fsm.peer_id(),
                             "snap_file" => %key,
                             "err" => %e,
+                            "error_code" => %e.error_code(),
                         );
                         continue;
                     }
@@ -2076,6 +2080,7 @@ where
                         "failed to cleanup extra split data, may leave some dirty data";
                         "region_id" => new_region.get_id(),
                         "err" => ?e,
+                        "error_code" => %e.error_code(),
                     );
                 }
                 continue;
@@ -2309,6 +2314,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "err" => %e,
                     "target_region_id" => target_region_id,
+                    "error_code" => %e.error_code(),
                 );
                 Ok(false)
             }
@@ -2441,6 +2447,7 @@ where
                         "region_id" => self.fsm.region_id(),
                         "peer_id" => self.fsm.peer_id(),
                         "err" => %e,
+                        "error_code" => %e.error_code(),
                     );
                     self.rollback_merge();
                 }
@@ -2451,6 +2458,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "leader_id" => self.fsm.peer.leader_id(),
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 if self.fsm.peer.leader_id() != raft::INVALID_ID {
                     self.fsm.peer.send_want_rollback_merge(
@@ -3091,6 +3099,7 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "message" => ?msg,
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
             cb.invoke_with_response(new_error(e));
             return;
