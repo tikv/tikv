@@ -74,9 +74,6 @@ impl ReleasedLock {
     }
 }
 
-
-
-
 #[derive(Debug, PartialEq)]
 pub enum SecondaryLockStatus {
     Locked(Lock),
@@ -139,7 +136,6 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             pd_client,
         )
     }
-
 
     /// Creates a transaction with a given `scan_mode`.
     ///
@@ -1143,7 +1139,6 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 .map(|s| (s, None)),
         }
     }
-
 
     /// Check the status of a secondary (optimistic) lock.
     ///
