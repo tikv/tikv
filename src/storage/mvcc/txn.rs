@@ -3373,7 +3373,7 @@ mod tests {
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
             let min_commit_ts = txn
                 .pessimistic_prewrite(
-                    mutation.clone(),
+                    mutation,
                     b"key",
                     &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
                     true,
