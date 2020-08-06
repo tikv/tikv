@@ -21,6 +21,7 @@ pub struct GcConfig {
     /// By default compaction_filter can only works if `cluster_version` is greater than 5.0.0.
     /// Change `compaction_filter_skip_version_check` can enable it by force.
     pub compaction_filter_skip_version_check: bool,
+    pub use_delete_range: bool,
 }
 
 impl Default for GcConfig {
@@ -31,6 +32,7 @@ impl Default for GcConfig {
             max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
             enable_compaction_filter: false,
             compaction_filter_skip_version_check: false,
+            use_delete_range: true,
         }
     }
 }

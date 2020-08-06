@@ -325,9 +325,8 @@ impl<E: Engine> GcRunner<E> {
         // Then, delete all remaining keys in the range.
         let cleanup_all_start_time = Instant::now();
         for cf in cfs {
-            // TODO: set use_delete_range with config here.
             local_storage
-                .delete_all_in_range_cf(cf, &start_data_key, &end_data_key, false)
+                .delete_all_in_range_cf(cf, &start_data_key, &end_data_key, self.cfg.use_delete_range)
                 .map_err(|e| {
                     let e: Error = box_err!(e);
                     warn!(
