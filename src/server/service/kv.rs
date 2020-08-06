@@ -995,6 +995,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
                     let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC.$metric_name.start_coarse_timer();
+                    GRPC_MSG_SIZE_HISTOGRAM_VEC.$metric_name.observe(req.compute_size() as f64);
                     let resp = $future_fn($($arg,)* req)
                         .map(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
