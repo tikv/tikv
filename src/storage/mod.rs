@@ -4527,12 +4527,7 @@ mod tests {
                 expect_value_callback(
                     tx.clone(),
                     0,
-                    uncommitted(
-                        100,
-                        cm.max_read_ts().next(),
-                        true,
-                        vec![b"k1".to_vec(), b"k2".to_vec()],
-                    ),
+                    uncommitted(100, ts(10, 1), true, vec![b"k1".to_vec(), b"k2".to_vec()]),
                 ),
             )
             .unwrap();
