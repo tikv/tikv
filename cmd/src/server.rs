@@ -10,6 +10,8 @@
 
 use crate::{setup::*, signal_handler};
 use encryption::DataKeyManager;
+#[cfg(features = "cloud")]
+pub use engine_rocks::CloudEnvOptions;
 use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{compaction_job::CompactionJobInfo, KvEngines, MetricsFlusher};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
@@ -371,7 +373,22 @@ impl TiKVServer {
     }
 
     fn init_engines(&mut self) {
-        let env = get_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
+        let mut base_env = None;
+        #[cfg(features = "cloud")]
+        if self.config.s3.enabled {
+            let s3_config = self.config.s3;
+            based_env = engine_rocks::raw::Env::new_aws_env(
+                Env::default(),
+                s3_config.src_cloud_bucket,
+                s3_config.src_cloud_object,
+                s3_config.src_cloud_region,
+                s3_config.dest_cloud_bucket,
+                s3_config.dest_cloud_object,
+                s3_config.dest_cloud_region,
+                s3_config.opts,
+            )
+        }
+        let env = get_env(self.encryption_key_manager.clone(), base_env).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);

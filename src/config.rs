@@ -803,21 +803,53 @@ impl TitanDBConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-// Note that the S3 integration is still an experimental feature.
-pub struct S3Config {
-    pub enabled: bool,
-}
+#[cfg(features = "cloud")]
+mod cloud {
+    use engine_rocks::raw::CloudEnvOptions;
 
-impl Default for S3Config {
-    fn default() -> Self {
-        Self {
-            enabled: false,
+    #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+    #[serde(default)]
+    #[serde(rename_all = "kebab-case")]
+    // Note that the S3 integration is still an experimental feature.
+    pub struct S3Config {
+        pub enabled: bool,
+        pub src_cloud_bucket: String,
+        pub src_cloud_object: String,
+        pub src_cloud_region: String,
+        pub dest_cloud_bucket: String,
+        pub dest_cloud_object: String,
+        pub dest_cloud_region: String,
+        pub opts: CloudEnvOptions,
+    }
+
+    impl Default for S3Config {
+        fn default() -> Self {
+            Self {
+                enabled: false,
+                src_cloud_bucket: "".to_owned(),
+                src_cloud_object: "".to_owned(),
+                src_cloud_region: "".to_owned(),
+                dest_cloud_bucket: "".to_owned(),
+                dest_cloud_object: "".to_owned(),
+                dest_cloud_region: "".to_owned(),
+                opts: CloudEnvOptions::default(),
+            }
+        }
+    }
+
+    impl S3Config {
+        fn build_opts(&self) -> CloudEnvOptions {
+            CloudEnvOptions::new()
+        }
+
+        fn validate(&self) -> Result<(), Box<dyn Error>> {
+            Ok(())
         }
     }
 }
+
+#[cfg(features = "cloud")]
+pub use cloud::S3Config;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
@@ -887,6 +919,7 @@ pub struct DbConfig {
     pub ver_defaultcf: VersionCfConfig,
     #[config(skip)]
     pub titan: TitanDBConfig,
+    #[cfg(features = "cloud")]
     #[config(skip)]
     pub s3: S3Config,
 }
@@ -933,6 +966,7 @@ impl Default for DbConfig {
             raftcf: RaftCfConfig::default(),
             ver_defaultcf: VersionCfConfig::default(),
             titan: titan_config,
+            #[cfg(features = "cloud")]
             s3: S3Config::default(),
         }
     }

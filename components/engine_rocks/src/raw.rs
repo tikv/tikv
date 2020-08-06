@@ -17,3 +17,6 @@ pub use rocksdb::{
     TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex, TitanDBOptions,
     Writable, WriteOptions, DB,
 };
+
+#[cfg(features = "cloud")]
+pub use rocksdb::CloudEnvOptions;
