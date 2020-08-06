@@ -80,13 +80,18 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
         // for getting the written keys.
         txn.extra_op = context.extra_op;
 
-        let primary_key = Key::from_raw(&self.primary);
+        let async_commit_pk: Option<Key> = self
+            .secondary_keys
+            .as_ref()
+            .filter(|keys| !keys.is_empty())
+            .map(|_| Key::from_raw(&self.primary));
+
         let mut locks = vec![];
         let mut async_commit_ts = TimeStamp::zero();
         for (m, is_pessimistic_lock) in self.mutations.clone().into_iter() {
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
 
-            if m.key() == &primary_key {
+            if Some(m.key()) == async_commit_pk.as_ref() {
                 secondaries = &self.secondary_keys;
             }
             match txn.pessimistic_prewrite(
