@@ -10,11 +10,13 @@ use futures::Future;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
 use kvproto::raft_serverpb::*;
+use kvproto::metapb::PeerRole;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine_rocks::Compat;
 use engine_traits::{Peekable, CF_RAFT};
 use pd_client::PdClient;
+use raftstore::store::util::is_learner;
 use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
@@ -305,14 +307,14 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     let mut peer = new_conf_change_peer(&stores[i], &pd_client);
-    peer.set_is_learner(true);
+    peer.set_role(PeerRole::Learner);
     let engine = cluster.get_engine(peer.get_store_id());
     must_get_none(&engine, b"k1");
 
     pd_client.must_add_peer(region_id, peer.clone());
     wait_till_reach_count(Arc::clone(&pd_client), region_id, 6);
     must_get_equal(&engine, b"k1", b"v1");
-    peer.set_is_learner(false);
+    peer.set_role(PeerRole::Voter);
     pd_client.must_add_peer(region_id, peer);
 
     // it should remove extra replica.
