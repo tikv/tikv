@@ -1950,7 +1950,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#3132349c113335cb670de2c81a74fc565b49f813"
+source = "git+https://github.com/pingcap/kvproto.git#ebd5de15093fd2263f769f31b2ec25c89261f2e4"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -3250,7 +3250,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/hicqu/raft-engine?branch=change-raft-engine-to-trait#000e5d65209734748d2eec6fda7b56168640cd32"
+source = "git+https://github.com/tikv/raft-engine#3758a4c312dc16c6d2480ae4276ab2fa5812105d"
 dependencies = [
  "byteorder 1.3.2",
  "compress",
