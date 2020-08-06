@@ -716,7 +716,7 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k4", b"v4");
 
     let mut add_peer = |peer: metapb::Peer| {
-        let conf_type = if peer.get_is_learner() {
+        let conf_type = if is_learner(&peer) {
             ConfChangeType::AddLearnerNode
         } else {
             ConfChangeType::AddNode
