@@ -1358,6 +1358,16 @@ impl NormalRpnFn {
         let call_arg2 = extract.clone();
         let extract2 = extract.clone();
 
+        let nonnull_unwrap_fast = if !self.nullable {
+            quote! {
+                #(let #extract2 = #extract2.unwrap());*;
+            }
+        } else {
+            quote! {}
+        };
+
+        let extract2 = extract.clone();
+
         let nonnull_unwrap = if !self.nullable {
             quote! {
                 #(if #extract2.is_none() { result.chunked_push(None); continue; } let #extract2 = #extract2.unwrap());*;
@@ -1401,6 +1411,84 @@ impl NormalRpnFn {
             }
         };
 
+        let chunked_push_2 = chunked_push.clone();
+        let chunked_push_3 = chunked_push.clone();
+        let extract_2 = extract.clone();
+        let extract_3 = extract.clone();
+        let extract_4 = extract.clone();
+
+        let nullable_loop = quote! {
+            for row_index in 0..output_rows {
+                #(let (#extract, arg) = arg.extract(row_index));*;
+                #chunked_push
+            }
+        };
+
+        let nonnullable_loop = quote! {
+            use tidb_query_datatype::codec::data_type::{BitAndIterator, BitVec};
+
+            let (vecs, fastpath, all_null) = {
+                let mut vecs: Vec<&BitVec> = vec![];
+                let mut fastpath = true;
+                let mut all_null = false;
+                #(
+                    let ((#extract_3, scalar_val), arg) = arg.get_bit_vec();
+                    if let Some(x) = #extract_3 {
+                        vecs.push(x);
+                        if !scalar_val {
+                            fastpath = false;
+                        }
+                    } else {
+                        if !scalar_val {
+                            all_null = true;
+                        }
+                    }
+                )*;
+
+                if all_null {
+                    (vec![], false, true)
+                } else if !fastpath {
+                    (vec![], false, false)
+                } else {
+                    (vecs, true, false)
+                }
+            };
+
+            if all_null {
+                // there's a scalar column of None, just return None vector
+                let mut result = <#vec_type as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
+                for i in 0..output_rows {
+                    result.chunked_push(None);
+                }
+                return Ok(#vec_type::into_vector_value(result));
+            }
+
+            if !fastpath {
+                for row_index in 0..output_rows {
+                    #(let (#extract_4, arg) = arg.extract(row_index));*;
+                    #nonnull_unwrap
+                    #chunked_push_3
+                }
+                return Ok(#vec_type::into_vector_value(result));
+            }
+
+            for (row_index, val) in BitAndIterator::new(vecs.as_slice(), output_rows).enumerate() {
+                if !val {
+                    result.chunked_push(None);
+                    continue;
+                }
+                #(let (#extract_2, arg) = arg.extract(row_index));*;
+                #nonnull_unwrap_fast
+                #chunked_push_2
+            }
+        };
+
+        let final_loop = if self.nullable {
+            nullable_loop
+        } else {
+            nonnullable_loop
+        };
+
         quote! {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp #where_clause {
                 default fn eval(
@@ -1414,11 +1502,7 @@ impl NormalRpnFn {
                     #downcast_metadata
                     let arg = &self;
                     let mut result = <#vec_type as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
-                    for row_index in 0..output_rows {
-                        #(let (#extract, arg) = arg.extract(row_index));*;
-                        #nonnull_unwrap
-                        #chunked_push
-                    }
+                    #final_loop
                     Ok(#vec_type::into_vector_value(result))
                 }
             }

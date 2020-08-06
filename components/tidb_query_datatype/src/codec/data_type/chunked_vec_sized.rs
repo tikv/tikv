@@ -92,6 +92,10 @@ impl<'a, T: Evaluable + EvaluableRet> ChunkRef<'a, &'a T> for &'a ChunkedVecSize
         self.get(idx)
     }
 
+    fn get_bit_vec(self) -> &'a BitVec {
+        &self.bitmap
+    }
+
     fn phantom_data(self) -> Option<&'a T> {
         None
     }

@@ -23,13 +23,14 @@ mod txn;
 
 pub use self::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 pub use self::reader::*;
-pub use self::txn::{GcInfo, MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE};
+pub use self::txn::{GcInfo, MvccTxn, ReleasedLock, SecondaryLockStatus, MAX_TXN_WRITE_SIZE};
 pub use crate::new_txn;
 pub use txn_types::{
     Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
     SHORT_VALUE_MAX_LEN,
 };
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use std::error;
 use std::fmt;
 use std::io;
@@ -265,6 +266,35 @@ impl From<txn_types::Error> for ErrorInner {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Engine(e) => e.error_code(),
+            ErrorInner::Io(_) => error_code::storage::IO,
+            ErrorInner::Codec(e) => e.error_code(),
+            ErrorInner::KeyIsLocked(_) => error_code::storage::KEY_IS_LOCKED,
+            ErrorInner::BadFormat(e) => e.error_code(),
+            ErrorInner::Committed { .. } => error_code::storage::COMMITTED,
+            ErrorInner::PessimisticLockRolledBack { .. } => {
+                error_code::storage::PESSIMISTIC_LOCK_ROLLED_BACK
+            }
+            ErrorInner::TxnLockNotFound { .. } => error_code::storage::TXN_LOCK_NOT_FOUND,
+            ErrorInner::TxnNotFound { .. } => error_code::storage::TXN_NOT_FOUND,
+            ErrorInner::LockTypeNotMatch { .. } => error_code::storage::LOCK_TYPE_NOT_MATCH,
+            ErrorInner::WriteConflict { .. } => error_code::storage::WRITE_CONFLICT,
+            ErrorInner::Deadlock { .. } => error_code::storage::DEADLOCK,
+            ErrorInner::AlreadyExist { .. } => error_code::storage::ALREADY_EXIST,
+            ErrorInner::DefaultNotFound { .. } => error_code::storage::DEFAULT_NOT_FOUND,
+            ErrorInner::CommitTsExpired { .. } => error_code::storage::COMMIT_TS_EXPIRED,
+            ErrorInner::KeyVersion => error_code::storage::KEY_VERSION,
+            ErrorInner::PessimisticLockNotFound { .. } => {
+                error_code::storage::PESSIMISTIC_LOCK_NOT_FOUND
+            }
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
+        }
+    }
+}
+
 /// Generates `DefaultNotFound` error or panic directly based on config.
 #[inline(never)]
 pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
@@ -406,6 +436,7 @@ pub mod tests {
         txn.pessimistic_prewrite(
             Mutation::CheckNotExists(Key::from_raw(key)),
             pk,
+            &None,
             false,
             0,
             TimeStamp::default(),
@@ -448,6 +479,7 @@ pub mod tests {
             txn.pessimistic_prewrite(
                 mutation,
                 pk,
+                &None,
                 is_pessimistic_lock,
                 lock_ttl,
                 for_update_ts,
@@ -605,6 +637,7 @@ pub mod tests {
             txn.pessimistic_prewrite(
                 mutation,
                 pk,
+                &None,
                 is_pessimistic_lock,
                 0,
                 for_update_ts,
@@ -688,6 +721,7 @@ pub mod tests {
             txn.pessimistic_prewrite(
                 mutation,
                 pk,
+                &None,
                 is_pessimistic_lock,
                 0,
                 for_update_ts,
@@ -742,6 +776,7 @@ pub mod tests {
             txn.pessimistic_prewrite(
                 mutation,
                 pk,
+                &None,
                 is_pessimistic_lock,
                 0,
                 for_update_ts,

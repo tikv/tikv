@@ -25,7 +25,7 @@ impl ReadOptions {
 
 impl Default for ReadOptions {
     fn default() -> ReadOptions {
-        ReadOptions { fill_cache: false }
+        ReadOptions { fill_cache: true }
     }
 }
 
