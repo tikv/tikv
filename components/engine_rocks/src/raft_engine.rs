@@ -1,8 +1,8 @@
 use crate::{RocksEngine, RocksWriteBatch};
 
 use engine_traits::{
-    Iterable, Iterator, MiscExt, Mutable, Peekable, SeekKey, SyncMutable, WriteBatch,
-    WriteBatchExt, CF_DEFAULT, MAX_DELETE_BATCH_SIZE,
+    Iterable, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT,
+    MAX_DELETE_BATCH_SIZE,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
@@ -152,14 +152,15 @@ impl RaftEngine for RocksEngine {
         state: &RaftLocalState,
         batch: &mut RocksWriteBatch,
     ) -> Result<()> {
+        box_try!(batch.delete(&keys::raft_state_key(raft_group_id)));
         let seek_key = keys::raft_log_key(raft_group_id, 0);
-        let mut iter = box_try!(self.iterator());
-        if box_try!(iter.valid()) && box_try!(iter.seek(SeekKey::Key(&seek_key))) {
-            if !iter.key().starts_with(&seek_key) {
+        let prefix = keys::raft_log_prefix(raft_group_id);
+        if let Some((key, _)) = box_try!(self.seek(&seek_key)) {
+            if !key.starts_with(&prefix) {
                 // No raft logs for the raft group.
                 return Ok(());
             }
-            let first_index = match keys::raft_log_index(iter.key()) {
+            let first_index = match keys::raft_log_index(&key) {
                 Ok(index) => index,
                 Err(_) => return Ok(()),
             };
@@ -168,7 +169,6 @@ impl RaftEngine for RocksEngine {
                 box_try!(batch.delete(&key));
             }
         }
-        box_try!(batch.delete(&keys::raft_state_key(raft_group_id)));
         Ok(())
     }
 
@@ -193,7 +193,9 @@ impl RaftEngine for RocksEngine {
     }
 
     fn gc(&self, raft_group_id: u64, mut from: u64, to: u64) -> Result<usize> {
-        assert!(to > from);
+        if from >= to {
+            return Ok(0);
+        }
         if from == 0 {
             let start_key = keys::raft_log_key(raft_group_id, 0);
             let prefix = keys::raft_log_prefix(raft_group_id);

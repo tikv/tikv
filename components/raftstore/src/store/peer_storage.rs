@@ -985,9 +985,10 @@ where
         entries: &[Entry],
         ready_ctx: &mut H,
     ) -> Result<u64> {
+        let region_id = self.get_region_id();
         debug!(
             "append entries";
-            "region_id" => self.region.get_id(),
+            "region_id" => region_id,
             "peer_id" => self.peer_id,
             "count" => entries.len(),
         );
@@ -1006,16 +1007,13 @@ where
                 ready_ctx.set_sync_log(get_sync_log_from_entry(entry));
             }
         }
-        ready_ctx
-            .raft_wb_mut()
-            .append(self.get_region_id(), entries)?;
-        assert!(entries.is_empty());
+        ready_ctx.raft_wb_mut().append(region_id, entries)?;
 
         // Delete any previously appended log entries which never committed.
         // TODO: Wrap it as an engine::Error.
         ready_ctx
             .raft_wb_mut()
-            .remove(self.get_region_id(), last_index + 1, prev_last_index)?;
+            .remove(region_id, last_index + 1, prev_last_index)?;
 
         invoke_ctx.raft_state.set_last_index(last_index);
         invoke_ctx.last_term = last_term;

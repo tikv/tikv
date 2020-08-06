@@ -101,7 +101,7 @@ impl<ER: RaftEngine> Runnable<Task<ER>> for Runner {
 mod tests {
     use super::*;
     use engine_rocks::util::new_engine;
-    use engine_traits::{KvEngine, WriteBatchExt, CF_DEFAULT, Mutable};
+    use engine_traits::{KvEngine, Mutable, WriteBatchExt, CF_DEFAULT};
     use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
