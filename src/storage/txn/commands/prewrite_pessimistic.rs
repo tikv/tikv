@@ -1,8 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
-use crate::storage::types::PrewriteResult;
+use pd_client::PdClient;
 use txn_types::{Mutation, TimeStamp};
+
+use crate::storage::kv::WriteData;
+use crate::storage::lock_manager::LockManager;
+use crate::storage::mvcc::MvccTxn;
+use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+use crate::storage::txn::commands::{
+    Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
+};
+use crate::storage::txn::{Error, Result};
+use crate::storage::types::PrewriteResult;
+use crate::storage::{Error as StorageError, ProcessResult, Snapshot};
 
 command! {
     /// The prewrite phase of a transaction using pessimistic locking. The first phase of 2PC.
@@ -50,4 +60,69 @@ impl CommandExt for PrewritePessimistic {
     }
 
     gen_lock!(mutations: multiple(|(x, _)| x.key()));
+}
+
+impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
+    for PrewritePessimistic
+{
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
+        let rows = self.mutations.len();
+        let mut txn = MvccTxn::new(
+            snapshot,
+            self.start_ts,
+            !self.ctx.get_not_fill_cache(),
+            context.pd_client,
+        );
+        // Althrough pessimistic prewrite doesn't read the write record for checking conflict, we still set extra op here
+        // for getting the written keys.
+        txn.extra_op = context.extra_op;
+
+        let mut locks = vec![];
+        for (m, is_pessimistic_lock) in self.mutations.clone().into_iter() {
+            match txn.pessimistic_prewrite(
+                m,
+                &self.primary,
+                is_pessimistic_lock,
+                self.lock_ttl,
+                self.for_update_ts,
+                self.txn_size,
+                self.min_commit_ts,
+                context.pipelined_pessimistic_lock,
+            ) {
+                Ok(_) => {}
+                e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
+                    locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                }
+                Err(e) => return Err(Error::from(e)),
+            }
+        }
+        context.statistics.add(&txn.take_statistics());
+        let (pr, to_be_write, rows, ctx, lock_info) = if locks.is_empty() {
+            let pr = ProcessResult::PrewriteResult {
+                result: PrewriteResult {
+                    locks: vec![],
+                    min_commit_ts: TimeStamp::zero(),
+                },
+            };
+            let txn_extra = txn.take_extra();
+            let write_data = WriteData::new(txn.into_modifies(), txn_extra);
+            (pr, write_data, rows, self.ctx, None)
+        } else {
+            // Skip write stage if some keys are locked.
+            let pr = ProcessResult::PrewriteResult {
+                result: PrewriteResult {
+                    locks,
+                    min_commit_ts: TimeStamp::zero(),
+                },
+            };
+            (pr, WriteData::default(), 0, self.ctx, None)
+        };
+        Ok(WriteResult {
+            ctx,
+            to_be_write,
+            rows,
+            pr,
+            lock_info,
+        })
+    }
 }

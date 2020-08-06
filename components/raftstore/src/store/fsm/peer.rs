@@ -10,6 +10,7 @@ use batch_system::{BasicMailbox, Fsm};
 use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt};
+use error_code::ErrorCodeExt;
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -29,6 +30,7 @@ use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
+use tikv_util::collections::HashMap;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -54,8 +56,8 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks, RaftCommand, SignificantMsg,
-    SnapKey, StoreMsg,
+    util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks, RaftCommand,
+    SignificantMsg, SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
@@ -105,7 +107,7 @@ where
     has_ready: bool,
     early_apply: bool,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
-    pub receiver: Receiver<PeerMsg<EK, ER>>,
+    pub receiver: Receiver<PeerMsg<EK>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
 
@@ -148,7 +150,7 @@ where
     }
 }
 
-pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg<EK, ER>>, Box<PeerFsm<EK, ER>>);
+pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg<EK>>, Box<PeerFsm<EK, ER>>);
 
 impl<EK, ER> PeerFsm<EK, ER>
 where
@@ -390,7 +392,7 @@ where
     EK: KvEngine,
     ER: KvEngine,
 {
-    type Message = PeerMsg<EK, ER>;
+    type Message = PeerMsg<EK>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -438,7 +440,7 @@ where
         PeerFsmDelegate { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK, ER>>) {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -448,6 +450,7 @@ where
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "err" => %e,
+                            "error_code" => %e.error_code(),
                         );
                     }
                 }
@@ -508,7 +511,7 @@ where
         }
     }
 
-    fn on_casual_msg(&mut self, msg: CasualMessage<EK, ER>) {
+    fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
         match msg {
             CasualMessage::SplitRegion {
                 region_epoch,
@@ -565,7 +568,7 @@ where
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
-            CasualMessage::AccessPeer(cb) => cb(self.fsm),
+            CasualMessage::AccessPeer(cb) => cb(&mut self.fsm.peer as &mut dyn AbstractPeer),
         }
     }
 
@@ -622,6 +625,7 @@ where
                             "peer_id" => self.fsm.peer_id(),
                             "snapshot" => ?key,
                             "err" => %e,
+                            "error_code" => %e.error_code(),
                         );
                         continue;
                     }
@@ -678,6 +682,7 @@ where
                             "peer_id" => self.fsm.peer_id(),
                             "snap_file" => %key,
                             "err" => %e,
+                            "error_code" => %e.error_code(),
                         );
                         continue;
                     }
@@ -1465,6 +1470,15 @@ where
             return Ok(None);
         }
 
+        let before_check_snapshot_1_2 = || {
+            fail_point!(
+                "before_check_snapshot_1_2",
+                self.fsm.region_id() == 1 && self.fsm.peer_id() == 2,
+                |_| {}
+            );
+        };
+        before_check_snapshot_1_2();
+
         let region_id = msg.get_region_id();
         let snap = msg.get_message().get_snapshot();
         let key = SnapKey::from_region_snap(region_id, snap);
@@ -1510,6 +1524,7 @@ where
                 );
             }
         }
+
         for region in &meta.pending_snapshot_regions {
             if enc_start_key(region) < snap_enc_end_key &&
                enc_end_key(region) > snap_enc_start_key &&
@@ -1589,6 +1604,25 @@ where
         // Check if snapshot file exists.
         self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
 
+        // WARNING: The checking code must be above this line.
+        // Now all checking passed.
+
+        if self.fsm.peer.local_first_replicate && !self.fsm.peer.is_initialized() {
+            // If the peer is not initialized and passes the snapshot range check, `is_splitting` flag must
+            // be false.
+            // 1. If `is_splitting` is set to true, then the uninitialized peer is created before split is applied
+            //    and the peer id is the same as split one. So there should be no initialized peer before.
+            // 2. If the peer is also created by splitting, then the snapshot range is not overlapped with
+            //    parent peer. It means leader has applied merge and split at least one time. However,
+            //    the prerequisite of merge includes the initialization of all target peers and source peers,
+            //    which is conflict with 1.
+            let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            let status = pending_create_peers.get(&region_id).cloned();
+            if status != Some((self.fsm.peer_id(), false)) {
+                drop(pending_create_peers);
+                panic!("{} status {:?} is not expected", self.fsm.peer.tag, status);
+            }
+        }
         meta.pending_snapshot_regions.push(snap_region);
 
         assert!(!meta.atomic_snap_regions.contains_key(&region_id));
@@ -1729,6 +1763,21 @@ where
         }
         if meta.regions.remove(&region_id).is_none() && !merged_by_target {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
+        }
+
+        if self.fsm.peer.local_first_replicate {
+            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            if is_initialized {
+                assert!(pending_create_peers.get(&region_id).is_none());
+            } else {
+                // If this region's data in `pending_create_peers` is not equal to `(peer_id, false)`,
+                // it means this peer will be replaced by the split one.
+                if let Some(status) = pending_create_peers.get(&region_id) {
+                    if *status == (self.fsm.peer_id(), false) {
+                        pending_create_peers.remove(&region_id);
+                    }
+                }
+            }
         }
 
         // Clear merge related structures.
@@ -1895,10 +1944,14 @@ where
         }
     }
 
-    fn on_ready_split_region(&mut self, derived: metapb::Region, regions: Vec<metapb::Region>) {
+    fn on_ready_split_region(
+        &mut self,
+        derived: metapb::Region,
+        regions: Vec<metapb::Region>,
+        new_split_regions: HashMap<u64, apply::NewSplitPeer>,
+    ) {
         self.register_split_region_check_tick();
-        let mut guard = self.ctx.store_meta.lock().unwrap();
-        let meta: &mut StoreMeta = &mut *guard;
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         let region_id = derived.get_id();
         meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
         self.fsm.peer.post_split();
@@ -1947,6 +2000,33 @@ where
                 continue;
             }
 
+            // Create new region
+            let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
+            if new_split_peer.result.is_some() {
+                if let Err(e) = self
+                    .fsm
+                    .peer
+                    .mut_store()
+                    .clear_extra_split_data(enc_start_key(&new_region), enc_end_key(&new_region))
+                {
+                    error!(
+                        "failed to cleanup extra split data, may leave some dirty data";
+                        "region_id" => new_region.get_id(),
+                        "err" => ?e,
+                        "error_code" => %e.error_code(),
+                    );
+                }
+                continue;
+            }
+
+            {
+                let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+                assert_eq!(
+                    pending_create_peers.remove(&new_region_id),
+                    Some((new_split_peer.peer_id, true))
+                );
+            }
+
             // Insert new regions and validation
             info!(
                 "insert new region";
@@ -1960,7 +2040,7 @@ where
                 // store. After that, the old snapshot comes, followed with the last split
                 // proposal. After it's applied, the uninitialized peer will be met.
                 // We can remove this uninitialized peer directly.
-                if !r.get_peers().is_empty() {
+                if util::is_region_initialized(r) {
                     panic!(
                         "[region {}] duplicated region {:?} for split region {:?}",
                         new_region_id, r, new_region
@@ -1986,6 +2066,7 @@ where
             let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
             new_peer.peer.init_replication_mode(&mut *replication_state);
             drop(replication_state);
+
             let meta_peer = new_peer.peer.peer.clone();
 
             for p in new_region.get_peers() {
@@ -2166,6 +2247,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "err" => %e,
                     "target_region_id" => target_region_id,
+                    "error_code" => %e.error_code(),
                 );
                 Ok(false)
             }
@@ -2298,6 +2380,7 @@ where
                         "region_id" => self.fsm.region_id(),
                         "peer_id" => self.fsm.peer_id(),
                         "err" => %e,
+                        "error_code" => %e.error_code(),
                     );
                     self.rollback_merge();
                 }
@@ -2308,6 +2391,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "leader_id" => self.fsm.peer.leader_id(),
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 if self.fsm.peer.leader_id() != raft::INVALID_ID {
                     self.fsm.peer.send_want_rollback_merge(
@@ -2647,8 +2731,7 @@ where
             }
         }
 
-        let initialized = !prev_region.get_peers().is_empty();
-        if initialized {
+        if util::is_region_initialized(&prev_region) {
             info!(
                 "region changed after applying snapshot";
                 "region_id" => self.fsm.region_id(),
@@ -2660,9 +2743,17 @@ where
             if prev != Some(region.get_id()) {
                 panic!(
                     "{} meta corrupted, expect {:?} got {:?}",
-                    self.fsm.peer.tag, prev_region, prev
+                    self.fsm.peer.tag, prev_region, prev,
                 );
             }
+        } else if self.fsm.peer.local_first_replicate {
+            // This peer is uninitialized previously.
+            // More accurately, the `RegionLocalState` has been persisted so the data can be removed from `pending_create_peers`.
+            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            assert_eq!(
+                pending_create_peers.remove(&self.fsm.region_id()),
+                Some((self.fsm.peer_id(), false))
+            );
         }
 
         if let Some(r) = meta
@@ -2704,9 +2795,11 @@ where
                 ExecResult::CompactLog { first_index, state } => {
                     self.on_ready_compact_log(first_index, state)
                 }
-                ExecResult::SplitRegion { derived, regions } => {
-                    self.on_ready_split_region(derived, regions)
-                }
+                ExecResult::SplitRegion {
+                    derived,
+                    regions,
+                    new_split_regions,
+                } => self.on_ready_split_region(derived, regions, new_split_regions),
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
                 }
@@ -2924,6 +3017,7 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "message" => ?msg,
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
             cb.invoke_with_response(new_error(e));
             return;
