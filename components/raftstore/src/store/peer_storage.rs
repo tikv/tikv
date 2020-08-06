@@ -1266,7 +1266,7 @@ impl PeerStorage {
         }
 
         // only when apply snapshot
-        if snapshot_index > 0 0 {
+        if snapshot_index > 0 {
             ctx.save_apply_state_to(&mut ready_ctx.kv_wb_mut())?;
         }
 

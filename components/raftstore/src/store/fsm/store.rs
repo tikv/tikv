@@ -59,8 +59,8 @@ use crate::store::worker::{
 use crate::store::PdTask;
 use crate::store::PeerTicks;
 use crate::store::{
-    util, Callback, CasualMessage, MergeResultKind, PeerMsg, RaftCommand, SignificantMsg, SnapManager, StoreMsg,
-    StoreTick,
+    util, Callback, CasualMessage, MergeResultKind, PeerMsg, RaftCommand, SignificantMsg,
+    SnapManager, StoreMsg, StoreTick,
 };
 
 use crate::Result;
