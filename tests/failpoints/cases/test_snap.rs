@@ -387,12 +387,17 @@ fn test_receive_old_snapshot() {
     let r1 = cluster.run_conf_change();
 
     // Bypass the snapshot gc because the snapshot may be used twice.
-    fail::cfg("peer_2_handle_snap_mgr_gc", "return()").unwrap();
+    let peer_2_handle_snap_mgr_gc_fp = "peer_2_handle_snap_mgr_gc";
+    fail::cfg(peer_2_handle_snap_mgr_gc_fp, "return()").unwrap();
 
     pd_client.must_add_peer(r1, new_peer(2, 2));
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     cluster.must_transfer_leader(r1, new_peer(1, 1));
+
+    cluster.must_put(b"k00", b"v1");
+    // Ensure peer 2 is initialized.
+    must_get_equal(&cluster.get_engine(2), b"k00", b"v1");
 
     cluster.add_send_filter(IsolationFilterFactory::new(2));
 
@@ -459,5 +464,5 @@ fn test_receive_old_snapshot() {
     // in `pending_snapshot_regions`, peer 4 should be created normally.
     must_get_equal(&cluster.get_engine(2), b"k11", b"v1");
 
-    fail::remove("peer_2_handle_snap_mgr_gc");
+    fail::remove(peer_2_handle_snap_mgr_gc_fp);
 }

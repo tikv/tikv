@@ -1484,8 +1484,9 @@ where
         }
     }
 
-    // Returns `None` if the `msg` doesn't contain a snapshot or it contains a snapshot which
-    // doesn't conflict with any other snapshots or regions. Otherwise a `SnapKey` is returned.
+    // Returns `Vec<(u64, bool)>` indicated (source_region_id, merge_to_this_peer) if the `msg`
+    // doesn't contain a snapshot or this snapshot doesn't conflict with any other snapshots or regions.
+    // Otherwise a `SnapKey` is returned.
     fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<Either<SnapKey, Vec<(u64, bool)>>> {
         if !msg.get_message().has_snapshot() {
             return Ok(Either::Right(vec![]));
@@ -2670,7 +2671,7 @@ where
             );
         }
         // Because of the checking before proposing `PrepareMerge`, which is
-        // no compact proposal between the smallest commit index and the latest index.
+        // no `CompactLog` proposal between the smallest commit index and the latest index.
         // If the merge succeed, all source peers are impossible in apply snapshot state
         // and must be initialized.
         {
@@ -2742,7 +2743,7 @@ where
             "merge_state" => ?self.fsm.peer.pending_merge_state,
         );
         // Because of the checking before proposing `PrepareMerge`, which is
-        // no compact proposal between the smallest commit index and the latest index.
+        // no `CompactLog` proposal between the smallest commit index and the latest index.
         // If the merge succeed, all source peers are impossible in apply snapshot state
         // and must be initialized.
         // So `maybe_destroy` must succeed here.
