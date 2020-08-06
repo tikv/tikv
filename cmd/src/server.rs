@@ -54,7 +54,7 @@ use tikv::{
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
         Node, RaftKv, Server, DEFAULT_CLUSTER_ID,
-        metrics::CPU_CORES_QUOTA,
+        CPU_CORES_QUOTA,
     },
     storage::{self, config::StorageConfigManger},
 };
@@ -79,9 +79,8 @@ pub fn run_tikv(config: TiKvConfig) {
     tikv::log_tikv_info();
 
     // Print resource quota.
-    let sys_quota = SysQuota::new();
-    sys_quota.log_quota();
-    CPU_CORES_QUOTA.set(sys_quota.cpu_cores_quota());
+    SysQuota::new().log_quota();
+    CPU_CORES_QUOTA.set(SysQuota::new().cpu_cores_quota() as i64);
 
     // Do some prepare works before start.
     pre_start();
