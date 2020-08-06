@@ -1826,14 +1826,17 @@ where
 
     fn leave_joint(&self) -> Result<Region> {
         let mut region = self.region.clone();
+        let mut change_num = 0;
         for peer in region.mut_peers().iter_mut() {
+            change_num += 1;
             match peer.get_role() {
                 PeerRole::IncomingVoter => peer.set_role(PeerRole::Voter),
                 PeerRole::DemotingVoter => peer.set_role(PeerRole::Learner),
-                _ => {}
+                _ => change_num -= 1,
             }
         }
-        // TODO: Should we also increase epoch here?
+        let conf_ver = region.get_region_epoch().get_conf_ver() + change_num;
+        region.mut_region_epoch().set_conf_ver(conf_ver);
         Ok(region)
     }
 
