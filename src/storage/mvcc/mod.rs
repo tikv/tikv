@@ -462,13 +462,10 @@ pub mod tests {
             )
             .unwrap();
         } else {
-            if secondary_keys.is_some() {
-                panic!("async commit not yet implemented for pessimistic transactions");
-            }
             txn.pessimistic_prewrite(
                 mutation,
                 pk,
-                &None,
+                &secondary_keys,
                 is_pessimistic_lock,
                 lock_ttl,
                 for_update_ts,
