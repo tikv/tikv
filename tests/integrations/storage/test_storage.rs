@@ -14,7 +14,6 @@ use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
-use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 use tikv::storage::Engine;
 use txn_types::{Key, Mutation, TimeStamp};
 
@@ -589,14 +588,7 @@ fn test_txn_store_resolve_lock_in_a_batch() {
 
 #[test]
 fn test_txn_store_resolve_lock2() {
-    for &i in &[
-        0,
-        1,
-        RESOLVE_LOCK_BATCH_SIZE - 1,
-        RESOLVE_LOCK_BATCH_SIZE,
-        RESOLVE_LOCK_BATCH_SIZE + 1,
-        RESOLVE_LOCK_BATCH_SIZE * 2,
-    ] {
+    for &i in &[0, 1, 127, 512, 1024] {
         test_txn_store_resolve_lock_batch(1, i);
     }
 

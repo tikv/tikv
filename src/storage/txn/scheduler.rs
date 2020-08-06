@@ -321,9 +321,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         let task = Task::new(cid, cmd);
         // TODO: enqueue_task should return an reference of the tctx.
         self.inner.enqueue_task(task, callback);
-        if self.inner.acquire_lock(cid) {
-            self.get_snapshot(cid);
-        }
+        self.try_to_wake_up(cid);
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
             .get(priority_tag)
@@ -594,7 +592,9 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         let pipelined = self.inner.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
 
         let context = WriteContext {
+            cid,
             lock_mgr: &self.inner.lock_mgr,
+            latches: &self.inner.latches,
             pd_client: self.inner.pd_client.clone(),
             extra_op: task.extra_op,
             statistics,
@@ -693,7 +693,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Clone for Scheduler<E, L,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::mvcc::{self, Mutation};
+    use crate::storage::mvcc::Mutation;
     use crate::storage::txn::{commands, latch::*};
     use kvproto::kvrpcpb::Context;
     use txn_types::Key;
@@ -704,7 +704,6 @@ mod tests {
         temp_map.insert(10.into(), 20.into());
         let readonly_cmds: Vec<Command> = vec![
             commands::ScanLock::new(5.into(), None, 0, Context::default()).into(),
-            commands::ResolveLockReadPhase::new(temp_map.clone(), None, Context::default()).into(),
             commands::MvccByKey::new(Key::from_raw(b"k"), Context::default()).into(),
             commands::MvccByStartTs::new(25.into(), Context::default()).into(),
         ];
@@ -751,25 +750,7 @@ mod tests {
                 Context::default(),
             )
             .into(),
-            commands::ResolveLock::new(
-                temp_map,
-                None,
-                vec![(
-                    Key::from_raw(b"k"),
-                    mvcc::Lock::new(
-                        mvcc::LockType::Put,
-                        b"k".to_vec(),
-                        10.into(),
-                        20,
-                        None,
-                        TimeStamp::zero(),
-                        0,
-                        TimeStamp::zero(),
-                    ),
-                )],
-                Context::default(),
-            )
-            .into(),
+            commands::ResolveLockScan::new(temp_map, None, Context::default()).into(),
             commands::ResolveLockLite::new(
                 10.into(),
                 TimeStamp::zero(),

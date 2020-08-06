@@ -2,6 +2,7 @@
 
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
+use crate::storage::CfStatistics;
 use engine_rocks::properties::MvccProperties;
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{IterOptions, TableProperties, TablePropertiesCollection};
@@ -10,6 +11,29 @@ use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
+
+pub struct ScanLocksIter<'a, S: Snapshot, F: Fn(&Lock) -> bool> {
+    lock: &'a mut CfStatistics,
+    cursor: &'a mut Cursor<S::Iter>,
+    filter_: F,
+}
+
+impl<'a, S: Snapshot, F: Fn(&Lock) -> bool> Iterator for ScanLocksIter<'a, S, F> {
+    type Item = (Key, Lock);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // todo: handle error here
+        while self.cursor.valid().ok()? {
+            let key = Key::from_encoded_slice(self.cursor.key(&mut self.lock));
+            let lock = Lock::parse(self.cursor.value(&mut self.lock)).ok()?;
+            if (self.filter_)(&lock) {
+                return Some((key, lock));
+            }
+            self.cursor.next(&mut self.lock);
+        }
+        None
+    }
+}
 
 pub struct MvccReader<S: Snapshot> {
     snapshot: S,
@@ -321,6 +345,30 @@ impl<S: Snapshot> MvccReader<S> {
         Ok((locks, false))
     }
 
+    pub fn scan_locks_iter<F: Fn(&Lock) -> bool>(
+        &mut self,
+        start: Option<&Key>,
+        filter: F,
+    ) -> ScanLocksIter<S, F> {
+        // todo: handle error
+        self.create_lock_cursor().unwrap();
+        let cursor = self.lock_cursor.as_mut().unwrap();
+        let ok = match start {
+            // todo: handle error
+            Some(ref x) => cursor.seek(x, &mut self.statistics.lock).unwrap(),
+            None => cursor.seek_to_first(&mut self.statistics.lock),
+        };
+        if !ok {
+            // todo
+            unimplemented!();
+        }
+        ScanLocksIter {
+            lock: &mut self.statistics.lock,
+            cursor,
+            filter_: filter,
+        }
+    }
+
     pub fn scan_keys(
         &mut self,
         mut start: Option<Key>,
@@ -525,7 +573,6 @@ mod tests {
             txn.pessimistic_prewrite(
                 m,
                 pk,
-                &None,
                 true,
                 0,
                 TimeStamp::default(),

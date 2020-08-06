@@ -14,9 +14,8 @@ mod pause;
 mod pessimistic_rollback;
 mod prewrite;
 mod prewrite_pessimistic;
-mod resolve_lock;
 mod resolve_lock_lite;
-mod resolve_lock_readphase;
+mod resolve_lock_scan;
 mod rollback;
 mod scan_lock;
 mod txn_heart_beat;
@@ -32,17 +31,14 @@ pub use pause::Pause;
 pub use pessimistic_rollback::PessimisticRollback;
 pub use prewrite::Prewrite;
 pub use prewrite_pessimistic::PrewritePessimistic;
-pub use resolve_lock::ResolveLock;
 pub use resolve_lock_lite::ResolveLockLite;
-pub use resolve_lock_readphase::ResolveLockReadPhase;
+pub use resolve_lock_scan::ResolveLockScan;
 pub use rollback::Rollback;
 pub use scan_lock::ScanLock;
 pub use txn_heart_beat::TxnHeartBeat;
 
 #[cfg(test)]
 pub(crate) use prewrite::FORWARD_MIN_MUTATIONS_NUM;
-
-pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
 
 use std::fmt::{self, Debug, Display, Formatter};
 use std::iter::{self, FromIterator};
@@ -85,8 +81,7 @@ pub enum Command {
     CheckTxnStatus(CheckTxnStatus),
     CheckSecondaryLocks(CheckSecondaryLocks),
     ScanLock(ScanLock),
-    ResolveLockReadPhase(ResolveLockReadPhase),
-    ResolveLock(ResolveLock),
+    ResolveLockScan(ResolveLockScan),
     ResolveLockLite(ResolveLockLite),
     Pause(Pause),
     MvccByKey(MvccByKey),
@@ -116,11 +111,6 @@ impl<T> From<TypedCommand<T>> for Command {
 impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
     fn from(mut req: PrewriteRequest) -> Self {
         let for_update_ts = req.get_for_update_ts();
-        let secondary_keys = if req.get_use_async_commit() {
-            Some(req.get_secondaries().into())
-        } else {
-            None
-        };
         if for_update_ts == 0 {
             Prewrite::new(
                 req.take_mutations().into_iter().map(Into::into).collect(),
@@ -130,7 +120,11 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_skip_constraint_check(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
-                secondary_keys,
+                if req.get_use_async_commit() {
+                    Some(req.get_secondaries().into())
+                } else {
+                    None
+                },
                 req.take_context(),
             )
         } else {
@@ -149,7 +143,6 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 for_update_ts.into(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
-                secondary_keys,
                 req.take_context(),
             )
         }
@@ -304,7 +297,7 @@ impl From<ResolveLockRequest> for TypedCommand<()> {
         };
 
         if resolve_keys.is_empty() {
-            ResolveLockReadPhase::new(txn_status, None, req.take_context())
+            ResolveLockScan::new(txn_status, None, req.take_context())
         } else {
             let start_ts: TimeStamp = req.get_start_version().into();
             assert!(!start_ts.is_zero());
@@ -428,6 +421,8 @@ pub trait CommandExt: Display {
 }
 
 pub struct WriteContext<'a, L: LockManager, P: PdClient + 'static> {
+    pub cid: u64,
+    pub latches: &'a Latches,
     pub lock_mgr: &'a L,
     pub pd_client: Arc<P>,
     pub extra_op: ExtraOp,
@@ -451,8 +446,7 @@ impl Command {
             Command::CheckTxnStatus(t) => t,
             Command::CheckSecondaryLocks(t) => t,
             Command::ScanLock(t) => t,
-            Command::ResolveLockReadPhase(t) => t,
-            Command::ResolveLock(t) => t,
+            Command::ResolveLockScan(t) => t,
             Command::ResolveLockLite(t) => t,
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
@@ -473,8 +467,7 @@ impl Command {
             Command::CheckTxnStatus(t) => t,
             Command::CheckSecondaryLocks(t) => t,
             Command::ScanLock(t) => t,
-            Command::ResolveLockReadPhase(t) => t,
-            Command::ResolveLock(t) => t,
+            Command::ResolveLockScan(t) => t,
             Command::ResolveLockLite(t) => t,
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
@@ -489,7 +482,6 @@ impl Command {
     ) -> Result<ProcessResult> {
         match self {
             Command::ScanLock(t) => t.process_read(snapshot, statistics),
-            Command::ResolveLockReadPhase(t) => t.process_read(snapshot, statistics),
             Command::MvccByKey(t) => t.process_read(snapshot, statistics),
             Command::MvccByStartTs(t) => t.process_read(snapshot, statistics),
             _ => panic!("unsupported read command"),
@@ -509,7 +501,7 @@ impl Command {
             Command::Cleanup(t) => t.process_write(snapshot, context),
             Command::Rollback(t) => t.process_write(snapshot, context),
             Command::PessimisticRollback(t) => t.process_write(snapshot, context),
-            Command::ResolveLock(t) => t.process_write(snapshot, context),
+            Command::ResolveLockScan(t) => t.process_write(snapshot, context),
             Command::ResolveLockLite(t) => t.process_write(snapshot, context),
             Command::TxnHeartBeat(t) => t.process_write(snapshot, context),
             Command::CheckTxnStatus(t) => t.process_write(snapshot, context),

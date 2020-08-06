@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use pd_client::PdClient;
-use txn_types::{Key, Mutation, TimeStamp};
+use txn_types::{Mutation, TimeStamp};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
@@ -34,9 +34,6 @@ command! {
             /// How many keys this transaction involved.
             txn_size: u64,
             min_commit_ts: TimeStamp,
-            /// All secondary keys in the whole transaction (i.e., as sent to all nodes, not only
-            /// this node). Only present if using async commit.
-            secondary_keys: Option<Vec<Vec<u8>>>,
         }
 }
 
@@ -80,24 +77,11 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
         // for getting the written keys.
         txn.extra_op = context.extra_op;
 
-        let async_commit_pk: Option<Key> = self
-            .secondary_keys
-            .as_ref()
-            .filter(|keys| !keys.is_empty())
-            .map(|_| Key::from_raw(&self.primary));
-
         let mut locks = vec![];
-        let mut async_commit_ts = TimeStamp::zero();
         for (m, is_pessimistic_lock) in self.mutations.clone().into_iter() {
-            let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
-
-            if Some(m.key()) == async_commit_pk.as_ref() {
-                secondaries = &self.secondary_keys;
-            }
             match txn.pessimistic_prewrite(
                 m,
                 &self.primary,
-                secondaries,
                 is_pessimistic_lock,
                 self.lock_ttl,
                 self.for_update_ts,
@@ -105,17 +89,9 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
                 self.min_commit_ts,
                 context.pipelined_pessimistic_lock,
             ) {
-                Ok(ts) => {
-                    if secondaries.is_some() {
-                        async_commit_ts = ts;
-                    }
-                }
+                Ok(_) => {}
                 e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
-                    locks.push(
-                        e.map(|_| ())
-                            .map_err(Error::from)
-                            .map_err(StorageError::from),
-                    );
+                    locks.push(e.map_err(Error::from).map_err(StorageError::from));
                 }
                 Err(e) => return Err(Error::from(e)),
             }
@@ -125,7 +101,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks: vec![],
-                    min_commit_ts: async_commit_ts,
+                    min_commit_ts: TimeStamp::zero(),
                 },
             };
             let txn_extra = txn.take_extra();
@@ -136,7 +112,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks,
-                    min_commit_ts: async_commit_ts,
+                    min_commit_ts: TimeStamp::zero(),
                 },
             };
             (pr, WriteData::default(), 0, self.ctx, None)

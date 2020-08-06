@@ -168,18 +168,13 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         // Set extra op here for getting the write record when check write conflict in prewrite.
         txn.extra_op = context.extra_op;
 
-        let async_commit_pk: Option<Key> = self
-            .secondary_keys
-            .as_ref()
-            .filter(|keys| !keys.is_empty())
-            .map(|_| Key::from_raw(&self.primary));
-
+        let primary_key = Key::from_raw(&self.primary);
         let mut locks = vec![];
         let mut async_commit_ts = TimeStamp::zero();
         for m in self.mutations {
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
 
-            if Some(m.key()) == async_commit_pk.as_ref() {
+            if m.key() == &primary_key {
                 secondaries = &self.secondary_keys;
             }
             match txn.prewrite(
@@ -253,6 +248,7 @@ mod tests {
     use crate::storage::txn::commands::{
         Commit, Prewrite, Rollback, WriteContext, FORWARD_MIN_MUTATIONS_NUM,
     };
+    use crate::storage::txn::latch::Latches;
     use crate::storage::txn::LockInfo;
     use crate::storage::txn::{Error, ErrorInner, Result};
     use crate::storage::DummyLockManager;
@@ -426,6 +422,8 @@ mod tests {
         let snap = engine.snapshot(&ctx)?;
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts));
         let context = WriteContext {
+            cid: 0,
+            latches: &Latches::new(0),
             lock_mgr: &DummyLockManager {},
             pd_client: Arc::new(DummyPdClient::new()),
             extra_op: ExtraOp::Noop,
@@ -466,6 +464,8 @@ mod tests {
         );
 
         let context = WriteContext {
+            cid: 0,
+            latches: &Latches::new(0),
             lock_mgr: &DummyLockManager {},
             pd_client: Arc::new(DummyPdClient::new()),
             extra_op: ExtraOp::Noop,
@@ -489,6 +489,8 @@ mod tests {
         let snap = engine.snapshot(&ctx)?;
         let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let context = WriteContext {
+            cid: 0,
+            latches: &Latches::new(0),
             lock_mgr: &DummyLockManager {},
             pd_client: Arc::new(DummyPdClient::new()),
             extra_op: ExtraOp::Noop,
