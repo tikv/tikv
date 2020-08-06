@@ -1500,13 +1500,29 @@ fn future_ver_batch_get<E: Engine, L: LockManager, P: PdClient + 'static>(
         })
 }
 
-// unimplemented
 fn future_ver_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
-    mut _req: VerMutRequest,
+    storage: &Storage<E, L, P>,
+    mut req: VerMutRequest,
 ) -> impl Future<Item = VerMutResponse, Error = Error> {
-    let resp = VerMutResponse::default();
-    future::ok(resp)
+    let (cb, future) = paired_future_callback();
+    let mut ver_mutation = req.take_mut();
+    let mut key = Key::from_raw(&ver_mutation.take_key());
+    let version = req.get_version();
+    key = key.append_ts(version.into());
+    let value = ver_mutation.take_value();
+    let res = storage.raw_put(req.take_context(), "".to_string(), key.into_raw().expect("failed to decode"), value, cb);
+
+    AndThenWith::new(res, future.map_err(Error::from)).map(|v| {
+        let mut resp = VerMutResponse::default();
+        let mut ver_err = VerError::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            ver_err.set_error(format!("{}", e));
+            resp.set_error(ver_err);
+        }
+        resp
+    })
 }
 
 // unimplemented
