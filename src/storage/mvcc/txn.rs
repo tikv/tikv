@@ -457,10 +457,12 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             }
 
             // Handle rollback.
-            // If the start timestamp of write is equal to transaction's start timestamp
-            // as well as commit timestamp, the lock is already rollbacked.
-            if write.start_ts == self.start_ts && commit_ts == self.start_ts {
-                assert!(write.write_type == WriteType::Rollback);
+            // The rollack informathin may come from either a Rollback record or a record with
+            // `has_overlay_rollback` flag.
+            if commit_ts == self.start_ts
+                && (write.write_type == WriteType::Rollback || write.has_overlay_rollback)
+            {
+                assert!(write.has_overlay_rollback || write.start_ts == commit_ts);
                 return Err(ErrorInner::PessimisticLockRolledBack {
                     start_ts: self.start_ts,
                     key: key.into_raw()?,
@@ -673,8 +675,22 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 // If exists a commit version whose commit timestamp is larger than or equal to
                 // current start timestamp, we should abort current prewrite, even if the commit
                 // type is Rollback.
-                if commit_ts >= self.start_ts {
+                if commit_ts > self.start_ts {
                     MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                    return Err(ErrorInner::WriteConflict {
+                        start_ts: self.start_ts,
+                        conflict_start_ts: write.start_ts,
+                        conflict_commit_ts: commit_ts,
+                        key: key.into_raw()?,
+                        primary: primary.to_vec(),
+                    }
+                    .into());
+                }
+                if commit_ts == self.start_ts
+                    && (write.write_type == WriteType::Rollback || write.has_overlay_rollback)
+                {
+                    MVCC_CONFLICT_COUNTER.rolled_back.inc();
+                    // TODO: Maybe we need to add a new error for the rolled back case.
                     return Err(ErrorInner::WriteConflict {
                         start_ts: self.start_ts,
                         conflict_start_ts: write.start_ts,
@@ -3607,5 +3623,56 @@ mod tests {
             res => panic!("unexpected lock status: {:?}", res),
         }
         must_get_overlay_rollback(&engine, b"k1", 15, 13, WriteType::Lock);
+    }
+
+    #[test]
+    fn test_txn_timestamp_overlapping() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k, v) = (b"k1", b"v1");
+
+        // Prepare a committed transaction.
+        must_prewrite_put(&engine, k, v, k, 10);
+        must_locked(&engine, k, 10);
+        must_commit(&engine, k, 10, 20);
+        must_unlocked(&engine, k);
+        must_written(&engine, k, 10, 20, WriteType::Put);
+
+        // Optimistic transaction allows the start_ts equals to another transaction's commit_ts
+        // on the same key.
+        must_prewrite_put(&engine, k, v, k, 20);
+        must_locked(&engine, k, 20);
+        must_commit(&engine, k, 20, 30);
+        must_unlocked(&engine, k);
+
+        // ...but it can be rejected by overlay rollback flag.
+        must_cleanup(&engine, k, 30, 0);
+        let w = must_written(&engine, k, 20, 30, WriteType::Put);
+        assert!(w.has_overlay_rollback);
+        must_unlocked(&engine, k);
+        must_prewrite_put_err(&engine, k, v, k, 30);
+        must_unlocked(&engine, k);
+
+        // Prepare a committed transaction.
+        must_prewrite_put(&engine, k, v, k, 40);
+        must_locked(&engine, k, 40);
+        must_commit(&engine, k, 40, 50);
+        must_unlocked(&engine, k);
+        must_written(&engine, k, 40, 50, WriteType::Put);
+
+        // Pessimistic transaction also works in the same case.
+        must_acquire_pessimistic_lock(&engine, k, k, 50, 50);
+        must_pessimistic_locked(&engine, k, 50, 50);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 50, 50, true);
+        must_commit(&engine, k, 50, 60);
+        must_unlocked(&engine, k);
+        must_written(&engine, k, 50, 60, WriteType::Put);
+
+        // .. and it can also be rejected by overlay rollback flag.
+        must_cleanup(&engine, k, 60, 0);
+        let w = must_written(&engine, k, 50, 60, WriteType::Put);
+        assert!(w.has_overlay_rollback);
+        must_unlocked(&engine, k);
+        must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60);
+        must_unlocked(&engine, k);
     }
 }
