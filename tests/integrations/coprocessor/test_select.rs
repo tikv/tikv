@@ -1637,7 +1637,7 @@ fn test_exec_details() {
 
     let flags = &[0];
 
-    let mut ctx = Context::default();
+    let ctx = Context::default();
     let req = DAGSelect::from(&product).build_with(ctx, flags);
     let resp = handle_request(&endpoint, req);
     assert!(resp.has_exec_details());
