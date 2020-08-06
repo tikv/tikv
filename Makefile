@@ -269,6 +269,11 @@ format: pre-format
 	@cargo fmt --all -- --check >/dev/null || \
 	cargo fmt --all
 
+doc: 
+	@cargo doc --workspace --document-private-items \
+		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		--no-default-features --features "${ENABLE_FEATURES}"
+
 pre-clippy: unset-override
 	@rustup component add clippy
 
