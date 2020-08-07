@@ -20,7 +20,7 @@ use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
+use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
@@ -197,10 +197,6 @@ where
     /// raftstore.
     pub fn get_router(&self) -> RaftRouter<RocksEngine, RocksEngine> {
         self.system.router()
-    }
-    /// Gets a transmission end of a channel which is used send messages to apply worker.
-    pub fn get_apply_router(&self) -> ApplyRouter<RocksEngine> {
-        self.system.apply_router()
     }
 
     // check store, return store id for the engine.

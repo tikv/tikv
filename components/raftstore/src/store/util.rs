@@ -686,6 +686,7 @@ macro_rules! observe_perf_context_type {
     };
 }
 
+#[derive(Clone, Debug)]
 pub struct PerfContextStatistics {
     pub perf_level: PerfLevel,
     pub write_wal_time: u64,

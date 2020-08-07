@@ -35,12 +35,13 @@ use txn_types::TxnExtra;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
-use crate::store::fsm::apply::CatchUpLogs;
+use crate::store::fsm::apply::{ApplyRouter, CatchUpLogs};
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
 use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, GlobalReplicationState, PdTask, ReadResponse};
 use crate::{Error, Result};
+//use futures03::channel::mpsc::Sender as FutureSender;
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -286,6 +287,7 @@ where
     pub local_first_replicate: bool,
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    pub apply_router: ApplyRouter<EK>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -300,6 +302,7 @@ where
         engines: KvEngines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
+        apply_router: ApplyRouter<EK>,
     ) -> Result<Peer<EK, ER>> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
@@ -374,6 +377,7 @@ where
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
             local_first_replicate: false,
+            apply_router,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
         };
 
@@ -441,10 +445,7 @@ where
 
     /// Register self to apply_scheduler so that the peer is then usable.
     /// Also trigger `RegionChangeEvent::Create` here.
-    pub fn activate<T, C>(&self, ctx: &PollContext<EK, ER, T, C>) {
-        ctx.apply_router
-            .schedule_task(self.region_id, ApplyTask::register(self));
-
+    pub fn activate<T, C>(&mut self, ctx: &PollContext<EK, ER, T, C>) {
         ctx.coprocessor_host.on_region_changed(
             self.region(),
             RegionChangeEvent::Create,
@@ -1301,8 +1302,7 @@ where
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
                 self.pending_request_snapshot_count
                     .fetch_add(1, Ordering::SeqCst);
-                ctx.apply_router
-                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+                self.apply_router.schedule(ApplyTask::Snapshot(gen_task));
             }
             return None;
         }
@@ -1559,8 +1559,7 @@ where
                     term,
                     cbs,
                 );
-                ctx.apply_router
-                    .schedule_task(self.region_id, ApplyTask::apply(apply));
+                self.apply_router.schedule(ApplyTask::apply(apply));
             }
             fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
             // Check whether there is a pending generate snapshot task, the task
@@ -1570,8 +1569,7 @@ where
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
                 self.pending_request_snapshot_count
                     .fetch_add(1, Ordering::SeqCst);
-                ctx.apply_router
-                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+                self.apply_router.schedule(ApplyTask::Snapshot(gen_task));
             }
         }
 

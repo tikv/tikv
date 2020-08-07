@@ -12,6 +12,7 @@ use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use futures::Future;
+//use futures03::channel::mpsc::{channel as future_channel, Receiver as FutureReceiver};
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -35,13 +36,16 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{escape, is_zero_duration};
+use tokio::sync::mpsc::{channel as future_channel, Receiver as FutureReceiver};
 use txn_types::TxnExtra;
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
+use crate::store::fsm::apply::ApplyRouter;
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
+    Registration,
 };
 use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::metrics::*;
@@ -150,7 +154,11 @@ where
     }
 }
 
-pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg<EK>>, Box<PeerFsm<EK, ER>>);
+pub type SenderFsmPair<EK, ER> = (
+    LooseBoundedSender<PeerMsg<EK>>,
+    FutureReceiver<ApplyTask<EK>>,
+    Box<PeerFsm<EK, ER>>,
+);
 
 impl<EK, ER> PeerFsm<EK, ER>
 where
@@ -184,11 +192,21 @@ where
             "peer_id" => meta_peer.get_id(),
         );
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
+        let (apply_router, apply_receiver) = future_channel(cfg.notify_capacity);
         Ok((
             tx,
+            apply_receiver,
             Box::new(PeerFsm {
                 early_apply: cfg.early_apply,
-                peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
+                peer: Peer::new(
+                    store_id,
+                    cfg,
+                    sched,
+                    engines,
+                    region,
+                    meta_peer,
+                    ApplyRouter::new(apply_router),
+                )?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
                 group_state: GroupState::Ordered,
@@ -226,11 +244,21 @@ where
         region.set_id(region_id);
 
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
+        let (apply_router, apply_receiver) = future_channel(cfg.notify_capacity);
         Ok((
             tx,
+            apply_receiver,
             Box::new(PeerFsm {
                 early_apply: cfg.early_apply,
-                peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
+                peer: Peer::new(
+                    store_id,
+                    cfg,
+                    sched,
+                    engines,
+                    &region,
+                    peer,
+                    ApplyRouter::new(apply_router),
+                )?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
                 group_state: GroupState::Ordered,
@@ -708,7 +736,7 @@ where
         let region_id = self.region_id();
         let msg =
             new_read_index_request(region_id, region_epoch.clone(), self.fsm.peer.peer.clone());
-        let apply_router = self.ctx.apply_router.clone();
+        let mut apply_router = self.fsm.peer.apply_router.clone();
         self.propose_raft_command(
             msg,
             Callback::Read(Box::new(move |resp| {
@@ -717,14 +745,11 @@ where
                     cb.invoke_read(resp);
                     return;
                 }
-                apply_router.schedule_task(
-                    region_id,
-                    ApplyTask::Change {
-                        cmd,
-                        region_epoch,
-                        cb,
-                    },
-                )
+                apply_router.schedule(ApplyTask::Change {
+                    cmd,
+                    region_epoch,
+                    cb,
+                });
             })),
             TxnExtra::default(),
         );
@@ -1684,10 +1709,11 @@ where
             // send destroy msg to peer fsm because peer fsm has already destroyed.
             // In this case, if apply fsm sends destroy msg, peer fsm may be destroyed twice
             // because there are some msgs in channel so peer fsm still need to handle them (e.g. callback)
-            self.ctx.apply_router.schedule_task(
+            self.fsm.peer.apply_router.schedule(ApplyTask::destroy(
                 job.region_id,
-                ApplyTask::destroy(job.region_id, job.async_remove, false),
-            );
+                job.async_remove,
+                false,
+            ));
         }
         if job.async_remove {
             info!(
@@ -2049,14 +2075,14 @@ where
                 self.ctx.router.close(new_region_id);
             }
 
-            let (sender, mut new_peer) = match PeerFsm::create(
+            let (sender, apply_receiver, mut new_peer) = match PeerFsm::create(
                 self.ctx.store_id(),
                 &self.ctx.cfg,
                 self.ctx.region_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,
             ) {
-                Ok((sender, new_peer)) => (sender, new_peer),
+                Ok((sender, receiver, new_peer)) => (sender, receiver, new_peer),
                 Err(e) => {
                     // peer information is already written into db, can't recover.
                     // there is probably a bug.
@@ -2095,6 +2121,9 @@ where
                 // check again after split.
                 new_peer.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
             }
+            self.ctx
+                .apply_batch_system
+                .register(Registration::new(new_peer.get_peer()), apply_receiver);
             let mailbox = BasicMailbox::new(sender, new_peer);
             self.ctx.router.register(new_region_id, mailbox);
             self.ctx
@@ -2425,10 +2454,9 @@ where
                 self.fsm.peer.pending_remove = true;
                 // Send CatchUpLogs back to destroy source apply fsm,
                 // then it will send `Noop` to trigger target apply fsm.
-                self.ctx.apply_router.schedule_task(
-                    self.fsm.region_id(),
-                    ApplyTask::LogsUpToDate(self.fsm.peer.catch_up_logs.take().unwrap()),
-                );
+                self.fsm.peer.apply_router.schedule(ApplyTask::LogsUpToDate(
+                    self.fsm.peer.catch_up_logs.take().unwrap(),
+                ));
                 return;
             }
         }
@@ -2460,9 +2488,10 @@ where
                 catch_up_logs.merge.clear_entries();
                 // Send CatchUpLogs back to destroy source apply fsm,
                 // then it will send `Noop` to trigger target apply fsm.
-                self.ctx
+                self.fsm
+                    .peer
                     .apply_router
-                    .schedule_task(region_id, ApplyTask::LogsUpToDate(catch_up_logs));
+                    .schedule(ApplyTask::LogsUpToDate(catch_up_logs));
                 return;
             }
         }
@@ -2536,7 +2565,7 @@ where
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
-        if let Err(e) = self.ctx.router.force_send(
+        if let Err(e) = self.ctx.router.send(
             source.get_id(),
             PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
                 target_region_id: self.fsm.region_id(),
@@ -2644,10 +2673,11 @@ where
                 );
                 self.fsm.peer.pending_remove = true;
                 // Destroy apply fsm at first
-                self.ctx.apply_router.schedule_task(
+                self.fsm.peer.apply_router.schedule(ApplyTask::destroy(
                     self.fsm.region_id(),
-                    ApplyTask::destroy(self.fsm.region_id(), true, true),
-                );
+                    true,
+                    true,
+                ));
             }
             MergeResultKind::FromTargetSnapshotStep2 => {
                 // `merge_by_target` is true because this region's range already belongs to

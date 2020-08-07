@@ -23,6 +23,7 @@ extern crate serde_with;
 extern crate slog_global;
 #[macro_use]
 extern crate tikv_util;
+extern crate futures;
 
 #[cfg(test)]
 extern crate test;

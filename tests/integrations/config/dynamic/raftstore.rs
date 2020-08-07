@@ -64,7 +64,6 @@ fn start_raftstore(
 ) -> (
     ConfigController,
     RaftRouter<RocksEngine, RocksEngine>,
-    ApplyRouter<RocksEngine>,
     RaftBatchSystem,
 ) {
     let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
@@ -114,7 +113,7 @@ fn start_raftstore(
             Arc::default(),
         )
         .unwrap();
-    (cfg_controller, raft_router, system.apply_router(), system)
+    (cfg_controller, raft_router, system)
 }
 
 fn validate_store<F>(router: &RaftRouter<RocksEngine, RocksEngine>, f: F)
@@ -131,21 +130,18 @@ where
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 }
 
-fn validate_apply<F>(router: &ApplyRouter<RocksEngine>, region_id: u64, validate: F)
+fn validate_apply<F>(router: &mut ApplyRouter<RocksEngine>, validate: F)
 where
     F: FnOnce(bool) + Send + 'static,
 {
     let (tx, rx) = mpsc::channel();
-    router.schedule_task(
-        region_id,
-        ApplyTask::Validate(
-            region_id,
-            Box::new(move |(_, sync_log): (_, bool)| {
-                validate(sync_log);
-                tx.send(()).unwrap();
-            }),
-        ),
-    );
+    router.schedule(ApplyTask::Validate(
+        0,
+        Box::new(move |(_, sync_log): (_, bool)| {
+            validate(sync_log);
+            tx.send(()).unwrap();
+        }),
+    ));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 }
 
@@ -153,7 +149,7 @@ where
 fn test_update_raftstore_config() {
     let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
     config.validate().unwrap();
-    let (cfg_controller, router, _, mut system) = start_raftstore(config.clone(), &_dir);
+    let (cfg_controller, router, mut system) = start_raftstore(config.clone(), &_dir);
 
     // dispatch updated config
     let change = {
@@ -183,19 +179,18 @@ fn test_update_apply_store_config() {
     let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
     config.raft_store.sync_log = true;
     config.validate().unwrap();
-    let (cfg_controller, raft_router, apply_router, mut system) =
-        start_raftstore(config.clone(), &_dir);
+    let (cfg_controller, raft_router, mut system) = start_raftstore(config.clone(), &_dir);
 
     // register region
     let region_id = 1;
     let mut reg = Registration::default();
     reg.region.set_id(region_id);
-    apply_router.schedule_task(region_id, ApplyTask::Registration(reg));
+    let mut apply_router = system.apply_system().register_router(reg);
 
     validate_store(&raft_router, move |cfg: &Config| {
         assert_eq!(cfg.sync_log, true);
     });
-    validate_apply(&apply_router, region_id, |sync_log| {
+    validate_apply(&mut apply_router, |sync_log| {
         assert_eq!(sync_log, true);
     });
 
@@ -208,7 +203,7 @@ fn test_update_apply_store_config() {
     validate_store(&raft_router, move |cfg: &Config| {
         assert_eq!(cfg.sync_log, false);
     });
-    validate_apply(&apply_router, region_id, |sync_log| {
+    validate_apply(&mut apply_router, |sync_log| {
         assert_eq!(sync_log, false);
     });
 
