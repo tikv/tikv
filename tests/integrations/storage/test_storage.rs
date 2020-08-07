@@ -588,7 +588,7 @@ fn test_txn_store_resolve_lock_in_a_batch() {
 
 #[test]
 fn test_txn_store_resolve_lock2() {
-    for &i in &[0, 1, 127, 512, 1024] {
+    for &i in &[0, 1, 255, 256, 257, 511, 512, 513] {
         test_txn_store_resolve_lock_batch(1, i);
     }
 

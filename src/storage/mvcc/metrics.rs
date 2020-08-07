@@ -6,6 +6,7 @@ use prometheus_static_metric::*;
 make_static_metric! {
     pub label_enum MvccConflictKind {
         prewrite_write_conflict,
+        rolled_back,
         commit_lock_not_found,
         rollback_committed,
         acquire_pessimistic_lock_conflict,
