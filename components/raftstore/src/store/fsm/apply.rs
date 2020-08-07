@@ -1646,8 +1646,8 @@ where
         );
 
         let region = match ConfChangeKind::confchange_kind(changes.len()) {
-            ConfChangeKind::LeaveJoint => self.leave_joint()?,
-            _ => self.apply_conf_change(changes)?,
+            ConfChangeKind::LeaveJoint => self.apply_leave_joint()?,
+            kind => self.apply_conf_change(kind, changes)?,
         };
 
         let state = if self.pending_remove {
@@ -1673,7 +1673,11 @@ where
         ))
     }
 
-    fn apply_conf_change(&mut self, changes: &[ChangePeerRequest]) -> Result<Region> {
+    fn apply_conf_change(
+        &mut self,
+        kind: ConfChangeKind,
+        changes: &[ChangePeerRequest],
+    ) -> Result<Region> {
         let mut region = self.region.clone();
         for cp in changes.iter() {
             let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
@@ -1732,12 +1736,16 @@ where
                             self.region
                         ));
                     }
-                    (PeerRole::Voter, ConfChangeType::AddLearnerNode) => {
-                        exist_peer.set_role(PeerRole::DemotingVoter)
-                    }
-                    (PeerRole::Learner, ConfChangeType::AddNode) => {
-                        exist_peer.set_role(PeerRole::IncomingVoter)
-                    }
+                    (PeerRole::Voter, ConfChangeType::AddLearnerNode) => match kind {
+                        ConfChangeKind::Simple => exist_peer.set_role(PeerRole::Learner),
+                        ConfChangeKind::EnterJoint => exist_peer.set_role(PeerRole::DemotingVoter),
+                        _ => unreachable!(),
+                    },
+                    (PeerRole::Learner, ConfChangeType::AddNode) => match kind {
+                        ConfChangeKind::Simple => exist_peer.set_role(PeerRole::Voter),
+                        ConfChangeKind::EnterJoint => exist_peer.set_role(PeerRole::IncomingVoter),
+                        _ => unreachable!(),
+                    },
                     (PeerRole::Voter, ConfChangeType::AddNode) => {
                         error!(
                             "can't add duplicated peer";
@@ -1810,21 +1818,21 @@ where
                 },
             }
             confchange_cmd_metric::inc_success(change_type);
-            info!(
-                "conf change successfully";
-                "type" => ?change_type,
-                "region_id" => self.region_id(),
-                "peer_id" => self.id(),
-                "peer" => ?peer,
-                "region" => ?&self.region
-            );
         }
+        info!(
+            "conf change successfully";
+            "region_id" => self.region_id(),
+            "peer_id" => self.id(),
+            "changes" => ?changes,
+            "original region" => ?&self.region,
+            "current region" => ?&region,
+        );
         let conf_ver = region.get_region_epoch().get_conf_ver() + changes.len() as u64;
         region.mut_region_epoch().set_conf_ver(conf_ver);
         Ok(region)
     }
 
-    fn leave_joint(&self) -> Result<Region> {
+    fn apply_leave_joint(&self) -> Result<Region> {
         let mut region = self.region.clone();
         let mut change_num = 0;
         for peer in region.mut_peers().iter_mut() {
