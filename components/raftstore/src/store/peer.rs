@@ -509,7 +509,10 @@ where
     }
 
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
-    pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
+    pub fn maybe_destroy<T, C>(
+        &mut self,
+        ctx: &PollContext<EK, ER, T, C>,
+    ) -> Option<DestroyPeerJob> {
         if self.pending_remove {
             info!(
                 "is being destroyed, skip";
@@ -517,6 +520,17 @@ where
                 "peer_id" => self.peer.get_id(),
             );
             return None;
+        }
+        {
+            let meta = ctx.store_meta.lock().unwrap();
+            if meta.atomic_snap_regions.contains_key(&self.region_id) {
+                info!(
+                    "stale peer is applying atomic snapshot, will destroy next time";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                return None;
+            }
         }
         // If initialized is false, it implicitly means apply fsm does not exist now.
         let initialized = self.get_store().is_initialized();
@@ -1257,7 +1271,7 @@ where
             self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
         }
         let mut destroy_regions = vec![];
-        if self.get_pending_snapshot().is_some() {
+        if self.has_pending_snapshot() {
             if !self.ready_to_handle_pending_snap() {
                 let count = self.pending_request_snapshot_count.load(Ordering::SeqCst);
                 debug!(
