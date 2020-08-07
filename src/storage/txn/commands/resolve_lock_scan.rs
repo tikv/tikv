@@ -61,6 +61,7 @@ impl CommandExt for ResolveLockScan {
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for ResolveLockScan {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
         let (ctx, txn_status) = (self.ctx, self.txn_status);
+        let lock_mgr = context.lock_mgr;
         let mut reader = MvccReader::new(
             snapshot.clone(),
             Some(ScanMode::Forward),
@@ -79,6 +80,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         let mut rows = 0;
         let mut next_first_scan_key = None;
         if let Some(iter) = iter {
+            let mut released_locks = HashMap::default();
             for (current_key, current_lock) in iter {
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                     next_first_scan_key = Some((current_key, current_lock));
@@ -92,7 +94,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                         .get(&current_lock.ts)
                         .expect("txn status not found");
 
-                    if commit_ts.is_zero() {
+                    let released = if commit_ts.is_zero() {
                         txn.rollback(current_key.clone())?
                     } else if commit_ts > current_lock.ts {
                         txn.commit(current_key.clone(), commit_ts)?
@@ -102,8 +104,11 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                             commit_ts,
                         }));
                     };
+                    released_locks
+                        .entry(current_lock.ts)
+                        .or_insert_with(|| ReleasedLocks::new(current_lock.ts, commit_ts))
+                        .push(released);
                     rows += 1;
-                    ReleasedLocks::new(current_lock.ts, commit_ts).wake_up(context.lock_mgr);
                     context.latches.release(&lock, context.cid);
                 } else {
                     // else "spawn" another `ResolveLockScan` command which will wait for this (key, lock) group
@@ -111,6 +116,9 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                     break;
                 }
             }
+            released_locks
+                .into_iter()
+                .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
         }
 
         let pr = if next_first_scan_key.is_none() {
