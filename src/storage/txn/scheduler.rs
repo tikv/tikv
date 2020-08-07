@@ -700,8 +700,6 @@ mod tests {
 
     #[test]
     fn test_command_latches() {
-        let mut temp_map = HashMap::default();
-        temp_map.insert(10.into(), 20.into());
         let readonly_cmds: Vec<Command> = vec![
             commands::ScanLock::new(5.into(), None, 0, Context::default()).into(),
             commands::MvccByKey::new(Key::from_raw(b"k"), Context::default()).into(),
@@ -750,7 +748,9 @@ mod tests {
                 Context::default(),
             )
             .into(),
-            commands::ResolveLockScan::new(temp_map, None, Context::default()).into(),
+            // ResolveLockScan now acquire locks during the write process.
+            // todo: I wonder if we can test this behavior
+            // commands::ResolveLockScan::new(temp_map, None, Context::default()).into(),
             commands::ResolveLockLite::new(
                 10.into(),
                 TimeStamp::zero(),
