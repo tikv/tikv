@@ -65,7 +65,7 @@ fn start_raftstore(
     ConfigController,
     RaftRouter<RocksEngine, RocksEngine>,
     ApplyRouter<RocksEngine>,
-    RaftBatchSystem,
+    RaftBatchSystem<RocksEngine, RocksEngine>,
 ) {
     let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
     let engines = create_tmp_engine(dir);
@@ -86,7 +86,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        SnapManager::new(p, Some(raft_router.clone()))
+        SnapManager::new(p)
     };
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
