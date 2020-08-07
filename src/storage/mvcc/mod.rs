@@ -443,6 +443,7 @@ pub mod tests {
         key: &[u8],
         value: &[u8],
         pk: &[u8],
+        secondary_keys: &Option<Vec<Vec<u8>>>,
         ts: impl Into<TimeStamp>,
         is_pessimistic_lock: bool,
         lock_ttl: u64,
@@ -461,7 +462,7 @@ pub mod tests {
             txn.prewrite(
                 mutation,
                 pk,
-                &None,
+                &secondary_keys,
                 false,
                 lock_ttl,
                 txn_size,
@@ -472,7 +473,7 @@ pub mod tests {
             txn.pessimistic_prewrite(
                 mutation,
                 pk,
-                &None,
+                &secondary_keys,
                 is_pessimistic_lock,
                 lock_ttl,
                 for_update_ts,
@@ -497,6 +498,7 @@ pub mod tests {
             key,
             value,
             pk,
+            &None,
             ts,
             false,
             0,
@@ -521,6 +523,7 @@ pub mod tests {
             key,
             value,
             pk,
+            &None,
             ts,
             is_pessimistic_lock,
             0,
@@ -545,6 +548,7 @@ pub mod tests {
             key,
             value,
             pk,
+            &None,
             ts,
             is_pessimistic_lock,
             0,
@@ -570,6 +574,7 @@ pub mod tests {
             key,
             value,
             pk,
+            &None,
             ts,
             is_pessimistic_lock,
             lock_ttl,
@@ -598,12 +603,38 @@ pub mod tests {
             key,
             value,
             pk,
+            &None,
             ts,
             !for_update_ts.is_zero(),
             lock_ttl,
             for_update_ts,
             0,
             min_commit_ts,
+            false,
+        );
+    }
+
+    pub fn must_prewrite_put_async_commit<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        secondary_keys: &Option<Vec<Vec<u8>>>,
+        ts: impl Into<TimeStamp>,
+    ) {
+        assert!(secondary_keys.is_some());
+        must_prewrite_put_impl(
+            engine,
+            key,
+            value,
+            pk,
+            secondary_keys,
+            ts,
+            false,
+            0,
+            TimeStamp::default(),
+            0,
+            TimeStamp::default(),
             false,
         );
     }
@@ -1279,13 +1310,14 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
         tp: WriteType,
-    ) {
+    ) -> Write {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let k = Key::from_raw(key).append_ts(commit_ts.into());
         let v = snapshot.get_cf(CF_WRITE, &k).unwrap().unwrap();
         let write = WriteRef::parse(&v).unwrap();
         assert_eq!(write.start_ts, start_ts.into());
         assert_eq!(write.write_type, tp);
+        write.to_owned()
     }
 
     pub fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
@@ -1325,8 +1357,9 @@ pub mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         let (ts, write_type) = reader
-            .get_txn_commit_info(&Key::from_raw(key), start_ts.into())
+            .get_txn_commit_record(&Key::from_raw(key), start_ts.into())
             .unwrap()
+            .info()
             .unwrap();
         assert_ne!(write_type, WriteType::Rollback);
         assert_eq!(ts, commit_ts.into());
@@ -1340,9 +1373,9 @@ pub mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
 
-        let ret = reader.get_txn_commit_info(&Key::from_raw(key), start_ts.into());
+        let ret = reader.get_txn_commit_record(&Key::from_raw(key), start_ts.into());
         assert!(ret.is_ok());
-        match ret.unwrap() {
+        match ret.unwrap().info() {
             None => {}
             Some((_, write_type)) => {
                 assert_eq!(write_type, WriteType::Rollback);
@@ -1356,8 +1389,9 @@ pub mod tests {
 
         let start_ts = start_ts.into();
         let (ts, write_type) = reader
-            .get_txn_commit_info(&Key::from_raw(key), start_ts)
+            .get_txn_commit_record(&Key::from_raw(key), start_ts)
             .unwrap()
+            .info()
             .unwrap();
         assert_eq!(ts, start_ts);
         assert_eq!(write_type, WriteType::Rollback);
@@ -1372,8 +1406,9 @@ pub mod tests {
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
 
         let ret = reader
-            .get_txn_commit_info(&Key::from_raw(key), start_ts.into())
-            .unwrap();
+            .get_txn_commit_record(&Key::from_raw(key), start_ts.into())
+            .unwrap()
+            .info();
         assert_eq!(ret, None);
     }
 
@@ -1394,6 +1429,28 @@ pub mod tests {
         assert_eq!(ts, start_ts);
         assert_eq!(write.write_type, WriteType::Rollback);
         assert_eq!(write.as_ref().is_protected(), protected);
+    }
+
+    pub fn must_get_overlapped_rollback<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        overlapped_start_ts: impl Into<TimeStamp>,
+        overlapped_write_type: WriteType,
+    ) {
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+
+        let start_ts = start_ts.into();
+        let overlapped_start_ts = overlapped_start_ts.into();
+        let (ts, write) = reader
+            .seek_write(&Key::from_raw(key), start_ts)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ts, start_ts);
+        assert!(write.has_overlapped_rollback);
+        assert_eq!(write.start_ts, overlapped_start_ts);
+        assert_eq!(write.write_type, overlapped_write_type);
     }
 
     pub fn must_scan_keys<E: Engine>(
