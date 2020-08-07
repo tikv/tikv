@@ -1456,26 +1456,26 @@ pub mod tests {
         assert_eq!(write.as_ref().is_protected(), protected);
     }
 
-    pub fn must_get_overlay_rollback<E: Engine>(
+    pub fn must_get_overlapped_rollback<E: Engine>(
         engine: &E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
-        overlay_start_ts: impl Into<TimeStamp>,
-        overlay_write_type: WriteType,
+        overlapped_start_ts: impl Into<TimeStamp>,
+        overlapped_write_type: WriteType,
     ) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
 
         let start_ts = start_ts.into();
-        let overlay_start_ts = overlay_start_ts.into();
+        let overlapped_start_ts = overlapped_start_ts.into();
         let (ts, write) = reader
             .seek_write(&Key::from_raw(key), start_ts)
             .unwrap()
             .unwrap();
         assert_eq!(ts, start_ts);
-        assert!(write.has_overlay_rollback);
-        assert_eq!(write.start_ts, overlay_start_ts);
-        assert_eq!(write.write_type, overlay_write_type);
+        assert!(write.has_overlapped_rollback);
+        assert_eq!(write.start_ts, overlapped_start_ts);
+        assert_eq!(write.write_type, overlapped_write_type);
     }
 
     pub fn must_scan_keys<E: Engine>(

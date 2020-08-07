@@ -29,13 +29,13 @@ pub struct GcInfo {
 fn make_rollback(
     start_ts: TimeStamp,
     protected: bool,
-    overlay_write: Option<Write>,
+    overlapped_write: Option<Write>,
 ) -> Option<Write> {
-    match overlay_write {
+    match overlapped_write {
         Some(write) => {
             assert!(start_ts > write.start_ts);
             if protected {
-                Some(write.set_overlay_rollback(true))
+                Some(write.set_overlapped_rollback(true))
             } else {
                 // No need to update the original write.
                 None
@@ -69,10 +69,10 @@ impl MissingLockAction {
         }
     }
 
-    fn construct_write(&self, ts: TimeStamp, overlay_write: Option<Write>) -> Option<Write> {
+    fn construct_write(&self, ts: TimeStamp, overlapped_write: Option<Write>) -> Option<Write> {
         match self {
-            MissingLockAction::Rollback => make_rollback(ts, false, overlay_write),
-            MissingLockAction::ProtectedRollback => make_rollback(ts, true, overlay_write),
+            MissingLockAction::Rollback => make_rollback(ts, false, overlapped_write),
+            MissingLockAction::ProtectedRollback => make_rollback(ts, true, overlapped_write),
             _ => unreachable!(),
         }
     }
@@ -289,19 +289,19 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Ok(async_commit_ts)
     }
 
-    // Check whether there's an overlay write record, and then perform rollback. The actual behavior
-    // to do the rollback differs according to whether there's an overlay write record.
+    // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
+    // to do the rollback differs according to whether there's an overlapped write record.
     fn check_write_and_rollback_lock(
         &mut self,
         key: Key,
         lock: &Lock,
         is_pessimistic_txn: bool,
     ) -> Result<Option<ReleasedLock>> {
-        let overlay_write = self
+        let overlapped_write = self
             .reader
             .get_txn_commit_record(&key, self.start_ts)?
             .unwrap_none();
-        self.rollback_lock(key, lock, is_pessimistic_txn, overlay_write)
+        self.rollback_lock(key, lock, is_pessimistic_txn, overlapped_write)
     }
 
     fn rollback_lock(
@@ -309,7 +309,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         key: Key,
         lock: &Lock,
         is_pessimistic_txn: bool,
-        overlay_write: Option<Write>,
+        overlapped_write: Option<Write>,
     ) -> Result<Option<ReleasedLock>> {
         // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
         if lock.short_value.is_none() && lock.lock_type == LockType::Put {
@@ -318,7 +318,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
 
         // Only the primary key of a pessimistic transaction needs to be protected.
         let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
-        if let Some(write) = make_rollback(self.start_ts, protected, overlay_write) {
+        if let Some(write) = make_rollback(self.start_ts, protected, overlapped_write) {
             self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
         }
         if self.collapse_rollback {
@@ -458,11 +458,11 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
 
             // Handle rollback.
             // The rollack informathin may come from either a Rollback record or a record with
-            // `has_overlay_rollback` flag.
+            // `has_overlapped_rollback` flag.
             if commit_ts == self.start_ts
-                && (write.write_type == WriteType::Rollback || write.has_overlay_rollback)
+                && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
             {
-                assert!(write.has_overlay_rollback || write.start_ts == commit_ts);
+                assert!(write.has_overlapped_rollback || write.start_ts == commit_ts);
                 return Err(ErrorInner::PessimisticLockRolledBack {
                     start_ts: self.start_ts,
                     key: key.into_raw()?,
@@ -691,7 +691,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 // transaction is ok to continue, unless the record means that the current
                 // transaction has been rolled back.
                 if commit_ts == self.start_ts
-                    && (write.write_type == WriteType::Rollback || write.has_overlay_rollback)
+                    && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
                 {
                     MVCC_CONFLICT_COUNTER.rolled_back.inc();
                     // TODO: Maybe we need to add a new error for the rolled back case.
@@ -865,8 +865,8 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     Ok(TxnStatus::committed(commit_ts))
                 }
             }
-            TxnCommitRecord::OverlayRollback { .. } => Ok(TxnStatus::RolledBack),
-            TxnCommitRecord::None { overlay_write } => {
+            TxnCommitRecord::OverlappedRollback { .. } => Ok(TxnStatus::RolledBack),
+            TxnCommitRecord::None { overlapped_write } => {
                 if MissingLockAction::ReturnError == action {
                     return Err(ErrorInner::TxnNotFound {
                         start_ts: self.start_ts,
@@ -884,7 +884,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
 
                 // Insert a Rollback to Write CF in case that a stale prewrite
                 // command is received after a cleanup command.
-                if let Some(write) = action.construct_write(ts, overlay_write) {
+                if let Some(write) = action.construct_write(ts, overlapped_write) {
                     self.put_write(primary_key, ts, write.as_ref().to_bytes());
                 }
                 MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
@@ -1121,45 +1121,46 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         start_ts: TimeStamp,
     ) -> Result<(SecondaryLockStatus, Option<ReleasedLock>)> {
         let mut released_lock = None;
-        let (status, need_rollback, rollback_overlay_write) = match self.reader.load_lock(&key)? {
-            Some(lock) if lock.ts == start_ts => {
-                if lock.lock_type == LockType::Pessimistic {
-                    released_lock = self.unlock_key(key.clone(), true);
-                    let overlay_write = self
-                        .reader
-                        .get_txn_commit_record(&key, start_ts)?
-                        .unwrap_none();
-                    (SecondaryLockStatus::RolledBack, true, overlay_write)
-                } else {
-                    (SecondaryLockStatus::Locked(lock), false, None)
-                }
-            }
-            _ => match self.reader.get_txn_commit_record(&key, start_ts)? {
-                TxnCommitRecord::SingleRecord { commit_ts, write } => {
-                    let status = if write.write_type != WriteType::Rollback {
-                        SecondaryLockStatus::Committed(commit_ts)
+        let (status, need_rollback, rollback_overlapped_write) =
+            match self.reader.load_lock(&key)? {
+                Some(lock) if lock.ts == start_ts => {
+                    if lock.lock_type == LockType::Pessimistic {
+                        released_lock = self.unlock_key(key.clone(), true);
+                        let overlapped_write = self
+                            .reader
+                            .get_txn_commit_record(&key, start_ts)?
+                            .unwrap_none();
+                        (SecondaryLockStatus::RolledBack, true, overlapped_write)
                     } else {
-                        SecondaryLockStatus::RolledBack
-                    };
-                    // We needn't write a rollback once there is a write record for it:
-                    // If it's a committed record, it cannot be changed.
-                    // If it's a rollback record, it either comes from another check_secondary_lock
-                    // (thus protected) or the client stops commit actively. So we don't need
-                    // to make it protected again.
-                    (status, false, None)
+                        (SecondaryLockStatus::Locked(lock), false, None)
+                    }
                 }
-                TxnCommitRecord::OverlayRollback { .. } => {
-                    (SecondaryLockStatus::RolledBack, false, None)
-                }
-                TxnCommitRecord::None { overlay_write } => {
-                    (SecondaryLockStatus::RolledBack, true, overlay_write)
-                }
-            },
-        };
+                _ => match self.reader.get_txn_commit_record(&key, start_ts)? {
+                    TxnCommitRecord::SingleRecord { commit_ts, write } => {
+                        let status = if write.write_type != WriteType::Rollback {
+                            SecondaryLockStatus::Committed(commit_ts)
+                        } else {
+                            SecondaryLockStatus::RolledBack
+                        };
+                        // We needn't write a rollback once there is a write record for it:
+                        // If it's a committed record, it cannot be changed.
+                        // If it's a rollback record, it either comes from another check_secondary_lock
+                        // (thus protected) or the client stops commit actively. So we don't need
+                        // to make it protected again.
+                        (status, false, None)
+                    }
+                    TxnCommitRecord::OverlappedRollback { .. } => {
+                        (SecondaryLockStatus::RolledBack, false, None)
+                    }
+                    TxnCommitRecord::None { overlapped_write } => {
+                        (SecondaryLockStatus::RolledBack, true, overlapped_write)
+                    }
+                },
+            };
         if need_rollback {
             // We must protect this rollback in case this rollback is collapsed and a stale
             // acquire_pessimistic_lock and prewrite succeed again.
-            if let Some(write) = make_rollback(start_ts, true, rollback_overlay_write) {
+            if let Some(write) = make_rollback(start_ts, true, rollback_overlapped_write) {
                 self.put_write(key.clone(), start_ts, write.as_ref().to_bytes());
                 if self.collapse_rollback {
                     self.collapse_prev_rollback(key.clone())?;
@@ -1629,7 +1630,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_overlay() {
+    fn test_rollback_overlapped() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let (k1, v1) = (b"key1", b"v1");
         let (k2, v2) = (b"key2", b"v2");
@@ -1640,19 +1641,19 @@ mod tests {
         must_commit(&engine, k2, 11, 20);
         let w1 = must_written(&engine, k1, 10, 20, WriteType::Put);
         let w2 = must_written(&engine, k2, 11, 20, WriteType::Put);
-        assert!(!w1.has_overlay_rollback);
-        assert!(!w2.has_overlay_rollback);
+        assert!(!w1.has_overlapped_rollback);
+        assert!(!w2.has_overlapped_rollback);
 
         must_cleanup(&engine, k1, 20, 0);
         must_rollback(&engine, k2, 20);
 
         let w1r = must_written(&engine, k1, 10, 20, WriteType::Put);
-        assert!(w1r.has_overlay_rollback);
-        // The only difference between w1r and w1 is the overlay_rollback flag.
-        assert_eq!(w1r.set_overlay_rollback(false), w1);
+        assert!(w1r.has_overlapped_rollback);
+        // The only difference between w1r and w1 is the overlapped_rollback flag.
+        assert_eq!(w1r.set_overlapped_rollback(false), w1);
 
         let w2r = must_written(&engine, k2, 11, 20, WriteType::Put);
-        // Rollback is invoked on secondaries, so the rollback is not protected and overlay_rollback
+        // Rollback is invoked on secondaries, so the rollback is not protected and overlapped_rollback
         // won't be set.
         assert_eq!(w2r, w2);
     }
@@ -2464,13 +2465,13 @@ mod tests {
         must_rollback_collapsed(&engine, k, 51);
         must_acquire_pessimistic_lock_err(&engine, k, k, 49, 60);
 
-        // Overlay rollback record will be written when the current start_ts equals to another write
+        // Overlapped rollback record will be written when the current start_ts equals to another write
         // records' commit ts. Now there is a commit record with commit_ts = 50.
         must_acquire_pessimistic_lock(&engine, k, k, 50, 61);
         must_pessimistic_prewrite_put(&engine, k, v, k, 50, 61, true);
         must_locked(&engine, k, 50);
         must_cleanup(&engine, k, 50, 0);
-        must_get_overlay_rollback(&engine, k, 50, 46, WriteType::Put);
+        must_get_overlapped_rollback(&engine, k, 50, 46, WriteType::Put);
 
         // start_ts and commit_ts interlacing
         for start_ts in &[140, 150, 160] {
@@ -3694,7 +3695,7 @@ mod tests {
             (SecondaryLockStatus::RolledBack, None) => {}
             res => panic!("unexpected lock status: {:?}", res),
         }
-        must_get_overlay_rollback(&engine, b"k1", 15, 13, WriteType::Lock);
+        must_get_overlapped_rollback(&engine, b"k1", 15, 13, WriteType::Lock);
     }
 
     #[test]
@@ -3716,10 +3717,10 @@ mod tests {
         must_commit(&engine, k, 20, 30);
         must_unlocked(&engine, k);
 
-        // ...but it can be rejected by overlay rollback flag.
+        // ...but it can be rejected by overlapped rollback flag.
         must_cleanup(&engine, k, 30, 0);
         let w = must_written(&engine, k, 20, 30, WriteType::Put);
-        assert!(w.has_overlay_rollback);
+        assert!(w.has_overlapped_rollback);
         must_unlocked(&engine, k);
         must_prewrite_put_err(&engine, k, v, k, 30);
         must_unlocked(&engine, k);
@@ -3739,10 +3740,10 @@ mod tests {
         must_unlocked(&engine, k);
         must_written(&engine, k, 50, 60, WriteType::Put);
 
-        // .. and it can also be rejected by overlay rollback flag.
+        // .. and it can also be rejected by overlapped rollback flag.
         must_cleanup(&engine, k, 60, 0);
         let w = must_written(&engine, k, 50, 60, WriteType::Put);
-        assert!(w.has_overlay_rollback);
+        assert!(w.has_overlapped_rollback);
         must_unlocked(&engine, k);
         must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60);
         must_unlocked(&engine, k);

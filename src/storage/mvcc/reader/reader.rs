@@ -17,23 +17,23 @@ const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 pub enum TxnCommitRecord {
     /// The commit record of the given transaction is not found. But it's possible that there's
     /// another transaction's commit record, whose `commit_ts` equals to the current transaction's
-    /// `start_ts`. That kind of record will be returned via the `overlay_write` field.
-    /// In this case, if the current transaction is to be rolled back, the `overlay_write` must not
+    /// `start_ts`. That kind of record will be returned via the `overlapped_write` field.
+    /// In this case, if the current transaction is to be rolled back, the `overlapped_write` must not
     /// be overwritten.
-    None { overlay_write: Option<Write> },
+    None { overlapped_write: Option<Write> },
     /// Found the transaction's write record.
     SingleRecord { commit_ts: TimeStamp, write: Write },
-    /// The transaction's status is found in another transaction's record's `overlay_rollback`
+    /// The transaction's status is found in another transaction's record's `overlapped_rollback`
     /// field. This may happen when the current transaction's `start_ts` is the same as the
     /// `commit_ts` of another transaction on this key.
-    OverlayRollback { commit_ts: TimeStamp },
+    OverlappedRollback { commit_ts: TimeStamp },
 }
 
 impl TxnCommitRecord {
     pub fn exist(&self) -> bool {
         match self {
             Self::None { .. } => false,
-            Self::SingleRecord { .. } | Self::OverlayRollback { .. } => true,
+            Self::SingleRecord { .. } | Self::OverlappedRollback { .. } => true,
         }
     }
 
@@ -41,7 +41,7 @@ impl TxnCommitRecord {
         match self {
             Self::None { .. } => None,
             Self::SingleRecord { commit_ts, write } => Some((*commit_ts, write.write_type)),
-            Self::OverlayRollback { commit_ts } => Some((*commit_ts, WriteType::Rollback)),
+            Self::OverlappedRollback { commit_ts } => Some((*commit_ts, WriteType::Rollback)),
         }
     }
 
@@ -52,16 +52,16 @@ impl TxnCommitRecord {
         }
     }
 
-    pub fn unwrap_overlay_rollback(self) -> TimeStamp {
+    pub fn unwrap_overlapped_rollback(self) -> TimeStamp {
         match self {
-            Self::OverlayRollback { commit_ts } => commit_ts,
-            _ => panic!("not an overlay rollback record: {:?}", self),
+            Self::OverlappedRollback { commit_ts } => commit_ts,
+            _ => panic!("not an overlapped rollback record: {:?}", self),
         }
     }
 
     pub fn unwrap_none(self) -> Option<Write> {
         match self {
-            Self::None { overlay_write } => overlay_write,
+            Self::None { overlapped_write } => overlapped_write,
             _ => panic!("txn record found but not expected: {:?}", self),
         }
     }
@@ -279,11 +279,11 @@ impl<S: Snapshot> MvccReader<S> {
                 return Ok(TxnCommitRecord::SingleRecord { commit_ts, write });
             }
             if commit_ts == start_ts {
-                if write.has_overlay_rollback {
-                    return Ok(TxnCommitRecord::OverlayRollback { commit_ts });
+                if write.has_overlapped_rollback {
+                    return Ok(TxnCommitRecord::OverlappedRollback { commit_ts });
                 }
                 return Ok(TxnCommitRecord::None {
-                    overlay_write: Some(write),
+                    overlapped_write: Some(write),
                 });
             }
             if commit_ts < start_ts {
@@ -292,7 +292,7 @@ impl<S: Snapshot> MvccReader<S> {
             seek_ts = commit_ts.prev();
         }
         Ok(TxnCommitRecord::None {
-            overlay_write: None,
+            overlapped_write: None,
         })
     }
 
@@ -1016,7 +1016,7 @@ mod tests {
         engine.prewrite(m, k, 35);
         engine.commit(k, 35, 40);
 
-        // Overlay rollback on the commit record at 40.
+        // Overlapped rollback on the commit record at 40.
         engine.rollback_protected(k, 40);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
@@ -1031,21 +1031,21 @@ mod tests {
         // is 50.
         // Commit versions: [50_45 PUT, 45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
         let key = Key::from_raw(k);
-        let overlay_write = reader
+        let overlapped_write = reader
             .get_txn_commit_record(&key, 55.into())
             .unwrap()
             .unwrap_none();
-        assert!(overlay_write.is_none());
+        assert!(overlapped_write.is_none());
 
         // When no such record is found but a record of another txn has a write record with
         // its commit_ts equals to current start_ts, it
-        let overlay_write = reader
+        let overlapped_write = reader
             .get_txn_commit_record(&key, 50.into())
             .unwrap()
             .unwrap_none()
             .unwrap();
-        assert_eq!(overlay_write.start_ts, 45.into());
-        assert_eq!(overlay_write.write_type, WriteType::Put);
+        assert_eq!(overlapped_write.start_ts, 45.into());
+        assert_eq!(overlapped_write.write_type, WriteType::Put);
 
         let (commit_ts, write_type) = reader
             .get_txn_commit_record(&key, 45.into())
@@ -1057,7 +1057,7 @@ mod tests {
         let commit_ts = reader
             .get_txn_commit_record(&key, 40.into())
             .unwrap()
-            .unwrap_overlay_rollback();
+            .unwrap_overlapped_rollback();
         assert_eq!(commit_ts, 40.into());
 
         let (commit_ts, write_type) = reader
