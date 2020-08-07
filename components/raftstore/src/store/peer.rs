@@ -3300,10 +3300,15 @@ mod tests {
         req.set_admin_request(admin_req.clone());
         table.push((req.clone(), RequestPolicy::ProposeNormal));
 
-        admin_req.set_change_peer_v2(raft_cmdpb::ChangePeerV2Request::default());
+        admin_req.set_change_peer(raft_cmdpb::ChangePeerRequest::default());
         req.set_admin_request(admin_req.clone());
         table.push((req.clone(), RequestPolicy::ProposeConfChange));
         admin_req.clear_change_peer();
+
+        admin_req.set_change_peer_v2(raft_cmdpb::ChangePeerV2Request::default());
+        req.set_admin_request(admin_req.clone());
+        table.push((req.clone(), RequestPolicy::ProposeConfChange));
+        admin_req.clear_change_peer_v2();
 
         admin_req.set_transfer_leader(raft_cmdpb::TransferLeaderRequest::default());
         req.set_admin_request(admin_req.clone());
