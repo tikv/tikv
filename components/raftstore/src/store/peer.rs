@@ -1932,8 +1932,10 @@ where
     ) -> Result<()> {
         // Check whether current joint state can handle this request
         let mut after_applied_prs = self.check_joint_state(cc)?;
+        let kind = ConfChangeKind::confchange_kind(change_peers.len());
+
         // Leaving joint state, skip check
-        if change_peers.is_empty() {
+        if kind == ConfChangeKind::LeaveJoint {
             return Ok(());
         }
 
@@ -1943,14 +1945,16 @@ where
             if let Some(exist_peer) = self.get_peer_from_cache(peer.get_id()) {
                 match (exist_peer.get_role(), change_type) {
                     (PeerRole::Voter, ConfChangeType::RemoveNode) => {
-                        return Err(box_err!(
-                            "{} invalid conf change request, can't remove voter directly",
-                            self.tag
-                        ))
+                        if kind != ConfChangeKind::Simple {
+                            return Err(box_err!(
+                                "{} invalid conf change request, can't remove voter directly",
+                                self.tag
+                            ));
+                        }
                     }
                     (PeerRole::IncomingVoter, _) | (PeerRole::DemotingVoter, _) => {
                         return Err(box_err!(
-                            "{} invalid conf change request, configuration is still in joint",
+                            "{} invalid conf change request, configuration is still in joint state",
                             self.tag
                         ));
                     }
@@ -1976,6 +1980,11 @@ where
                 );
                 return Err(box_err!("{} ignore remove leader", self.tag));
             }
+        }
+
+        if self.raft_group.raft.prs().conf().voters().ids().len() == 1 {
+            // It's always safe if there is only one node in the cluster.
+            return Ok(());
         }
 
         let promoted_commit_index = after_applied_prs.maximal_committed_index().0;

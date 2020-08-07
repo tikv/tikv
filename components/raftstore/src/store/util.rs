@@ -141,7 +141,7 @@ pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str 
     }
 }
 
-#[derive(Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum ConfChangeKind {
     // Only contains one configuration change
     Simple,

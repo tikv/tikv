@@ -1727,7 +1727,7 @@ where
                 (Some(exist_peer), cct) => match (exist_peer.get_role(), cct) {
                     (PeerRole::IncomingVoter, _) | (PeerRole::DemotingVoter, _) => {
                         error!(
-                            "can't apply confchange due to still in joint state";
+                            "can't apply confchange because configuration is still in joint state";
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
                             "peer" => ?peer,
@@ -1778,21 +1778,21 @@ where
                             self.region
                         ));
                     }
-                    (PeerRole::Voter, ConfChangeType::RemoveNode) => {
-                        error!(
-                            "can't remove voter directly";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "peer" => ?peer,
-                            "region" => ?&self.region
-                        );
-                        return Err(box_err!(
-                            "can't remove voter {:?} directly from region {:?}",
-                            peer,
-                            self.region
-                        ));
-                    }
-                    (PeerRole::Learner, ConfChangeType::RemoveNode) => {
+                    (role, ConfChangeType::RemoveNode) => {
+                        if kind == ConfChangeKind::EnterJoint && role == PeerRole::Voter {
+                            error!(
+                                "can't remove voter directly";
+                                "region_id" => self.region_id(),
+                                "peer_id" => self.id(),
+                                "peer" => ?peer,
+                                "region" => ?&self.region
+                            );
+                            return Err(box_err!(
+                                "can't remove voter {:?} directly from region {:?}",
+                                peer,
+                                self.region
+                            ));
+                        }
                         match util::remove_peer(&mut region, store_id) {
                             Some(p) => {
                                 if &p != peer {
