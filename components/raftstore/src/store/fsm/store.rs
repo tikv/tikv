@@ -74,6 +74,7 @@ use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
+use txn_types::TxnExtra;
 
 type Key = Vec<u8>;
 
@@ -224,6 +225,23 @@ where
             Err(TrySendError::Full(PeerMsg::RaftCommand(cmd))) => Err(TrySendError::Full(cmd)),
             Err(TrySendError::Disconnected(PeerMsg::RaftCommand(cmd))) => {
                 Err(TrySendError::Disconnected(cmd))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[inline]
+    pub fn send_txn_extra(
+        &self,
+        txn_extra: TxnExtra,
+    ) -> std::result::Result<(), TrySendError<TxnExtra>> {
+        match self.send_control(StoreMsg::TxnExtra(txn_extra)) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(StoreMsg::TxnExtra(txn_extra))) => {
+                Err(TrySendError::Full(txn_extra))
+            }
+            Err(TrySendError::Disconnected(StoreMsg::TxnExtra(txn_extra))) => {
+                Err(TrySendError::Disconnected(txn_extra))
             }
             _ => unreachable!(),
         }
@@ -531,6 +549,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
+                StoreMsg::TxnExtra(txn_extra) => self.ctx.coprocessor_host.on_txn_extra(txn_extra),
             }
         }
     }

@@ -23,11 +23,12 @@ use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
 use tikv_util::collections::HashMap;
+use tikv_util::lru::LruCache;
 use tikv_util::time::Instant;
 use tikv_util::timer::{SteadyTimer, Timer};
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tokio_threadpool::{Builder, ThreadPool};
-use txn_types::{Key, Lock, LockType, TimeStamp};
+use txn_types::{Key, Lock, LockType, MutationType, OldValue, TimeStamp, TxnExtra};
 
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
@@ -90,7 +91,9 @@ impl fmt::Debug for Deregister {
 }
 
 type InitCallback = Box<dyn FnOnce() + Send>;
-pub(crate) type OldValueCallback = Box<dyn FnMut(Key) -> Option<Vec<u8>> + Send>;
+pub(crate) type OldValueCache = LruCache<Key, (Option<OldValue>, MutationType)>;
+pub(crate) type OldValueCallback =
+    Box<dyn FnMut(Key, &mut OldValueCache) -> Option<Vec<u8>> + Send>;
 
 pub enum Task {
     Register {
@@ -128,6 +131,7 @@ pub enum Task {
         downstream_state: Arc<AtomicCell<DownstreamState>>,
         cb: InitCallback,
     },
+    TxnExtra(TxnExtra),
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
 }
 
@@ -199,12 +203,14 @@ impl fmt::Debug for Task {
                 .field("type", &"init_downstream")
                 .field("downstream", &downstream_id)
                 .finish(),
+            Task::TxnExtra(_) => de.field("type", &"txn_extra").finish(),
             Task::Validate(region_id, _) => de.field("region_id", &region_id).finish(),
         }
     }
 }
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
+const OLD_VALUE_LRU_SIZE: usize = 1024;
 
 pub struct Endpoint<T> {
     capture_regions: HashMap<u64, Delegate>,
@@ -224,6 +230,7 @@ pub struct Endpoint<T> {
 
     min_resolved_ts: TimeStamp,
     min_ts_region_id: u64,
+    old_value_cache: OldValueCache,
 }
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
@@ -251,6 +258,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             min_ts_interval: Duration::from_secs(1),
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
+            old_value_cache: LruCache::with_capacity(OLD_VALUE_LRU_SIZE),
         };
         ep.register_min_ts_event();
         ep
@@ -518,7 +526,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     // Skip the batch if the delegate has failed.
                     continue;
                 }
-                if let Err(e) = delegate.on_batch(batch, old_value_cb.clone()) {
+                if let Err(e) =
+                    delegate.on_batch(batch, old_value_cb.clone(), &mut self.old_value_cache)
+                {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
                     deregister = Some(Deregister::Region {
@@ -874,6 +884,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
                 downstream_state
                     .compare_and_swap(DownstreamState::Uninitialized, DownstreamState::Normal);
                 cb();
+            }
+            Task::TxnExtra(txn_extra) => {
+                for (k, v) in txn_extra.old_values {
+                    self.old_value_cache.insert(k, v);
+                }
             }
             Task::Validate(region_id, validate) => {
                 validate(self.capture_regions.get(&region_id));

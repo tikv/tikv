@@ -4046,6 +4046,8 @@ mod tests {
                 }
             }
         }
+
+        fn on_txn_extra(&self, _: txn_types::TxnExtra) {}
     }
 
     #[test]

@@ -9,6 +9,7 @@ use kvproto::raft_cmdpb::{
     AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
 };
 use raft::StateRole;
+use txn_types::TxnExtra;
 
 pub mod config;
 pub mod dispatcher;
@@ -244,4 +245,5 @@ pub trait CmdObserver<E>: Coprocessor {
     fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd);
     /// Hook to call after flushing writes to db.
     fn on_flush_apply(&self, engine: E);
+    fn on_txn_extra(&self, txn_extra: TxnExtra);
 }

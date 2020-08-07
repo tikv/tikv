@@ -17,7 +17,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::worker::Scheduler;
 use txn_types::{Key, Lock, MutationType, TxnExtra, Value, WriteRef, WriteType};
 
-use crate::endpoint::{Deregister, Task};
+use crate::endpoint::{Deregister, OldValueCache, Task};
 use crate::{Error as CdcError, Result};
 
 /// An Observer for CDC.
@@ -114,7 +114,6 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
 
     fn on_flush_apply(&self, engine: E) {
         fail_point!("before_cdc_flush_apply");
-        let mut txn_extra = TxnExtra::default();
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
             let mut region = Region::default();
@@ -123,8 +122,8 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             let snapshot =
                 RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
             let mut reader = OldValueReader::new(snapshot);
-            let get_old_value = move |key| {
-                if let Some((old_value, mutation_type)) = txn_extra.mut_old_values().remove(&key) {
+            let get_old_value = move |key, old_value_cache: &mut OldValueCache| {
+                if let Some((old_value, mutation_type)) = old_value_cache.remove(&key) {
                     match mutation_type {
                         MutationType::Insert => {
                             assert!(old_value.is_none());
@@ -152,6 +151,12 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             }) {
                 warn!("schedule cdc task failed"; "error" => ?e);
             }
+        }
+    }
+
+    fn on_txn_extra(&self, txn_extra: TxnExtra) {
+        if let Err(e) = self.sched.schedule(Task::TxnExtra(txn_extra)) {
+            warn!("schedule cdc task failed"; "error" => ?e);
         }
     }
 }

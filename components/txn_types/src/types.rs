@@ -327,7 +327,7 @@ pub type OldValues = HashMap<Key, (Option<OldValue>, MutationType)>;
 // Extra data fields filled by kvrpcpb::ExtraOp.
 #[derive(Default, Debug, Clone)]
 pub struct TxnExtra {
-    old_values: OldValues,
+    pub old_values: OldValues,
 }
 
 impl TxnExtra {
@@ -347,14 +347,6 @@ impl TxnExtra {
     pub fn extend(&mut self, other: &mut Self) {
         self.old_values
             .extend(std::mem::take(&mut other.old_values))
-    }
-
-    pub fn mut_old_values(&mut self) -> &mut OldValues {
-        &mut self.old_values
-    }
-
-    pub fn get_old_values(&self) -> &OldValues {
-        &self.old_values
     }
 }
 

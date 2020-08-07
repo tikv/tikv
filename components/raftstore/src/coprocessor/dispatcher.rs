@@ -5,6 +5,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use std::marker::PhantomData;
+use txn_types::TxnExtra;
 
 use std::mem;
 use std::ops::Deref;
@@ -491,6 +492,29 @@ where
             .on_flush_apply(engine)
     }
 
+    pub fn on_txn_extra(&self, txn_extra: TxnExtra) {
+        if self.registry.cmd_observers.is_empty() {
+            return;
+        }
+
+        for i in 0..self.registry.cmd_observers.len() - 1 {
+            self.registry
+                .cmd_observers
+                .get(i)
+                .unwrap()
+                .observer
+                .inner()
+                .on_txn_extra(txn_extra.clone())
+        }
+        self.registry
+            .cmd_observers
+            .last()
+            .unwrap()
+            .observer
+            .inner()
+            .on_txn_extra(txn_extra)
+    }
+
     pub fn shutdown(&self) {
         for entry in &self.registry.admin_observers {
             entry.observer.inner().stop();
@@ -624,6 +648,7 @@ mod tests {
         fn on_flush_apply(&self, _: PanicEngine) {
             self.called.fetch_add(13, Ordering::SeqCst);
         }
+        fn on_txn_extra(&self, _: txn_types::TxnExtra) {}
     }
 
     macro_rules! assert_all {

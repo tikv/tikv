@@ -213,10 +213,12 @@ where
     }
 
     #[inline]
-    pub fn remove(&mut self, key: &K) {
+    pub fn remove(&mut self, key: &K) -> Option<V> {
         if let Some(v) = self.map.remove(key) {
             self.trace.delete(v.record);
+            return Some(v.value);
         }
+        None
     }
 
     #[inline]
