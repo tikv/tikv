@@ -1698,7 +1698,11 @@ where
             match (util::find_peer_mut(&mut region, store_id), change_type) {
                 (None, ConfChangeType::AddNode) => {
                     let mut peer = peer.clone();
-                    peer.set_role(PeerRole::IncomingVoter);
+                    match kind {
+                        ConfChangeKind::Simple => peer.set_role(PeerRole::Voter),
+                        ConfChangeKind::EnterJoint => peer.set_role(PeerRole::IncomingVoter),
+                        _ => unreachable!(),
+                    }
                     region.mut_peers().push(peer);
                 }
                 (None, ConfChangeType::AddLearnerNode) => {
