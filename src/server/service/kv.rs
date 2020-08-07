@@ -20,6 +20,7 @@ use crate::storage::{
     SecondaryLocksStatus, Storage, TxnStatus,
 };
 use engine_rocks::RocksEngine;
+use engine_traits::CF_VER_DEFAULT;
 use futures::executor::{self, Notify, Spawn};
 use futures::future::Either;
 use futures::{future, Async, Future, Sink, Stream};
@@ -1510,7 +1511,13 @@ fn future_ver_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
     let version = req.get_version();
     key = key.append_ts(version.into());
     let value = ver_mutation.take_value();
-    let res = storage.raw_put(req.take_context(), "".to_string(), key.into_raw().expect("failed to decode"), value, cb);
+    let res = storage.raw_put(
+        req.take_context(),
+        "".to_string(),
+        key.into_raw().expect("failed to decode"),
+        value,
+        cb,
+    );
 
     AndThenWith::new(res, future.map_err(Error::from)).map(|v| {
         let mut resp = VerMutResponse::default();
@@ -1525,13 +1532,36 @@ fn future_ver_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
     })
 }
 
-// unimplemented
 fn future_ver_batch_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
-    mut _req: VerBatchMutRequest,
+    storage: &Storage<E, L, P>,
+    mut req: VerBatchMutRequest,
 ) -> impl Future<Item = VerBatchMutResponse, Error = Error> {
-    let resp = VerBatchMutResponse::default();
-    future::ok(resp)
+    let cf = CF_VER_DEFAULT.to_string();
+    let version = req.get_version();
+    let pairs = req
+        .take_muts()
+        .into_iter()
+        .map(|mut x| {
+            let mut key = Key::from_raw(&x.take_key());
+            key = key.append_ts(version.into());
+            (key.into_raw().expect("failed to decode"), x.take_value())
+        })
+        .collect();
+
+    let (cb, f) = paired_future_callback();
+    let res = storage.raw_batch_put(req.take_context(), cf, pairs, cb);
+
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = VerBatchMutResponse::default();
+        let mut ver_err = VerError::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            ver_err.set_error(format!("{}", e));
+            resp.set_error(ver_err);
+        }
+        resp
+    })
 }
 
 fn future_ver_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
