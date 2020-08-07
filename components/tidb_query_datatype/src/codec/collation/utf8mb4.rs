@@ -362,7 +362,7 @@ fn unicode_ci_convert(c: char) -> u128 {
 
     let u = UNICODE_CI_TABLE[r];
     if u == LONG_RUNE {
-        map_long_rune(r)
+        return map_long_rune(r)
     }
 
     u as u128
@@ -466,11 +466,11 @@ impl Collator for CollatorUtf8Mb4UnicodeCi {
             }
 
             while an != 0 && bn != 0 {
-                if (an^bn)&0xFFFF {
+                if (an^bn)&0xFFFF == 0 {
                     an >>= 16;
                     bn >>= 16;
                 } else {
-                    Ok((an&0xFFFF).cmp(&(bn&0xFFFF)))
+                    return Ok((an&0xFFFF).cmp(&(bn&0xFFFF)))
                 }
             }
         }
