@@ -362,7 +362,7 @@ fn unicode_ci_convert(c: char) -> u128 {
 
     let u = UNICODE_CI_TABLE[r];
     if u == LONG_RUNE {
-        maptoweight(r)
+        map_long_rune(r)
     }
 
     u as u128
