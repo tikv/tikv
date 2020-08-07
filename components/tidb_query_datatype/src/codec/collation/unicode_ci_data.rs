@@ -577,6 +577,6 @@ pub fn map_long_rune(r: usize) -> u128 {
         0x33AE => 0x04370E6D0E330FC00000000000000FEA,
         0x33AF => 0x04370E6D0E330FC0000000000E2B0FEA,
         0xFDFB => 0x135E020913AB135E13B713AB135013AB,
-        _ => 0xFFFD
+        _ => 0xFFFD,
     }
 }

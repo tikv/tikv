@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod utf8mb4;
 mod unicode_ci_data;
+mod utf8mb4;
 
 pub use self::utf8mb4::*;
 
