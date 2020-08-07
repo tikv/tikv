@@ -57,7 +57,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     trans: ServerTransport<T, S>,
     raft_router: T,
     // For sending/receiving snapshots.
-    snap_mgr: SnapManager<RocksEngine>,
+    snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
@@ -77,7 +77,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         cop: Endpoint<E>,
         raft_router: T,
         resolver: S,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         gc_worker: GcWorker<E>,
         yatp_read_pool: Option<ReadPool>,
     ) -> Result<Self> {
@@ -423,7 +423,7 @@ mod tests {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
             },
-            SnapManager::new("", None),
+            SnapManager::new(""),
             gc_worker,
             None,
         )
