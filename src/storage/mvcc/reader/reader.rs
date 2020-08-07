@@ -26,10 +26,11 @@ impl<'a, S: Snapshot, F: Fn(&Lock) -> bool> Iterator for ScanLocksIter<'a, S, F>
         while self.cursor.valid().ok()? {
             let key = Key::from_encoded_slice(self.cursor.key(&mut self.lock));
             let lock = Lock::parse(self.cursor.value(&mut self.lock)).ok()?;
+            self.cursor.next(&mut self.lock);
             if (self.filter_)(&lock) {
+                self.lock.processed += 1;
                 return Some((key, lock));
             }
-            self.cursor.next(&mut self.lock);
         }
         None
     }
@@ -349,7 +350,7 @@ impl<S: Snapshot> MvccReader<S> {
         &mut self,
         start: Option<&Key>,
         filter: F,
-    ) -> ScanLocksIter<S, F> {
+    ) -> Option<ScanLocksIter<S, F>> {
         // todo: handle error
         self.create_lock_cursor().unwrap();
         let cursor = self.lock_cursor.as_mut().unwrap();
@@ -359,14 +360,13 @@ impl<S: Snapshot> MvccReader<S> {
             None => cursor.seek_to_first(&mut self.statistics.lock),
         };
         if !ok {
-            // todo
-            unimplemented!();
+            return None;
         }
-        ScanLocksIter {
+        Some(ScanLocksIter {
             lock: &mut self.statistics.lock,
             cursor,
             filter_: filter,
-        }
+        })
     }
 
     pub fn scan_keys(

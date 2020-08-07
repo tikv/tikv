@@ -4061,7 +4061,7 @@ mod tests {
 
         // We should be able to resolve all locks for transaction ts=100 when there are this
         // many locks.
-        let scanned_locks_coll = vec![1, 127, 512, 1024];
+        let scanned_locks_coll = vec![1, 255, 256, 257, 511, 512, 513];
 
         let is_rollback_coll = vec![
             false, // commit

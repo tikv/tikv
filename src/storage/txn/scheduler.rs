@@ -105,9 +105,9 @@ impl TaskContext {
         let tag = task.cmd.tag();
         let lock = task.cmd.gen_lock(latches);
         // Write command should acquire write lock.
-        if !task.cmd.readonly() && !lock.is_write_lock() {
-            panic!("write lock is expected for command {}", task.cmd);
-        }
+        // if !task.cmd.readonly() && !lock.is_write_lock() {
+        //     panic!("write lock is expected for command {}", task.cmd);
+        // }
         let write_bytes = if lock.is_write_lock() {
             task.cmd.write_bytes()
         } else {

@@ -78,36 +78,38 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         });
         let mut rows = 0;
         let mut next_first_scan_key = None;
-        for (current_key, current_lock) in iter {
-            if txn.write_size() >= MAX_TXN_WRITE_SIZE {
-                next_first_scan_key = Some((current_key, current_lock));
-                break;
-            }
-            let mut lock = context.latches.gen_lock(std::iter::once(&current_key));
-            if context.latches.acquire(&mut lock, context.cid) {
-                // when latch is acquired successfully, we can resolve the lock
-                txn.set_start_ts(current_lock.ts);
-                let commit_ts = *txn_status
-                    .get(&current_lock.ts)
-                    .expect("txn status not found");
+        if let Some(iter) = iter {
+            for (current_key, current_lock) in iter {
+                if txn.write_size() >= MAX_TXN_WRITE_SIZE {
+                    next_first_scan_key = Some((current_key, current_lock));
+                    break;
+                }
+                let mut lock = context.latches.gen_lock(std::iter::once(&current_key));
+                if context.latches.acquire(&mut lock, context.cid) {
+                    // when latch is acquired successfully, we can resolve the lock
+                    txn.set_start_ts(current_lock.ts);
+                    let commit_ts = *txn_status
+                        .get(&current_lock.ts)
+                        .expect("txn status not found");
 
-                if commit_ts.is_zero() {
-                    txn.rollback(current_key.clone())?
-                } else if commit_ts > current_lock.ts {
-                    txn.commit(current_key.clone(), commit_ts)?
+                    if commit_ts.is_zero() {
+                        txn.rollback(current_key.clone())?
+                    } else if commit_ts > current_lock.ts {
+                        txn.commit(current_key.clone(), commit_ts)?
+                    } else {
+                        return Err(Error::from(ErrorInner::InvalidTxnTso {
+                            start_ts: current_lock.ts,
+                            commit_ts,
+                        }));
+                    };
+                    rows += 1;
+                    ReleasedLocks::new(current_lock.ts, commit_ts).wake_up(context.lock_mgr);
+                    context.latches.release(&lock, context.cid);
                 } else {
-                    return Err(Error::from(ErrorInner::InvalidTxnTso {
-                        start_ts: current_lock.ts,
-                        commit_ts,
-                    }));
-                };
-                rows += 1;
-                ReleasedLocks::new(current_lock.ts, commit_ts).wake_up(context.lock_mgr);
-                context.latches.release(&lock, context.cid);
-            } else {
-                // else "spawn" another `ResolveLockScan` command which will wait for this (key, lock) group
-                next_first_scan_key = Some((current_key, current_lock));
-                break;
+                    // else "spawn" another `ResolveLockScan` command which will wait for this (key, lock) group
+                    next_first_scan_key = Some((current_key, current_lock));
+                    break;
+                }
             }
         }
 
