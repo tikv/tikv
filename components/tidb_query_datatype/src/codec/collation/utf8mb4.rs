@@ -432,7 +432,7 @@ impl Collator for CollatorUtf8Mb4UnicodeCi {
             while convert != 0 {
                 writer.write_u16_be((convert & 0xFFFF) as u16)?;
                 n += 1;
-                convert = convert >> 16
+                convert >>= 16
             }
         }
         Ok(n * std::mem::size_of::<u16>())
