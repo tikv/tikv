@@ -290,7 +290,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
     }
 
     // Check whether there's an overlay write record, and then perform rollback. The actual behavior
-    // to do the rollback differs according th whether there's an ovarlay write record.
+    // to do the rollback differs according to whether there's an overlay write record.
     fn check_write_and_rollback_lock(
         &mut self,
         key: Key,
@@ -674,9 +674,8 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         if !skip_constraint_check {
             if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
                 // Abort on writes after our start timestamp ...
-                // If exists a commit version whose commit timestamp is larger than or equal to
-                // current start timestamp, we should abort current prewrite, even if the commit
-                // type is Rollback.
+                // If exists a commit version whose commit timestamp is larger than current start
+                // timestamp, we should abort current prewrite.
                 if commit_ts > self.start_ts {
                     MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
                     return Err(ErrorInner::WriteConflict {
@@ -688,6 +687,9 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     }
                     .into());
                 }
+                // If there's a write record whose commit_ts equals to our start ts, the current
+                // transaction is ok to continue, unless the record means that the current
+                // transaction has been rolled back.
                 if commit_ts == self.start_ts
                     && (write.write_type == WriteType::Rollback || write.has_overlay_rollback)
                 {
