@@ -58,7 +58,7 @@ impl Modify {
         let cf = match self {
             Modify::Delete(cf, _) => cf,
             Modify::Put(cf, ..) => cf,
-            Modify::DeleteRange(..) => unreachable!(),
+            Modify::DeleteRange(..) => return 0,
         };
         let cf_size = if cf == &CF_DEFAULT { 0 } else { cf.len() };
 
@@ -73,7 +73,7 @@ impl Modify {
         let cf = match self {
             Modify::Delete(cf, _) => cf,
             Modify::Put(cf, ..) => cf,
-            Modify::DeleteRange(..) => unreachable!(),
+            Modify::DeleteRange(..) => return (CF_DEFAULT, 0),
         };
         let cf_size = if cf == &CF_DEFAULT { 0 } else { cf.len() };
 
