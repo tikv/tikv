@@ -1948,36 +1948,34 @@ where
         // No matter whether the source peer has applied to the required index,
         // it's a race to write apply state in both source delegate and target
         // fsm. So asking the source delegate to stop first.
+        info!(
+            "asking fsm to stop";
+            "region_id" => self.region_id(),
+            "peer_id" => self.id(),
+            "source_region_id" => source_region_id
+        );
+        fail_point!("before_handle_catch_up_logs_for_merge");
+        // Sends message to the source peer fsm and pause `exec_commit_merge` process
+        let (callback, f) = paired_std_future_callback::<u64>();
+        let msg = SignificantMsg::CatchUpLogs(CatchUpLogs {
+            target_region_id: self.region_id(),
+            merge: merge.to_owned(),
+            callback,
+        });
+        ctx.core
+            .notifier
+            .notify(source_region_id, PeerMsg::SignificantMsg(msg));
+
+        // We must notify other fsm to avoid them block when this fsm is waiting for source region
+        if !ctx.flush_notifier.is_empty() {
+            ctx.flush();
+        }
+        self.ready_source_region_id = f.await.unwrap();
         if self.ready_source_region_id != source_region_id {
-            if self.ready_source_region_id != 0 {
-                panic!(
-                    "{} unexpected ready source region {}, expecting {}",
-                    self.tag, self.ready_source_region_id, source_region_id
-                );
-            }
-            info!(
-                "asking fsm to stop";
-                "region_id" => self.region_id(),
-                "peer_id" => self.id(),
-                "source_region_id" => source_region_id
+            panic!(
+                "{} unexpected ready source region {}, expecting {}",
+                self.tag, self.ready_source_region_id, source_region_id
             );
-            fail_point!("before_handle_catch_up_logs_for_merge");
-            // Sends message to the source peer fsm and pause `exec_commit_merge` process
-            while self.ready_source_region_id != source_region_id {
-                let (callback, f) = paired_std_future_callback::<u64>();
-                let msg = SignificantMsg::CatchUpLogs(CatchUpLogs {
-                    target_region_id: self.region_id(),
-                    merge: merge.to_owned(),
-                    callback,
-                });
-                ctx.core
-                    .notifier
-                    .notify(source_region_id, PeerMsg::SignificantMsg(msg));
-                if !ctx.apply_res.is_empty() {
-                    ctx.flush();
-                }
-                self.ready_source_region_id = f.await.unwrap();
-            }
         }
 
         info!(
