@@ -75,6 +75,7 @@ prost-codec = [
 ]
 jemalloc = ["tikv/jemalloc"]
 sse = ["tikv/sse"]
+cloud = ["tikv/cloud"]
 portable = ["tikv/portable"]
 
 [dependencies]
