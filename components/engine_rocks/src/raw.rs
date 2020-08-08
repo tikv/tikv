@@ -18,5 +18,5 @@ pub use rocksdb::{
     Writable, WriteOptions, DB,
 };
 
-#[cfg(features = "cloud")]
+#[cfg(feature = "cloud")]
 pub use rocksdb::CloudEnvOptions;

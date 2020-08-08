@@ -67,6 +67,11 @@ ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
 endif
 
+# Build with cloud features by default, unless explicitly disable
+ifneq ($(ROCKSDB_SYS_CLOUD),0)
+ENABLE_FEATURES += cloud
+endif
+
 ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
 endif
