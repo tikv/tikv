@@ -771,6 +771,17 @@ mod tests {
                     ],
                 ],
             ),
+            (
+                "ﷻ",
+                [
+                    vec![0x00, 0xFD, 0xFB],
+                    vec![0xFD, 0xFB],
+                    vec![
+                        0x13, 0x5E, 0x13, 0xAB, 0x02, 0x09, 0x13, 0x5E, 0x13, 0xAB, 0x13, 0x50,
+                        0x13, 0xAB, 0x13, 0xB7,
+                    ],
+                ],
+            ),
         ];
         for (s, expected) in cases {
             for (collation, order_in_expected) in &collations {
