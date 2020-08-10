@@ -198,7 +198,7 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         // TODO: 0 is a valid value for compression_level
         if self.compression_level != 0 {
             // other three fields are default value.
-            // see: https://github.com/facebook/rocksdb/blob/master/include/rocksdb/advanced_options.h#L146-L153
+            // see: https://github.com/facebook/rocksdb/blob/8cb278d11a43773a3ac22e523f4d183b06d37d88/include/rocksdb/advanced_options.h#L146-L153
             io_options.set_compression_options(-14, self.compression_level, 0, 0);
         }
         io_options.compression(compress_type);
