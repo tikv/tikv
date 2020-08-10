@@ -85,6 +85,8 @@ pub use rocks_metrics_defs::*;
 pub mod event_listener;
 pub use event_listener::*;
 
+pub mod cloud;
+
 pub mod config;
 pub use config::*;
 pub mod encryption;

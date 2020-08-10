@@ -77,7 +77,7 @@ fn new_debug_executor(
                 DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .unwrap()
                     .map(|key_manager| Arc::new(key_manager));
-            let env = get_env(key_manager, None).unwrap();
+            let env = get_env(key_manager, Some(Arc::new(cfg.rocksdb.s3.clone())), None).unwrap();
             let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
             kv_db_opts.set_env(env.clone());
@@ -2401,7 +2401,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     let key_manager = DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(|key_manager| Arc::new(key_manager));
-    let env = get_env(key_manager, None).unwrap();
+    let env = get_env(key_manager, Some(Arc::new(cfg.rocksdb.s3.clone())), None).unwrap();
     let mut opts = cfg.rocksdb.build_opt();
     opts.set_env(env);
 

@@ -234,7 +234,11 @@ impl SSTImporter {
 
         // now validate the SST file.
         let path_str = path.temp.to_str().unwrap();
-        let env = get_env(self.key_manager.clone(), None /*base_env*/)?;
+        let env = get_env(
+            self.key_manager.clone(),
+            None, /*s3_config*/
+            None, /*base_env*/
+        )?;
         // Use abstracted SstReader after Env is abstracted.
         let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
         sst_reader.verify_checksum()?;

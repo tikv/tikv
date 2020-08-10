@@ -8,6 +8,7 @@ use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
+use engine_rocks::cloud::S3Config;
 use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
 use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,

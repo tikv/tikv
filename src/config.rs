@@ -30,9 +30,9 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
+use engine_rocks::cloud::S3Config;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
-use engine_rocks::raw::{CloudEnvOptions, Env};
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::util::{
     FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
@@ -801,52 +801,6 @@ impl TitanDBConfig {
 
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         Ok(())
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-// Note that the S3 integration is still an experimental feature.
-pub struct S3Config {
-    pub enabled: bool,
-    pub src_cloud_bucket: String,
-    pub src_cloud_object: String,
-    pub src_cloud_region: String,
-    pub dest_cloud_bucket: String,
-    pub dest_cloud_object: String,
-    pub dest_cloud_region: String,
-}
-
-impl Default for S3Config {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            src_cloud_bucket: "".to_owned(),
-            src_cloud_object: "".to_owned(),
-            src_cloud_region: "".to_owned(),
-            dest_cloud_bucket: "".to_owned(),
-            dest_cloud_object: "".to_owned(),
-            dest_cloud_region: "".to_owned(),
-        }
-    }
-}
-
-impl S3Config {
-    pub fn build_env(&self) -> Option<Arc<Env>> {
-        let env = Env::new_aws_env(
-            Arc::new(Env::default()),
-            &self.src_cloud_bucket,
-            &self.src_cloud_object,
-            &self.src_cloud_region,
-            &self.dest_cloud_bucket,
-            &self.dest_cloud_object,
-            &self.dest_cloud_region,
-            CloudEnvOptions::new(),
-        )
-        .expect("Couldn't generate a Cloud Env");
-
-        Some(Arc::new(env))
     }
 }
 

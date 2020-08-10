@@ -371,12 +371,12 @@ impl TiKVServer {
     }
 
     fn init_engines(&mut self) {
-        #[allow(unused_mut)]
-        let mut base_env = None;
-        if self.config.rocksdb.s3.enabled {
-            base_env = self.config.rocksdb.s3.build_env();
-        }
-        let env = get_env(self.encryption_key_manager.clone(), base_env).unwrap();
+        let env = get_env(
+            self.encryption_key_manager.clone(),
+            Some(Arc::new(self.config.rocksdb.s3.clone())),
+            None, /*base_env*/
+        )
+        .unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);

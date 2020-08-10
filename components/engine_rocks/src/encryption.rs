@@ -3,7 +3,8 @@
 use std::io::Result;
 use std::sync::Arc;
 
-use crate::raw::Env;
+use crate::cloud::S3Config;
+use crate::raw::{CloudEnvOptions, Env};
 use encryption::{self, DataKeyManager};
 use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
 use rocksdb::{
@@ -14,9 +15,24 @@ use rocksdb::{
 // Use engine::Env directly since Env is not abstracted.
 pub fn get_env(
     key_manager: Option<Arc<DataKeyManager>>,
+    s3_config: Option<Arc<S3Config>>,
     base_env: Option<Arc<Env>>,
 ) -> encryption::Result<Arc<Env>> {
-    let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
+    let mut base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
+    if let Some(cfg) = s3_config {
+        if cfg.enabled {
+            base_env = Arc::new(Env::new_aws_env(
+                base_env,
+                &cfg.src_cloud_bucket,
+                &cfg.src_cloud_object,
+                &cfg.src_cloud_region,
+                &cfg.dest_cloud_bucket,
+                &cfg.dest_cloud_object,
+                &cfg.dest_cloud_region,
+                CloudEnvOptions::new(),
+            )?);
+        }
+    }
     if let Some(manager) = key_manager {
         // TODO(yiwu): To avoid nested Arc here, need to refactor rust-rocksdb API to accept a
         // Box<DBEncryptionKeyManager> instead.

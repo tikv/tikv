@@ -519,7 +519,12 @@ pub fn create_test_engine(
             .unwrap()
             .map(|key_manager| Arc::new(key_manager));
 
-    let env = get_env(key_manager.clone(), None).unwrap();
+    let env = get_env(
+        key_manager.clone(),
+        Some(Arc::new(cfg.rocksdb.s3.clone())),
+        None,
+    )
+    .unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
 
     let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
