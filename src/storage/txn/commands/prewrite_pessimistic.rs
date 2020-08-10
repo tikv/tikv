@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use pd_client::PdClient;
 use txn_types::{Key, Mutation, TimeStamp};
 
 use crate::storage::kv::WriteData;
@@ -65,16 +64,14 @@ impl CommandExt for PrewritePessimistic {
     gen_lock!(mutations: multiple(|(x, _)| x.key()));
 }
 
-impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
-    for PrewritePessimistic
-{
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            context.pd_client,
+            context.concurrency_manager,
         );
         // Althrough pessimistic prewrite doesn't read the write record for checking conflict, we still set extra op here
         // for getting the written keys.
@@ -121,7 +118,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
             }
         }
         context.statistics.add(&txn.take_statistics());
-        let (pr, to_be_write, rows, ctx, lock_info) = if locks.is_empty() {
+        let (pr, to_be_write, rows, ctx, lock_info, lock_guards) = if locks.is_empty() {
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks: vec![],
@@ -129,8 +126,11 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
                 },
             };
             let txn_extra = txn.take_extra();
+            // Here the lock guards are taken and will be released after the write finishes.
+            // If an error occurs before, these lock guards are dropped along with `txn` automatically.
+            let lock_guards = txn.take_guards();
             let write_data = WriteData::new(txn.into_modifies(), txn_extra);
-            (pr, write_data, rows, self.ctx, None)
+            (pr, write_data, rows, self.ctx, None, lock_guards)
         } else {
             // Skip write stage if some keys are locked.
             let pr = ProcessResult::PrewriteResult {
@@ -139,7 +139,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
                     min_commit_ts: async_commit_ts,
                 },
             };
-            (pr, WriteData::default(), 0, self.ctx, None)
+            (pr, WriteData::default(), 0, self.ctx, None, vec![])
         };
         Ok(WriteResult {
             ctx,
@@ -147,6 +147,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
             rows,
             pr,
             lock_info,
+            lock_guards,
         })
     }
 }

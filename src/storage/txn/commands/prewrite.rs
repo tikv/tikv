@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::CF_WRITE;
-use pd_client::PdClient;
 use txn_types::{Key, Mutation, TimeStamp};
 
 use crate::storage::kv::WriteData;
@@ -130,12 +129,8 @@ impl Prewrite {
     }
 }
 
-impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Prewrite {
-    fn process_write(
-        mut self,
-        snapshot: S,
-        context: WriteContext<'_, L, P>,
-    ) -> Result<WriteResult> {
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
+    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
         if rows > FORWARD_MIN_MUTATIONS_NUM {
             self.mutations.sort_by(|a, b| a.key().cmp(b.key()));
@@ -162,7 +157,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            context.pd_client,
+            context.concurrency_manager,
         );
 
         // Set extra op here for getting the write record when check write conflict in prewrite.
@@ -208,7 +203,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         }
 
         context.statistics.add(&txn.take_statistics());
-        let (pr, to_be_write, rows, ctx, lock_info) = if locks.is_empty() {
+        let (pr, to_be_write, rows, ctx, lock_info, lock_guards) = if locks.is_empty() {
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks: vec![],
@@ -216,8 +211,12 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                 },
             };
             let txn_extra = txn.take_extra();
+            // Here the lock guards are taken and will be released after the write finishes.
+            // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
+            // are dropped along with `txn` automatically.
+            let lock_guards = txn.take_guards();
             let write_data = WriteData::new(txn.into_modifies(), txn_extra);
-            (pr, write_data, rows, self.ctx, None)
+            (pr, write_data, rows, self.ctx, None, lock_guards)
         } else {
             // Skip write stage if some keys are locked.
             let pr = ProcessResult::PrewriteResult {
@@ -226,7 +225,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                     min_commit_ts: async_commit_ts,
                 },
             };
-            (pr, WriteData::default(), 0, self.ctx, None)
+            (pr, WriteData::default(), 0, self.ctx, None, vec![])
         };
         Ok(WriteResult {
             ctx,
@@ -234,18 +233,16 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             rows,
             pr,
             lock_info,
+            lock_guards,
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use kvproto::kvrpcpb::{Context, ExtraOp};
 
     use engine_traits::CF_WRITE;
-    use pd_client::DummyPdClient;
     use txn_types::TimeStamp;
     use txn_types::{Key, Mutation};
 
@@ -257,7 +254,8 @@ mod tests {
     use crate::storage::txn::{Error, ErrorInner, Result};
     use crate::storage::DummyLockManager;
     use crate::storage::{
-        Engine, PrewriteResult, ProcessResult, Snapshot, Statistics, TestEngineBuilder,
+        concurrency_manager::ConcurrencyManager, Engine, PrewriteResult, ProcessResult, Snapshot,
+        Statistics, TestEngineBuilder,
     };
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
@@ -424,10 +422,11 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
+        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts));
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
-            pd_client: Arc::new(DummyPdClient::new()),
+            concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
@@ -458,6 +457,7 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
+        let concurrency_manager = ConcurrencyManager::new(lock_ts.into());
         let cmd = Commit::new(
             keys,
             TimeStamp::from(lock_ts),
@@ -467,7 +467,7 @@ mod tests {
 
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
-            pd_client: Arc::new(DummyPdClient::new()),
+            concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
@@ -487,10 +487,11 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
+        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
         let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
-            pd_client: Arc::new(DummyPdClient::new()),
+            concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,

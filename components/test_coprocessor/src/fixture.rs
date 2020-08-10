@@ -10,7 +10,7 @@ use tikv::coprocessor::{readpool_impl, Endpoint};
 use tikv::read_pool::ReadPool;
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
-use tikv::storage::{Engine, TestEngineBuilder};
+use tikv::storage::{concurrency_manager::ConcurrencyManager, Engine, TestEngineBuilder};
 
 #[derive(Clone)]
 pub struct ProductTable(Table);
@@ -84,7 +84,8 @@ pub fn init_data_with_details<E: Engine>(
         &CoprReadPoolConfig::default_for_test(),
         store.get_engine(),
     ));
-    let cop = Endpoint::new(cfg, pool.handle());
+    let cm = ConcurrencyManager::new(1.into());
+    let cop = Endpoint::new(cfg, pool.handle(), cm);
     (store, cop)
 }
 
