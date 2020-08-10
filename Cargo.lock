@@ -1122,6 +1122,8 @@ dependencies = [
  "crossbeam-skiplist",
  "engine_traits",
  "hex 0.3.2",
+ "lazy_static",
+ "prometheus",
  "slog",
  "slog-global",
  "tikv_alloc",
