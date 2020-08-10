@@ -155,7 +155,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         read_pool: ReadPoolHandle,
         lock_mgr: L,
         pd_client: Arc<P>,
-        pipelined_pessimistic_lock: bool,
+        pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -1274,7 +1274,7 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
 pub struct TestStorageBuilder<E: Engine, L: LockManager> {
     engine: E,
     config: Config,
-    pipelined_pessimistic_lock: bool,
+    pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
     lock_mgr: L,
 }
 
@@ -1284,7 +1284,7 @@ impl TestStorageBuilder<RocksEngine, DummyLockManager> {
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: Config::default(),
-            pipelined_pessimistic_lock: false,
+            pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
             lock_mgr,
         }
     }
@@ -1295,7 +1295,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         Self {
             engine,
             config: Config::default(),
-            pipelined_pessimistic_lock: false,
+            pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
             lock_mgr,
         }
     }
@@ -1308,8 +1308,9 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         self
     }
 
-    pub fn set_pipelined_pessimistic_lock(mut self, enabled: bool) -> Self {
-        self.pipelined_pessimistic_lock = enabled;
+    pub fn set_pipelined_pessimistic_lock(self, enabled: bool) -> Self {
+        self.pipelined_pessimistic_lock
+            .store(enabled, atomic::Ordering::Relaxed);
         self
     }
 

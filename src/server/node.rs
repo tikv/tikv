@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -39,7 +39,7 @@ pub fn create_raft_storage<S, P: PdClient + 'static>(
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
     pd_client: Arc<P>,
-    pipelined_pessimistic_lock: bool,
+    pipelined_pessimistic_lock: Arc<AtomicBool>,
 ) -> Result<Storage<RaftKv<S>, LockManager, P>>
 where
     S: RaftStoreRouter<RocksEngine> + 'static,

@@ -466,7 +466,7 @@ impl TiKVServer {
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
 
-        let lock_mgr = LockManager::new();
+        let lock_mgr = LockManager::new(self.config.pessimistic_txn.pipelined);
         cfg_controller.register(
             tikv::config::Module::PessimisticTxn,
             Box::new(lock_mgr.config_manager()),
@@ -505,7 +505,7 @@ impl TiKVServer {
             storage_read_pool_handle,
             lock_mgr.clone(),
             self.pd_client.clone(),
-            self.config.pessimistic_txn.pipelined,
+            lock_mgr.get_pipelined(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 

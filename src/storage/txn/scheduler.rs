@@ -22,7 +22,7 @@
 
 use futures::future;
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
@@ -160,7 +160,7 @@ struct SchedulerInner<L: LockManager, P: PdClient + 'static> {
 
     pd_client: Arc<P>,
 
-    pipelined_pessimistic_lock: bool,
+    pipelined_pessimistic_lock: Arc<AtomicBool>,
 }
 
 #[inline]
@@ -258,7 +258,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
-        pipelined_pessimistic_lock: bool,
+        pipelined_pessimistic_lock: Arc<AtomicBool>,
     ) -> Self {
         // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
         // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
@@ -591,14 +591,18 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
-        let pipelined = self.inner.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
+        let pipelined_pessimistic_lock = self
+            .inner
+            .pipelined_pessimistic_lock
+            .load(Ordering::Relaxed);
+        let pipelined = pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
 
         let context = WriteContext {
             lock_mgr: &self.inner.lock_mgr,
             pd_client: self.inner.pd_client.clone(),
             extra_op: task.extra_op,
             statistics,
-            pipelined_pessimistic_lock: self.inner.pipelined_pessimistic_lock,
+            pipelined_pessimistic_lock,
         };
 
         match task.cmd.process_write(snapshot, context) {
