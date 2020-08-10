@@ -7,7 +7,7 @@
 //! crate, but only until the engine interface is completely abstracted.
 
 pub use rocksdb::{
-    new_compaction_filter_raw, run_ldb_tool, BlockBasedOptions, CFHandle, Cache,
+    new_compaction_filter_raw, run_ldb_tool, BlockBasedOptions, CFHandle, Cache, CloudEnvOptions,
     ColumnFamilyOptions, CompactOptions, CompactionFilter, CompactionFilterContext,
     CompactionFilterFactory, CompactionJobInfo, CompactionPriority, DBBottommostLevelCompaction,
     DBCompactionFilter, DBCompactionStyle, DBCompressionType, DBEntryType, DBInfoLogLevel,
@@ -17,6 +17,3 @@ pub use rocksdb::{
     TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex, TitanDBOptions,
     Writable, WriteOptions, DB,
 };
-
-#[cfg(feature = "cloud")]
-pub use rocksdb::CloudEnvOptions;

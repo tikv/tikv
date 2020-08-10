@@ -32,9 +32,7 @@ use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
-#[cfg(feature = "cloud")]
-use engine_rocks::raw::CloudEnvOptions;
-use engine_rocks::raw::Env;
+use engine_rocks::raw::{CloudEnvOptions, Env};
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::util::{
     FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
@@ -836,10 +834,6 @@ impl Default for S3Config {
 
 impl S3Config {
     pub fn build_env(&self) -> Option<Arc<Env>> {
-        #[allow(unused_variables)]
-        let env = Env::default();
-
-        #[cfg(feature = "cloud")]
         let env = Env::new_aws_env(
             Arc::new(Env::default()),
             &self.src_cloud_bucket,

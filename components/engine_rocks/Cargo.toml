@@ -16,7 +16,6 @@ prost-codec = [
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
-cloud = ["rocksdb/cloud"]
 
 [dependencies]
 encryption = { path = "../encryption" }
@@ -40,7 +39,7 @@ coarsetime = "0.1"
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
-features = ["encryption", "static_libcpp"]
+features = ["encryption", "static_libcpp", "cloud"]
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"

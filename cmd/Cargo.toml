@@ -7,7 +7,6 @@ publish = false
 default-run = "tikv-server"
 
 [features]
-cloud = ["tikv/cloud"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
