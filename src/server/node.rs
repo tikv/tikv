@@ -61,7 +61,7 @@ pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
-    system: RaftBatchSystem,
+    system: RaftBatchSystem<RocksEngine, RocksEngine>,
     has_started: bool,
 
     pd_client: Arc<C>,
@@ -74,7 +74,7 @@ where
 {
     /// Creates a new Node.
     pub fn new(
-        system: RaftBatchSystem,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
@@ -135,7 +135,7 @@ where
         &mut self,
         engines: KvEngines<RocksEngine, RocksEngine>,
         trans: T,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
@@ -370,7 +370,7 @@ where
         store_id: u64,
         engines: KvEngines<RocksEngine, RocksEngine>,
         trans: T,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,

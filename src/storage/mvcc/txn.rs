@@ -1,7 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
-use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
+use crate::storage::mvcc::{
+    metrics::*, reader::MvccReader, reader::TxnCommitRecord, ErrorInner, Result,
+};
 use crate::storage::types::TxnStatus;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures03::compat::Compat01As03;
@@ -20,6 +22,27 @@ pub struct GcInfo {
     pub found_versions: usize,
     pub deleted_versions: usize,
     pub is_completed: bool,
+}
+
+/// Generate the Write record that should be written that means to to perform a specified rollback
+/// operation.
+fn make_rollback(
+    start_ts: TimeStamp,
+    protected: bool,
+    overlapped_write: Option<Write>,
+) -> Option<Write> {
+    match overlapped_write {
+        Some(write) => {
+            assert!(start_ts > write.start_ts);
+            if protected {
+                Some(write.set_overlapped_rollback(true))
+            } else {
+                // No need to update the original write.
+                None
+            }
+        }
+        None => Some(Write::new_rollback(start_ts, protected)),
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -46,10 +69,10 @@ impl MissingLockAction {
         }
     }
 
-    fn construct_write(&self, ts: TimeStamp) -> Write {
+    fn construct_write(&self, ts: TimeStamp, overlapped_write: Option<Write>) -> Option<Write> {
         match self {
-            MissingLockAction::Rollback => Write::new_rollback(ts, false),
-            MissingLockAction::ProtectedRollback => Write::new_rollback(ts, true),
+            MissingLockAction::Rollback => make_rollback(ts, false, overlapped_write),
+            MissingLockAction::ProtectedRollback => make_rollback(ts, true, overlapped_write),
             _ => unreachable!(),
         }
     }
@@ -266,11 +289,27 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Ok(async_commit_ts)
     }
 
+    // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
+    // to do the rollback differs according to whether there's an overlapped write record.
+    fn check_write_and_rollback_lock(
+        &mut self,
+        key: Key,
+        lock: &Lock,
+        is_pessimistic_txn: bool,
+    ) -> Result<Option<ReleasedLock>> {
+        let overlapped_write = self
+            .reader
+            .get_txn_commit_record(&key, self.start_ts)?
+            .unwrap_none();
+        self.rollback_lock(key, lock, is_pessimistic_txn, overlapped_write)
+    }
+
     fn rollback_lock(
         &mut self,
         key: Key,
         lock: &Lock,
         is_pessimistic_txn: bool,
+        overlapped_write: Option<Write>,
     ) -> Result<Option<ReleasedLock>> {
         // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
         if lock.short_value.is_none() && lock.lock_type == LockType::Put {
@@ -279,8 +318,9 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
 
         // Only the primary key of a pessimistic transaction needs to be protected.
         let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
-        let write = Write::new_rollback(self.start_ts, protected);
-        self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
+        if let Some(write) = make_rollback(self.start_ts, protected, overlapped_write) {
+            self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
+        }
         if self.collapse_rollback {
             self.collapse_prev_rollback(key.clone())?;
         }
@@ -417,10 +457,12 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             }
 
             // Handle rollback.
-            // If the start timestamp of write is equal to transaction's start timestamp
-            // as well as commit timestamp, the lock is already rollbacked.
-            if write.start_ts == self.start_ts && commit_ts == self.start_ts {
-                assert!(write.write_type == WriteType::Rollback);
+            // The rollack informathin may come from either a Rollback record or a record with
+            // `has_overlapped_rollback` flag.
+            if commit_ts == self.start_ts
+                && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
+            {
+                assert!(write.has_overlapped_rollback || write.start_ts == commit_ts);
                 return Err(ErrorInner::PessimisticLockRolledBack {
                     start_ts: self.start_ts,
                     key: key.into_raw()?,
@@ -474,13 +516,14 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         &mut self,
         mutation: Mutation,
         primary: &[u8],
+        secondary_keys: &Option<Vec<Vec<u8>>>,
         is_pessimistic_lock: bool,
         mut lock_ttl: u64,
         for_update_ts: TimeStamp,
         txn_size: u64,
         mut min_commit_ts: TimeStamp,
         pipelined_pessimistic_lock: bool,
-    ) -> Result<()> {
+    ) -> Result<TimeStamp> {
         if mutation.should_not_write() {
             return Err(box_err!(
                 "cannot handle checkNotExists in pessimistic prewrite"
@@ -514,12 +557,14 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     }
                     .into());
                 }
-                return self.handle_non_pessimistic_lock_conflict(key, lock);
+                return Err(self
+                    .handle_non_pessimistic_lock_conflict(key, lock)
+                    .unwrap_err());
             } else {
                 if lock.lock_type != LockType::Pessimistic {
                     // Duplicated command. No need to overwrite the lock and data.
                     MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-                    return Ok(());
+                    return Ok(lock.min_commit_ts);
                 }
                 // The lock is pessimistic and owned by this txn, go through to overwrite it.
                 // The ttl and min_commit_ts of the lock may have been pushed forward.
@@ -536,14 +581,13 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             key,
             lock_type.unwrap(),
             primary,
-            &None,
+            secondary_keys,
             value,
             lock_ttl,
             for_update_ts,
             txn_size,
             min_commit_ts,
-        )?;
-        Ok(())
+        )
     }
 
     // TiKV may fails to write pessimistic locks due to pipelined process.
@@ -630,11 +674,27 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         if !skip_constraint_check {
             if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
                 // Abort on writes after our start timestamp ...
-                // If exists a commit version whose commit timestamp is larger than or equal to
-                // current start timestamp, we should abort current prewrite, even if the commit
-                // type is Rollback.
-                if commit_ts >= self.start_ts {
+                // If exists a commit version whose commit timestamp is larger than current start
+                // timestamp, we should abort current prewrite.
+                if commit_ts > self.start_ts {
                     MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                    return Err(ErrorInner::WriteConflict {
+                        start_ts: self.start_ts,
+                        conflict_start_ts: write.start_ts,
+                        conflict_commit_ts: commit_ts,
+                        key: key.into_raw()?,
+                        primary: primary.to_vec(),
+                    }
+                    .into());
+                }
+                // If there's a write record whose commit_ts equals to our start ts, the current
+                // transaction is ok to continue, unless the record means that the current
+                // transaction has been rolled back.
+                if commit_ts == self.start_ts
+                    && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
+                {
+                    MVCC_CONFLICT_COUNTER.rolled_back.inc();
+                    // TODO: Maybe we need to add a new error for the rolled back case.
                     return Err(ErrorInner::WriteConflict {
                         start_ts: self.start_ts,
                         conflict_start_ts: write.start_ts,
@@ -667,7 +727,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             }
             // Duplicated command. No need to overwrite the lock and data.
             MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-            return Ok(TimeStamp::zero());
+            return Ok(lock.min_commit_ts);
         }
 
         self.check_extra_op(&key, mutation_type, prev_write)?;
@@ -734,7 +794,11 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 )
             }
             _ => {
-                return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
+                return match self
+                    .reader
+                    .get_txn_commit_record(&key, self.start_ts)?
+                    .info()
+                {
                     Some((_, WriteType::Rollback)) | None => {
                         MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
                         // None: related Rollback has been collapsed.
@@ -792,16 +856,17 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
         match self
             .reader
-            .get_txn_commit_info(&primary_key, self.start_ts)?
+            .get_txn_commit_record(&primary_key, self.start_ts)?
         {
-            Some((ts, write_type)) => {
-                if write_type == WriteType::Rollback {
+            TxnCommitRecord::SingleRecord { commit_ts, write } => {
+                if write.write_type == WriteType::Rollback {
                     Ok(TxnStatus::RolledBack)
                 } else {
-                    Ok(TxnStatus::committed(ts))
+                    Ok(TxnStatus::committed(commit_ts))
                 }
             }
-            None => {
+            TxnCommitRecord::OverlappedRollback { .. } => Ok(TxnStatus::RolledBack),
+            TxnCommitRecord::None { overlapped_write } => {
                 if MissingLockAction::ReturnError == action {
                     return Err(ErrorInner::TxnNotFound {
                         start_ts: self.start_ts,
@@ -819,8 +884,9 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
 
                 // Insert a Rollback to Write CF in case that a stale prewrite
                 // command is received after a cleanup command.
-                let write = action.construct_write(ts);
-                self.put_write(primary_key, ts, write.as_ref().to_bytes());
+                if let Some(write) = action.construct_write(ts, overlapped_write) {
+                    self.put_write(primary_key, ts, write.as_ref().to_bytes());
+                }
                 MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
 
                 Ok(TxnStatus::LockNotExist)
@@ -859,7 +925,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 }
 
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
-                self.rollback_lock(key, lock, is_pessimistic_txn)
+                self.check_write_and_rollback_lock(key, lock, is_pessimistic_txn)
             }
             _ => match self.check_txn_status_missing_lock(
                 key,
@@ -991,7 +1057,8 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
 
                 if lock.ts.physical() + lock.ttl < current_ts.physical() {
                     // If the lock is expired, clean it up.
-                    let released = self.rollback_lock(primary_key, &lock, is_pessimistic_txn)?;
+                    let released =
+                        self.check_write_and_rollback_lock(primary_key, &lock, is_pessimistic_txn)?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
                     return Ok((TxnStatus::TtlExpire, released));
                 }
@@ -1054,39 +1121,50 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         start_ts: TimeStamp,
     ) -> Result<(SecondaryLockStatus, Option<ReleasedLock>)> {
         let mut released_lock = None;
-        let (status, need_rollback) = match self.reader.load_lock(&key)? {
-            Some(lock) if lock.ts == start_ts => {
-                if lock.lock_type == LockType::Pessimistic {
-                    released_lock = self.unlock_key(key.clone(), true);
-                    (SecondaryLockStatus::RolledBack, true)
-                } else {
-                    (SecondaryLockStatus::Locked(lock), false)
-                }
-            }
-            _ => match self.reader.get_txn_commit_info(&key, start_ts)? {
-                Some((commit_ts, write_type)) => {
-                    let status = if write_type != WriteType::Rollback {
-                        SecondaryLockStatus::Committed(commit_ts)
+        let (status, need_rollback, rollback_overlapped_write) =
+            match self.reader.load_lock(&key)? {
+                Some(lock) if lock.ts == start_ts => {
+                    if lock.lock_type == LockType::Pessimistic {
+                        released_lock = self.unlock_key(key.clone(), true);
+                        let overlapped_write = self
+                            .reader
+                            .get_txn_commit_record(&key, start_ts)?
+                            .unwrap_none();
+                        (SecondaryLockStatus::RolledBack, true, overlapped_write)
                     } else {
-                        SecondaryLockStatus::RolledBack
-                    };
-                    // We needn't write a rollback once there is a write record for it:
-                    // If it's a committed record, it cannot be changed.
-                    // If it's a rollback record, it either comes from another check_secondary_lock
-                    // (thus protected) or the client stops commit actively. So we don't need
-                    // to make it protected again.
-                    (status, false)
+                        (SecondaryLockStatus::Locked(lock), false, None)
+                    }
                 }
-                None => (SecondaryLockStatus::RolledBack, true),
-            },
-        };
+                _ => match self.reader.get_txn_commit_record(&key, start_ts)? {
+                    TxnCommitRecord::SingleRecord { commit_ts, write } => {
+                        let status = if write.write_type != WriteType::Rollback {
+                            SecondaryLockStatus::Committed(commit_ts)
+                        } else {
+                            SecondaryLockStatus::RolledBack
+                        };
+                        // We needn't write a rollback once there is a write record for it:
+                        // If it's a committed record, it cannot be changed.
+                        // If it's a rollback record, it either comes from another check_secondary_lock
+                        // (thus protected) or the client stops commit actively. So we don't need
+                        // to make it protected again.
+                        (status, false, None)
+                    }
+                    TxnCommitRecord::OverlappedRollback { .. } => {
+                        (SecondaryLockStatus::RolledBack, false, None)
+                    }
+                    TxnCommitRecord::None { overlapped_write } => {
+                        (SecondaryLockStatus::RolledBack, true, overlapped_write)
+                    }
+                },
+            };
         if need_rollback {
             // We must protect this rollback in case this rollback is collapsed and a stale
             // acquire_pessimistic_lock and prewrite succeed again.
-            let write = Write::new_rollback(start_ts, true);
-            self.put_write(key.clone(), start_ts, write.as_ref().to_bytes());
-            if self.collapse_rollback {
-                self.collapse_prev_rollback(key.clone())?;
+            if let Some(write) = make_rollback(start_ts, true, rollback_overlapped_write) {
+                self.put_write(key.clone(), start_ts, write.as_ref().to_bytes());
+                if self.collapse_rollback {
+                    self.collapse_prev_rollback(key.clone())?;
+                }
             }
         }
         Ok((status, released_lock))
@@ -1552,6 +1630,35 @@ mod tests {
     }
 
     #[test]
+    fn test_rollback_overlapped() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k1, v1) = (b"key1", b"v1");
+        let (k2, v2) = (b"key2", b"v2");
+
+        must_prewrite_put(&engine, k1, v1, k1, 10);
+        must_prewrite_put(&engine, k2, v2, k2, 11);
+        must_commit(&engine, k1, 10, 20);
+        must_commit(&engine, k2, 11, 20);
+        let w1 = must_written(&engine, k1, 10, 20, WriteType::Put);
+        let w2 = must_written(&engine, k2, 11, 20, WriteType::Put);
+        assert!(!w1.has_overlapped_rollback);
+        assert!(!w2.has_overlapped_rollback);
+
+        must_cleanup(&engine, k1, 20, 0);
+        must_rollback(&engine, k2, 20);
+
+        let w1r = must_written(&engine, k1, 10, 20, WriteType::Put);
+        assert!(w1r.has_overlapped_rollback);
+        // The only difference between w1r and w1 is the overlapped_rollback flag.
+        assert_eq!(w1r.set_overlapped_rollback(false), w1);
+
+        let w2r = must_written(&engine, k2, 11, 20, WriteType::Put);
+        // Rollback is invoked on secondaries, so the rollback is not protected and overlapped_rollback
+        // won't be set.
+        assert_eq!(w2r, w2);
+    }
+
+    #[test]
     fn test_cleanup() {
         // Cleanup's logic is mostly similar to rollback, except the TTL check. Tests that not
         // related to TTL check should be covered by other test cases.
@@ -1707,6 +1814,7 @@ mod tests {
             k,
             v,
             k,
+            &None,
             ts(60, 0),
             true,
             50,
@@ -2334,7 +2442,7 @@ mod tests {
         must_pessimistic_locked(&engine, k, 46, 47);
         must_pessimistic_prewrite_put(&engine, k, v, k, 46, 48, true);
         must_locked(&engine, k, 46);
-        must_commit(&engine, k, 46, 49);
+        must_commit(&engine, k, 46, 50);
         must_unlocked(&engine, k);
 
         // Prewrite on non-pessimistic key meets write with larger commit_ts than current
@@ -2356,6 +2464,14 @@ mod tests {
         must_prewrite_put(&engine, k, v, k, 51);
         must_rollback_collapsed(&engine, k, 51);
         must_acquire_pessimistic_lock_err(&engine, k, k, 49, 60);
+
+        // Overlapped rollback record will be written when the current start_ts equals to another write
+        // records' commit ts. Now there is a commit record with commit_ts = 50.
+        must_acquire_pessimistic_lock(&engine, k, k, 50, 61);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 50, 61, true);
+        must_locked(&engine, k, 50);
+        must_cleanup(&engine, k, 50, 0);
+        must_get_overlapped_rollback(&engine, k, 50, 46, WriteType::Put);
 
         // start_ts and commit_ts interlacing
         for start_ts in &[140, 150, 160] {
@@ -2837,6 +2953,7 @@ mod tests {
             k,
             v,
             k,
+            &None,
             ts(300, 0),
             false,
             100,
@@ -2936,6 +3053,7 @@ mod tests {
                     expected_lock_info.get_key(),
                     v,
                     expected_lock_info.get_primary_lock(),
+                    &None,
                     expected_lock_info.get_lock_version(),
                     false,
                     expected_lock_info.get_lock_ttl(),
@@ -3272,6 +3390,7 @@ mod tests {
                 txn.pessimistic_prewrite(
                     mutation,
                     b"key",
+                    &None,
                     true,
                     0,
                     start_ts.into(),
@@ -3309,24 +3428,35 @@ mod tests {
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
         let mut pd_client = DummyPdClient::new();
         pd_client.next_ts = TimeStamp::new(42);
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, Arc::new(pd_client));
-        let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-        txn.prewrite(
-            mutation,
-            b"key",
-            &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
-            false,
-            0,
-            4,
-            TimeStamp::zero(),
-        )
-        .unwrap();
-        engine
-            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
-            .unwrap();
+        let pd_client = Arc::new(pd_client);
+
+        let do_prewrite = || {
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+            let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+            let min_commit_ts = txn
+                .prewrite(
+                    mutation,
+                    b"key",
+                    &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+                    false,
+                    0,
+                    4,
+                    TimeStamp::zero(),
+                )
+                .unwrap();
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                engine
+                    .write(&ctx, WriteData::from_modifies(modifies))
+                    .unwrap();
+            }
+            min_commit_ts
+        };
+
+        assert_eq!(do_prewrite(), 42.into());
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
@@ -3338,6 +3468,62 @@ mod tests {
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
         assert_eq!(lock.min_commit_ts, TimeStamp::new(42));
+
+        // A duplicate prewrite request should return the min_commit_ts in the primary key
+        assert_eq!(do_prewrite(), 42.into());
+    }
+
+    #[test]
+    fn test_async_pessimistic_prewrite_primary() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
+        let mut pd_client = DummyPdClient::new();
+        pd_client.next_ts = TimeStamp::new(42);
+        let pd_client = Arc::new(pd_client);
+
+        must_acquire_pessimistic_lock(&engine, b"key", b"key", 2, 2);
+
+        let do_pessimistic_prewrite = || {
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+            let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+            let min_commit_ts = txn
+                .pessimistic_prewrite(
+                    mutation,
+                    b"key",
+                    &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+                    true,
+                    0,
+                    4.into(),
+                    4,
+                    TimeStamp::zero(),
+                    false,
+                )
+                .unwrap();
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                engine
+                    .write(&ctx, WriteData::from_modifies(modifies))
+                    .unwrap();
+            }
+            min_commit_ts
+        };
+
+        assert_eq!(do_pessimistic_prewrite(), 42.into());
+
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
+        assert_eq!(lock.ts, TimeStamp::new(2));
+        assert_eq!(lock.use_async_commit, true);
+        assert_eq!(
+            lock.secondaries,
+            vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
+        );
+        assert_eq!(lock.min_commit_ts, TimeStamp::new(42));
+
+        // A duplicate prewrite request should return the min_commit_ts in the primary key
+        assert_eq!(do_pessimistic_prewrite(), 42.into());
     }
 
     #[test]
@@ -3484,5 +3670,82 @@ mod tests {
             res => panic!("unexpected lock status: {:?}", res),
         }
         must_locked(&engine, b"k1", 13);
+
+        // ----------------------------
+
+        must_commit(&engine, b"k1", 13, 15);
+
+        // Lock CF has an optimistic lock
+        //
+        // LOCK CF       | WRITE CF
+        // ------------------------------------
+        //               | 15: start_ts = 13
+        //               | 11: rollback
+        //               |  9: start_ts = 7
+        //               |  5: rollback
+        //               |  3: start_ts = 1
+
+        match check_secondary(b"k1", 14) {
+            (SecondaryLockStatus::RolledBack, None) => {}
+            res => panic!("unexpected lock status: {:?}", res),
+        }
+        must_get_rollback_protected(&engine, b"k1", 14, true);
+
+        match check_secondary(b"k1", 15) {
+            (SecondaryLockStatus::RolledBack, None) => {}
+            res => panic!("unexpected lock status: {:?}", res),
+        }
+        must_get_overlapped_rollback(&engine, b"k1", 15, 13, WriteType::Lock);
+    }
+
+    #[test]
+    fn test_txn_timestamp_overlapping() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k, v) = (b"k1", b"v1");
+
+        // Prepare a committed transaction.
+        must_prewrite_put(&engine, k, v, k, 10);
+        must_locked(&engine, k, 10);
+        must_commit(&engine, k, 10, 20);
+        must_unlocked(&engine, k);
+        must_written(&engine, k, 10, 20, WriteType::Put);
+
+        // Optimistic transaction allows the start_ts equals to another transaction's commit_ts
+        // on the same key.
+        must_prewrite_put(&engine, k, v, k, 20);
+        must_locked(&engine, k, 20);
+        must_commit(&engine, k, 20, 30);
+        must_unlocked(&engine, k);
+
+        // ...but it can be rejected by overlapped rollback flag.
+        must_cleanup(&engine, k, 30, 0);
+        let w = must_written(&engine, k, 20, 30, WriteType::Put);
+        assert!(w.has_overlapped_rollback);
+        must_unlocked(&engine, k);
+        must_prewrite_put_err(&engine, k, v, k, 30);
+        must_unlocked(&engine, k);
+
+        // Prepare a committed transaction.
+        must_prewrite_put(&engine, k, v, k, 40);
+        must_locked(&engine, k, 40);
+        must_commit(&engine, k, 40, 50);
+        must_unlocked(&engine, k);
+        must_written(&engine, k, 40, 50, WriteType::Put);
+
+        // Pessimistic transaction also works in the same case.
+        must_acquire_pessimistic_lock(&engine, k, k, 50, 50);
+        must_pessimistic_locked(&engine, k, 50, 50);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 50, 50, true);
+        must_commit(&engine, k, 50, 60);
+        must_unlocked(&engine, k);
+        must_written(&engine, k, 50, 60, WriteType::Put);
+
+        // .. and it can also be rejected by overlapped rollback flag.
+        must_cleanup(&engine, k, 60, 0);
+        let w = must_written(&engine, k, 50, 60, WriteType::Put);
+        assert!(w.has_overlapped_rollback);
+        must_unlocked(&engine, k);
+        must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60);
+        must_unlocked(&engine, k);
     }
 }
