@@ -12,7 +12,6 @@ use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use futures::Future;
-//use futures03::channel::mpsc::{channel as future_channel, Receiver as FutureReceiver};
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -45,7 +44,6 @@ use crate::store::fsm::apply::ApplyRouter;
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
-    Registration,
 };
 use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::metrics::*;
@@ -2112,7 +2110,7 @@ where
                 new_peer.peer.heartbeat_pd(self.ctx);
             }
 
-            new_peer.peer.activate(self.ctx);
+            new_peer.peer.activate(self.ctx, Some(apply_receiver));
             meta.regions.insert(new_region_id, new_region);
             meta.readers
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
@@ -2121,9 +2119,6 @@ where
                 // check again after split.
                 new_peer.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
             }
-            self.ctx
-                .apply_batch_system
-                .register(Registration::new(new_peer.get_peer()), apply_receiver);
             let mailbox = BasicMailbox::new(sender, new_peer);
             self.ctx.router.register(new_region_id, mailbox);
             self.ctx

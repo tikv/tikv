@@ -35,7 +35,7 @@ use txn_types::TxnExtra;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
-use crate::store::fsm::apply::{ApplyRouter, CatchUpLogs};
+use crate::store::fsm::apply::{ApplyRouter, CatchUpLogs, Registration};
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
 use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
@@ -47,6 +47,7 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::Scheduler;
+use tokio::sync::mpsc::Receiver as FutureReceiver;
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -445,7 +446,17 @@ where
 
     /// Register self to apply_scheduler so that the peer is then usable.
     /// Also trigger `RegionChangeEvent::Create` here.
-    pub fn activate<T, C>(&mut self, ctx: &PollContext<EK, ER, T, C>) {
+    pub fn activate<T, C>(
+        &mut self,
+        ctx: &PollContext<EK, ER, T, C>,
+        apply_receiver: Option<FutureReceiver<ApplyTask<EK>>>,
+    ) {
+        let reg = Registration::new(self);
+        if let Some(receiver) = apply_receiver {
+            ctx.apply_batch_system.register(reg, receiver);
+        } else {
+            self.apply_router.schedule(ApplyTask::Registration(reg));
+        }
         ctx.coprocessor_host.on_region_changed(
             self.region(),
             RegionChangeEvent::Create,
@@ -1466,7 +1477,7 @@ where
         }
 
         if apply_snap_result.is_some() {
-            self.activate(ctx);
+            self.activate(ctx, None);
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));

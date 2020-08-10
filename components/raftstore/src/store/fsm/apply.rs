@@ -51,14 +51,12 @@ use error_code::ErrorCodeExt;
 use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::escape;
-// use futures03::channel::mpsc::{channel, Receiver, Sender as FutureSender};
 use tikv_util::future::paired_std_future_callback;
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
 use tikv_util::MustConsumeVec;
 use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 use tokio::sync::mpsc::{channel, Receiver, Sender as FutureSender};
-use tokio::sync::Notify;
 use txn_types::TxnExtra;
 
 use super::metrics::*;
@@ -73,6 +71,9 @@ const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const WRITE_BATCH_LIMIT: usize = 16;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
+const MAX_FLUSH_WAIT_TIME: Duration = Duration::from_millis(100);
+
+type FlushCallback = Box<dyn FnOnce(bool) + Send>;
 
 pub struct PendingCmd<S>
 where
@@ -322,7 +323,7 @@ where
     fn notify(&self, region_id: u64, msg: PeerMsg<EK>) {
         match *self {
             Notifier::Router(ref r) => {
-                r.force_send(region_id, msg).unwrap();
+                let _ = r.try_send(region_id, msg);
             }
             #[cfg(test)]
             Notifier::Sender(ref s) => s.send(msg).unwrap(),
@@ -337,7 +338,7 @@ where
 {
     cbs: MustConsumeVec<ApplyCallback<E>>,
     apply_res: Vec<ApplyRes<E::Snapshot>>,
-    flush_notifier: Vec<Arc<Notify>>,
+    flush_notifier: Vec<FlushCallback>,
     kv_wb: Option<W>,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
@@ -347,6 +348,7 @@ where
     core: ApplyContextCore<E>,
     // TxnExtra collected from applied cmds.
     txn_extras: MustConsumeVec<TxnExtra>,
+    last_flush_time: Instant,
 }
 
 impl<E, W> ApplyContext<E, W>
@@ -367,6 +369,7 @@ where
             perf_context_statistics,
             sync_log_hint: false,
             txn_extras: MustConsumeVec::new("extra data from txn"),
+            last_flush_time: Instant::now_coarse(),
         }
     }
 
@@ -410,9 +413,7 @@ where
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, fsm: &mut ApplyFsm<E>) {
-        if self.sync_log_hint {
-            fsm.write_apply_state(self.kv_wb.as_mut().unwrap());
-        }
+        fsm.write_apply_state(self.kv_wb.as_mut().unwrap());
         // last_applied_index doesn't need to be updated, set persistent to true will
         // force it call `prepare_for` automatically.
         self.commit_opt(fsm, true);
@@ -477,10 +478,11 @@ where
             }
         }
         if !self.flush_notifier.is_empty() {
-            for res in self.flush_notifier.drain(..) {
-                res.notify();
+            for cb in self.flush_notifier.drain(..) {
+                cb(need_sync);
             }
         }
+        self.last_flush_time = Instant::now_coarse();
     }
 
     /// Finishes `Apply`s for the fsm.
@@ -489,7 +491,7 @@ where
         fsm: &mut ApplyFsm<E>,
         results: VecDeque<ExecResult<E::Snapshot>>,
     ) {
-        if !fsm.pending_remove && self.sync_log_hint {
+        if !fsm.pending_remove {
             fsm.write_apply_state(self.kv_wb.as_mut().unwrap());
         }
         self.commit_opt(fsm, false);
@@ -591,7 +593,11 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
 /// Checks if a write is needed to be issued after handling the command.
 fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
-        return true;
+        match cmd.get_admin_request().get_cmd_type() {
+            // ComputeHash and .
+            AdminCmdType::ComputeHash | AdminCmdType::CompactLog => return false,
+            _ => return true,
+        }
     }
 
     for req in cmd.get_requests() {
@@ -721,8 +727,6 @@ where
     apply_state: RaftApplyState,
     /// The term of the raft log at applied index.
     applied_index_term: u64,
-    /// The latest synced apply index.
-    last_sync_apply_index: u64,
 
     /// Info about cmd observer.
     observe_cmd: Option<ObserveCmd>,
@@ -730,8 +734,7 @@ where
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
 
-    /// To notify self when wait another future flush writebatch
-    notify: Arc<Notify>,
+    last_sync_apply_index: u64,
 }
 
 impl<E> ApplyFsm<E>
@@ -758,8 +761,24 @@ where
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
             observe_cmd: None,
             uncommit_data: false,
-            notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Handles peer registration. When a peer is created, it will register an apply delegate.
+    fn handle_registration(&mut self, reg: Registration) {
+        info!(
+            "re-register to apply delegates";
+            "region_id" => self.region_id(),
+            "peer_id" => self.id(),
+            "term" => reg.term
+        );
+        assert_eq!(self.id, reg.id);
+        self.term = reg.term;
+        self.region = reg.region;
+        self.applied_index_term = reg.applied_index_term;
+        self.last_sync_apply_index = reg.apply_state.get_applied_index();
+        self.apply_state = reg.apply_state;
+        self.clear_all_commands_as_stale();
     }
 
     pub fn region_id(&self) -> u64 {
@@ -798,9 +817,9 @@ where
             }
 
             if let Some(res) = match entry.get_entry_type() {
-                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry).await,
+                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, entry).await,
                 EntryType::EntryConfChange => {
-                    self.handle_raft_entry_conf_change(apply_ctx, &entry).await
+                    self.handle_raft_entry_conf_change(apply_ctx, entry).await
                 }
                 EntryType::EntryConfChangeV2 => unimplemented!(),
             } {
@@ -823,7 +842,11 @@ where
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state<W: WriteBatch + WriteBatchVecExt<E>>(&self, wb: &mut W) {
+    fn write_apply_state<W: WriteBatch + WriteBatchVecExt<E>>(&mut self, wb: &mut W) {
+        if self.last_sync_apply_index >= self.apply_state.get_applied_index() {
+            return;
+        }
+        self.last_sync_apply_index = self.apply_state.get_applied_index();
         wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
@@ -840,7 +863,7 @@ where
     async fn handle_raft_entry_normal<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
         apply_ctx: &mut ApplyContext<E, W>,
-        entry: &Entry,
+        entry: Entry,
     ) -> Option<ExecResult<E::Snapshot>> {
         let index = entry.get_index();
         let term = entry.get_term();
@@ -881,7 +904,7 @@ where
     async fn handle_raft_entry_conf_change<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
         apply_ctx: &mut ApplyContext<E, W>,
-        entry: &Entry,
+        entry: Entry,
     ) -> Option<ExecResult<E::Snapshot>> {
         let index = entry.get_index();
         let term = entry.get_term();
@@ -1971,6 +1994,7 @@ where
             ctx.flush();
         }
         self.ready_source_region_id = f.await.unwrap();
+        self.handle_start = Instant::now_coarse();
         if self.ready_source_region_id != source_region_id {
             panic!(
                 "{} unexpected ready source region {}, expecting {}",
@@ -2502,6 +2526,7 @@ where
         start: Instant,
         apply: Apply<E::Snapshot>,
     },
+    Registration(Registration),
     LogsUpToDate(CatchUpLogs),
     Noop,
     Destroy(Destroy),
@@ -2543,6 +2568,9 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Msg::Apply { apply, .. } => write!(f, "[region {}] async apply", apply.region_id),
+            Msg::Registration(ref r) => {
+                write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
+            }
             Msg::LogsUpToDate(_) => write!(f, "logs are updated"),
             Msg::Noop => write!(f, "noop"),
             Msg::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
@@ -2766,13 +2794,7 @@ where
         }
         let applied_index = self.apply_state.get_applied_index();
         assert!(snap_task.commit_index() <= applied_index);
-        let mut need_sync = apply_ctx
-            .apply_res
-            .iter()
-            .any(|res| res.region_id == self.region_id())
-            && self.last_sync_apply_index != applied_index;
-        (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
-        if need_sync {
+        if self.uncommit_data || self.last_sync_apply_index < applied_index {
             apply_ctx.prepare_write_batch();
             self.write_apply_state(apply_ctx.kv_wb_mut());
             fail_point!(
@@ -2783,7 +2805,6 @@ where
 
             apply_ctx.flush();
             self.uncommit_data = false;
-            self.last_sync_apply_index = applied_index;
         }
 
         if let Err(e) = snap_task.generate_and_schedule_snapshot::<E>(
@@ -2900,6 +2921,7 @@ where
                 }
                 self.handle_apply(apply_ctx, apply).await;
             }
+            Msg::Registration(reg) => self.handle_registration(reg),
             Msg::Destroy(d) => self.handle_destroy(apply_ctx, d),
             Msg::LogsUpToDate(cul) => self.logs_up_to_date_for_merge(apply_ctx, cul.callback),
             Msg::Noop => {}
@@ -2995,34 +3017,59 @@ where
     });
 }
 
-unsafe fn take_tls_ctx<E, W>() -> Option<ApplyContext<E, W>>
+fn take_tls_ctx<E, W>() -> Option<ApplyContext<E, W>>
 where
     E: KvEngine,
     W: WriteBatch + WriteBatchVecExt<E>,
 {
-    TLS_APPLY_CONTEXT.with(|e| {
-        if (*e.get()).is_null() {
-            return None;
-        }
-        let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
-        ctx.take()
-    })
+    unsafe {
+        TLS_APPLY_CONTEXT.with(|e| {
+            if (*e.get()).is_null() {
+                return None;
+            }
+            let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
+            ctx.take()
+        })
+    }
 }
 
-unsafe fn flush_tls_ctx<E, W>()
+fn flush_tls_ctx<E, W>()
 where
     E: KvEngine,
     W: WriteBatch + WriteBatchVecExt<E>,
 {
-    TLS_APPLY_CONTEXT.with(|e| {
-        if (*e.get()).is_null() {
-            return;
-        }
-        let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
-        if let Some(apply_ctx) = ctx.as_mut() {
-            apply_ctx.flush();
-        }
-    })
+    unsafe {
+        TLS_APPLY_CONTEXT.with(|e| {
+            if (*e.get()).is_null() {
+                return;
+            }
+            let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
+            if let Some(apply_ctx) = ctx.as_mut() {
+                apply_ctx.flush();
+            }
+        })
+    }
+}
+fn maybe_flush_tls_ctx<E, W>()
+where
+    E: KvEngine,
+    W: WriteBatch + WriteBatchVecExt<E>,
+{
+    unsafe {
+        TLS_APPLY_CONTEXT.with(|e| {
+            if (*e.get()).is_null() {
+                return;
+            }
+            let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
+            if let Some(apply_ctx) = ctx.as_mut() {
+                if !apply_ctx.flush_notifier.is_empty()
+                    && apply_ctx.last_flush_time.elapsed() > MAX_FLUSH_WAIT_TIME
+                {
+                    apply_ctx.flush();
+                }
+            }
+        })
+    }
 }
 
 pub struct ApplyRunner<E, W>
@@ -3064,13 +3111,13 @@ where
         local: &mut yatp::pool::Local<Self::TaskCell>,
         task_cell: Self::TaskCell,
     ) -> bool {
-        self.inner.handle(local, task_cell)
+        let finished = self.inner.handle(local, task_cell);
+        maybe_flush_tls_ctx::<E, W>();
+        finished
     }
 
     fn pause(&mut self, local: &mut yatp::pool::Local<Self::TaskCell>) -> bool {
-        unsafe {
-            flush_tls_ctx::<E, W>();
-        }
+        flush_tls_ctx::<E, W>();
         self.inner.pause(local)
     }
 
@@ -3079,6 +3126,7 @@ where
     }
 
     fn end(&mut self, local: &mut yatp::pool::Local<Self::TaskCell>) {
+        flush_tls_ctx::<E, W>();
         self.inner.end(local);
     }
 }
@@ -3092,12 +3140,8 @@ async fn handle_normal<E, W>(
     W: WriteBatch + WriteBatchVecExt<E>,
 {
     fsm.handle_start = Instant::now_coarse();
-    let mut apply_ctx = unsafe {
-        Some(
-            take_tls_ctx()
-                .unwrap_or_else(|| ApplyContext::<E, W>::new(core.lock().unwrap().clone())),
-        )
-    };
+    let mut apply_ctx =
+        take_tls_ctx().or_else(|| Some(ApplyContext::<E, W>::new(core.lock().unwrap().clone())));
     loop {
         let msg = match receiver.try_recv() {
             Ok(msg) => msg,
@@ -3105,20 +3149,26 @@ async fn handle_normal<E, W>(
                 TryRecvError::Empty => {
                     let mut ctx = apply_ctx.take().unwrap();
                     if fsm.uncommit_data {
-                        ctx.flush_notifier.push(fsm.notify.clone());
+                        let (callback, f) = paired_std_future_callback();
+                        ctx.flush_notifier.push(callback);
                         set_tls_ctx(ctx);
-                        fsm.notify.notified().await;
+                        if let Err(e) = f.await {
+                            error!(
+                                "execute raft command";
+                                "region_id" => fsm.region_id(),
+                                "err" => ?e,
+                            );
+                            return;
+                        }
                         fsm.uncommit_data = false;
                         fsm.handle_start = Instant::now_coarse();
                     } else {
                         set_tls_ctx(ctx);
                     }
                     if let Some(msg) = receiver.recv().await {
-                        apply_ctx = unsafe {
-                            Some(take_tls_ctx().unwrap_or_else(|| {
-                                ApplyContext::<E, W>::new(core.lock().unwrap().clone())
-                            }))
-                        };
+                        apply_ctx = take_tls_ctx().or_else(|| {
+                            Some(ApplyContext::<E, W>::new(core.lock().unwrap().clone()))
+                        });
                         msg
                     } else {
                         return;
@@ -3319,7 +3369,7 @@ mod tests {
         // Admin command
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
-            .set_cmd_type(AdminCmdType::ComputeHash);
+            .set_cmd_type(AdminCmdType::TransferLeader);
         assert_eq!(should_sync_log(&req), true);
 
         // IngestSst command
@@ -3550,10 +3600,6 @@ mod tests {
             assert_eq!(fsm.term, 11);
             assert_eq!(fsm.applied_index_term, 5);
             assert_eq!(fsm.apply_state.get_applied_index(), 5);
-            assert_eq!(
-                fsm.apply_state.get_applied_index(),
-                fsm.last_sync_apply_index
-            );
         });
 
         router.schedule(Msg::destroy(2, true, false));
@@ -3745,7 +3791,7 @@ mod tests {
         let obs = ApplyObserver::default();
         let mut host = CoprocessorHost::<RocksEngine>::default();
         host.registry
-            .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
+            .register_query_observer(1, BoxQueryObserver::new(obs));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
@@ -3830,7 +3876,7 @@ mod tests {
         assert_eq!(apply_res.applied_index_term, 2);
         assert!(apply_res.exec_res.is_empty());
         assert!(apply_res.metrics.written_bytes >= 5);
-        assert_eq!(apply_res.metrics.written_keys, 1);
+        assert_eq!(apply_res.metrics.written_keys, 2);
         assert_eq!(apply_res.metrics.size_diff_hint, 5);
         assert_eq!(apply_res.metrics.lock_cf_written_bytes, 5);
         assert_eq!(
@@ -4093,10 +4139,10 @@ mod tests {
         let (system, _pool) = create_apply_batch_system::<RocksWriteBatch>(
             1,
             "test-store".to_owned(),
-            CoprocessorHost::<RocksEngine>::default(),
+            host,
             importer,
             region_scheduler,
-            engine.clone(),
+            engine,
             notifier,
             pending_create_peers,
             &cfg,
@@ -4160,7 +4206,7 @@ mod tests {
         let enabled = Arc::new(AtomicBool::new(true));
         let observe_id = ObserveID::new();
         router.schedule(Msg::Change {
-            region_epoch: region_epoch.clone(),
+            region_epoch,
             cmd: ChangeCmd::RegisterObserver {
                 observe_id,
                 region_id: 1,
@@ -4239,24 +4285,6 @@ mod tests {
         cmdbatch_rx
             .recv_timeout(Duration::from_millis(100))
             .unwrap_err();
-
-        // Must response a RegionNotFound error.
-        router.schedule(Msg::Change {
-            region_epoch,
-            cmd: ChangeCmd::RegisterObserver {
-                observe_id,
-                region_id: 2,
-                enabled,
-            },
-            cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
-                assert!(resp
-                    .response
-                    .get_header()
-                    .get_error()
-                    .has_region_not_found());
-                assert!(resp.snapshot.is_none());
-            })),
-        });
     }
 
     #[test]
@@ -4390,7 +4418,7 @@ mod tests {
         let mut router = ApplyRouter::new(sender);
 
         let (system, _pool) = create_apply_batch_system::<RocksWriteBatch>(
-            1,
+            2,
             "test-store".to_owned(),
             host,
             importer,
