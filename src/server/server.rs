@@ -11,7 +11,6 @@ use grpcio::{
     ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
 };
 use kvproto::tikvpb::*;
-use pd_client::PdClient;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
@@ -73,7 +72,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
     pub fn new<E: Engine, L: LockManager>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
-        storage: Storage<E, L, impl PdClient + 'static>,
+        storage: Storage<E, L>,
         cop: Endpoint<E>,
         raft_router: T,
         resolver: S,
@@ -410,7 +409,11 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             storage.get_engine(),
         ));
-        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool.handle());
+        let cop = coprocessor::Endpoint::new(
+            &cfg,
+            cop_read_pool.handle(),
+            storage.get_concurrency_manager(),
+        );
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(

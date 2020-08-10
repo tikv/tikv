@@ -53,6 +53,12 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 30).unwrap()
     )
     .unwrap();
+    pub static ref CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_concurrency_manager_lock_duration",
+        "Histogram of the duration of lock key in the concurrency manager",
+        exponential_buckets(1e-7, 2.0, 20).unwrap() // 100ns ~ 100ms
+    )
+    .unwrap();
     pub static ref MVCC_CONFLICT_COUNTER: MvccConflictCounterVec = {
         register_static_int_counter_vec!(
             MvccConflictCounterVec,
