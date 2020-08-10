@@ -318,6 +318,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpLE>>(),
         ScalarFuncSig::LeJson => compare_json_fn_meta::<CmpOpLE>(),
         ScalarFuncSig::GreatestInt => greatest_int_fn_meta(),
+        ScalarFuncSig::GreatestDecimal => greatest_decimal_fn_meta(),
         ScalarFuncSig::GreatestReal => greatest_real_fn_meta(),
         ScalarFuncSig::GreatestTime => greatest_time_fn_meta(),
         ScalarFuncSig::GtInt => map_int_sig(value, children, compare_mapper::<CmpOpGT>)?,
