@@ -79,9 +79,10 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         });
         let mut rows = 0;
         let mut next_first_scan_key = None;
-        if let Some(iter) = iter {
+        if let Ok(iter) = iter {
             let mut released_locks = HashMap::default();
-            for (current_key, current_lock) in iter {
+            for item in iter {
+                let (current_key, current_lock) = item?;
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                     next_first_scan_key = Some((current_key, current_lock));
                     break;

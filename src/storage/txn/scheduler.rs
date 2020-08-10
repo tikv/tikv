@@ -749,7 +749,7 @@ mod tests {
             )
             .into(),
             // ResolveLockScan now acquire locks during the write process.
-            // todo: I wonder if we can test this behavior
+            // todo: I wonder if we can test this behavior for ResolveLockScan
             // commands::ResolveLockScan::new(temp_map, None, Context::default()).into(),
             commands::ResolveLockLite::new(
                 10.into(),

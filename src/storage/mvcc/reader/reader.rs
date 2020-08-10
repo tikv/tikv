@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
+use crate::storage::mvcc::ErrorInner;
 use crate::storage::mvcc::{default_not_found_error, Result};
 use crate::storage::CfStatistics;
 use engine_rocks::properties::MvccProperties;
@@ -15,24 +16,30 @@ const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 pub struct ScanLocksIter<'a, S: Snapshot, F: Fn(&Lock) -> bool> {
     lock: &'a mut CfStatistics,
     cursor: &'a mut Cursor<S::Iter>,
-    filter_: F,
+    filter_function: F,
 }
 
 impl<'a, S: Snapshot, F: Fn(&Lock) -> bool> Iterator for ScanLocksIter<'a, S, F> {
-    type Item = (Key, Lock);
+    type Item = Result<(Key, Lock)>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // todo: handle error here
-        while self.cursor.valid().ok()? {
+        loop {
+            let valid = self.cursor.valid();
+            if let Err(e) = valid {
+                return Some(Err(e.into()));
+            }
             let key = Key::from_encoded_slice(self.cursor.key(&mut self.lock));
-            let lock = Lock::parse(self.cursor.value(&mut self.lock)).ok()?;
+            let lock = Lock::parse(self.cursor.value(&mut self.lock));
+            if let Err(e) = lock {
+                return Some(Err(e.into()));
+            }
+            let lock = lock.unwrap();
             self.cursor.next(&mut self.lock);
-            if (self.filter_)(&lock) {
+            if (self.filter_function)(&lock) {
                 self.lock.processed += 1;
-                return Some((key, lock));
+                return Some(Ok((key, lock)));
             }
         }
-        None
     }
 }
 
@@ -416,22 +423,26 @@ impl<S: Snapshot> MvccReader<S> {
         &mut self,
         start: Option<&Key>,
         filter: F,
-    ) -> Option<ScanLocksIter<S, F>> {
-        // todo: handle error
-        self.create_lock_cursor().unwrap();
+    ) -> Result<ScanLocksIter<S, F>> {
+        self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
-            // todo: handle error
-            Some(ref x) => cursor.seek(x, &mut self.statistics.lock).unwrap(),
+            Some(ref x) => cursor.seek(x, &mut self.statistics.lock)?,
             None => cursor.seek_to_first(&mut self.statistics.lock),
         };
         if !ok {
-            return None;
+            return Err(ErrorInner::DefaultNotFound {
+                key: start
+                    .cloned()
+                    .map(|it| it.into_raw().unwrap())
+                    .unwrap_or_else(Vec::default),
+            }
+            .into());
         }
-        Some(ScanLocksIter {
+        Ok(ScanLocksIter {
             lock: &mut self.statistics.lock,
             cursor,
-            filter_: filter,
+            filter_function: filter,
         })
     }
 
