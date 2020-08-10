@@ -272,7 +272,7 @@ pub fn greatest_decimal(args: &[Option<&Decimal>]) -> Result<Option<Decimal>> {
 
 #[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
-pub fn greatest_string(args: &[Option<BytesRef>]) -> Result<Option<BytesRef>> {
+pub fn greatest_string(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     do_get_extremum(args, max)
 }
 
