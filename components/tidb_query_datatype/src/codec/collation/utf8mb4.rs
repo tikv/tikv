@@ -466,6 +466,8 @@ impl Collator for CollatorUtf8Mb4UnicodeCi {
             }
 
             if an == bn {
+                an = 0;
+                bn = 0;
                 continue;
             }
 
