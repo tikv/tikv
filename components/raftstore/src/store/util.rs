@@ -48,12 +48,15 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::default();
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
+    peer.set_role(PeerRole::Voter);
     peer
 }
 
 // a helper function to create learner peer easily.
 pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
-    let mut peer = new_peer(store_id, peer_id);
+    let mut peer = metapb::Peer::default();
+    peer.set_store_id(store_id);
+    peer.set_id(peer_id);
     peer.set_role(PeerRole::Learner);
     peer
 }

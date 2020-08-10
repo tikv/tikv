@@ -1740,44 +1740,49 @@ where
                             self.region
                         ));
                     }
-                    (PeerRole::Voter, ConfChangeType::AddLearnerNode) => match kind {
-                        ConfChangeKind::Simple => exist_peer.set_role(PeerRole::Learner),
-                        ConfChangeKind::EnterJoint => exist_peer.set_role(PeerRole::DemotingVoter),
-                        _ => unreachable!(),
-                    },
-                    (PeerRole::Learner, ConfChangeType::AddNode) => match kind {
-                        ConfChangeKind::Simple => exist_peer.set_role(PeerRole::Voter),
-                        ConfChangeKind::EnterJoint => exist_peer.set_role(PeerRole::IncomingVoter),
-                        _ => unreachable!(),
-                    },
-                    (PeerRole::Voter, ConfChangeType::AddNode) => {
-                        error!(
-                            "can't add duplicated peer";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "peer" => ?peer,
-                            "region" => ?&self.region
-                        );
-                        return Err(box_err!(
-                            "can't add duplicated peer {:?} to region {:?}",
-                            peer,
-                            self.region
-                        ));
+                    // Add node
+                    (role, ConfChangeType::AddNode) | (role, ConfChangeType::AddLearnerNode) => {
+                        let (exist_id, incoming_id) = (exist_peer.get_id(), peer.get_id());
+                        if exist_id != incoming_id // Add peer with different id to the same store
+                            // The peer is already the requested role
+                            || (role, cct) == (PeerRole::Voter, ConfChangeType::AddNode)
+                            || (role, cct) == (PeerRole::Learner, ConfChangeType::AddLearnerNode)
+                        {
+                            error!(
+                                "can't add duplicated peer";
+                                "region_id" => self.region_id(),
+                                "peer_id" => self.id(),
+                                "peer" => ?peer,
+                                "exist peer" => ?exist_peer,
+                                "confchnage type" => ?cct,
+                                "region" => ?&self.region
+                            );
+                            return Err(box_err!(
+                                "can't add duplicated peer {:?} to region {:?}, duplicated with exist peer {:?}",
+                                peer,
+                                self.region,
+                                exist_peer
+                            ));
+                        }
+                        match (role, cct) {
+                            (PeerRole::Voter, ConfChangeType::AddLearnerNode) => match kind {
+                                ConfChangeKind::Simple => exist_peer.set_role(PeerRole::Learner),
+                                ConfChangeKind::EnterJoint => {
+                                    exist_peer.set_role(PeerRole::DemotingVoter)
+                                }
+                                _ => unreachable!(),
+                            },
+                            (PeerRole::Learner, ConfChangeType::AddNode) => match kind {
+                                ConfChangeKind::Simple => exist_peer.set_role(PeerRole::Voter),
+                                ConfChangeKind::EnterJoint => {
+                                    exist_peer.set_role(PeerRole::IncomingVoter)
+                                }
+                                _ => unreachable!(),
+                            },
+                            _ => unreachable!(),
+                        }
                     }
-                    (PeerRole::Learner, ConfChangeType::AddLearnerNode) => {
-                        error!(
-                            "can't add duplicated learner";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "peer" => ?peer,
-                            "region" => ?&self.region
-                        );
-                        return Err(box_err!(
-                            "can't add duplicated learner {:?} to region {:?}",
-                            peer,
-                            self.region
-                        ));
-                    }
+                    // Remove node
                     (role, ConfChangeType::RemoveNode) => {
                         if kind == ConfChangeKind::EnterJoint && role == PeerRole::Voter {
                             error!(
