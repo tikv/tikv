@@ -1808,8 +1808,9 @@ impl CoprReadPoolConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub unified: UnifiedReadPoolConfig,
-    pub storage: StorageReadPoolConfig,
     pub coprocessor: CoprReadPoolConfig,
+    pub storage: StorageReadPoolConfig,
+    pub scheduler: StorageReadPoolConfig,
 }
 
 impl ReadPoolConfig {

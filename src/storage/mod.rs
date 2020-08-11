@@ -153,6 +153,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         engine: E,
         config: &Config,
         read_pool: ReadPoolHandle,
+        worker_pool: ReadPoolHandle,
         lock_mgr: L,
         pd_client: Arc<P>,
         pipelined_pessimistic_lock: bool,
@@ -161,8 +162,8 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             engine.clone(),
             lock_mgr,
             pd_client,
+            worker_pool,
             config.scheduler_concurrency,
-            config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
             pipelined_pessimistic_lock,
         );
@@ -1320,10 +1321,12 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             self.engine.clone(),
         );
 
+        let handle = ReadPool::from(read_pool).handle();
         Storage::from_engine(
             self.engine,
             &self.config,
-            ReadPool::from(read_pool).handle(),
+            handle.clone(),
+            handle,
             self.lock_mgr,
             Arc::new(DummyPdClient::new()),
             self.pipelined_pessimistic_lock,

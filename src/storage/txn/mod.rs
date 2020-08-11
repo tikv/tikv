@@ -3,7 +3,6 @@
 //! Storage Transactions
 
 pub mod commands;
-pub mod sched_pool;
 pub mod scheduler;
 
 mod latch;

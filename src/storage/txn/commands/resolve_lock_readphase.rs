@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::read_pool::tls_collect_keyread_histogram_vec;
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{Command, CommandExt, ReadCommand, ResolveLock, TypedCommand};
-use crate::storage::txn::sched_pool::tls_collect_keyread_histogram_vec;
 use crate::storage::txn::{ProcessResult, Result, RESOLVE_LOCK_BATCH_SIZE};
 use crate::storage::{ScanMode, Snapshot, Statistics};
 use tikv_util::collections::HashMap;

@@ -40,11 +40,12 @@ use std::{
     sync::{Arc, Mutex},
     thread::JoinHandle,
 };
+use tikv::storage::kv::{destroy_tls_engine, set_tls_engine};
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
-    read_pool::{build_yatp_read_pool, ReadPool},
+    read_pool::{get_unified_read_pool_name, ReporterTicker},
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
@@ -61,6 +62,7 @@ use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
+    read_pool::{ReadPool, ReadPoolBuilder},
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureWorker, Worker},
@@ -446,13 +448,24 @@ impl TiKVServer {
 
         let pd_worker = FutureWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
+        let mut unified_pool_builder = ReadPoolBuilder::new(ReporterTicker::new(pd_sender.clone()));
 
+        let raftkv = Arc::new(Mutex::new(engines.engine.clone()));
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
-            Some(build_yatp_read_pool(
-                &self.config.readpool.unified,
-                pd_sender.clone(),
-                engines.engine.clone(),
-            ))
+            let cfg = &self.config.readpool.unified;
+            let pool = unified_pool_builder
+                .name_prefix(get_unified_read_pool_name())
+                .after_start(move || {
+                    let engine = raftkv.lock().unwrap().clone();
+                    set_tls_engine(engine);
+                })
+                .before_stop(|| unsafe {
+                    destroy_tls_engine::<RaftKv<ServerRaftStoreRouter<RocksEngine>>>();
+                })
+                .thread_count(cfg.min_thread_count, cfg.max_thread_count)
+                .stack_size(cfg.stack_size.0 as usize)
+                .build();
+            Some(pool)
         } else {
             None
         };
@@ -467,11 +480,22 @@ impl TiKVServer {
             ));
             storage_read_pools.handle()
         };
+        let sched_read_pool_handle = if self.config.readpool.scheduler.use_unified_pool() {
+            unified_read_pool.as_ref().unwrap().handle()
+        } else {
+            let storage_read_pools = ReadPool::from(storage::build_read_pool(
+                &self.config.readpool.scheduler,
+                pd_sender.clone(),
+                engines.engine.clone(),
+            ));
+            storage_read_pools.handle()
+        };
 
         let storage = create_raft_storage(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
+            sched_read_pool_handle,
             lock_mgr.clone(),
             self.pd_client.clone(),
             self.config.pessimistic_txn.pipelined,
