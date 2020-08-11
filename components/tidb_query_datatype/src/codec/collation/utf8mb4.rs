@@ -353,21 +353,6 @@ fn general_ci_convert(c: char) -> u16 {
     }
 }
 
-#[inline]
-fn unicode_ci_convert(c: char) -> u128 {
-    let r = c as usize;
-    if r > 0xFFFF {
-        return 0xFFFD;
-    }
-
-    let u = UNICODE_CI_TABLE[r];
-    if u == LONG_RUNE {
-        return map_long_rune(r);
-    }
-
-    u as u128
-}
-
 pub const TRIM_PADDING_SPACE: char = 0x20 as char;
 
 /// Collator for utf8mb4_general_ci collation with padding behavior (trims right spaces).
@@ -411,7 +396,22 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
     }
 }
 
-/// Collator for utf8mb4_unicode_ci collation with padding behavior (trims right spaces).
+#[inline]
+fn unicode_ci_convert(c: char) -> u128 {
+    let r = c as usize;
+    if r > 0xFFFF {
+        return 0xFFFD;
+    }
+
+    let u = UNICODE_CI_TABLE[r];
+    if u == LONG_RUNE {
+        return map_long_rune(r);
+    }
+
+    u as u128
+}
+
+/// Collator for `utf8mb4_unicode_ci` collation with padding behavior (trims right spaces).
 #[derive(Debug)]
 pub struct CollatorUtf8Mb4UnicodeCi;
 
