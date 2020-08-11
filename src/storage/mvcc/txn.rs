@@ -355,7 +355,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
     // It's possible that lock conflict occours on them, but the isolation is
     // guaranteed by pessimistic locks on row keys, so let TiDB resolves these
     // locks immediately.
-    fn handle_non_pessimistic_lock_conflict(&self, key: Key, lock: Lock) -> Result<()> {
+    pub(crate) fn handle_non_pessimistic_lock_conflict(&self, key: Key, lock: Lock) -> Result<()> {
         // The previous pessimistic transaction has been committed or aborted.
         // Resolve it immediately.
         //
@@ -592,7 +592,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
 
     // TiKV may fails to write pessimistic locks due to pipelined process.
     // If the data is not changed after acquiring the lock, we can still prewrite the key.
-    fn amend_pessimistic_lock(
+    pub(crate) fn amend_pessimistic_lock(
         &mut self,
         pipelined_pessimistic_lock: bool,
         key: &Key,

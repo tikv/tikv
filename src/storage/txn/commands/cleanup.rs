@@ -72,7 +72,7 @@ impl Cleanup {
                     return Err(MvccErrorInner::KeyIsLocked(
                         lock.clone().into_lock_info(self.key.into_raw()?),
                     )
-                        .into());
+                    .into());
                 }
 
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
