@@ -3,7 +3,6 @@
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
-use engine_rocks::RocksEngine;
 use engine_traits::{KvEngine, Snapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
@@ -40,9 +39,10 @@ pub trait StoreRouter {
     fn send(&self, msg: StoreMsg) -> Result<()>;
 }
 
-impl<EK> CasualRouter<EK> for RaftRouter<EK, RocksEngine>
+impl<EK, ER> CasualRouter<EK> for RaftRouter<EK, ER>
 where
     EK: KvEngine,
+    ER: KvEngine,
 {
     #[inline]
     fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()> {
@@ -54,9 +54,10 @@ where
     }
 }
 
-impl<EK> ProposalRouter<EK::Snapshot> for RaftRouter<EK, RocksEngine>
+impl<EK, ER> ProposalRouter<EK::Snapshot> for RaftRouter<EK, ER>
 where
     EK: KvEngine,
+    ER: KvEngine,
 {
     #[inline]
     fn send(
@@ -67,7 +68,11 @@ where
     }
 }
 
-impl StoreRouter for RaftRouter<RocksEngine, RocksEngine> {
+impl<EK, ER> StoreRouter for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     #[inline]
     fn send(&self, msg: StoreMsg) -> Result<()> {
         match self.send_control(msg) {

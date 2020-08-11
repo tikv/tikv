@@ -754,7 +754,7 @@ fn test_double_run_node() {
     let pd_worker = FutureWorker::new("test-pd-worker");
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
-    let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), None);
+    let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
     let coprocessor_host = CoprocessorHost::new(router);
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
