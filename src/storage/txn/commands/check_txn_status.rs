@@ -5,12 +5,15 @@ use txn_types::{Key, TimeStamp};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::MvccTxn;
+use crate::storage::mvcc::metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC;
+use crate::storage::mvcc::txn::{make_txn_error, MissingLockAction};
+use crate::storage::mvcc::{MvccTxn, ReleasedLock, Result as MvccResult};
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
+use std::mem;
 
 command! {
     /// Check the status of a transaction. This is usually invoked by a transaction that meets
@@ -47,8 +50,97 @@ impl CommandExt for CheckTxnStatus {
     gen_lock!(primary_key);
 }
 
+impl CheckTxnStatus {
+    /// Check the status of a transaction.
+    ///
+    /// This operation checks whether a transaction has expired its primary lock's TTL, rollback the
+    /// transaction if expired, or update the transaction's min_commit_ts according to the metadata
+    /// in the primary lock.
+    ///
+    /// When transaction T1 meets T2's lock, it may invoke this on T2's primary key. In this
+    /// situation, `self.start_ts` is T2's `start_ts`, `caller_start_ts` is T1's `start_ts`, and
+    /// the `current_ts` is literally the timestamp when this function is invoked. It may not be
+    /// accurate.
+    ///
+    /// Returns (`lock_ttl`, `commit_ts`, `is_pessimistic_txn`).
+    /// After checking, if the lock is still alive, it retrieves the Lock's TTL; if the transaction
+    /// is committed, get the commit_ts; otherwise, if the transaction is rolled back or there's
+    /// no information about the transaction, results will be both 0.
+    pub fn check_txn_status<S: Snapshot, P: PdClient + 'static>(
+        mut self,
+        txn: &mut MvccTxn<S, P>,
+    ) -> MvccResult<(TxnStatus, Option<ReleasedLock>)> {
+        fail_point!("check_txn_status", |err| Err(make_txn_error(
+            err,
+            &self.primary_key,
+            txn.start_ts,
+        )
+        .into()));
+
+        match txn.reader.load_lock(&self.primary_key)? {
+            Some(mut lock) if lock.ts == txn.start_ts => {
+                let is_pessimistic_txn = !lock.for_update_ts.is_zero();
+
+                if lock.ts.physical() + lock.ttl < self.current_ts.physical() {
+                    // If the lock is expired, clean it up.
+                    let released = txn.check_write_and_rollback_lock(
+                        self.primary_key,
+                        &lock,
+                        is_pessimistic_txn,
+                    )?;
+                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
+                    return Ok((TxnStatus::TtlExpire, released));
+                }
+
+                // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
+                // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
+                // during rolling update.
+                if !lock.min_commit_ts.is_zero()
+                    // If the caller_start_ts is max, it's a point get in the autocommit transaction.
+                    // We don't push forward lock's min_commit_ts and the point get can ingore the lock
+                    // next time because it's not committed.
+                    && !self.caller_start_ts.is_max()
+                    // Push forward the min_commit_ts so that reading won't be blocked by locks.
+                    && self.caller_start_ts >= lock.min_commit_ts
+                {
+                    lock.min_commit_ts = self.caller_start_ts.next();
+
+                    if lock.min_commit_ts < self.current_ts {
+                        lock.min_commit_ts = self.current_ts;
+                    }
+
+                    txn.put_lock(self.primary_key, &lock);
+                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
+                }
+
+                Ok((
+                    TxnStatus::uncommitted(
+                        lock.ttl,
+                        lock.min_commit_ts,
+                        lock.use_async_commit,
+                        lock.secondaries,
+                    ),
+                    None,
+                ))
+            }
+            // The rollback must be protected, see more on
+            // [issue #7364](https://github.com/tikv/tikv/issues/7364)
+            _ => txn
+                .check_txn_status_missing_lock(
+                    self.primary_key,
+                    MissingLockAction::rollback(self.rollback_if_not_exist),
+                )
+                .map(|s| (s, None)),
+        }
+    }
+}
+
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for CheckTxnStatus {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
+    fn process_write(
+        mut self,
+        snapshot: S,
+        context: WriteContext<'_, L, P>,
+    ) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(
             snapshot,
             self.lock_ts,
@@ -57,12 +149,8 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         );
 
         let mut released_locks = ReleasedLocks::new(self.lock_ts, TimeStamp::zero());
-        let (txn_status, released) = txn.check_txn_status(
-            self.primary_key,
-            self.caller_start_ts,
-            self.current_ts,
-            self.rollback_if_not_exist,
-        )?;
+        let ctx = mem::take(&mut self.ctx);
+        let (txn_status, released) = self.check_txn_status(&mut txn)?;
         released_locks.push(released);
         // The lock is released here only when the `check_txn_status` returns `TtlExpire`.
         if let TxnStatus::TtlExpire = txn_status {
@@ -73,7 +161,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         let pr = ProcessResult::TxnStatus { txn_status };
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
-            ctx: self.ctx,
+            ctx,
             to_be_write: write_data,
             rows: 1,
             pr,

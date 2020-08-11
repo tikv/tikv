@@ -53,7 +53,7 @@ pub enum MissingLockAction {
 }
 
 impl MissingLockAction {
-    fn rollback_protect(protect_rollback: bool) -> MissingLockAction {
+    pub(crate) fn rollback_protect(protect_rollback: bool) -> MissingLockAction {
         if protect_rollback {
             MissingLockAction::ProtectedRollback
         } else {
@@ -61,7 +61,7 @@ impl MissingLockAction {
         }
     }
 
-    fn rollback(rollback_if_not_exist: bool) -> MissingLockAction {
+    pub(crate) fn rollback(rollback_if_not_exist: bool) -> MissingLockAction {
         if rollback_if_not_exist {
             MissingLockAction::ProtectedRollback
         } else {
@@ -291,7 +291,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
 
     // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
     // to do the rollback differs according to whether there's an overlapped write record.
-    fn check_write_and_rollback_lock(
+    pub(crate) fn check_write_and_rollback_lock(
         &mut self,
         key: Key,
         lock: &Lock,
@@ -848,7 +848,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         self.cleanup(key, TimeStamp::zero(), false)
     }
 
-    fn check_txn_status_missing_lock(
+    pub(crate) fn check_txn_status_missing_lock(
         &mut self,
         primary_key: Key,
         action: MissingLockAction,
