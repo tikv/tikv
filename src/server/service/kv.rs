@@ -1508,12 +1508,13 @@ fn future_ver_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
     let (cb, future) = paired_future_callback();
     let mut ver_mutation = req.take_mut();
     let mut key = Key::from_raw(&ver_mutation.take_key());
+    let cf = CF_VER_DEFAULT.to_string();
     let version = req.get_version();
     key = key.append_ts(version.into());
     let value = ver_mutation.take_value();
     let res = storage.raw_put(
         req.take_context(),
-        "".to_string(),
+        cf,
         key.into_raw().expect("failed to decode"),
         value,
         cb,
