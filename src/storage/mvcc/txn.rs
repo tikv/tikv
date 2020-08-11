@@ -26,7 +26,7 @@ pub struct GcInfo {
 
 /// Generate the Write record that should be written that means to to perform a specified rollback
 /// operation.
-fn make_rollback(
+pub(crate) fn make_rollback(
     start_ts: TimeStamp,
     protected: bool,
     overlapped_write: Option<Write>,
@@ -110,7 +110,7 @@ pub struct MvccTxn<S: Snapshot, P: PdClient + 'static> {
     write_size: usize,
     writes: WriteData,
     // collapse continuous rollbacks.
-    collapse_rollback: bool,
+    pub(crate) collapse_rollback: bool,
     pub extra_op: ExtraOp,
     pd_client: Arc<P>,
 }
@@ -191,7 +191,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         self.write_size
     }
 
-    fn put_lock(&mut self, key: Key, lock: &Lock) {
+    pub(crate) fn put_lock(&mut self, key: Key, lock: &Lock) {
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
         self.writes.modifies.push(write);
@@ -414,7 +414,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     key: key.into_raw()?,
                     pessimistic: false,
                 }
-                    .into());
+                .into());
             }
             if need_value {
                 val = self.reader.get(&key, for_update_ts, true)?;
@@ -453,7 +453,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     key: key.into_raw()?,
                     primary: primary.to_vec(),
                 }
-                    .into());
+                .into());
             }
 
             // Handle rollback.
@@ -467,7 +467,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     start_ts: self.start_ts,
                     key: key.into_raw()?,
                 }
-                    .into());
+                .into());
             }
             // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
             if commit_ts > self.start_ts {
@@ -480,7 +480,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                             start_ts: self.start_ts,
                             key: key.into_raw()?,
                         }
-                            .into());
+                        .into());
                     }
                 }
             }
@@ -555,7 +555,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                         start_ts: self.start_ts,
                         key: key.into_raw()?,
                     }
-                        .into());
+                    .into());
                 }
                 return Err(self
                     .handle_non_pessimistic_lock_conflict(key, lock)
@@ -608,7 +608,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 start_ts: self.start_ts,
                 key: key.clone().into_raw()?,
             }
-                .into());
+            .into());
         }
         if let Some((commit_ts, _)) = self.reader.seek_write(key, TimeStamp::max())? {
             // The invariants of pessimistic locks are:
@@ -634,7 +634,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     start_ts: self.start_ts,
                     key: key.clone().into_raw()?,
                 }
-                    .into());
+                .into());
             }
         }
         // Used pipelined pessimistic lock acquiring in this txn but failed
@@ -685,7 +685,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                         key: key.into_raw()?,
                         primary: primary.to_vec(),
                     }
-                        .into());
+                    .into());
                 }
                 // If there's a write record whose commit_ts equals to our start ts, the current
                 // transaction is ok to continue, unless the record means that the current
@@ -702,7 +702,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                         key: key.into_raw()?,
                         primary: primary.to_vec(),
                     }
-                        .into());
+                    .into());
                 }
                 self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
                 prev_write = Some(write);
@@ -723,7 +723,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     key: key.into_raw()?,
                     pessimistic: true,
                 }
-                    .into());
+                .into());
             }
             // Duplicated command. No need to overwrite the lock and data.
             MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
@@ -769,7 +769,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                         key: key.into_raw()?,
                         min_commit_ts: lock.min_commit_ts,
                     }
-                        .into());
+                    .into());
                 }
 
                 // It's an abnormal routine since pessimistic locks shouldn't be committed in our
@@ -814,7 +814,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                             commit_ts,
                             key: key.into_raw()?,
                         }
-                            .into())
+                        .into())
                     }
                     // Committed by concurrent transaction.
                     Some((_, WriteType::Put))
@@ -872,7 +872,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                         start_ts: self.start_ts,
                         key: primary_key.into_raw()?,
                     }
-                        .into());
+                    .into());
                 }
 
                 let ts = self.start_ts;
@@ -921,7 +921,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     return Err(ErrorInner::KeyIsLocked(
                         lock.clone().into_lock_info(key.into_raw()?),
                     )
-                        .into());
+                    .into());
                 }
 
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
@@ -970,7 +970,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Ok(None)
     }
 
-    fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
+    pub(crate) fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
         if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
             if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
                 self.delete_write(key, commit_ts);
@@ -1019,7 +1019,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             commit_ts: TimeStamp::zero(),
             key: primary_key.into_raw()?,
         }
-            .into())
+        .into())
     }
 
     /// Check the status of a transaction.
@@ -1902,8 +1902,8 @@ mod tests {
     }
 
     fn test_gc_imp<F>(k: &[u8], v1: &[u8], v2: &[u8], v3: &[u8], v4: &[u8], gc: F)
-        where
-            F: Fn(&RocksEngine, &[u8], u64),
+    where
+        F: Fn(&RocksEngine, &[u8], u64),
     {
         let engine = TestEngineBuilder::new().build().unwrap();
 
@@ -2059,7 +2059,7 @@ mod tests {
             0,
             TimeStamp::default(),
         )
-            .unwrap();
+        .unwrap();
         assert!(txn.write_size() > 0);
         engine
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
@@ -3383,7 +3383,7 @@ mod tests {
                     false,
                     TimeStamp::zero(),
                 )
-                    .unwrap();
+                .unwrap();
                 write(WriteData::from_modifies(txn.into_modifies()));
                 txn = new_txn(start_ts.into());
                 txn.extra_op = ExtraOp::ReadOldValue;
@@ -3398,7 +3398,7 @@ mod tests {
                     TimeStamp::zero(),
                     false,
                 )
-                    .unwrap();
+                .unwrap();
             } else {
                 txn.prewrite(mutation, b"key", &None, false, 0, 0, TimeStamp::default())
                     .unwrap();
@@ -3548,7 +3548,7 @@ mod tests {
             4,
             TimeStamp::zero(),
         )
-            .unwrap();
+        .unwrap();
         engine
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
             .unwrap();

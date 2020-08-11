@@ -1,11 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use pd_client::PdClient;
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, Lock as TxnLock, LockType, TimeStamp, Value, WriteType};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::{Lock, LockManager, WaitTimeout};
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn};
+use crate::storage::mvcc::metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC};
+use crate::storage::mvcc::txn::make_txn_error;
+use crate::storage::mvcc::{
+    Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, Result as MvccResult,
+};
 use crate::storage::txn::commands::{
     Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
@@ -14,6 +18,7 @@ use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
     Result as StorageResult, Snapshot,
 };
+use std::mem;
 
 command! {
     /// Acquire a Pessimistic lock on the keys.
@@ -69,11 +74,164 @@ fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
     }
 }
 
+impl AcquirePessimisticLock {
+    pub fn acquire_pessimistic_lock<S: Snapshot, P: PdClient + 'static>(
+        &mut self,
+        txn: &mut MvccTxn<S, P>,
+        key: Key,
+        should_not_exist: bool,
+    ) -> MvccResult<Option<Value>> {
+        fail_point!("acquire_pessimistic_lock", |err| Err(make_txn_error(
+            err,
+            &key,
+            txn.start_ts,
+        )
+        .into()));
+
+        fn pessimistic_lock(
+            primary: &[u8],
+            start_ts: TimeStamp,
+            lock_ttl: u64,
+            for_update_ts: TimeStamp,
+            min_commit_ts: TimeStamp,
+        ) -> TxnLock {
+            TxnLock::new(
+                LockType::Pessimistic,
+                primary.to_vec(),
+                start_ts,
+                lock_ttl,
+                None,
+                for_update_ts,
+                0,
+                min_commit_ts,
+            )
+        }
+
+        let mut val = None;
+        if let Some(lock) = txn.reader.load_lock(&key)? {
+            if lock.ts != txn.start_ts {
+                return Err(
+                    MvccErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into(),
+                );
+            }
+            if lock.lock_type != LockType::Pessimistic {
+                return Err(MvccErrorInner::LockTypeNotMatch {
+                    start_ts: txn.start_ts,
+                    key: key.into_raw()?,
+                    pessimistic: false,
+                }
+                .into());
+            }
+            if self.return_values {
+                val = txn.reader.get(&key, self.for_update_ts, true)?;
+            }
+            // Overwrite the lock with small for_update_ts
+            if self.for_update_ts > lock.for_update_ts {
+                let lock = pessimistic_lock(
+                    &self.primary,
+                    txn.start_ts,
+                    self.lock_ttl,
+                    self.for_update_ts,
+                    self.min_commit_ts,
+                );
+                txn.put_lock(key, &lock);
+            } else {
+                MVCC_DUPLICATE_CMD_COUNTER_VEC
+                    .acquire_pessimistic_lock
+                    .inc();
+            }
+            return Ok(val);
+        }
+
+        if let Some((commit_ts, write)) = txn.reader.seek_write(&key, TimeStamp::max())? {
+            // The isolation level of pessimistic transactions is RC. `for_update_ts` is
+            // the commit_ts of the data this transaction read. If exists a commit version
+            // whose commit timestamp is larger than current `for_update_ts`, the
+            // transaction should retry to get the latest data.
+            if commit_ts > self.for_update_ts {
+                MVCC_CONFLICT_COUNTER
+                    .acquire_pessimistic_lock_conflict
+                    .inc();
+                return Err(MvccErrorInner::WriteConflict {
+                    start_ts: txn.start_ts,
+                    conflict_start_ts: write.start_ts,
+                    conflict_commit_ts: commit_ts,
+                    key: key.into_raw()?,
+                    primary: self.primary.to_vec(),
+                }
+                .into());
+            }
+
+            // Handle rollback.
+            // The rollack informathin may come from either a Rollback record or a record with
+            // `has_overlapped_rollback` flag.
+            if commit_ts == txn.start_ts
+                && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
+            {
+                assert!(write.has_overlapped_rollback || write.start_ts == commit_ts);
+                return Err(MvccErrorInner::PessimisticLockRolledBack {
+                    start_ts: txn.start_ts,
+                    key: key.into_raw()?,
+                }
+                .into());
+            }
+            // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
+            if commit_ts > txn.start_ts {
+                if let Some((commit_ts, write)) = txn.reader.seek_write(&key, txn.start_ts)? {
+                    if write.start_ts == txn.start_ts {
+                        assert!(
+                            commit_ts == txn.start_ts && write.write_type == WriteType::Rollback
+                        );
+                        return Err(MvccErrorInner::PessimisticLockRolledBack {
+                            start_ts: txn.start_ts,
+                            key: key.into_raw()?,
+                        }
+                        .into());
+                    }
+                }
+            }
+
+            // Check data constraint when acquiring pessimistic lock.
+            txn.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+
+            if self.return_values {
+                val = match write.write_type {
+                    // If it's a valid Write, no need to read again.
+                    WriteType::Put => Some(txn.reader.load_data(&key, write)?),
+                    WriteType::Delete => None,
+                    WriteType::Lock | WriteType::Rollback => {
+                        txn.reader.get(&key, commit_ts.prev(), true)?
+                    }
+                };
+            }
+        }
+
+        let lock = pessimistic_lock(
+            &self.primary,
+            txn.start_ts,
+            self.lock_ttl,
+            self.for_update_ts,
+            self.min_commit_ts,
+        );
+        txn.put_lock(key, &lock);
+
+        Ok(val)
+    }
+}
+
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
     for AcquirePessimisticLock
 {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
-        let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
+    fn process_write(
+        mut self,
+        snapshot: S,
+        context: WriteContext<'_, L, P>,
+    ) -> Result<WriteResult> {
+        let (start_ts, ctx, keys) = (
+            mem::take(&mut self.start_ts),
+            mem::take(&mut self.ctx),
+            mem::take(&mut self.keys),
+        );
         let mut txn = MvccTxn::new(
             snapshot,
             start_ts,
@@ -87,15 +245,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
             Ok(PessimisticLockRes::Empty)
         };
         for (k, should_not_exist) in keys {
-            match txn.acquire_pessimistic_lock(
-                k,
-                &self.primary,
-                should_not_exist,
-                self.lock_ttl,
-                self.for_update_ts,
-                self.return_values,
-                self.min_commit_ts,
-            ) {
+            match self.acquire_pessimistic_lock(&mut txn, k, should_not_exist) {
                 Ok(val) => {
                     if self.return_values {
                         res.as_mut().unwrap().push(val);
