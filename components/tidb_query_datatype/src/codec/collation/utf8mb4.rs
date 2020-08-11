@@ -450,7 +450,7 @@ impl Collator for CollatorUtf8Mb4UnicodeCi {
 
         loop {
             if an == 0 {
-                while let Some(ach) = ca.next() {
+                for ach in &mut ca {
                     an = unicode_ci_convert(ach);
                     if an != 0 {
                         break;
@@ -459,7 +459,7 @@ impl Collator for CollatorUtf8Mb4UnicodeCi {
             }
 
             if bn == 0 {
-                while let Some(bch) = cb.next() {
+                for bch in &mut cb {
                     bn = unicode_ci_convert(bch);
                     if bn != 0 {
                         break;
