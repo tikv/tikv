@@ -302,12 +302,12 @@ impl BackupRange {
             compression_type,
             compression_level,
         ) {
-                Ok(w) => w,
-                Err(e) => {
-                    error!("backup writer failed"; "error" => ?e);
-                    return Err(e);
-                }
-            };
+            Ok(w) => w,
+            Err(e) => {
+                error!("backup writer failed"; "error" => ?e);
+                return Err(e);
+            }
+        };
         let stat = match self.backup(
             &mut writer,
             engine,
