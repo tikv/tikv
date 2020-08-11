@@ -77,6 +77,7 @@ derive_more = "0.99.3"
 encryption = { path = "components/encryption" }
 engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
+engine_skiplist = { path = "components/engine_skiplist" }
 engine_traits = { path = "components/engine_traits" }
 error_code = { path = "components/error_code" }
 fail = "0.3"
