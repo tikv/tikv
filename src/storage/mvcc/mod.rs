@@ -2,9 +2,9 @@
 
 //! Multi-version concurrency control functionality.
 
-mod metrics;
+pub(super) mod metrics;
 mod reader;
-mod txn;
+pub(super) mod txn;
 
 pub use self::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 pub use self::reader::*;
@@ -833,7 +833,7 @@ pub mod tests {
                 false,
                 0,
                 0,
-                TimeStamp::default()
+                TimeStamp::default(),
             )
             .is_err());
     }

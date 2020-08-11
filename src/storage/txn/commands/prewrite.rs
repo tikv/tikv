@@ -6,8 +6,11 @@ use txn_types::{Key, Mutation, TimeStamp};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
+use crate::storage::mvcc::metrics::MVCC_CONFLICT_COUNTER;
+use crate::storage::mvcc::metrics::MVCC_DUPLICATE_CMD_COUNTER_VEC;
 use crate::storage::mvcc::{
-    has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
+    has_data_in_range, txn::make_txn_error, Error as MvccError, ErrorInner as MvccErrorInner,
+    LockType, MvccTxn, Result as MvccResult, WriteType,
 };
 use crate::storage::txn::commands::{WriteCommand, WriteContext, WriteResult};
 use crate::storage::txn::{Error, Result};
@@ -16,6 +19,7 @@ use crate::storage::{
     types::PrewriteResult,
     Context, Error as StorageError, ProcessResult, Snapshot,
 };
+use core::mem;
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -128,6 +132,101 @@ impl Prewrite {
             ctx,
         )
     }
+
+    pub fn prewrite<S: Snapshot, P: PdClient + 'static>(
+        &mut self,
+        start_ts: TimeStamp,
+        txn: &mut MvccTxn<S, P>,
+        mutation: Mutation,
+        secondary_keys: &mut Option<Vec<Vec<u8>>>,
+    ) -> MvccResult<TimeStamp> {
+        let lock_type = LockType::from_mutation(&mutation);
+        // For the insert/checkNotExists operation, the old key should not be in the system.
+        let should_not_exist = mutation.should_not_exists();
+        let should_not_write = mutation.should_not_write();
+        let mutation_type = mutation.mutation_type();
+        let (key, value) = mutation.into_key_value();
+
+        fail_point!("prewrite", |err| Err(
+            make_txn_error(err, &key, start_ts,).into()
+        ));
+
+        let mut prev_write = None;
+        // Check whether there is a newer version.
+        if !self.skip_constraint_check {
+            if let Some((commit_ts, write)) = txn.reader.seek_write(&key, TimeStamp::max())? {
+                // Abort on writes after our start timestamp ...
+                // If exists a commit version whose commit timestamp is larger than current start
+                // timestamp, we should abort current prewrite.
+                if commit_ts > start_ts {
+                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                    return Err(MvccErrorInner::WriteConflict {
+                        start_ts,
+                        conflict_start_ts: write.start_ts,
+                        conflict_commit_ts: commit_ts,
+                        key: key.into_raw()?,
+                        primary: self.primary.to_vec(),
+                    }
+                    .into());
+                }
+                // If there's a write record whose commit_ts equals to our start ts, the current
+                // transaction is ok to continue, unless the record means that the current
+                // transaction has been rolled back.
+                if commit_ts == start_ts
+                    && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
+                {
+                    MVCC_CONFLICT_COUNTER.rolled_back.inc();
+                    // TODO: Maybe we need to add a new error for the rolled back case.
+                    return Err(MvccErrorInner::WriteConflict {
+                        start_ts,
+                        conflict_start_ts: write.start_ts,
+                        conflict_commit_ts: commit_ts,
+                        key: key.into_raw()?,
+                        primary: self.primary.to_vec(),
+                    }
+                    .into());
+                }
+                txn.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+                prev_write = Some(write);
+            }
+        }
+        if should_not_write {
+            return Ok(TimeStamp::zero());
+        }
+        // Check whether the current key is locked at any timestamp.
+        if let Some(lock) = txn.reader.load_lock(&key)? {
+            if lock.ts != start_ts {
+                return Err(
+                    MvccErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into(),
+                );
+            }
+            // TODO: remove it in future
+            if lock.lock_type == LockType::Pessimistic {
+                return Err(MvccErrorInner::LockTypeNotMatch {
+                    start_ts,
+                    key: key.into_raw()?,
+                    pessimistic: true,
+                }
+                .into());
+            }
+            // Duplicated command. No need to overwrite the lock and data.
+            MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+            return Ok(lock.min_commit_ts);
+        }
+
+        txn.check_extra_op(&key, mutation_type, prev_write)?;
+        txn.prewrite_key_value(
+            key,
+            lock_type.unwrap(),
+            &self.primary,
+            &secondary_keys,
+            value,
+            self.lock_ttl,
+            TimeStamp::zero(),
+            self.txn_size,
+            self.min_commit_ts,
+        )
+    }
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Prewrite {
@@ -176,21 +275,14 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
 
         let mut locks = vec![];
         let mut async_commit_ts = TimeStamp::zero();
-        for m in self.mutations {
-            let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
-
-            if Some(m.key()) == async_commit_pk.as_ref() {
-                secondaries = &self.secondary_keys;
-            }
-            match txn.prewrite(
-                m,
-                &self.primary,
-                secondaries,
-                self.skip_constraint_check,
-                self.lock_ttl,
-                self.txn_size,
-                self.min_commit_ts,
-            ) {
+        let mutations = mem::take(&mut self.mutations);
+        for m in mutations {
+            let mut secondaries = if Some(m.key()) == async_commit_pk.as_ref() {
+                mem::take(&mut self.secondary_keys)
+            } else {
+                self.secondary_keys.as_ref().map(|_| vec![])
+            };
+            match self.prewrite(self.start_ts, &mut txn, m, &mut secondaries) {
                 Ok(ts) => {
                     if secondaries.is_some() {
                         async_commit_ts = ts;
