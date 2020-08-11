@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
+use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
@@ -152,10 +152,14 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                         if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                             self.met_newer_ts_data = NewerTsCheckState::Met;
                         }
-                        result = lock
-                            .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
-                            .map(|_| None)
-                            .map_err(Into::into);
+                        result = Lock::check_ts_conflict(
+                            Cow::Owned(lock),
+                            &current_user_key,
+                            ts,
+                            &self.cfg.bypass_locks,
+                        )
+                        .map(|_| None)
+                        .map_err(Into::into);
                     }
                     IsolationLevel::Rc => {}
                 }

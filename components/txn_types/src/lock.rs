@@ -5,7 +5,7 @@ use crate::types::{Key, Mutation, Value, SHORT_VALUE_PREFIX};
 use crate::{Error, ErrorInner, Result};
 use byteorder::ReadBytesExt;
 use kvproto::kvrpcpb::{LockInfo, Op};
-use std::mem::size_of;
+use std::{borrow::Cow, mem::size_of};
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN};
 
@@ -261,27 +261,32 @@ impl Lock {
     }
 
     /// Checks whether the lock conflicts with the given `ts`. If `ts == TimeStamp::max()`, the primary lock will be ignored.
-    pub fn check_ts_conflict(self, key: &Key, ts: TimeStamp, bypass_locks: &TsSet) -> Result<()> {
-        if self.ts > ts
-            || self.lock_type == LockType::Lock
-            || self.lock_type == LockType::Pessimistic
+    pub fn check_ts_conflict(
+        lock: Cow<Self>,
+        key: &Key,
+        ts: TimeStamp,
+        bypass_locks: &TsSet,
+    ) -> Result<()> {
+        if lock.ts > ts
+            || lock.lock_type == LockType::Lock
+            || lock.lock_type == LockType::Pessimistic
         {
             // Ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
             return Ok(());
         }
 
-        if self.min_commit_ts > ts {
+        if lock.min_commit_ts > ts {
             // Ignore lock when min_commit_ts > ts
             return Ok(());
         }
 
-        if bypass_locks.contains(self.ts) {
+        if bypass_locks.contains(lock.ts) {
             return Ok(());
         }
 
         let raw_key = key.to_raw()?;
 
-        if ts == TimeStamp::max() && raw_key == self.primary {
+        if ts == TimeStamp::max() && raw_key == lock.primary {
             // When `ts == TimeStamp::max()` (which means to get latest committed version for
             // primary key), and current key is the primary key, we ignore this lock.
             return Ok(());
@@ -289,7 +294,7 @@ impl Lock {
 
         // There is a pending lock. Client should wait or clean it.
         Err(Error::from(ErrorInner::KeyIsLocked(
-            self.into_lock_info(raw_key),
+            lock.into_owned().into_lock_info(raw_key),
         )))
     }
 }
@@ -514,65 +519,60 @@ mod tests {
         let empty = Default::default();
 
         // Ignore the lock if read ts is less than the lock version
-        lock.clone()
-            .check_ts_conflict(&key, 50.into(), &empty)
-            .unwrap();
+        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 50.into(), &empty).unwrap();
 
         // Returns the lock if read ts >= lock version
-        lock.clone()
-            .check_ts_conflict(&key, 110.into(), &empty)
-            .unwrap_err();
+        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 110.into(), &empty).unwrap_err();
 
         // Ignore locks that occurs in the `bypass_locks` set.
-        lock.clone()
-            .check_ts_conflict(&key, 110.into(), &TsSet::from_u64s(vec![109]))
-            .unwrap_err();
-        lock.clone()
-            .check_ts_conflict(&key, 110.into(), &TsSet::from_u64s(vec![110]))
-            .unwrap_err();
-        lock.clone()
-            .check_ts_conflict(&key, 110.into(), &TsSet::from_u64s(vec![100]))
-            .unwrap();
-        lock.clone()
-            .check_ts_conflict(
-                &key,
-                110.into(),
-                &TsSet::from_u64s(vec![99, 101, 102, 100, 80]),
-            )
-            .unwrap();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            110.into(),
+            &TsSet::from_u64s(vec![109]),
+        )
+        .unwrap_err();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            110.into(),
+            &TsSet::from_u64s(vec![110]),
+        )
+        .unwrap_err();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            110.into(),
+            &TsSet::from_u64s(vec![100]),
+        )
+        .unwrap();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            110.into(),
+            &TsSet::from_u64s(vec![99, 101, 102, 100, 80]),
+        )
+        .unwrap();
 
         // Ignore the lock if it is Lock or Pessimistic.
         lock.lock_type = LockType::Lock;
-        lock.clone()
-            .check_ts_conflict(&key, 110.into(), &empty)
-            .unwrap();
+        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 110.into(), &empty).unwrap();
         lock.lock_type = LockType::Pessimistic;
-        lock.clone()
-            .check_ts_conflict(&key, 110.into(), &empty)
-            .unwrap();
+        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 110.into(), &empty).unwrap();
 
         // Ignore the primary lock when reading the latest committed version by setting u64::MAX as ts
         lock.lock_type = LockType::Put;
         lock.primary = b"foo".to_vec();
-        lock.clone()
-            .check_ts_conflict(&key, TimeStamp::max(), &empty)
-            .unwrap();
+        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, TimeStamp::max(), &empty).unwrap();
 
         // Should not ignore the secondary lock even though reading the latest version
         lock.primary = b"bar".to_vec();
-        lock.clone()
-            .check_ts_conflict(&key, TimeStamp::max(), &empty)
-            .unwrap_err();
+        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, TimeStamp::max(), &empty).unwrap_err();
 
         // Ignore the lock if read ts is less than min_commit_ts
         lock.min_commit_ts = 150.into();
-        lock.clone()
-            .check_ts_conflict(&key, 140.into(), &empty)
-            .unwrap();
-        lock.clone()
-            .check_ts_conflict(&key, 150.into(), &empty)
-            .unwrap_err();
-        lock.check_ts_conflict(&key, 160.into(), &empty)
-            .unwrap_err();
+        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 140.into(), &empty).unwrap();
+        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 150.into(), &empty).unwrap_err();
+        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 160.into(), &empty).unwrap_err();
     }
 }

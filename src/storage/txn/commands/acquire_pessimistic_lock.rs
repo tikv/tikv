@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use pd_client::PdClient;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::kv::WriteData;
@@ -69,16 +68,14 @@ fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
     }
 }
 
-impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
-    for AcquirePessimisticLock
-{
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
         let mut txn = MvccTxn::new(
             snapshot,
             start_ts,
             !ctx.get_not_fill_cache(),
-            context.pd_client,
+            context.concurrency_manager,
         );
         let rows = keys.len();
         let mut res = if self.return_values {
@@ -128,6 +125,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
             rows,
             pr,
             lock_info,
+            lock_guards: vec![],
         })
     }
 }
