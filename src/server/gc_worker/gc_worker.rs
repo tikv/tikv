@@ -33,7 +33,7 @@ use crate::storage::{
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
-use super::{init_compaction_filter, Callback, Error, ErrorInner, Result};
+use super::{Callback, CompactionFilterInitializer, Error, ErrorInner, Result};
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -623,7 +623,7 @@ impl<E: Engine> GcWorker<E> {
         let kvdb = self.engine.kv_engine();
         let cfg_mgr = self.config_manager.clone();
         let cluster_version = self.cluster_version.clone();
-        init_compaction_filter(kvdb, safe_point.clone(), cfg_mgr, cluster_version);
+        kvdb.init_compaction_filter(safe_point.clone(), cfg_mgr, cluster_version);
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
@@ -834,6 +834,7 @@ mod tests {
     impl Engine for PrefixedEngine {
         // Use RegionSnapshot which can remove the z prefix internally.
         type Snap = RegionSnapshot<RocksSnapshot>;
+        type Local = RocksEngine;
 
         fn kv_engine(&self) -> RocksEngine {
             self.0.kv_engine()

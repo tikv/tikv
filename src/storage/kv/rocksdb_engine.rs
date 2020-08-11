@@ -276,6 +276,7 @@ pub fn write_modifies(kv_engine: &BaseRocksEngine, modifies: Vec<Modify>) -> Res
 
 impl Engine for RocksEngine {
     type Snap = Arc<RocksSnapshot>;
+    type Local = BaseRocksEngine;
 
     fn kv_engine(&self) -> BaseRocksEngine {
         self.engines.kv.clone()
