@@ -10,9 +10,10 @@ mod peer;
 pub mod store;
 
 pub use self::apply::{
-    create_apply_batch_system, Apply, ApplyBatchSystem, ApplyMetrics, ApplyRes, ApplyRouter,
-    CatchUpLogs, ChangeCmd, ChangePeer, ExecResult, GenSnapTask, Msg as ApplyTask,
-    Notifier as ApplyNotifier, ObserveID, Proposal, Registration, TaskRes as ApplyTaskRes,
+    create_apply_batch_system, flush_tls_ctx, maybe_flush_tls_ctx, Apply, ApplyBatchSystem,
+    ApplyMetrics, ApplyRes, ApplyRouter, ApplyRunner, CatchUpLogs, ChangeCmd, ChangePeer,
+    ExecResult, GenSnapTask, Msg as ApplyTask, Notifier as ApplyNotifier, ObserveID, Proposal,
+    Registration, TaskRes as ApplyTaskRes,
 };
 pub use self::peer::{DestroyPeerJob, GroupState, PeerFsm};
 pub use self::store::{

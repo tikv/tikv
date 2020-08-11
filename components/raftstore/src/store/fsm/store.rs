@@ -31,6 +31,7 @@ use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 use yatp::task::future::TaskCell;
+use yatp::Remote;
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
@@ -43,7 +44,9 @@ use crate::store::fsm::peer::{
 };
 #[cfg(feature = "failpoints")]
 use crate::store::fsm::ApplyTaskRes;
-use crate::store::fsm::{create_apply_batch_system, ApplyBatchSystem, ApplyNotifier, Registration};
+use crate::store::fsm::{
+    create_apply_batch_system, ApplyBatchSystem, ApplyNotifier, ApplyRunner, Registration,
+};
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
@@ -1103,6 +1106,7 @@ impl RaftBatchSystem {
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
+        remote: Option<Remote<TaskCell>>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1157,6 +1161,7 @@ impl RaftBatchSystem {
                 region_peers,
                 builder,
                 auto_split_controller,
+                remote,
             )?;
         } else {
             self.start_system::<T, C, RocksWriteBatch>(
@@ -1164,6 +1169,7 @@ impl RaftBatchSystem {
                 region_peers,
                 builder,
                 auto_split_controller,
+                remote,
             )?;
         }
         Ok(())
@@ -1179,6 +1185,7 @@ impl RaftBatchSystem {
         region_peers: Vec<SenderFsmPair<RocksEngine, RocksEngine>>,
         mut builder: RaftPollerBuilder<T, C>,
         auto_split_controller: AutoSplitController,
+        remote: Option<Remote<TaskCell>>,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1188,7 +1195,13 @@ impl RaftBatchSystem {
         let store = builder.store.clone();
         let pd_client = builder.pd_client.clone();
         let importer = builder.importer.clone();
-        let (apply_system, pool) = create_apply_batch_system::<W>(
+        let remote = remote.unwrap_or_else(|| {
+            let pool = Self::create_apply_pool::<W>(cfg.apply_batch_system.pool_size);
+            let remote = pool.remote().clone();
+            self.pool = Some(pool);
+            remote
+        });
+        let apply_system = create_apply_batch_system::<W>(
             builder.store.get_id(),
             format!("[store {}]", builder.store.get_id()),
             builder.coprocessor_host.clone(),
@@ -1197,9 +1210,9 @@ impl RaftBatchSystem {
             builder.engines.kv.clone(),
             ApplyNotifier::Router(self.router.clone()),
             builder.pending_create_peers.clone(),
+            remote,
             &builder.cfg.value(),
         );
-        self.pool = Some(pool);
         {
             let mut meta = builder.store_meta.lock().unwrap();
             for (_, _, peer_fsm) in &region_peers {
@@ -1312,6 +1325,19 @@ impl RaftBatchSystem {
         }
         workers.coprocessor_host.shutdown();
         workers.future_poller.shutdown_now().wait().unwrap();
+    }
+
+    fn create_apply_pool<W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static>(
+        pool_size: usize,
+    ) -> yatp::pool::ThreadPool<TaskCell> {
+        let runner = ApplyRunner::<RocksEngine, W>::new();
+        let mut pool_builder = yatp::Builder::new("yatp-apply-pool");
+        pool_builder
+            .max_thread_count(pool_size)
+            .build_with_queue_and_runner(
+                yatp::queue::QueueType::SingleLevel,
+                yatp::pool::CloneRunnerBuilder(runner),
+            )
     }
 }
 

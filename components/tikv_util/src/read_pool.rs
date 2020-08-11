@@ -80,6 +80,13 @@ impl ReadPool {
             },
         }
     }
+
+    pub fn remote(&self) -> Option<Remote<TaskCell>> {
+        match self {
+            ReadPool::Yatp { pool, .. } => Some(pool.remote().clone()),
+            ReadPool::FuturePools { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone)]

@@ -71,7 +71,7 @@ const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const WRITE_BATCH_LIMIT: usize = 16;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
-const MAX_FLUSH_WAIT_TIME: Duration = Duration::from_millis(100);
+const MAX_FLUSH_WAIT_TIME: Duration = Duration::from_millis(50);
 
 type FlushCallback = Box<dyn FnOnce(bool) + Send>;
 
@@ -3033,7 +3033,7 @@ where
     }
 }
 
-fn flush_tls_ctx<E, W>()
+pub fn flush_tls_ctx<E, W>()
 where
     E: KvEngine,
     W: WriteBatch + WriteBatchVecExt<E>,
@@ -3045,12 +3045,14 @@ where
             }
             let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
             if let Some(apply_ctx) = ctx.as_mut() {
-                apply_ctx.flush();
+                if !apply_ctx.flush_notifier.is_empty() {
+                    apply_ctx.flush();
+                }
             }
         })
     }
 }
-fn maybe_flush_tls_ctx<E, W>()
+pub fn maybe_flush_tls_ctx<E, W>()
 where
     E: KvEngine,
     W: WriteBatch + WriteBatchVecExt<E>,
@@ -3081,6 +3083,20 @@ where
     _phantom1: PhantomData<E>,
     _phantom2: PhantomData<W>,
 }
+impl<E, W> ApplyRunner<E, W>
+where
+    E: KvEngine,
+    W: WriteBatch + WriteBatchVecExt<E>,
+{
+    pub fn new() -> Self {
+        Self {
+            inner: yatp::task::future::Runner::default(),
+            _phantom1: PhantomData,
+            _phantom2: PhantomData,
+        }
+    }
+}
+
 impl<E, W> Clone for ApplyRunner<E, W>
 where
     E: KvEngine,
@@ -3257,11 +3273,9 @@ pub fn create_apply_batch_system<W: WriteBatch + WriteBatchVecExt<RocksEngine> +
     engine: RocksEngine,
     notifier: Notifier<RocksEngine>,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    remote: Remote<TaskCell>,
     cfg: &Config,
-) -> (
-    Arc<dyn ApplyBatchSystem<RocksEngine>>,
-    yatp::pool::ThreadPool<TaskCell>,
-) {
+) -> Arc<dyn ApplyBatchSystem<RocksEngine>> {
     let core = ApplyContextCore {
         tag,
         host,
@@ -3276,18 +3290,6 @@ pub fn create_apply_batch_system<W: WriteBatch + WriteBatchVecExt<RocksEngine> +
         use_delete_range: cfg.use_delete_range,
         perf_level: PerfLevel::Uninitialized,
     };
-    let runner = ApplyRunner::<RocksEngine, W> {
-        inner: yatp::task::future::Runner::default(),
-        _phantom1: PhantomData,
-        _phantom2: PhantomData,
-    };
-    let mut pool_builder = yatp::Builder::new("yatp-apply-pool");
-    let pool = pool_builder
-        .max_thread_count(2)
-        .build_with_queue_and_runner(
-            yatp::queue::QueueType::SingleLevel,
-            yatp::pool::CloneRunnerBuilder(runner),
-        );
     let _phatom = Arc::new(Mutex::new(W::write_batch_vec(
         &core.engine,
         WRITE_BATCH_LIMIT,
@@ -3295,10 +3297,49 @@ pub fn create_apply_batch_system<W: WriteBatch + WriteBatchVecExt<RocksEngine> +
     )));
     let system = ApplyBatchSystemImpl::<RocksEngine, W> {
         core: Arc::new(Mutex::new(core)),
-        remote: pool.remote().clone(),
+        remote,
         _phatom,
     };
-    (Arc::new(system), pool)
+    Arc::new(system)
+}
+
+pub fn create_apply_batch_system_and_pool<
+    W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static,
+>(
+    store_id: u64,
+    tag: String,
+    host: CoprocessorHost<RocksEngine>,
+    importer: Arc<SSTImporter>,
+    region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
+    engine: RocksEngine,
+    notifier: Notifier<RocksEngine>,
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    cfg: &Config,
+) -> (
+    Arc<dyn ApplyBatchSystem<RocksEngine>>,
+    yatp::pool::ThreadPool<TaskCell>,
+) {
+    let runner = ApplyRunner::<RocksEngine, W>::new();
+    let mut pool_builder = yatp::Builder::new("yatp-apply-pool");
+    let pool = pool_builder
+        .max_thread_count(2)
+        .build_with_queue_and_runner(
+            yatp::queue::QueueType::SingleLevel,
+            yatp::pool::CloneRunnerBuilder(runner),
+        );
+    let system = create_apply_batch_system::<W>(
+        store_id,
+        tag,
+        host,
+        importer,
+        region_scheduler,
+        engine,
+        notifier,
+        pending_create_peers,
+        pool.remote().clone(),
+        cfg,
+    );
+    (system, pool)
 }
 
 #[cfg(test)]
@@ -3499,7 +3540,7 @@ mod tests {
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let (sender, receiver) = channel(1024);
         let mut router = ApplyRouter::new(sender);
-        let (system, _pool) = create_apply_batch_system::<RocksWriteBatch>(
+        let (system, _pool) = create_apply_batch_system_and_pool::<RocksWriteBatch>(
             1,
             "test-store".to_owned(),
             CoprocessorHost::<RocksEngine>::default(),
@@ -3803,7 +3844,7 @@ mod tests {
         let (sender, receiver) = channel(1024);
         let mut router = ApplyRouter::new(sender);
 
-        let (system, _pool) = create_apply_batch_system::<RocksWriteBatch>(
+        let (system, _pool) = create_apply_batch_system_and_pool::<RocksWriteBatch>(
             1,
             "test-store".to_owned(),
             CoprocessorHost::<RocksEngine>::default(),
@@ -4136,7 +4177,7 @@ mod tests {
         let (sender, receiver) = channel(1024);
         let mut router = ApplyRouter::new(sender);
 
-        let (system, _pool) = create_apply_batch_system::<RocksWriteBatch>(
+        let (system, _pool) = create_apply_batch_system_and_pool::<RocksWriteBatch>(
             1,
             "test-store".to_owned(),
             host,
@@ -4417,7 +4458,7 @@ mod tests {
         let (sender, receiver) = channel(1024);
         let mut router = ApplyRouter::new(sender);
 
-        let (system, _pool) = create_apply_batch_system::<RocksWriteBatch>(
+        let (system, _pool) = create_apply_batch_system_and_pool::<RocksWriteBatch>(
             2,
             "test-store".to_owned(),
             host,
