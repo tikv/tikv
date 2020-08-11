@@ -450,19 +450,25 @@ impl Collator for CollatorUtf8Mb4UnicodeCi {
 
         loop {
             if an == 0 {
-                if let Some(ach) = ca.next() {
+                while let Some(ach) = ca.next() {
                     an = unicode_ci_convert(ach);
-                } else {
-                    break;
+                    if an != 0 {
+                        break;
+                    }
                 }
             }
 
             if bn == 0 {
-                if let Some(bch) = cb.next() {
+                while let Some(bch) = cb.next() {
                     bn = unicode_ci_convert(bch);
-                } else {
-                    break;
+                    if bn != 0 {
+                        break;
+                    }
                 }
+            }
+
+            if an == 0 || bn == 0 {
+                return Ok(an.cmp(&bn));
             }
 
             if an == bn {

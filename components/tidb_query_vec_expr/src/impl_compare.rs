@@ -909,6 +909,17 @@ mod tests {
                     Ordering::Equal,
                 ],
             ),
+            (
+                "aa",
+                "AA۝۝۝۝۝۝۝۝۝",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Less,
+                    Ordering::Equal,
+                ],
+            ),
         ];
         let collations = [
             (Collation::Binary, 0),
