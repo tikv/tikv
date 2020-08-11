@@ -1,8 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
-use crate::storage::TxnStatus;
 use txn_types::Key;
+
+use crate::storage::kv::WriteData;
+use crate::storage::lock_manager::LockManager;
+use crate::storage::mvcc::MvccTxn;
+use crate::storage::txn::commands::{
+    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+};
+use crate::storage::txn::{Error, ErrorInner, Result};
+use crate::storage::{ProcessResult, Snapshot, TxnStatus};
 
 command! {
     /// Commit the transaction that started at `lock_ts`.
@@ -27,4 +34,43 @@ impl CommandExt for Commit {
     ts!(commit_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
+}
+
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        if self.commit_ts <= self.lock_ts {
+            return Err(Error::from(ErrorInner::InvalidTxnTso {
+                start_ts: self.lock_ts,
+                commit_ts: self.commit_ts,
+            }));
+        }
+        let mut txn = MvccTxn::new(
+            snapshot,
+            self.lock_ts,
+            !self.ctx.get_not_fill_cache(),
+            context.concurrency_manager,
+        );
+
+        let rows = self.keys.len();
+        // Pessimistic txn needs key_hashes to wake up waiters
+        let mut released_locks = ReleasedLocks::new(self.lock_ts, self.commit_ts);
+        for k in self.keys {
+            released_locks.push(txn.commit(k, self.commit_ts)?);
+        }
+        released_locks.wake_up(context.lock_mgr);
+
+        context.statistics.add(&txn.take_statistics());
+        let pr = ProcessResult::TxnStatus {
+            txn_status: TxnStatus::committed(self.commit_ts),
+        };
+        let write_data = WriteData::from_modifies(txn.into_modifies());
+        Ok(WriteResult {
+            ctx: self.ctx,
+            to_be_write: write_data,
+            rows,
+            pr,
+            lock_info: None,
+            lock_guards: vec![],
+        })
+    }
 }

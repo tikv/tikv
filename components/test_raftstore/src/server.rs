@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
+use futures::Future;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::{create_debug, DebugClient};
@@ -20,11 +21,11 @@ use super::*;
 use encryption::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngines, MiscExt};
-use pd_client::DummyPdClient;
+use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
-use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::{
     AutoSplitController, Callback, LocalReader, SnapManagerBuilder, SplitCheckRunner,
@@ -46,6 +47,7 @@ use tikv::server::{
     ServerTransport,
 };
 use tikv::storage;
+use tikv::storage::concurrency_manager::ConcurrencyManager;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
@@ -63,8 +65,8 @@ struct ServerMeta {
     server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    raw_router: RaftRouter<RocksSnapshot>,
-    raw_apply_router: ApplyRouter,
+    raw_router: RaftRouter<RocksEngine, RocksEngine>,
+    raw_apply_router: ApplyRouter<RocksEngine>,
     worker: Worker<ResolveTask>,
     gc_worker: GcWorker<RaftKv<SimulateStoreTransport>>,
 }
@@ -120,7 +122,7 @@ impl ServerCluster {
         &self.addrs[&node_id]
     }
 
-    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter {
+    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter<RocksEngine> {
         self.metas.get(&node_id).unwrap().raw_apply_router.clone()
     }
 
@@ -140,9 +142,10 @@ impl Simulator for ServerCluster {
         node_id: u64,
         mut cfg: TiKvConfig,
         engines: KvEngines<RocksEngine, RocksEngine>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksSnapshot>,
-        system: RaftBatchSystem,
+        router: RaftRouter<RocksEngine, RocksEngine>,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = Builder::new().prefix("test_cluster").tempdir().unwrap();
@@ -158,7 +161,6 @@ impl Simulator for ServerCluster {
             cfg.server.addr = addr.clone();
         }
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
@@ -197,13 +199,19 @@ impl Simulator for ServerCluster {
             .start_observe_lock_apply(&mut coprocessor_host)
             .unwrap();
 
+        let latest_ts = self
+            .pd_client
+            .get_tso()
+            .wait()
+            .expect("failed to get timestamp from PD");
+        let concurrency_manager = ConcurrencyManager::new(latest_ts);
         let mut lock_mgr = LockManager::new();
         let store = create_raft_storage(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
             lock_mgr.clone(),
-            Arc::new(DummyPdClient::new()),
+            concurrency_manager.clone(),
             false,
         )?;
         self.storages.insert(node_id, raft_engine);
@@ -243,13 +251,14 @@ impl Simulator for ServerCluster {
             resolve::new_resolver(Arc::clone(&self.pd_client), router.clone()).unwrap();
         let snap_mgr = SnapManagerBuilder::default()
             .encryption_key_manager(key_manager)
-            .build(tmp_str, Some(router.clone()));
+            .build(tmp_str);
         let server_cfg = Arc::new(cfg.server.clone());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         ));
-        let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool.handle());
+        let cop =
+            coprocessor::Endpoint::new(&server_cfg, cop_read_pool.handle(), concurrency_manager);
         let mut server = None;
         for _ in 0..100 {
             let mut svr = Server::new(
@@ -462,7 +471,7 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksSnapshot>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
 }

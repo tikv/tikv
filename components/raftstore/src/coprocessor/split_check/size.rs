@@ -5,6 +5,7 @@ use std::mem;
 use std::sync::{Arc, Mutex};
 
 use engine_traits::{KvEngine, Range};
+use error_code::ErrorCodeExt;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
@@ -102,7 +103,7 @@ pub struct SizeCheckObserver<C, E> {
     _phantom: PhantomData<E>,
 }
 
-impl<C: CasualRouter<E::Snapshot>, E> SizeCheckObserver<C, E>
+impl<C: CasualRouter<E>, E> SizeCheckObserver<C, E>
 where
     E: KvEngine,
 {
@@ -116,7 +117,7 @@ where
 
 impl<C: Send, E: Send> Coprocessor for SizeCheckObserver<C, E> {}
 
-impl<C: CasualRouter<E::Snapshot> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E>
+impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E>
 where
     E: KvEngine,
 {
@@ -140,6 +141,7 @@ where
                     "failed to get approximate stat";
                     "region_id" => region_id,
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 // Need to check size.
                 host.add_checker(Box::new(Checker::new(
@@ -159,6 +161,7 @@ where
                 "failed to send approximate region size";
                 "region_id" => region_id,
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
         }
 
@@ -254,7 +257,7 @@ pub mod tests {
     use engine_rocks::properties::RangePropertiesCollectorFactory;
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions, Writable};
     use engine_rocks::raw_util::{new_engine_opt, CFOptions};
-    use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+    use engine_rocks::{Compat, RocksEngine};
     use engine_traits::CF_LOCK;
     use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::Peer;
@@ -275,7 +278,7 @@ pub mod tests {
     use super::*;
 
     fn must_split_at_impl(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksSnapshot>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
         ignore_split_keys: bool,
@@ -307,7 +310,7 @@ pub mod tests {
     }
 
     pub fn must_split_at(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksSnapshot>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
     ) {
@@ -383,7 +386,7 @@ pub mod tests {
 
         // Approximate size of memtable is inaccurate for small data,
         // we flush it to SST so we can use the size properties instead.
-        engine.flush(true).unwrap();
+        engine.flush_cf(&cf_handle, true).unwrap();
 
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
@@ -397,7 +400,7 @@ pub mod tests {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             engine.put_cf(&cf_handle, &s, &s).unwrap();
         }
-        engine.flush(true).unwrap();
+        engine.flush_cf(&cf_handle, true).unwrap();
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,
@@ -411,7 +414,7 @@ pub mod tests {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             engine.put_cf(&cf_handle, &s, &s).unwrap();
         }
-        engine.flush(true).unwrap();
+        engine.flush_cf(&cf_handle, true).unwrap();
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,

@@ -11,7 +11,7 @@ use engine_rocks::RocksEngine;
 use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
-use pd_client::{ClusterVersion, DummyPdClient, PdClient};
+use pd_client::{ClusterVersion, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use raftstore::router::ServerRaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
@@ -25,7 +25,10 @@ use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
 use crate::storage::kv::{Engine, ScanMode, Statistics};
-use crate::storage::mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader, MvccTxn};
+use crate::storage::{
+    concurrency_manager::ConcurrencyManager,
+    mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader, MvccTxn},
+};
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::config::{GcConfig, GcWorkerConfigManager};
@@ -183,7 +186,7 @@ impl<E: Engine> GcRunner<E> {
         safe_point: TimeStamp,
         key: &Key,
         gc_info: &mut GcInfo,
-        txn: &mut MvccTxn<E::Snap, DummyPdClient>,
+        txn: &mut MvccTxn<E::Snap>,
     ) -> Result<()> {
         let next_gc_info = txn.gc(key.clone(), safe_point)?;
         gc_info.found_versions += next_gc_info.found_versions;
@@ -193,23 +196,19 @@ impl<E: Engine> GcRunner<E> {
         Ok(())
     }
 
-    fn new_txn(snap: E::Snap) -> MvccTxn<E::Snap, DummyPdClient> {
+    fn new_txn(snap: E::Snap) -> MvccTxn<E::Snap> {
         // TODO txn only used for GC, but this is hacky, maybe need an Option?
-        let pd_client = Arc::new(DummyPdClient::new());
+        let concurrency_manager = ConcurrencyManager::new(1.into());
         MvccTxn::for_scan(
             snap,
             Some(ScanMode::Forward),
             TimeStamp::zero(),
             false,
-            pd_client,
+            concurrency_manager,
         )
     }
 
-    fn flush_txn(
-        txn: MvccTxn<E::Snap, DummyPdClient>,
-        limiter: &Limiter,
-        engine: &E,
-    ) -> Result<()> {
+    fn flush_txn(txn: MvccTxn<E::Snap>, limiter: &Limiter, engine: &E) -> Result<()> {
         let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
@@ -926,7 +925,7 @@ mod tests {
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
     /// be encoded form without ts.
     fn check_data<E: Engine>(
-        storage: &Storage<E, DummyLockManager, DummyPdClient>,
+        storage: &Storage<E, DummyLockManager>,
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
         let scan_res = storage
@@ -935,6 +934,7 @@ mod tests {
                 Key::from_encoded_slice(b""),
                 None,
                 expected_data.len() + 1,
+                0,
                 1.into(),
                 false,
                 false,

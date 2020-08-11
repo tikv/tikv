@@ -10,6 +10,7 @@ use std::{cmp, error, u64};
 
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Mutable, Peekable, WriteBatch};
+use error_code::ErrorCodeExt;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -20,7 +21,7 @@ use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
 use crate::store::fsm::GenSnapTask;
-use crate::store::util::conf_state_from_region;
+use crate::store::util;
 use crate::store::ProposalContext;
 use crate::{Error, Result};
 use into_other::into_other;
@@ -480,7 +481,7 @@ fn init_raft_state(
         Some(s) => s,
         None => {
             let mut raft_state = RaftLocalState::default();
-            if !region.get_peers().is_empty() {
+            if util::is_region_initialized(region) {
                 // new split region
                 raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
                 raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
@@ -504,7 +505,7 @@ fn init_apply_state(
             Some(s) => s,
             None => {
                 let mut apply_state = RaftApplyState::default();
-                if !region.get_peers().is_empty() {
+                if util::is_region_initialized(region) {
                     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
                     let state = apply_state.mut_truncated_state();
                     state.set_index(RAFT_INIT_LOG_INDEX);
@@ -696,7 +697,7 @@ where
     }
 
     pub fn is_initialized(&self) -> bool {
-        !self.region().get_peers().is_empty()
+        util::is_region_initialized(self.region())
     }
 
     pub fn initial_state(&self) -> raft::Result<RaftState> {
@@ -714,7 +715,7 @@ where
         }
         Ok(RaftState::new(
             hard_state,
-            conf_state_from_region(self.region()),
+            util::conf_state_from_region(self.region()),
         ))
     }
 
@@ -1158,7 +1159,6 @@ where
     /// Delete all data that is not covered by `new_region`.
     fn clear_extra_data(
         &self,
-        region_id: u64,
         old_region: &metapb::Region,
         new_region: &metapb::Region,
     ) -> Result<()> {
@@ -1166,18 +1166,28 @@ where
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
         if old_start_key < new_start_key {
             box_try!(self.region_sched.schedule(RegionTask::destroy(
-                region_id,
+                old_region.get_id(),
                 old_start_key,
                 new_start_key
             )));
         }
         if new_end_key < old_end_key {
             box_try!(self.region_sched.schedule(RegionTask::destroy(
-                region_id,
+                old_region.get_id(),
                 new_end_key,
                 old_end_key
             )));
         }
+        Ok(())
+    }
+
+    /// Delete all extra split data from the `start_key` to `end_key`.
+    pub fn clear_extra_split_data(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+        box_try!(self.region_sched.schedule(RegionTask::destroy(
+            self.get_region_id(),
+            start_key,
+            end_key
+        )));
         Ok(())
     }
 
@@ -1382,8 +1392,7 @@ where
         };
         // cleanup data before scheduling apply task
         if self.is_initialized() {
-            if let Err(e) = self.clear_extra_data(self.get_region_id(), self.region(), &snap_region)
-            {
+            if let Err(e) = self.clear_extra_data(self.region(), &snap_region) {
                 // No need panic here, when applying snapshot, the deletion will be tried
                 // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
                 // [b, c) will be kept in rocksdb until a covered snapshot is applied or
@@ -1393,6 +1402,7 @@ where
                     "region_id" => self.get_region_id(),
                     "peer_id" => self.peer_id,
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -1401,16 +1411,17 @@ where
         // serve read request otherwise a corrupt data may be returned.
         // For now, it is ensured by
         // 1. After `PrepareMerge` log is committed, the source region leader's lease will be
-        //    suspected immediately which makes local reader invalid to serve read request.
-        // 2. No read request can be responsed during merging.
+        //    suspected immediately which makes the local reader not serve read request.
+        // 2. No read request can be responsed in peer fsm during merging.
         // These conditions are used to prevent reading **stale** data in the past.
-        // At present, they are used to prevent reading **corrupt** data.
+        // At present, they are also used to prevent reading **corrupt** data.
         for r in &ctx.destroyed_regions {
-            if let Err(e) = self.clear_extra_data(r.get_id(), r, &snap_region) {
+            if let Err(e) = self.clear_extra_data(r, &snap_region) {
                 error!(
                     "failed to cleanup data, may leave some dirty data";
                     "region_id" => r.get_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -1560,7 +1571,7 @@ where
 }
 
 pub fn do_snapshot<E>(
-    mgr: SnapManager<E>,
+    mgr: SnapManager,
     engine: &E,
     kv_snap: E::Snapshot,
     region_id: u64,
@@ -1619,7 +1630,7 @@ where
     snapshot.mut_metadata().set_index(key.idx);
     snapshot.mut_metadata().set_term(key.term);
 
-    let conf_state = conf_state_from_region(state.get_region());
+    let conf_state = util::conf_state_from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
     let mut s = mgr.get_snapshot_for_building(&key)?;
@@ -2047,7 +2058,7 @@ mod tests {
 
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
@@ -2363,7 +2374,7 @@ mod tests {
 
         let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap").tempdir().unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);

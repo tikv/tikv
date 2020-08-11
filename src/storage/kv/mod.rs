@@ -12,11 +12,11 @@ use std::time::Duration;
 use std::{error, ptr, result};
 
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksTablePropertiesCollection};
-use engine_traits::IterOptions;
-use engine_traits::{CfName, MvccProperties, CF_DEFAULT};
+use engine_traits::{CfName, CF_DEFAULT};
+use engine_traits::{IterOptions, MvccProperties, ReadOptions};
 use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::{Context, ExtraOp};
+use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
 use txn_types::{Key, TimeStamp, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
@@ -26,6 +26,7 @@ pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot, TestE
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
 use tikv_util::time::ThreadReadId;
 
@@ -38,14 +39,14 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(Debug)]
 pub struct CbContext {
     pub term: Option<u64>,
-    pub extra_op: ExtraOp,
+    pub txn_extra_op: TxnExtraOp,
 }
 
 impl CbContext {
     pub fn new() -> CbContext {
         CbContext {
             term: None,
-            extra_op: ExtraOp::Noop,
+            txn_extra_op: TxnExtraOp::Noop,
         }
     }
 }
@@ -177,6 +178,7 @@ pub trait Snapshot: Sync + Send + Clone {
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>>;
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     fn iter_cf(
         &self,
@@ -307,6 +309,17 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     default fn from(err: T) -> Self {
         let err = err.into();
         err.into()
+    }
+}
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Request(e) => e.error_code(),
+            ErrorInner::Timeout(_) => error_code::storage::TIMEOUT,
+            ErrorInner::EmptyRequest => error_code::storage::EMPTY_REQUEST,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
+        }
     }
 }
 

@@ -20,7 +20,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::errors::Error as RaftError;
 use raftstore::router::{RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::config::RaftstoreConfigManager;
-use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use raftstore::store::SnapManagerBuilder;
 use raftstore::store::*;
@@ -35,7 +35,7 @@ use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 
 pub struct ChannelTransportCore {
-    snap_paths: HashMap<u64, (SnapManager<RocksEngine>, TempDir)>,
+    snap_paths: HashMap<u64, (SnapManager, TempDir)>,
     routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine>>>,
 }
 
@@ -63,7 +63,7 @@ impl Transport for ChannelTransport {
         let region_id = msg.get_region_id();
         let is_snapshot = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
 
-        if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
+        if is_snapshot {
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
             let from = match self.core.lock().unwrap().snap_paths.get(&from_store) {
@@ -178,9 +178,10 @@ impl Simulator for NodeCluster {
         node_id: u64,
         cfg: TiKvConfig,
         engines: KvEngines<RocksEngine, RocksEngine>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksSnapshot>,
-        system: RaftBatchSystem,
+        router: RaftRouter<RocksEngine, RocksEngine>,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = FutureWorker::new("test-pd-worker");
@@ -208,7 +209,7 @@ impl Simulator for NodeCluster {
             let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
             let snap_mgr = SnapManagerBuilder::default()
                 .encryption_key_manager(key_manager)
-                .build(tmp.path().to_str().unwrap(), Some(router.clone()));
+                .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.core.lock().unwrap();
@@ -228,7 +229,6 @@ impl Simulator for NodeCluster {
             Arc::new(SSTImporter::new(dir, None).unwrap())
         };
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let cfg_controller = ConfigController::new(cfg.clone());
 
@@ -410,7 +410,7 @@ impl Simulator for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksSnapshot>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }

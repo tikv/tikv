@@ -23,7 +23,9 @@ use crate::store::{
     RequestInspector, RequestPolicy,
 };
 use crate::Result;
+
 use engine_traits::KvEngine;
+use error_code::ErrorCodeExt;
 use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};
@@ -95,6 +97,7 @@ pub trait ReadExecutor<E: KvEngine> {
                             "failed to execute get command";
                             "region_id" => region.get_id(),
                             "err" => ?e,
+                            "error_code" => %e.error_code(),
                         );
                         response.response = cmd_resp::new_error(e);
                         return response;
@@ -148,7 +151,7 @@ pub struct ReadDelegate {
 }
 
 impl ReadDelegate {
-    pub fn from_peer(peer: &Peer) -> ReadDelegate {
+    pub fn from_peer(peer: &Peer<impl KvEngine, impl KvEngine>) -> ReadDelegate {
         let region = peer.region().clone();
         let region_id = region.get_id();
         let peer_id = peer.peer.get_id();

@@ -3,7 +3,7 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksEngine;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::config::{Config, RaftstoreConfigManager};
@@ -63,9 +63,9 @@ fn start_raftstore(
     dir: &TempDir,
 ) -> (
     ConfigController,
-    RaftRouter<RocksSnapshot>,
-    ApplyRouter,
-    RaftBatchSystem,
+    RaftRouter<RocksEngine, RocksEngine>,
+    ApplyRouter<RocksEngine>,
+    RaftBatchSystem<RocksEngine, RocksEngine>,
 ) {
     let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
     let engines = create_tmp_engine(dir);
@@ -86,7 +86,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        SnapManager::new(p, Some(raft_router.clone()))
+        SnapManager::new(p)
     };
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
@@ -117,7 +117,7 @@ fn start_raftstore(
     (cfg_controller, raft_router, system.apply_router(), system)
 }
 
-fn validate_store<F>(router: &RaftRouter<RocksSnapshot>, f: F)
+fn validate_store<F>(router: &RaftRouter<RocksEngine, RocksEngine>, f: F)
 where
     F: FnOnce(&Config) + Send + 'static,
 {
@@ -131,7 +131,7 @@ where
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 }
 
-fn validate_apply<F>(router: &ApplyRouter, region_id: u64, validate: F)
+fn validate_apply<F>(router: &ApplyRouter<RocksEngine>, region_id: u64, validate: F)
 where
     F: FnOnce(bool) + Send + 'static,
 {

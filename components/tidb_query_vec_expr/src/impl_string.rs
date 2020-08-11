@@ -797,6 +797,21 @@ pub fn quote(input: Option<BytesRef>) -> Result<Option<Bytes>> {
     }
 }
 
+#[rpn_fn(writer)]
+#[inline]
+pub fn repeat(input: BytesRef, cnt: &Int, writer: BytesWriter) -> Result<BytesGuard> {
+    let cnt = if *cnt > std::i32::MAX.into() {
+        std::i32::MAX.into()
+    } else {
+        *cnt
+    };
+    let mut writer = writer.begin();
+    for _i in 0..cnt {
+        writer.partial_write(input);
+    }
+    Ok(writer.finish())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2945,5 +2960,58 @@ mod tests {
         // check for null
         let got = quote(None).unwrap();
         assert_eq!(got, Some(Bytes::from("NULL")))
+    }
+
+    #[test]
+    fn test_repeat() {
+        let cases = vec![
+            ("hello, world!", -1, ""),
+            ("hello, world!", 0, ""),
+            ("hello, world!", 1, "hello, world!"),
+            (
+                "hello, world!",
+                3,
+                "hello, world!hello, world!hello, world!",
+            ),
+            ("你好世界", 3, "你好世界你好世界你好世界"),
+            ("こんにちは", 2, "こんにちはこんにちは"),
+            ("\x2f\x35", 5, "\x2f\x35\x2f\x35\x2f\x35\x2f\x35\x2f\x35"),
+        ];
+
+        for (input, cnt, expect) in cases {
+            let input = Bytes::from(input);
+            let expected_output = Bytes::from(expect);
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(input))
+                .push_param(Some(cnt))
+                .evaluate::<Bytes>(ScalarFuncSig::Repeat)
+                .unwrap();
+            assert_eq!(output, Some(expected_output));
+        }
+
+        let null_string: Option<Bytes> = None;
+        let null_cnt: Option<Int> = None;
+
+        // test NULL case
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(null_string.clone())
+            .push_param(Some(42))
+            .evaluate::<Bytes>(ScalarFuncSig::Repeat)
+            .unwrap();
+        assert_eq!(output, None);
+
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(Some(b"hi".to_vec()))
+            .push_param(null_cnt)
+            .evaluate::<Bytes>(ScalarFuncSig::Repeat)
+            .unwrap();
+        assert_eq!(output, None);
+
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(null_string)
+            .push_param(null_cnt)
+            .evaluate::<Bytes>(ScalarFuncSig::Repeat)
+            .unwrap();
+        assert_eq!(output, None);
     }
 }

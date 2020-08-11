@@ -17,9 +17,9 @@ use crate::storage::{
     },
     kv::Engine,
     lock_manager::LockManager,
-    Storage, TxnStatus,
+    SecondaryLocksStatus, Storage, TxnStatus,
 };
-use engine_rocks::RocksSnapshot;
+use engine_rocks::RocksEngine;
 use futures::executor::{self, Notify, Spawn};
 use futures::future::Either;
 use futures::{future, Async, Future, Sink, Stream};
@@ -32,7 +32,6 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
-use pd_client::PdClient;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
@@ -46,16 +45,11 @@ const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
-pub struct Service<
-    T: RaftStoreRouter<RocksSnapshot> + 'static,
-    E: Engine,
-    L: LockManager,
-    P: PdClient + 'static,
-> {
+pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> {
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E>,
     // For handling KV requests.
-    storage: Storage<E, L, P>,
+    storage: Storage<E, L>,
     // For handling coprocessor requests.
     cop: Endpoint<E>,
     // For handling raft messages.
@@ -75,11 +69,10 @@ pub struct Service<
 }
 
 impl<
-        T: RaftStoreRouter<RocksSnapshot> + Clone + 'static,
+        T: RaftStoreRouter<RocksEngine> + Clone + 'static,
         E: Engine + Clone,
         L: LockManager + Clone,
-        P: PdClient + 'static,
-    > Clone for Service<T, E, L, P>
+    > Clone for Service<T, E, L>
 {
     fn clone(&self) -> Self {
         Service {
@@ -97,16 +90,10 @@ impl<
     }
 }
 
-impl<
-        T: RaftStoreRouter<RocksSnapshot> + 'static,
-        E: Engine,
-        L: LockManager,
-        P: PdClient + 'static,
-    > Service<T, E, L, P>
-{
+impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Service<T, E, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
-        storage: Storage<E, L, P>,
+        storage: Storage<E, L>,
         gc_worker: GcWorker<E>,
         cop: Endpoint<E>,
         ch: T,
@@ -171,12 +158,8 @@ macro_rules! handle_request {
     }
 }
 
-impl<
-        T: RaftStoreRouter<RocksSnapshot> + 'static,
-        E: Engine,
-        L: LockManager,
-        P: PdClient + 'static,
-    > Tikv for Service<T, E, L, P>
+impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
+    for Service<T, E, L>
 {
     handle_request!(kv_get, future_get, GetRequest, GetResponse);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
@@ -223,6 +206,12 @@ impl<
         future_check_txn_status,
         CheckTxnStatusRequest,
         CheckTxnStatusResponse
+    );
+    handle_request!(
+        kv_check_secondary_locks,
+        future_check_secondary_locks,
+        CheckSecondaryLocksRequest,
+        CheckSecondaryLocksResponse
     );
     handle_request!(
         kv_scan_lock,
@@ -1008,9 +997,9 @@ pub fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: 
     notify.notify(0);
 }
 
-fn handle_batch_commands_request<E: Engine, L: LockManager, P: PdClient + 'static>(
+fn handle_batch_commands_request<E: Engine, L: LockManager>(
     batcher: &mut Option<ReqBatcher>,
-    storage: &Storage<E, L, P>,
+    storage: &Storage<E, L>,
     cop: &Endpoint<E>,
     peer: &str,
     id: u64,
@@ -1086,6 +1075,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, P: PdClient + 'stati
         BatchRollback, future_batch_rollback(storage), kv_batch_rollback;
         TxnHeartBeat, future_txn_heart_beat(storage), kv_txn_heart_beat;
         CheckTxnStatus, future_check_txn_status(storage), kv_check_txn_status;
+        CheckSecondaryLocks, future_check_secondary_locks(storage), kv_check_secondary_locks;
         ScanLock, future_scan_lock(storage), kv_scan_lock;
         ResolveLock, future_resolve_lock(storage), kv_resolve_lock;
         Gc, future_gc(), kv_gc;
@@ -1133,8 +1123,8 @@ fn future_handle_empty(
     }
 }
 
-fn future_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_get<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: GetRequest,
 ) -> impl Future<Item = GetResponse, Error = Error> {
     storage
@@ -1158,8 +1148,8 @@ fn future_get<E: Engine, L: LockManager, P: PdClient + 'static>(
         })
 }
 
-fn future_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_scan<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: ScanRequest,
 ) -> impl Future<Item = ScanResponse, Error = Error> {
     let end_key = if req.get_end_key().is_empty() {
@@ -1174,6 +1164,7 @@ fn future_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
             Key::from_raw(req.get_start_key()),
             end_key,
             req.get_limit() as usize,
+            req.get_sample_step() as usize,
             req.get_version().into(),
             req.get_key_only(),
             req.get_reverse(),
@@ -1189,8 +1180,8 @@ fn future_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
         })
 }
 
-fn future_batch_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_batch_get<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: BatchGetRequest,
 ) -> impl Future<Item = BatchGetResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
@@ -1214,8 +1205,8 @@ fn future_gc(_: GcRequest) -> impl Future<Item = GcResponse, Error = Error> {
     ))))
 }
 
-fn future_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_delete_range<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: DeleteRangeRequest,
 ) -> impl Future<Item = DeleteRangeResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1238,8 +1229,8 @@ fn future_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
     })
 }
 
-fn future_raw_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_get<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawGetRequest,
 ) -> impl Future<Item = RawGetResponse, Error = Error> {
     storage
@@ -1259,8 +1250,8 @@ fn future_raw_get<E: Engine, L: LockManager, P: PdClient + 'static>(
         })
 }
 
-fn future_raw_batch_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_batch_get<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawBatchGetRequest,
 ) -> impl Future<Item = RawBatchGetResponse, Error = Error> {
     let keys = req.take_keys().into();
@@ -1277,8 +1268,8 @@ fn future_raw_batch_get<E: Engine, L: LockManager, P: PdClient + 'static>(
         })
 }
 
-fn future_raw_put<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_put<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawPutRequest,
 ) -> impl Future<Item = RawPutResponse, Error = Error> {
     let (cb, future) = paired_future_callback();
@@ -1301,8 +1292,8 @@ fn future_raw_put<E: Engine, L: LockManager, P: PdClient + 'static>(
     })
 }
 
-fn future_raw_batch_put<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_batch_put<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawBatchPutRequest,
 ) -> impl Future<Item = RawBatchPutResponse, Error = Error> {
     let cf = req.take_cf();
@@ -1326,8 +1317,8 @@ fn future_raw_batch_put<E: Engine, L: LockManager, P: PdClient + 'static>(
     })
 }
 
-fn future_raw_delete<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_delete<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawDeleteRequest,
 ) -> impl Future<Item = RawDeleteResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1344,8 +1335,8 @@ fn future_raw_delete<E: Engine, L: LockManager, P: PdClient + 'static>(
     })
 }
 
-fn future_raw_batch_delete<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_batch_delete<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawBatchDeleteRequest,
 ) -> impl Future<Item = RawBatchDeleteResponse, Error = Error> {
     let cf = req.take_cf();
@@ -1364,8 +1355,8 @@ fn future_raw_batch_delete<E: Engine, L: LockManager, P: PdClient + 'static>(
     })
 }
 
-fn future_raw_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_scan<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawScanRequest,
 ) -> impl Future<Item = RawScanResponse, Error = Error> {
     let end_key = if req.get_end_key().is_empty() {
@@ -1394,8 +1385,8 @@ fn future_raw_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
         })
 }
 
-fn future_raw_batch_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_batch_scan<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawBatchScanRequest,
 ) -> impl Future<Item = RawBatchScanResponse, Error = Error> {
     storage
@@ -1418,8 +1409,8 @@ fn future_raw_batch_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
         })
 }
 
-fn future_raw_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_delete_range<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawDeleteRangeRequest,
 ) -> impl Future<Item = RawDeleteRangeResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1443,8 +1434,8 @@ fn future_raw_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
 }
 
 // unimplemented
-fn future_ver_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
+fn future_ver_get<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
     mut _req: VerGetRequest,
 ) -> impl Future<Item = VerGetResponse, Error = Error> {
     let resp = VerGetResponse::default();
@@ -1452,8 +1443,8 @@ fn future_ver_get<E: Engine, L: LockManager, P: PdClient + 'static>(
 }
 
 // unimplemented
-fn future_ver_batch_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
+fn future_ver_batch_get<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
     mut _req: VerBatchGetRequest,
 ) -> impl Future<Item = VerBatchGetResponse, Error = Error> {
     let resp = VerBatchGetResponse::default();
@@ -1461,8 +1452,8 @@ fn future_ver_batch_get<E: Engine, L: LockManager, P: PdClient + 'static>(
 }
 
 // unimplemented
-fn future_ver_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
+fn future_ver_mut<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
     mut _req: VerMutRequest,
 ) -> impl Future<Item = VerMutResponse, Error = Error> {
     let resp = VerMutResponse::default();
@@ -1470,8 +1461,8 @@ fn future_ver_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
 }
 
 // unimplemented
-fn future_ver_batch_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
+fn future_ver_batch_mut<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
     mut _req: VerBatchMutRequest,
 ) -> impl Future<Item = VerBatchMutResponse, Error = Error> {
     let resp = VerBatchMutResponse::default();
@@ -1479,8 +1470,8 @@ fn future_ver_batch_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
 }
 
 // unimplemented
-fn future_ver_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
+fn future_ver_scan<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
     mut _req: VerScanRequest,
 ) -> impl Future<Item = VerScanResponse, Error = Error> {
     let resp = VerScanResponse::default();
@@ -1488,8 +1479,8 @@ fn future_ver_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
 }
 
 // unimplemented
-fn future_ver_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
+fn future_ver_delete_range<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
     mut _req: VerDeleteRangeRequest,
 ) -> impl Future<Item = VerDeleteRangeResponse, Error = Error> {
     let resp = VerDeleteRangeResponse::default();
@@ -1507,8 +1498,8 @@ fn future_cop<E: Engine>(
 
 macro_rules! txn_command_future {
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) $prelude: stmt; ($v: ident, $resp: ident) { $else_branch: expr }) => {
-        fn $fn_name<E: Engine, L: LockManager, P: PdClient + 'static>(
-            storage: &Storage<E, L, P>,
+        fn $fn_name<E: Engine, L: LockManager>(
+            storage: &Storage<E, L>,
             $req: $req_ty,
         ) -> impl Future<Item = $resp_ty, Error = Error> {
             $prelude
@@ -1616,6 +1607,18 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
             },
             Err(e) => resp.set_error(extract_key_error(&e)),
         }
+});
+txn_command_future!(future_check_secondary_locks, CheckSecondaryLocksRequest, CheckSecondaryLocksResponse, (status, resp) {
+    match status {
+        Ok(SecondaryLocksStatus::Locked(locks)) => {
+            resp.set_locks(locks.into());
+        },
+        Ok(SecondaryLocksStatus::Committed(ts)) => {
+            resp.set_commit_ts(ts.into_inner());
+        },
+        Ok(SecondaryLocksStatus::RolledBack) => {},
+        Err(e) => resp.set_error(extract_key_error(&e)),
+    }
 });
 txn_command_future!(future_scan_lock, ScanLockRequest, ScanLockResponse, (v, resp) {
     match v {

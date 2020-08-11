@@ -2,6 +2,7 @@
 
 use crate::store::{CasualMessage, CasualRouter};
 use engine_traits::{KvEngine, Range};
+use error_code::ErrorCodeExt;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::marker::PhantomData;
 use std::mem;
@@ -87,7 +88,7 @@ pub struct KeysCheckObserver<C, E> {
     _phantom: PhantomData<E>,
 }
 
-impl<C: CasualRouter<E::Snapshot>, E> KeysCheckObserver<C, E>
+impl<C: CasualRouter<E>, E> KeysCheckObserver<C, E>
 where
     E: KvEngine,
 {
@@ -101,7 +102,7 @@ where
 
 impl<C: Send, E: Send> Coprocessor for KeysCheckObserver<C, E> {}
 
-impl<C: CasualRouter<E::Snapshot> + Send, E> SplitCheckObserver<E> for KeysCheckObserver<C, E>
+impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for KeysCheckObserver<C, E>
 where
     E: KvEngine,
 {
@@ -125,6 +126,7 @@ where
                     "failed to get approximate keys";
                     "region_id" => region_id,
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 // Need to check keys.
                 host.add_checker(Box::new(Checker::new(
@@ -143,6 +145,7 @@ where
                 "failed to send approximate region keys";
                 "region_id" => region_id,
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
         }
 

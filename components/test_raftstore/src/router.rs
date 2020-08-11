@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_rocks::RocksSnapshot;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};
@@ -13,8 +13,9 @@ use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use txn_types::TxnExtra;
 
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 pub struct MockRaftStoreRouter {
-    senders: Arc<Mutex<HashMap<u64, LooseBoundedSender<PeerMsg<RocksSnapshot>>>>>,
+    senders: Arc<Mutex<HashMap<u64, LooseBoundedSender<PeerMsg<RocksEngine>>>>>,
 }
 
 impl MockRaftStoreRouter {
@@ -23,15 +24,19 @@ impl MockRaftStoreRouter {
             senders: Arc::default(),
         }
     }
-    pub fn add_region(&self, region_id: u64, cap: usize) -> Receiver<PeerMsg<RocksSnapshot>> {
+    pub fn add_region(&self, region_id: u64, cap: usize) -> Receiver<PeerMsg<RocksEngine>> {
         let (tx, rx) = loose_bounded(cap);
         self.senders.lock().unwrap().insert(region_id, tx);
         rx
     }
 }
 
-impl RaftStoreRouter<RocksSnapshot> for MockRaftStoreRouter {
-    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
+impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
+    fn significant_send(
+        &self,
+        region_id: u64,
+        msg: SignificantMsg<RocksSnapshot>,
+    ) -> RaftStoreResult<()> {
         let mut senders = self.senders.lock().unwrap();
         if let Some(tx) = senders.get_mut(&region_id) {
             tx.force_send(PeerMsg::SignificantMsg(msg)).unwrap();
@@ -42,11 +47,7 @@ impl RaftStoreRouter<RocksSnapshot> for MockRaftStoreRouter {
         }
     }
 
-    fn casual_send(
-        &self,
-        region_id: u64,
-        msg: CasualMessage<RocksSnapshot>,
-    ) -> RaftStoreResult<()> {
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
         let mut senders = self.senders.lock().unwrap();
         if let Some(tx) = senders.get_mut(&region_id) {
             tx.try_send(PeerMsg::CasualMessage(msg))

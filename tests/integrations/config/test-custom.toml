@@ -183,6 +183,7 @@ info-log-roll-time = "12s"
 info-log-keep-log-file-num = 1000
 info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
+rate-limiter-refill-period = "10ms"
 rate-limiter-mode = 3
 auto-tuned = true
 bytes-per-sync = "1MB"
@@ -567,7 +568,7 @@ enable-compaction-filter = true
 compaction-filter-skip-version-check = true
 
 [pessimistic-txn]
-enabled = false
+enabled = false # test backward compatibility
 wait-for-lock-timeout = "10ms"
-wake-up-delay-duration = 100 # test backward compatible
+wake-up-delay-duration = 100 # test backward compatibility
 pipelined = true
