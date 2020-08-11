@@ -720,7 +720,7 @@ mod tests {
             (Collation::Utf8Mb4Bin, 0),
             (Collation::Utf8Mb4BinNoPadding, 1),
             (Collation::Utf8Mb4GeneralCi, 2),
-            (Collation::Utf8Mb4GeneralCi, 3),
+            (Collation::Utf8Mb4UnicodeCi, 3),
         ];
         let cases = vec![
             // (str, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi])
