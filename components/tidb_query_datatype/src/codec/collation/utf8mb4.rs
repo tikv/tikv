@@ -486,8 +486,6 @@ impl Collator for CollatorUtf8Mb4UnicodeCi {
                 }
             }
         }
-
-        Ok(ca.count().cmp(&(cb.count())))
     }
 
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
