@@ -185,7 +185,7 @@ pub fn check_region_epoch(
             | AdminCmdType::InvalidAdmin
             | AdminCmdType::ComputeHash
             | AdminCmdType::VerifyHash => {}
-            AdminCmdType::ChangePeer => check_conf_ver = true,
+            AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2 => check_conf_ver = true,
             AdminCmdType::Split
             | AdminCmdType::BatchSplit
             | AdminCmdType::PrepareMerge
@@ -1299,6 +1299,7 @@ mod tests {
             AdminCmdType::Split,
             AdminCmdType::BatchSplit,
             AdminCmdType::ChangePeer,
+            AdminCmdType::ChangePeerV2,
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
             AdminCmdType::RollbackMerge,

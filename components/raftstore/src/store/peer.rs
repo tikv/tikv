@@ -3129,6 +3129,7 @@ fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
         let req = msg.get_admin_request();
         return match req.get_cmd_type() {
             AdminCmdType::ChangePeer
+            | AdminCmdType::ChangePeerV2
             | AdminCmdType::Split
             | AdminCmdType::BatchSplit
             | AdminCmdType::PrepareMerge
@@ -3154,6 +3155,7 @@ fn is_request_urgent(req: &RaftCmdRequest) -> bool {
         AdminCmdType::Split
         | AdminCmdType::BatchSplit
         | AdminCmdType::ChangePeer
+        | AdminCmdType::ChangePeerV2
         | AdminCmdType::ComputeHash
         | AdminCmdType::VerifyHash
         | AdminCmdType::PrepareMerge
@@ -3241,6 +3243,7 @@ mod tests {
             AdminCmdType::Split,
             AdminCmdType::BatchSplit,
             AdminCmdType::ChangePeer,
+            AdminCmdType::ChangePeerV2,
             AdminCmdType::ComputeHash,
             AdminCmdType::VerifyHash,
             AdminCmdType::PrepareMerge,

@@ -1296,7 +1296,9 @@ where
         }
 
         let (mut response, exec_result) = match cmd_type {
-            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
+            AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2 => {
+                self.exec_change_peer(ctx, request)
+            }
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
@@ -1741,8 +1743,10 @@ where
                         ));
                     }
                     // Add node
-                    (role, ConfChangeType::AddNode) | (role, ConfChangeType::AddLearnerNode) => {
-                        let (exist_id, incoming_id) = (exist_peer.get_id(), peer.get_id());
+                    (_, ConfChangeType::AddNode) | (_, ConfChangeType::AddLearnerNode) => {
+                        let (role, exist_id, incoming_id) =
+                            (exist_peer.get_role(), exist_peer.get_id(), peer.get_id());
+
                         if exist_id != incoming_id // Add peer with different id to the same store
                             // The peer is already the requested role
                             || (role, cct) == (PeerRole::Voter, ConfChangeType::AddNode)

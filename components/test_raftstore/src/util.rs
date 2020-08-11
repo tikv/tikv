@@ -15,7 +15,10 @@ use kvproto::pdpb::{
     ChangePeer, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader,
 };
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
-use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
+use kvproto::raft_cmdpb::{
+    AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest, RaftCmdResponse, Request,
+    StatusRequest,
+};
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::ConfChangeType;
@@ -246,6 +249,24 @@ pub fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) 
     req.set_cmd_type(AdminCmdType::ChangePeer);
     req.mut_change_peer().set_change_type(change_type);
     req.mut_change_peer().set_peer(peer);
+    req
+}
+
+pub fn new_change_peer_v2_request(changes: Vec<ChangePeer>) -> AdminRequest {
+    let mut req = AdminRequest::default();
+    req.set_cmd_type(AdminCmdType::ChangePeerV2);
+    let change_peer_reqs = changes
+        .into_iter()
+        .map(|mut c| {
+            let mut cp = ChangePeerRequest::default();
+            cp.set_change_type(c.get_change_type());
+            cp.set_peer(c.take_peer());
+            cp
+        })
+        .collect();
+    let mut cp = ChangePeerV2Request::default();
+    cp.set_changes(change_peer_reqs);
+    req.set_change_peer_v2(cp);
     req
 }
 
