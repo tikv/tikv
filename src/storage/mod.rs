@@ -678,7 +678,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             .flatten()
     }
 
-    /// Get the latest key-version of prefix key
+    /// Get the latest key-version based on prefix key
     pub fn ver_get(
         &self,
         ctx: Context,
@@ -706,7 +706,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                     let stats = statistics.mut_cf_statistics(&cf);
                     let mut option = IterOptions::default();
                     option.set_key_only(true);
-                    let mut cursor = snapshot.iter(IterOptions::default(), ScanMode::Backward).unwrap();
+                    let mut cursor = snapshot.iter(IterOptions::default(), ScanMode::Forward).unwrap();
                     cursor.seek(&Key::from_raw(&key), &mut stats.clone())?;
                     cursor.seek_to_first(stats);
                     let key_version = cursor.key(stats);
