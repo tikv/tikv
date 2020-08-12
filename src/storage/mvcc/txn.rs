@@ -351,6 +351,37 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(self.unlock_key(key, is_pessimistic_txn))
     }
 
+    /// Add the timestamp of the current rollback operation to another transaction's lock if
+    /// necessary.
+    ///
+    /// When putting rollback record on a key that's locked by another transaction, the second
+    /// transaction may overwrite the current rollback record when it's committed. Sometimes it may
+    /// break consistency. To solve the problem, add the timestamp of the current rollback to the
+    /// lock. So when the lock is committed, it can check if it will overwrite a rollback record
+    /// by checking the information in the lock.
+    fn mark_rollback_on_mismatching_lock(&mut self, key: &Key, mut lock: Lock, is_protected: bool) {
+        assert_ne!(lock.ts, self.start_ts);
+
+        if !is_protected {
+            // A non-protected rollback record is ok to be overwritten, so do nothing in this case.
+            return;
+        }
+
+        if self.start_ts < lock.ts || self.start_ts < lock.min_commit_ts {
+            // The rollback will surely note be overwritten by committing the lock. Do nothing.
+            return;
+        }
+
+        if !lock.use_async_commit {
+            // Currently only async commit may use calculated commit_ts. Do nothing if it's not a
+            // async commit transaction.
+            return;
+        }
+
+        lock.rollback_ts.push(self.start_ts);
+        self.put_lock(key.clone(), &lock);
+    }
+
     /// Checks the existence of the key according to `should_not_exist`.
     /// If not, returns an `AlreadyExist` error.
     fn check_data_constraint(
@@ -776,8 +807,9 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        let (lock_type, short_value, is_pessimistic_txn) = match self.reader.load_lock(&key)? {
-            Some(ref mut lock) if lock.ts == self.start_ts => {
+        // let (lock_type, short_value, is_pessimistic_txn)
+        let mut lock = match self.reader.load_lock(&key)? {
+            Some(mut lock) if lock.ts == self.start_ts => {
                 // A lock with larger min_commit_ts than current commit_ts can't be committed
                 if commit_ts < lock.min_commit_ts {
                     info!(
@@ -811,11 +843,12 @@ impl<S: Snapshot> MvccTxn<S> {
                     // Commit with WriteType::Lock.
                     lock.lock_type = LockType::Lock;
                 }
-                (
-                    lock.lock_type,
-                    lock.short_value.take(),
-                    !lock.for_update_ts.is_zero(),
-                )
+                // (
+                //     lock.lock_type,
+                //     lock.short_value.take(),
+                //     !lock.for_update_ts.is_zero(),
+                // )
+                lock
             }
             _ => {
                 return match self
@@ -850,13 +883,21 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         };
-        let write = Write::new(
-            WriteType::from_lock_type(lock_type).unwrap(),
+        let mut write = Write::new(
+            WriteType::from_lock_type(lock.lock_type).unwrap(),
             self.start_ts,
-            short_value,
+            lock.short_value.take(),
         );
+
+        for ts in &lock.rollback_ts {
+            if *ts == commit_ts {
+                write = write.set_overlapped_rollback(true);
+                break;
+            }
+        }
+
         self.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
-        Ok(self.unlock_key(key, is_pessimistic_txn))
+        Ok(self.unlock_key(key, lock.is_pessimistic_txn()))
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<Option<ReleasedLock>> {
@@ -875,9 +916,19 @@ impl<S: Snapshot> MvccTxn<S> {
     fn check_txn_status_missing_lock(
         &mut self,
         primary_key: Key,
+        mismatch_lock: Option<Lock>,
         action: MissingLockAction,
     ) -> Result<TxnStatus> {
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
+
+        if let Some(l) = mismatch_lock {
+            self.mark_rollback_on_mismatching_lock(
+                &primary_key,
+                l,
+                action == MissingLockAction::ProtectedRollback,
+            );
+        }
+
         match self
             .reader
             .get_txn_commit_record(&primary_key, self.start_ts)?
@@ -951,8 +1002,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
                 self.check_write_and_rollback_lock(key, lock, is_pessimistic_txn)
             }
-            _ => match self.check_txn_status_missing_lock(
+            l => match self.check_txn_status_missing_lock(
                 key,
+                l,
                 MissingLockAction::rollback_protect(protect_rollback),
             )? {
                 TxnStatus::Committed { commit_ts } => {
@@ -1120,9 +1172,10 @@ impl<S: Snapshot> MvccTxn<S> {
             }
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-            _ => self
+            l => self
                 .check_txn_status_missing_lock(
                     primary_key,
+                    l,
                     MissingLockAction::rollback(rollback_if_not_exist),
                 )
                 .map(|s| (s, None)),
@@ -1145,6 +1198,7 @@ impl<S: Snapshot> MvccTxn<S> {
         start_ts: TimeStamp,
     ) -> Result<(SecondaryLockStatus, Option<ReleasedLock>)> {
         let mut released_lock = None;
+        let mut mismatch_lock = None;
         let (status, need_rollback, rollback_overlapped_write) =
             match self.reader.load_lock(&key)? {
                 Some(lock) if lock.ts == start_ts => {
@@ -1159,29 +1213,35 @@ impl<S: Snapshot> MvccTxn<S> {
                         (SecondaryLockStatus::Locked(lock), false, None)
                     }
                 }
-                _ => match self.reader.get_txn_commit_record(&key, start_ts)? {
-                    TxnCommitRecord::SingleRecord { commit_ts, write } => {
-                        let status = if write.write_type != WriteType::Rollback {
-                            SecondaryLockStatus::Committed(commit_ts)
-                        } else {
-                            SecondaryLockStatus::RolledBack
-                        };
-                        // We needn't write a rollback once there is a write record for it:
-                        // If it's a committed record, it cannot be changed.
-                        // If it's a rollback record, it either comes from another check_secondary_lock
-                        // (thus protected) or the client stops commit actively. So we don't need
-                        // to make it protected again.
-                        (status, false, None)
+                l => {
+                    mismatch_lock = l;
+                    match self.reader.get_txn_commit_record(&key, start_ts)? {
+                        TxnCommitRecord::SingleRecord { commit_ts, write } => {
+                            let status = if write.write_type != WriteType::Rollback {
+                                SecondaryLockStatus::Committed(commit_ts)
+                            } else {
+                                SecondaryLockStatus::RolledBack
+                            };
+                            // We needn't write a rollback once there is a write record for it:
+                            // If it's a committed record, it cannot be changed.
+                            // If it's a rollback record, it either comes from another check_secondary_lock
+                            // (thus protected) or the client stops commit actively. So we don't need
+                            // to make it protected again.
+                            (status, false, None)
+                        }
+                        TxnCommitRecord::OverlappedRollback { .. } => {
+                            (SecondaryLockStatus::RolledBack, false, None)
+                        }
+                        TxnCommitRecord::None { overlapped_write } => {
+                            (SecondaryLockStatus::RolledBack, true, overlapped_write)
+                        }
                     }
-                    TxnCommitRecord::OverlappedRollback { .. } => {
-                        (SecondaryLockStatus::RolledBack, false, None)
-                    }
-                    TxnCommitRecord::None { overlapped_write } => {
-                        (SecondaryLockStatus::RolledBack, true, overlapped_write)
-                    }
-                },
+                }
             };
         if need_rollback {
+            if let Some(l) = mismatch_lock {
+                self.mark_rollback_on_mismatching_lock(&key, l, true);
+            }
             // We must protect this rollback in case this rollback is collapsed and a stale
             // acquire_pessimistic_lock and prewrite succeed again.
             if let Some(write) = make_rollback(start_ts, true, rollback_overlapped_write) {
