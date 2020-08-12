@@ -1045,11 +1045,12 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let for_update_ts = for_update_ts.into();
         let cm = ConcurrencyManager::new(for_update_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
+        let start_ts = start_ts.into();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
         let mut command = crate::storage::txn::commands::PessimisticRollback {
             ctx: ctx.clone(),
             keys: vec![],
-            start_ts: Default::default(),
+            start_ts,
             for_update_ts,
         };
         command
