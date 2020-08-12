@@ -1,13 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::{max, Ordering};
+use std::cmp::{max, min, Ordering};
 use std::str;
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::Collator;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::Time;
+use tidb_query_datatype::codec::mysql::{time::MAX_TIMESTAMP, Time, TimeType};
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::EvalContext;
 
@@ -266,8 +266,20 @@ pub fn greatest_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
 
 #[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
+pub fn least_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
+    do_get_extremum(args, min)
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
 pub fn greatest_decimal(args: &[Option<&Decimal>]) -> Result<Option<Decimal>> {
     do_get_extremum(args, max)
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn least_decimal(args: &[Option<&Decimal>]) -> Result<Option<Decimal>> {
+    do_get_extremum(args, min)
 }
 
 #[rpn_fn(nullable, varg, min_args = 2)]
@@ -278,8 +290,20 @@ pub fn greatest_string(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
 
 #[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
+pub fn least_string(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+    do_get_extremum(args, min)
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
 pub fn greatest_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
     do_get_extremum(args, |x, y| x.max(y))
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn least_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
+    do_get_extremum(args, |x, y| x.min(y))
 }
 
 #[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
@@ -313,6 +337,44 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result
     }
 
     Ok(greatest.map(|time| time.to_string().into_bytes()))
+}
+
+#[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
+#[inline]
+pub fn least_time(mut ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+    let mut least = Some(Time::parse_from_i64(
+        &mut ctx,
+        MAX_TIMESTAMP,
+        TimeType::DateTime,
+        0,
+    )?);
+    for arg in args {
+        match arg {
+            Some(arg_val) => {
+                let s = match str::from_utf8(arg_val) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::Encoding(err))
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
+                    Ok(t) => least = min(least, Some(t)),
+                    Err(_) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .map(|_| Ok(None))?;
+                    }
+                }
+            }
+            None => {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(least.map(|time| time.to_string().into_bytes()))
 }
 
 #[inline]
