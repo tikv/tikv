@@ -42,12 +42,9 @@ impl PessimisticRollback {
         txn: &mut MvccTxn<S>,
         key: Key,
     ) -> MvccResult<Option<ReleasedLock>> {
-        fail_point!("pessimistic_rollback", |err| Err(crate::storage::mvcc::txn::make_txn_error(
-            err,
-            &key,
-            self.start_ts,
-        )
-        .into()));
+        fail_point!("pessimistic_rollback", |err| Err(
+            crate::storage::mvcc::txn::make_txn_error(err, &key, self.start_ts,).into()
+        ));
 
         if let Some(lock) = txn.reader.load_lock(&key)? {
             if lock.lock_type == LockType::Pessimistic

@@ -69,12 +69,9 @@ impl CheckTxnStatus {
         self,
         txn: &mut MvccTxn<S>,
     ) -> MvccResult<(TxnStatus, Option<ReleasedLock>)> {
-        fail_point!("check_txn_status", |err| Err(crate::storage::mvcc::txn::make_txn_error(
-            err,
-            &self.primary_key,
-            self.lock_ts,
-        )
-        .into()));
+        fail_point!("check_txn_status", |err| Err(
+            crate::storage::mvcc::txn::make_txn_error(err, &self.primary_key, self.lock_ts,).into()
+        ));
 
         match txn.reader.load_lock(&self.primary_key)? {
             Some(mut lock) if lock.ts == self.lock_ts => {

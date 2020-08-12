@@ -43,12 +43,10 @@ impl TxnHeartBeat {
     ///
     /// Returns the new TTL.
     pub fn txn_heart_beat<S: Snapshot>(&mut self, txn: &mut MvccTxn<S>) -> MvccResult<u64> {
-        fail_point!("txn_heart_beat", |err| Err(crate::storage::mvcc::txn::make_txn_error(
-            err,
-            &self.primary_key,
-            self.start_ts,
-        )
-        .into()));
+        fail_point!("txn_heart_beat", |err| Err(
+            crate::storage::mvcc::txn::make_txn_error(err, &self.primary_key, self.start_ts,)
+                .into()
+        ));
 
         if let Some(mut lock) = txn.reader.load_lock(&self.primary_key)? {
             if lock.ts == self.start_ts {
