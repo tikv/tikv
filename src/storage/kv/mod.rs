@@ -11,9 +11,9 @@ use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use engine_rocks::{RocksEngine as BaseRocksEngine, RocksTablePropertiesCollection};
+use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{CfName, CF_DEFAULT};
-use engine_traits::{IterOptions, ReadOptions};
+use engine_traits::{IterOptions, KvEngine as LocalEngine, ReadOptions};
 use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
@@ -94,13 +94,14 @@ impl WriteData {
 
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
+    type Local: LocalEngine;
 
-    /// Key/value storage engine.
-    fn kv_engine(&self) -> BaseRocksEngine;
+    /// Local storage engine.
+    fn kv_engine(&self) -> Self::Local;
 
     fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap>;
 
-    /// Write modifications into internal kv engine directly.
+    /// Write modifications into internal local engine directly.
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
 
     fn async_snapshot(
