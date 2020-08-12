@@ -2,7 +2,6 @@
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::txn::make_txn_error;
 use crate::storage::mvcc::{MvccTxn, ReleasedLock, Result as MvccResult};
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
@@ -43,7 +42,7 @@ impl PessimisticRollback {
         txn: &mut MvccTxn<S>,
         key: Key,
     ) -> MvccResult<Option<ReleasedLock>> {
-        fail_point!("pessimistic_rollback", |err| Err(make_txn_error(
+        fail_point!("pessimistic_rollback", |err| Err(crate::storage::mvcc::txn::make_txn_error(
             err,
             &key,
             self.start_ts,

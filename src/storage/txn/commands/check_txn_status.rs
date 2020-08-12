@@ -5,7 +5,7 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC;
-use crate::storage::mvcc::txn::{make_txn_error, MissingLockAction};
+use crate::storage::mvcc::txn::MissingLockAction;
 use crate::storage::mvcc::{MvccTxn, ReleasedLock, Result as MvccResult};
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
@@ -69,7 +69,7 @@ impl CheckTxnStatus {
         self,
         txn: &mut MvccTxn<S>,
     ) -> MvccResult<(TxnStatus, Option<ReleasedLock>)> {
-        fail_point!("check_txn_status", |err| Err(make_txn_error(
+        fail_point!("check_txn_status", |err| Err(crate::storage::mvcc::txn::make_txn_error(
             err,
             &self.primary_key,
             self.lock_ts,

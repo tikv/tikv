@@ -2,7 +2,6 @@
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::txn::make_txn_error;
 use crate::storage::mvcc::{ErrorInner as MvccErrorInner, MvccTxn, Result as MvccResult};
 use crate::storage::txn::commands::{
     Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
@@ -44,7 +43,7 @@ impl TxnHeartBeat {
     ///
     /// Returns the new TTL.
     pub fn txn_heart_beat<S: Snapshot>(&mut self, txn: &mut MvccTxn<S>) -> MvccResult<u64> {
-        fail_point!("txn_heart_beat", |err| Err(make_txn_error(
+        fail_point!("txn_heart_beat", |err| Err(crate::storage::mvcc::txn::make_txn_error(
             err,
             &self.primary_key,
             self.start_ts,
