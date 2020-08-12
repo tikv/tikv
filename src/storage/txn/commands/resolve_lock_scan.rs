@@ -8,7 +8,6 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, ScanMode, Snapshot};
-use pd_client::PdClient;
 use tikv_util::collections::HashMap;
 use txn_types::{Key, TimeStamp};
 
@@ -58,8 +57,8 @@ impl CommandExt for ResolveLockScan {
     gen_lock!(first_scan_key: multiple); // it is not multiple actually, but Option is also IntoIterator
 }
 
-impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for ResolveLockScan {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockScan {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (ctx, txn_status) = (self.ctx, self.txn_status);
         let lock_mgr = context.lock_mgr;
         let mut reader = MvccReader::new(
@@ -72,7 +71,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             snapshot,
             TimeStamp::zero(),
             !ctx.get_not_fill_cache(),
-            context.pd_client,
+            context.concurrency_manager,
         );
         let iter = reader.scan_locks_iter(self.first_scan_key.as_ref(), |lock| {
             txn_status.contains_key(&lock.ts)
@@ -142,6 +141,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             rows,
             pr,
             lock_info: None,
+            lock_guards: vec![],
         })
     }
 }

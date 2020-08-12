@@ -8,7 +8,6 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
-use pd_client::PdClient;
 use txn_types::{Key, TimeStamp};
 
 command! {
@@ -35,13 +34,13 @@ impl CommandExt for ResolveLockLite {
     gen_lock!(resolve_keys: multiple);
 }
 
-impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for ResolveLockLite {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            context.pd_client,
+            context.concurrency_manager,
         );
 
         let rows = self.resolve_keys.len();
@@ -65,6 +64,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             rows,
             pr: ProcessResult::Res,
             lock_info: None,
+            lock_guards: vec![],
         })
     }
 }
