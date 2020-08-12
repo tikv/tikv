@@ -128,6 +128,7 @@ make_auto_flush_static_metric! {
         raw_delete,
         raw_delete_range,
         raw_batch_delete,
+        ver_get,
     }
 
     pub label_enum CommandStageKind {

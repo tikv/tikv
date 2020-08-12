@@ -24,7 +24,7 @@ pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CbContext, CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
+        RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
@@ -661,6 +661,58 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                     let r = Self::raw_get_key_value(&snapshot, cf, key, &mut stats);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+                    r
+                }
+            },
+            priority,
+            thread_rng().next_u64(),
+        );
+
+        res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+            .flatten()
+    }
+
+    /// Get the latest key-version of prefix key
+    pub fn ver_get(
+        &self,
+        ctx: Context,
+        cf: String,
+        key: Vec<u8>,
+    ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
+        const CMD: CommandKind = CommandKind::ver_get;
+        let priority = ctx.get_priority();
+        let priority_tag = get_priority_tag(priority);
+        let res = self.read_pool.spawn_handle(
+            async move {
+                tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
+                let command_duration = tikv_util::time::Instant::now_coarse();
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                {
+                    let begin_instant = Instant::now_coarse();
+                    let mut statistics = Statistics::default();
+                    let stats = statistics.mut_cf_statistics(&cf);
+                    let mut option = IterOptions::default();
+                    option.set_key_only(true);
+                    let mut cursor = snapshot.iter(IterOptions::default(), ScanMode::Backward).unwrap();
+                    cursor.seek(&Key::from_raw(&key), &mut stats.clone())?;
+                    cursor.seek_to_first(stats);
+                    let key_version = cursor.key(stats);
+                    let r = Self::raw_get_key_value(&snapshot, cf, key_version.to_vec(), &mut statistics);
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
+                    tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.elapsed_secs());
