@@ -297,13 +297,13 @@ pub fn least_string(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
 #[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
 pub fn greatest_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
-    do_get_extremum(args, |x, y| x.max(y))
+    do_get_extremum(args, max)
 }
 
 #[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
 pub fn least_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
-    do_get_extremum(args, |x, y| x.min(y))
+    do_get_extremum(args, max)
 }
 
 #[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
