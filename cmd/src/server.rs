@@ -646,6 +646,7 @@ impl TiKVServer {
         // Start CDC.
         let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
         let cdc_endpoint = cdc::Endpoint::new(
+            &self.config.cdc,
             self.pd_client.clone(),
             cdc_worker.scheduler(),
             raft_router,
