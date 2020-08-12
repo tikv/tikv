@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam::atomic::AtomicCell;
+use crossbeam::channel;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::future::Future;
 use kvproto::cdcpb::*;
@@ -26,6 +27,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 use tikv_util::timer::{SteadyTimer, Timer};
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
+use tikv_util::Either;
 use tokio_threadpool::{Builder, ThreadPool};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -217,7 +219,7 @@ pub struct Endpoint<T> {
     timer: SteadyTimer,
     min_ts_interval: Duration,
     scan_batch_size: usize,
-    tso_worker: ThreadPool,
+    tso_worker: Arc<ThreadPool>,
     store_meta: Arc<Mutex<StoreMeta>>,
 
     workers: ThreadPool,
@@ -235,7 +237,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         store_meta: Arc<Mutex<StoreMeta>>,
     ) -> Endpoint<T> {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
-        let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
+        let tso_worker = Arc::new(Builder::new().name_prefix("tso").pool_size(1).build());
         let ep = Endpoint {
             capture_regions: HashMap::default(),
             connections: HashMap::default(),
@@ -591,25 +593,26 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .iter()
             .map(|(region_id, delegate)| (*region_id, delegate.id))
             .collect();
+        let region_count = regions.len();
+        let tso_worker = self.tso_worker.clone();
+        let scheduler_clone = self.scheduler.clone();
         let fut = tso.join(timeout.map_err(|_| unreachable!())).then(
             move |tso: pd_client::Result<(TimeStamp, ())>| {
                 // Ignore get tso errors since we will retry every `min_ts_interval`.
                 let (min_ts, _) = tso.unwrap_or((TimeStamp::default(), ()));
+                let (tx, rx) = channel::unbounded();
                 // TODO: send a message to raftstore would consume too much cpu time,
                 // try to handle it outside raftstore.
                 for (region_id, observe_id) in regions {
                     let scheduler_clone = scheduler.clone();
+                    let tx_clone = tx.clone();
                     if let Err(e) = raft_router.significant_send(
                         region_id,
                         SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
                             if !resp.response.get_header().has_error() {
-                                match scheduler_clone.schedule(Task::MinTS { region_id, min_ts }) {
-                                    Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                                    Err(err) => panic!(
-                                        "failed to schedule min_ts event, min_ts: {}, error: {:?}",
-                                        min_ts, err
-                                    ),
-                                }
+                                tx_clone.send(Either::Left(region_id)).unwrap();
+                            } else {
+                                tx_clone.send(Either::Right(region_id)).unwrap();
                             }
                         }))),
                     ) {
@@ -623,11 +626,34 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                             region_id,
                             err: Error::Request(e.into()),
                         };
+                        tx.send(Either::Right(region_id)).unwrap();
                         if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                             error!("schedule cdc task failed"; "error" => ?e);
                         }
                     }
                 }
+
+                let ready_regions = vec![];
+                let mut ready_count = 0;
+                let wait_tso_fut = rx.for_each(move |res| {
+                    match res {
+                        Either::Left(region_id) => ready_regions.push(region_id),
+                        Either::Right(_) => (),
+                    }
+                    ready_count += 1;
+                    if ready_count >= region_count {
+                        match scheduler_clone.schedule(Task::MinTS { min_ts, ready_regions: ready_regions.clone() }) {
+                            Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                            Err(err) => panic!(
+                                "failed to schedule min_ts event, min_ts: {}, error: {:?}",
+                                min_ts, err
+                            ),
+                        }
+                        return Err(_);
+                    }
+                    Ok(())
+                });
+                tso_worker.spawn(wait_tso_fut);
                 match scheduler.schedule(Task::RegisterMinTsEvent) {
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                     // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
