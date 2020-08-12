@@ -1510,7 +1510,11 @@ mod tests {
             ));
         });
 
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
+        let config = Config {
+            end_point_check_memory_locks: true,
+            ..Default::default()
+        };
+        let cop = Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm);
 
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);

@@ -1412,9 +1412,14 @@ pub struct TestStorageBuilder<E: Engine, L: LockManager> {
 impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     /// Build `Storage<RocksEngine>`.
     pub fn new(lock_mgr: DummyLockManager) -> Self {
+        // Enable async commit in tests by default
+        let config = Config {
+            enable_async_commit: true,
+            ..Default::default()
+        };
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
-            config: Config::default(),
+            config,
             pipelined_pessimistic_lock: false,
             lock_mgr,
         }
@@ -1423,9 +1428,14 @@ impl TestStorageBuilder<RocksEngine, DummyLockManager> {
 
 impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L) -> Self {
+        // Enable async commit in tests by default
+        let config = Config {
+            enable_async_commit: true,
+            ..Default::default()
+        };
         Self {
             engine,
-            config: Config::default(),
+            config,
             pipelined_pessimistic_lock: false,
             lock_mgr,
         }
