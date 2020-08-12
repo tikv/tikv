@@ -81,7 +81,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
     // Print resource quota.
     SysQuota::new().log_quota();
-    CPU_CORES_QUOTA.set(SysQuota::new().cpu_cores_quota() as i64);
+    CPU_CORES_QUOTA.set(SysQuota::new().cpu_cores_quota());
 
     // Do some prepare works before start.
     pre_start();

@@ -332,7 +332,7 @@ lazy_static! {
             exponential_buckets(1f64, 5f64, 10).unwrap()
         )
         .unwrap();
-    pub static ref CPU_CORES_QUOTA: IntGauge = register_int_gauge!(
+    pub static ref CPU_CORES_QUOTA: Gauge = register_gauge!(
         "tikv_server_cpu_cores_quota",
         "Total CPU cores quota for TiKV server"
     )
