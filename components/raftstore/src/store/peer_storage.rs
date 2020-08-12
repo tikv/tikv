@@ -751,18 +751,17 @@ where
                 )?;
                 return Ok(ents);
             }
-            let mut fetched_size = 0;
             let begin_idx = if low < cache_low {
                 cache.miss.update(|m| m + 1);
-                fetched_size = self.engines.raft.fetch_entries_to(
+                let fetched_count = self.engines.raft.fetch_entries_to(
                     region_id,
                     low,
                     cache_low,
                     Some(max_size as usize),
                     &mut ents,
                 )?;
-                if fetched_size > max_size as usize {
-                    // max_size exceed.
+                if fetched_count < (cache_low - low) as usize {
+                    // Less entries are fetched than expected.
                     return Ok(ents);
                 }
                 cache_low
@@ -770,6 +769,7 @@ where
                 low
             };
             cache.hit.update(|h| h + 1);
+            let fetched_size = ents.iter().fold(0, |acc, e| acc + e.compute_size());
             cache.fetch_entries_to(begin_idx, high, fetched_size as u64, max_size, &mut ents);
         } else {
             self.engines.raft.fetch_entries_to(
@@ -1038,7 +1038,8 @@ where
         if let Some(ref mut cache) = self.cache {
             cache.compact_to(idx);
         } else {
-            self.engines.raft.gc_entry_cache(self.get_region_id(), idx);
+            let rid = self.get_region_id();
+            self.engines.raft.gc_entry_cache(rid, idx);
         }
     }
 
@@ -1048,23 +1049,27 @@ where
     }
 
     pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
-        if replicated_idx == apply_idx {
-            // The region is inactive, clear the cache immediately.
-            self.compact_to(apply_idx + 1);
+        if self.engines.raft.has_builtin_entry_cache() {
+            let rid = self.get_region_id();
+            self.engines.raft.gc_entry_cache(rid, apply_idx + 1);
             return;
         }
 
-        if let Some(ref mut cache) = self.cache {
-            let cache_first_idx = match cache.first_index() {
-                None => return,
-                Some(idx) => idx,
-            };
-            if cache_first_idx > replicated_idx + 1 {
-                // Catching up log requires accessing fs already, let's optimize for
-                // the common case.
-                // Maybe gc to second least replicated_idx is better.
-                self.compact_to(apply_idx + 1);
-            }
+        let cache = self.cache.as_mut().unwrap();
+        if replicated_idx == apply_idx {
+            // The region is inactive, clear the cache immediately.
+            cache.compact_to(apply_idx + 1);
+            return;
+        }
+        let cache_first_idx = match cache.first_index() {
+            None => return,
+            Some(idx) => idx,
+        };
+        if cache_first_idx > replicated_idx + 1 {
+            // Catching up log requires accessing fs already, let's optimize for
+            // the common case.
+            // Maybe gc to second least replicated_idx is better.
+            cache.compact_to(apply_idx + 1);
         }
     }
 

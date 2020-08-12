@@ -1,8 +1,8 @@
 use crate::{RocksEngine, RocksWriteBatch};
 
 use engine_traits::{
-    Iterable, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, WriteOptions,
-    MAX_DELETE_BATCH_SIZE,
+    Iterable, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
+    CF_DEFAULT, MAX_DELETE_BATCH_SIZE,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
@@ -45,11 +45,14 @@ impl RaftEngine for RocksEngine {
         max_size: Option<usize>,
         buf: &mut Vec<Entry>,
     ) -> Result<usize> {
-        let (max_size, mut total_size) = (max_size.unwrap_or(usize::MAX), 0);
+        let (max_size, mut total_size, mut count) = (max_size.unwrap_or(usize::MAX), 0, 0);
 
         if high - low <= RAFT_LOG_MULTI_GET_CNT {
             // If election happens in inactive regions, they will just try to fetch one empty log.
             for i in low..high {
+                if total_size > 0 && total_size >= max_size {
+                    break;
+                }
                 let key = keys::raft_log_key(region_id, i);
                 match self.get_value(&key) {
                     Ok(None) => return Err(Error::Storage(StorageError::Unavailable)),
@@ -57,22 +60,17 @@ impl RaftEngine for RocksEngine {
                         let mut entry = Entry::default();
                         entry.merge_from_bytes(&v)?;
                         assert_eq!(entry.get_index(), i);
+                        buf.push(entry);
                         total_size += v.len();
-                        if buf.is_empty() || total_size <= max_size {
-                            buf.push(entry);
-                        }
-                        if total_size > max_size {
-                            break;
-                        }
+                        count += 1;
                     }
                     Err(e) => return Err(box_err!(e)),
                 }
             }
-            return Ok(total_size);
+            return Ok(count);
         }
 
-        let mut next_index = low;
-        let mut exceeded_max_size = false;
+        let (mut check_compacted, mut next_index) = (true, low);
         let start_key = keys::raft_log_key(region_id, low);
         let end_key = keys::raft_log_key(region_id, high);
         box_try!(self.scan(
@@ -83,25 +81,28 @@ impl RaftEngine for RocksEngine {
                 let mut entry = Entry::default();
                 entry.merge_from_bytes(value)?;
 
-                // May meet gap or has been compacted.
-                if entry.get_index() != next_index {
-                    return Ok(false);
+                if check_compacted {
+                    if entry.get_index() != low {
+                        // May meet gap or has been compacted.
+                        return Ok(false);
+                    }
+                    check_compacted = false;
+                } else {
+                    assert_eq!(entry.get_index(), next_index);
                 }
                 next_index += 1;
 
+                buf.push(entry);
                 total_size += value.len();
-                exceeded_max_size = total_size > max_size;
-                if !exceeded_max_size || buf.is_empty() {
-                    buf.push(entry);
-                }
-                Ok(!exceeded_max_size)
+                count += 1;
+                Ok(total_size < max_size)
             },
         ));
 
-        // If we get the correct number of entries, returns,
-        // or the total size almost exceeds max_size, returns.
-        if buf.len() == (high - low) as usize || exceeded_max_size {
-            return Ok(total_size);
+        // If we get the correct number of entries, returns.
+        // Or the total size almost exceeds max_size, returns.
+        if count == (high - low) as usize || total_size >= max_size {
+            return Ok(count);
         }
 
         // Here means we don't fetch enough entries.
