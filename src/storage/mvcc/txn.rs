@@ -27,7 +27,7 @@ pub struct GcInfo {
 
 /// Generate the Write record that should be written that means to to perform a specified rollback
 /// operation.
-fn make_rollback(
+pub(in crate::storage) fn make_rollback(
     start_ts: TimeStamp,
     protected: bool,
     overlapped_write: Option<Write>,
@@ -62,7 +62,7 @@ impl MissingLockAction {
         }
     }
 
-    fn rollback(rollback_if_not_exist: bool) -> MissingLockAction {
+    pub(in crate::storage) fn rollback(rollback_if_not_exist: bool) -> MissingLockAction {
         if rollback_if_not_exist {
             MissingLockAction::ProtectedRollback
         } else {
@@ -106,12 +106,12 @@ pub enum SecondaryLockStatus {
 }
 
 pub struct MvccTxn<S: Snapshot> {
-    reader: MvccReader<S>,
+    pub(in crate::storage) reader: MvccReader<S>,
     start_ts: TimeStamp,
     write_size: usize,
     writes: WriteData,
     // collapse continuous rollbacks.
-    collapse_rollback: bool,
+    pub(in crate::storage) collapse_rollback: bool,
     pub extra_op: ExtraOp,
     // `concurrency_manager` is used to set memory locks for prewritten keys.
     // Prewritten locks of async commit transactions should be visible to
@@ -210,13 +210,17 @@ impl<S: Snapshot> MvccTxn<S> {
         self.write_size
     }
 
-    fn put_lock(&mut self, key: Key, lock: &Lock) {
+    pub(in crate::storage) fn put_lock(&mut self, key: Key, lock: &Lock) {
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
         self.writes.modifies.push(write);
     }
 
-    fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
+    pub(in crate::storage) fn unlock_key(
+        &mut self,
+        key: Key,
+        pessimistic: bool,
+    ) -> Option<ReleasedLock> {
         let released = ReleasedLock::new(&key, pessimistic);
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
@@ -236,7 +240,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.modifies.push(write);
     }
 
-    fn put_write(&mut self, key: Key, ts: TimeStamp, value: Value) {
+    pub(in crate::storage) fn put_write(&mut self, key: Key, ts: TimeStamp, value: Value) {
         let write = Modify::Put(CF_WRITE, key.append_ts(ts), value);
         self.write_size += write.size();
         self.writes.modifies.push(write);
@@ -315,7 +319,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
     // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
     // to do the rollback differs according to whether there's an overlapped write record.
-    fn check_write_and_rollback_lock(
+    pub(in crate::storage) fn check_write_and_rollback_lock(
         &mut self,
         key: Key,
         lock: &Lock,
@@ -872,7 +876,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.cleanup(key, TimeStamp::zero(), false)
     }
 
-    fn check_txn_status_missing_lock(
+    pub(in crate::storage) fn check_txn_status_missing_lock(
         &mut self,
         primary_key: Key,
         action: MissingLockAction,
@@ -970,228 +974,13 @@ impl<S: Snapshot> MvccTxn<S> {
         }
     }
 
-    /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
-    pub fn pessimistic_rollback(
-        &mut self,
-        key: Key,
-        for_update_ts: TimeStamp,
-    ) -> Result<Option<ReleasedLock>> {
-        fail_point!("pessimistic_rollback", |err| Err(make_txn_error(
-            err,
-            &key,
-            self.start_ts,
-        )
-        .into()));
-
-        if let Some(lock) = self.reader.load_lock(&key)? {
-            if lock.lock_type == LockType::Pessimistic
-                && lock.ts == self.start_ts
-                && lock.for_update_ts <= for_update_ts
-            {
-                return Ok(self.unlock_key(key, true));
-            }
-        }
-        Ok(None)
-    }
-
-    fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
+    pub(in crate::storage) fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
         if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
             if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
                 self.delete_write(key, commit_ts);
             }
         }
         Ok(())
-    }
-
-    /// Update a primary key's TTL if `advise_ttl > lock.ttl`.
-    ///
-    /// Returns the new TTL.
-    pub fn txn_heart_beat(&mut self, primary_key: Key, advise_ttl: u64) -> Result<u64> {
-        fail_point!("txn_heart_beat", |err| Err(make_txn_error(
-            err,
-            &primary_key,
-            self.start_ts,
-        )
-        .into()));
-
-        if let Some(mut lock) = self.reader.load_lock(&primary_key)? {
-            if lock.ts == self.start_ts {
-                if lock.ttl < advise_ttl {
-                    lock.ttl = advise_ttl;
-                    self.put_lock(primary_key, &lock);
-                } else {
-                    debug!(
-                        "txn_heart_beat with advise_ttl not large than current ttl";
-                        "primary_key" => %primary_key,
-                        "start_ts" => self.start_ts,
-                        "advise_ttl" => advise_ttl,
-                        "current_ttl" => lock.ttl,
-                    );
-                }
-                return Ok(lock.ttl);
-            }
-        }
-
-        debug!(
-            "txn_heart_beat invoked but lock is absent";
-            "primary_key" => %primary_key,
-            "start_ts" => self.start_ts,
-            "advise_ttl" => advise_ttl,
-        );
-        Err(ErrorInner::TxnLockNotFound {
-            start_ts: self.start_ts,
-            commit_ts: TimeStamp::zero(),
-            key: primary_key.into_raw()?,
-        }
-        .into())
-    }
-
-    /// Check the status of a transaction.
-    ///
-    /// This operation checks whether a transaction has expired its primary lock's TTL, rollback the
-    /// transaction if expired, or update the transaction's min_commit_ts according to the metadata
-    /// in the primary lock.
-    ///
-    /// When transaction T1 meets T2's lock, it may invoke this on T2's primary key. In this
-    /// situation, `self.start_ts` is T2's `start_ts`, `caller_start_ts` is T1's `start_ts`, and
-    /// the `current_ts` is literally the timestamp when this function is invoked. It may not be
-    /// accurate.
-    ///
-    /// Returns (`lock_ttl`, `commit_ts`, `is_pessimistic_txn`).
-    /// After checking, if the lock is still alive, it retrieves the Lock's TTL; if the transaction
-    /// is committed, get the commit_ts; otherwise, if the transaction is rolled back or there's
-    /// no information about the transaction, results will be both 0.
-    pub fn check_txn_status(
-        &mut self,
-        primary_key: Key,
-        caller_start_ts: TimeStamp,
-        current_ts: TimeStamp,
-        rollback_if_not_exist: bool,
-    ) -> Result<(TxnStatus, Option<ReleasedLock>)> {
-        fail_point!("check_txn_status", |err| Err(make_txn_error(
-            err,
-            &primary_key,
-            self.start_ts,
-        )
-        .into()));
-
-        match self.reader.load_lock(&primary_key)? {
-            Some(mut lock) if lock.ts == self.start_ts => {
-                let is_pessimistic_txn = !lock.for_update_ts.is_zero();
-
-                if lock.ts.physical() + lock.ttl < current_ts.physical() {
-                    // If the lock is expired, clean it up.
-                    let released =
-                        self.check_write_and_rollback_lock(primary_key, &lock, is_pessimistic_txn)?;
-                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
-                    return Ok((TxnStatus::TtlExpire, released));
-                }
-
-                // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
-                // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
-                // during rolling update.
-                if !lock.min_commit_ts.is_zero()
-                    // If the caller_start_ts is max, it's a point get in the autocommit transaction.
-                    // We don't push forward lock's min_commit_ts and the point get can ingore the lock
-                    // next time because it's not committed.
-                    && !caller_start_ts.is_max()
-                    // Push forward the min_commit_ts so that reading won't be blocked by locks.
-                    && caller_start_ts >= lock.min_commit_ts
-                {
-                    lock.min_commit_ts = caller_start_ts.next();
-
-                    if lock.min_commit_ts < current_ts {
-                        lock.min_commit_ts = current_ts;
-                    }
-
-                    self.put_lock(primary_key, &lock);
-                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
-                }
-
-                Ok((
-                    TxnStatus::uncommitted(
-                        lock.ttl,
-                        lock.min_commit_ts,
-                        lock.use_async_commit,
-                        lock.secondaries,
-                    ),
-                    None,
-                ))
-            }
-            // The rollback must be protected, see more on
-            // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-            _ => self
-                .check_txn_status_missing_lock(
-                    primary_key,
-                    MissingLockAction::rollback(rollback_if_not_exist),
-                )
-                .map(|s| (s, None)),
-        }
-    }
-
-    /// Check the status of a secondary (optimistic) lock.
-    ///
-    /// It checks whether the given secondary lock exists. If the lock exists,
-    /// the lock information is returned. Otherwise, it searches the write CF
-    /// for the commit record of the lock and returns the commit timestamp
-    /// (0 if the lock is not committed).
-    ///
-    /// If the lock does not exist or is a pessimistic lock, to prevent the
-    /// status being changed, a rollback may be written and this rollback
-    /// needs to be protected.
-    pub fn check_secondary_lock(
-        &mut self,
-        key: &Key,
-        start_ts: TimeStamp,
-    ) -> Result<(SecondaryLockStatus, Option<ReleasedLock>)> {
-        let mut released_lock = None;
-        let (status, need_rollback, rollback_overlapped_write) =
-            match self.reader.load_lock(&key)? {
-                Some(lock) if lock.ts == start_ts => {
-                    if lock.lock_type == LockType::Pessimistic {
-                        released_lock = self.unlock_key(key.clone(), true);
-                        let overlapped_write = self
-                            .reader
-                            .get_txn_commit_record(&key, start_ts)?
-                            .unwrap_none();
-                        (SecondaryLockStatus::RolledBack, true, overlapped_write)
-                    } else {
-                        (SecondaryLockStatus::Locked(lock), false, None)
-                    }
-                }
-                _ => match self.reader.get_txn_commit_record(&key, start_ts)? {
-                    TxnCommitRecord::SingleRecord { commit_ts, write } => {
-                        let status = if write.write_type != WriteType::Rollback {
-                            SecondaryLockStatus::Committed(commit_ts)
-                        } else {
-                            SecondaryLockStatus::RolledBack
-                        };
-                        // We needn't write a rollback once there is a write record for it:
-                        // If it's a committed record, it cannot be changed.
-                        // If it's a rollback record, it either comes from another check_secondary_lock
-                        // (thus protected) or the client stops commit actively. So we don't need
-                        // to make it protected again.
-                        (status, false, None)
-                    }
-                    TxnCommitRecord::OverlappedRollback { .. } => {
-                        (SecondaryLockStatus::RolledBack, false, None)
-                    }
-                    TxnCommitRecord::None { overlapped_write } => {
-                        (SecondaryLockStatus::RolledBack, true, overlapped_write)
-                    }
-                },
-            };
-        if need_rollback {
-            // We must protect this rollback in case this rollback is collapsed and a stale
-            // acquire_pessimistic_lock and prewrite succeed again.
-            if let Some(write) = make_rollback(start_ts, true, rollback_overlapped_write) {
-                self.put_write(key.clone(), start_ts, write.as_ref().to_bytes());
-                if self.collapse_rollback {
-                    self.collapse_prev_rollback(key.clone())?;
-                }
-            }
-        }
-        Ok((status, released_lock))
     }
 
     pub fn gc(&mut self, key: Key, safe_point: TimeStamp) -> Result<GcInfo> {
@@ -1317,7 +1106,11 @@ impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
 }
 
 #[cfg(feature = "failpoints")]
-fn make_txn_error(s: Option<String>, key: &Key, start_ts: TimeStamp) -> ErrorInner {
+pub(in crate::storage) fn make_txn_error(
+    s: Option<String>,
+    key: &Key,
+    start_ts: TimeStamp,
+) -> ErrorInner {
     if let Some(s) = s {
         match s.to_ascii_lowercase().as_str() {
             "keyislocked" => {
@@ -3561,21 +3354,22 @@ mod tests {
         let do_check_txn_status = |rollback_if_not_exist| {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
-            let (txn_status, released_lock) = txn
-                .check_txn_status(
-                    Key::from_raw(b"key"),
-                    0.into(),
-                    0.into(),
-                    rollback_if_not_exist,
-                )
-                .unwrap();
+            let command = crate::storage::txn::commands::CheckTxnStatus {
+                ctx: Default::default(),
+                primary_key: Key::from_raw(b"key"),
+                lock_ts: TimeStamp::new(2),
+                caller_start_ts: 0.into(),
+                current_ts: 0.into(),
+                rollback_if_not_exist,
+            };
+            let (txn_status, released_lock) = command.check_txn_status(&mut txn).unwrap();
             assert_eq!(
                 txn_status,
                 TxnStatus::uncommitted(
                     0,
                     43.into(), // min_commit_ts calculated from max_read_ts
                     true,
-                    vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
+                    vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()],
                 )
             );
             assert!(released_lock.is_none());
@@ -3595,7 +3389,12 @@ mod tests {
             let key = Key::from_raw(key);
             let ts = TimeStamp::new(ts);
             let mut txn = MvccTxn::new(snapshot, ts, true, cm.clone());
-            let res = txn.check_secondary_lock(&key, ts).unwrap();
+            let mut command = crate::storage::txn::commands::CheckSecondaryLocks {
+                ctx: Default::default(),
+                keys: vec![],
+                start_ts: ts,
+            };
+            let res = command.check_secondary_lock(&mut txn, &key).unwrap();
             let modifies = txn.into_modifies();
             if !modifies.is_empty() {
                 engine

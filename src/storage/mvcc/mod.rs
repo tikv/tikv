@@ -2,9 +2,9 @@
 
 //! Multi-version concurrency control functionality.
 
-mod metrics;
+pub(super) mod metrics;
 mod reader;
-mod txn;
+pub(super) mod txn;
 
 pub use self::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 pub use self::reader::*;
@@ -1046,7 +1046,14 @@ pub mod tests {
         let for_update_ts = for_update_ts.into();
         let cm = ConcurrencyManager::new(for_update_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
-        txn.pessimistic_rollback(Key::from_raw(key), for_update_ts)
+        let mut command = crate::storage::txn::commands::PessimisticRollback {
+            ctx: ctx.clone(),
+            keys: vec![],
+            start_ts: Default::default(),
+            for_update_ts,
+        };
+        command
+            .pessimistic_rollback(&mut txn, Key::from_raw(key))
             .unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
@@ -1156,9 +1163,13 @@ pub mod tests {
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
-        let ttl = txn
-            .txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
-            .unwrap();
+        let mut command = crate::storage::txn::commands::TxnHeartBeat {
+            ctx: Context::default(),
+            primary_key: Key::from_raw(primary_key),
+            start_ts,
+            advise_ttl,
+        };
+        let ttl = command.txn_heart_beat(&mut txn).unwrap();
         write(engine, &ctx, txn.into_modifies());
         assert_eq!(ttl, expect_ttl);
     }
@@ -1174,8 +1185,13 @@ pub mod tests {
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
-        txn.txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
-            .unwrap_err();
+        let mut command = crate::storage::txn::commands::TxnHeartBeat {
+            ctx,
+            primary_key: Key::from_raw(primary_key),
+            start_ts,
+            advise_ttl,
+        };
+        command.txn_heart_beat(&mut txn).unwrap_err();
     }
 
     pub fn must_check_txn_status<E: Engine>(
@@ -1191,15 +1207,17 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
-        let mut txn = MvccTxn::new(snapshot, lock_ts.into(), true, cm);
-        let (txn_status, _) = txn
-            .check_txn_status(
-                Key::from_raw(primary_key),
-                caller_start_ts.into(),
-                current_ts,
-                rollback_if_not_exist,
-            )
-            .unwrap();
+        let lock_ts: TimeStamp = lock_ts.into();
+        let mut txn = MvccTxn::new(snapshot, lock_ts, true, cm);
+        let command = crate::storage::txn::commands::CheckTxnStatus {
+            ctx: Context::default(),
+            primary_key: Key::from_raw(primary_key),
+            lock_ts,
+            caller_start_ts: caller_start_ts.into(),
+            current_ts,
+            rollback_if_not_exist,
+        };
+        let (txn_status, _) = command.check_txn_status(&mut txn).unwrap();
         assert_eq!(txn_status, expect_status);
         write(engine, &ctx, txn.into_modifies());
     }
@@ -1216,14 +1234,17 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
-        let mut txn = MvccTxn::new(snapshot, lock_ts.into(), true, cm);
-        txn.check_txn_status(
-            Key::from_raw(primary_key),
-            caller_start_ts.into(),
+        let lock_ts: TimeStamp = lock_ts.into();
+        let mut txn = MvccTxn::new(snapshot, lock_ts, true, cm);
+        let command = crate::storage::txn::commands::CheckTxnStatus {
+            ctx,
+            primary_key: Key::from_raw(primary_key),
+            lock_ts,
+            caller_start_ts: caller_start_ts.into(),
             current_ts,
             rollback_if_not_exist,
-        )
-        .unwrap_err();
+        };
+        command.check_txn_status(&mut txn).unwrap_err();
     }
 
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
