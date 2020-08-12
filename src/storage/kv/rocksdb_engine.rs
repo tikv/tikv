@@ -200,12 +200,16 @@ impl TestEngineBuilder {
 
     /// Build a `RocksEngine`.
     pub fn build(self) -> Result<RocksEngine> {
+        let cfg_rocksdb = crate::config::DbConfig::default();
+        self.build_with_cfg(&cfg_rocksdb)
+    }
+
+    pub fn build_with_cfg(self, cfg_rocksdb: &crate::config::DbConfig) -> Result<RocksEngine> {
         let path = match self.path {
             None => TEMP_DIR.to_owned(),
             Some(p) => p.to_str().unwrap().to_owned(),
         };
         let cfs = self.cfs.unwrap_or_else(|| crate::storage::ALL_CFS.to_vec());
-        let cfg_rocksdb = crate::config::DbConfig::default();
         let cache = BlockCacheConfig::default().build_shared_cache();
         let cfs_opts = cfs
             .iter()
@@ -272,6 +276,7 @@ pub fn write_modifies(kv_engine: &BaseRocksEngine, modifies: Vec<Modify>) -> Res
 
 impl Engine for RocksEngine {
     type Snap = Arc<RocksSnapshot>;
+    type Local = BaseRocksEngine;
 
     fn kv_engine(&self) -> BaseRocksEngine {
         self.engines.kv.clone()

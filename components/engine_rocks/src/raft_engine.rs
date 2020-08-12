@@ -1,7 +1,7 @@
 use crate::{RocksEngine, RocksWriteBatch};
 
 use engine_traits::{
-    Iterable, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT,
+    Iterable, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, WriteOptions,
     MAX_DELETE_BATCH_SIZE,
 };
 use kvproto::raft_serverpb::RaftLocalState;
@@ -22,8 +22,6 @@ impl RaftEngine for RocksEngine {
         box_try!(self.sync_wal());
         Ok(())
     }
-
-    fn compact_to(&self, _raft_group_id: u64, _index: u64) {}
 
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
         let key = keys::raft_state_key(raft_group_id);
@@ -111,13 +109,13 @@ impl RaftEngine for RocksEngine {
     }
 
     #[allow(unused_variables)]
-    fn consume(&self, batch: &mut Self::LogBatch, sync_log: bool) -> Result<()> {
-        box_try!(self.write(batch));
-        if sync_log {
-            self.sync()?;
-        }
+    fn consume(&self, batch: &mut Self::LogBatch, sync_log: bool) -> Result<usize> {
+        let bytes = batch.data_size();
+        let mut opts = WriteOptions::default();
+        opts.set_sync(sync_log);
+        box_try!(self.write_opt(batch, &opts));
         batch.clear();
-        Ok(())
+        Ok(bytes)
     }
 
     fn consume_and_shrink(
@@ -126,13 +124,12 @@ impl RaftEngine for RocksEngine {
         sync_log: bool,
         max_capacity: usize,
         shrink_to: usize,
-    ) -> Result<()> {
-        let data_size = batch.data_size();
-        self.consume(batch, sync_log)?;
+    ) -> Result<usize> {
+        let data_size = self.consume(batch, sync_log)?;
         if data_size > max_capacity {
             *batch = self.write_batch_with_cap(shrink_to);
         }
-        Ok(())
+        Ok(data_size)
     }
 
     fn clean(
@@ -161,22 +158,19 @@ impl RaftEngine for RocksEngine {
         Ok(())
     }
 
-    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
+    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
         self.append_slice(raft_group_id, &entries)
     }
 
-    fn append_slice(&self, raft_group_id: u64, entries: &[Entry]) -> Result<()> {
+    fn append_slice(&self, raft_group_id: u64, entries: &[Entry]) -> Result<usize> {
         let mut wb = RocksWriteBatch::new(self.as_inner().clone());
         let buf = Vec::with_capacity(1024);
         wb.append_impl(raft_group_id, entries, buf)?;
-        self.consume(&mut wb, false)?;
-        Ok(())
+        self.consume(&mut wb, false)
     }
 
-    fn remove(&self, raft_group_id: u64, from: u64, to: u64) -> Result<()> {
-        let mut wb = self.write_batch();
-        wb.remove(raft_group_id, from, to)?;
-        self.consume(&mut wb, false)?;
+    fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
+        box_try!(self.put_msg(&keys::raft_state_key(raft_group_id), state));
         Ok(())
     }
 
@@ -212,12 +206,7 @@ impl RaftEngine for RocksEngine {
         Ok((to - from) as usize)
     }
 
-    fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        box_try!(self.put_msg(&keys::raft_state_key(raft_group_id), state));
-        Ok(())
-    }
-
-    fn has_internal_entry_cache(&self) -> bool {
+    fn has_builtin_entry_cache(&self) -> bool {
         false
     }
 
@@ -239,12 +228,11 @@ impl RaftLogBatch for RocksWriteBatch {
         Ok(())
     }
 
-    fn remove(&mut self, raft_group_id: u64, from: u64, to: u64) -> Result<()> {
+    fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64) {
         for index in from..to {
             let key = keys::raft_log_key(raft_group_id, index);
-            box_try!(self.delete(&key));
+            self.delete(&key).unwrap();
         }
-        Ok(())
     }
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {

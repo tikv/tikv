@@ -667,7 +667,7 @@ where
         let last_term = init_last_term(&engines, region, &raft_state, &apply_state)?;
         let applied_index_term = init_applied_index_term(&engines, region, &apply_state)?;
 
-        let cache = if engines.raft.has_internal_entry_cache() {
+        let cache = if engines.raft.has_builtin_entry_cache() {
             None
         } else {
             Some(EntryCache::default())
@@ -1026,7 +1026,7 @@ where
         // TODO: Wrap it as an engine::Error.
         ready_ctx
             .raft_wb_mut()
-            .remove(region_id, last_index + 1, prev_last_index)?;
+            .cut_logs(region_id, last_index + 1, prev_last_index);
 
         invoke_ctx.raft_state.set_last_index(last_index);
         invoke_ctx.last_term = last_term;
@@ -1035,9 +1035,10 @@ where
     }
 
     pub fn compact_to(&mut self, idx: u64) {
-        self.engines.raft.compact_to(self.get_region_id(), idx);
         if let Some(ref mut cache) = self.cache {
             cache.compact_to(idx);
+        } else {
+            self.engines.raft.gc_entry_cache(self.get_region_id(), idx);
         }
     }
 
@@ -1049,11 +1050,8 @@ where
     pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
         if replicated_idx == apply_idx {
             // The region is inactive, clear the cache immediately.
-            let region_id = self.get_region_id();
-            self.engines.raft.compact_to(region_id, apply_idx + 1);
-            if self.engines.raft.has_internal_entry_cache() {
-                return;
-            }
+            self.compact_to(apply_idx + 1);
+            return;
         }
 
         if let Some(ref mut cache) = self.cache {
@@ -1065,7 +1063,7 @@ where
                 // Catching up log requires accessing fs already, let's optimize for
                 // the common case.
                 // Maybe gc to second least replicated_idx is better.
-                cache.compact_to(apply_idx + 1);
+                self.compact_to(apply_idx + 1);
             }
         }
     }
@@ -1157,7 +1155,7 @@ where
     ) -> Result<()> {
         let region_id = self.get_region_id();
         clear_meta(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
-        if !self.engines.raft.has_internal_entry_cache() {
+        if !self.engines.raft.has_builtin_entry_cache() {
             self.cache = Some(EntryCache::default());
         }
         Ok(())

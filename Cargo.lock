@@ -209,6 +209,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static 1.4.0",
+ "pd_client",
  "prometheus 0.8.0",
  "raft",
  "raftstore",
@@ -3250,7 +3251,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/hicqu/raft-engine?branch=entry-cache#78db72509435b3b5ff0d567cace4a112f3ef027f"
+source = "git+https://github.com/tikv/raft-engine#f122c8af4481623f1eea5704411b35cbe231956d"
 dependencies = [
  "byteorder 1.3.2",
  "compress",

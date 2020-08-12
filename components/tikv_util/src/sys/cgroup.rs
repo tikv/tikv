@@ -253,20 +253,18 @@ impl CGroupSys {
         Self { cgroups }
     }
 
-    pub fn cpu_cores_quota(&self) -> i64 {
+    pub fn cpu_cores_quota(&self) -> Option<f64> {
         if let Some(sub_cpu) = self.cgroups.get(CPU_SUBSYS) {
             if let Ok(quota) = sub_cpu.read_num(CPU_QUOTA) {
                 if quota < 0 {
-                    return -1;
+                    return None;
                 }
                 if let Ok(period) = sub_cpu.read_num(CPU_PERIOD) {
-                    return quota / period;
+                    return Some(quota as f64 / period as f64);
                 }
             }
         }
-
-        // -1 means no limit.
-        -1
+        None
     }
 
     pub fn memory_limit_in_bytes(&self) -> i64 {
