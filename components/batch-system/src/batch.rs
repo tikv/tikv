@@ -10,6 +10,7 @@ use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
 use crossbeam::channel::{self, SendError};
+use fail::FailPointRegistry;
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -391,9 +392,14 @@ where
                 max_batch_size: self.max_batch_size,
                 reschedule_duration: self.reschedule_duration,
             };
+            let local_registry = FailPointRegistry::current_registry();
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))
-                .spawn(move || poller.poll())
+                .spawn(move || {
+                    local_registry.register_current();
+                    poller.poll();
+                    FailPointRegistry::deregister_current();
+                })
                 .unwrap();
             self.workers.push(t);
         }

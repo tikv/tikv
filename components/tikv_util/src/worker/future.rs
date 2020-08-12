@@ -142,9 +142,14 @@ impl<T: Display + Send + 'static> Worker<T> {
         }
 
         let rx = receiver.take().unwrap();
+        let local_registry = fail::FailPointRegistry::current_registry();
         let h = Builder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx))?;
+            .spawn(move || {
+                local_registry.register_current();
+                poll(runner, rx);
+                fail::FailPointRegistry::deregister_current();
+            })?;
 
         self.handle = Some(h);
         Ok(())

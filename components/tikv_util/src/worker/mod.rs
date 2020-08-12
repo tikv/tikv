@@ -340,9 +340,14 @@ impl<T: Display + Send + 'static> Worker<T> {
         let rx = receiver.take().unwrap();
         let counter = Arc::clone(&self.scheduler.counter);
         let batch_size = self.batch_size;
+        let local_registry = fail::FailPointRegistry::current_registry();
         let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size, timer))?;
+            .spawn(move || {
+                local_registry.register_current();
+                poll(runner, rx, counter, batch_size, timer);
+                fail::FailPointRegistry::deregister_current();
+            })?;
         self.handle = Some(h);
         Ok(())
     }

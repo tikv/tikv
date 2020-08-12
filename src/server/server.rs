@@ -80,12 +80,15 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         gc_worker: GcWorker<E>,
         yatp_read_pool: Option<ReadPool>,
     ) -> Result<Self> {
+        let local_registry = fail::FailPointRegistry::current_registry();
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.stats_concurrency > 0 {
             Some(
                 ThreadPoolBuilder::new()
                     .pool_size(cfg.stats_concurrency)
                     .name_prefix(STATS_THREAD_PREFIX)
+                    .after_start(move || local_registry.register_current())
+                    .before_stop(|| fail::FailPointRegistry::deregister_current())
                     .build(),
             )
         } else {
@@ -94,10 +97,12 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
         let readpool_normal_thread_load =
             Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
-
+        let fail_registry = fail::FailPointRegistry::current_registry();
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(cfg.grpc_concurrency)
+                .after_start(move || fail_registry.register_current())
+                .before_stop(move || fail::FailPointRegistry::deregister_current())
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .build(),
         );

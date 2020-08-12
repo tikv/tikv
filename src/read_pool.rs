@@ -154,12 +154,14 @@ pub struct ReadPoolRunner<E: Engine, R: FlowStatsReporter> {
     engine: Option<E>,
     reporter: R,
     inner: FutureRunner,
+    fail_registry: fail::FailPointRegistry,
 }
 
 impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
     type TaskCell = TaskCell;
 
     fn start(&mut self, local: &mut Local<Self::TaskCell>) {
+        self.fail_registry.register_current();
         set_tls_engine(self.engine.take().unwrap());
         self.inner.start(local);
         tikv_alloc::add_thread_memory_accessor()
@@ -185,16 +187,23 @@ impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
         self.inner.end(local);
         self.flush_metrics();
         unsafe { destroy_tls_engine::<E>() }
-        tikv_alloc::remove_thread_memory_accessor()
+        tikv_alloc::remove_thread_memory_accessor();
+        fail::FailPointRegistry::deregister_current();
     }
 }
 
 impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
-    pub fn new(engine: E, inner: FutureRunner, reporter: R) -> Self {
+    pub fn new(
+        engine: E,
+        inner: FutureRunner,
+        reporter: R,
+        fail_registry: fail::FailPointRegistry,
+    ) -> Self {
         ReadPoolRunner {
             engine: Some(engine),
             reporter,
             inner,
+            fail_registry,
         }
     }
 
@@ -253,7 +262,13 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .max_thread_count(config.max_thread_count);
     let multilevel_builder =
         multilevel::Builder::new(multilevel::Config::default().name(Some(&unified_read_pool_name)));
-    let read_pool_runner = ReadPoolRunner::new(engine, Default::default(), reporter);
+    // Register the failpoint registry so that the generated thread and the current thread share the same registry.
+    let read_pool_runner = ReadPoolRunner::new(
+        engine,
+        Default::default(),
+        reporter,
+        fail::FailPointRegistry::current_registry(),
+    );
     let runner_builder = multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
     let pool = builder
         .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);

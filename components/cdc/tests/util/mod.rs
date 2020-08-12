@@ -1,9 +1,4 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-
-#[cfg(feature = "failpoints")]
-mod failpoints;
-mod integrations;
-
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::*;
@@ -51,7 +46,6 @@ pub fn new_event_feed(
     let (req_tx, resp_rx) = client.event_feed().unwrap();
     let event_feed_wrap = Rc::new(Cell::new(Some(resp_rx)));
     let event_feed_wrap_clone = event_feed_wrap.clone();
-
     let receive_event = move |keep_resolved_ts: bool| loop {
         let event_feed = event_feed_wrap_clone.as_ref();
         let (change_data, events) = match event_feed.replace(None).unwrap().into_future().wait() {

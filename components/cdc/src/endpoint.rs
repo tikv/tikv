@@ -234,7 +234,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         observer: CdcObserver,
         store_meta: Arc<Mutex<StoreMeta>>,
     ) -> Endpoint<T> {
-        let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
+        let local_registry = fail::FailPointRegistry::current_registry();
+        let workers = Builder::new()
+            .name_prefix("cdcwkr")
+            .pool_size(4)
+            .after_start(move || local_registry.register_current())
+            .before_stop(|| fail::FailPointRegistry::deregister_current())
+            .build();
         let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
         let ep = Endpoint {
             capture_regions: HashMap::default(),

@@ -5,7 +5,6 @@
 //! See https://doc.rust-lang.org/unstable-book/language-features/custom-test-frameworks.html.
 
 use crate::test::*;
-use std::cell::RefCell;
 use std::env;
 
 /// A runner function for running general tests.
@@ -79,23 +78,18 @@ pub fn run_test_with_hook(cases: &[&TestDescAndFn], hook: impl TestHook + Send +
     test_main(&args, cases, None)
 }
 
-thread_local!(static FS: RefCell<Option<fail::FailScenario<'static>>> = RefCell::new(None));
-
 #[derive(Clone)]
 struct FailpointHook;
 
 impl TestHook for FailpointHook {
     fn setup(&mut self) {
-        FS.with(|s| {
-            s.borrow_mut().take();
-            *s.borrow_mut() = Some(fail::FailScenario::setup());
-        })
+        let fail_registry = fail::FailPointRegistry::new();
+        fail_registry.register_current();
     }
 
     fn teardown(&mut self) {
-        FS.with(|s| {
-            s.borrow_mut().take();
-        })
+        let fail_registry = fail::FailPointRegistry::current_registry();
+        fail_registry.teardown();
     }
 }
 
@@ -103,7 +97,8 @@ impl TestHook for FailpointHook {
 /// If tests wait for a sleep failpoint, the whole tests will hang. So we need a method
 /// to clear failpoints explicitly besides teardown.
 pub fn clear_failpoints() {
-    FS.with(|s| s.borrow_mut().take());
+    let fail_registry = fail::FailPointRegistry::current_registry();
+    fail_registry.teardown();
 }
 
 /// A runner function for running failpoint tests.

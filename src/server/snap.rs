@@ -310,14 +310,21 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<Config>,
     ) -> Runner<R> {
+        let local_registry = fail::FailPointRegistry::current_registry();
         Runner {
             env,
             snap_mgr,
             pool: CpuPoolBuilder::new()
                 .name_prefix(thd_name!("snap-sender"))
                 .pool_size(DEFAULT_POOL_SIZE)
-                .after_start(|| tikv_alloc::add_thread_memory_accessor())
-                .before_stop(|| tikv_alloc::remove_thread_memory_accessor())
+                .after_start(move || {
+                    local_registry.register_current();
+                    tikv_alloc::add_thread_memory_accessor();
+                })
+                .before_stop(move || {
+                    tikv_alloc::remove_thread_memory_accessor();
+                    fail::FailPointRegistry::deregister_current();
+                })
                 .create(),
             raft_router: r,
             security_mgr,
