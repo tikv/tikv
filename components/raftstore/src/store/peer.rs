@@ -55,7 +55,9 @@ use super::peer_storage::{
 };
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
-use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
+use super::util::{
+    self, check_region_epoch, is_initial_msg, Lease, LeaseState, RaftCmdEpochChecker,
+};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -286,6 +288,8 @@ where
     pub local_first_replicate: bool,
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    /// Check whether this proposal can be proposed based on its epoch
+    cmd_epoch_checker: RaftCmdEpochChecker,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -375,6 +379,7 @@ where
             check_stale_peers: vec![],
             local_first_replicate: false,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
+            cmd_epoch_checker: Default::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1600,6 +1605,8 @@ where
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply(self.last_applying_idx);
+            self.cmd_epoch_checker
+                .advance_apply(self.last_applying_idx, self.term());
         } else {
             self.raft_group.advance_append(ready);
         }
@@ -1720,6 +1727,9 @@ where
 
         self.raft_group
             .advance_apply(apply_state.get_applied_index());
+
+        self.cmd_epoch_checker
+            .advance_apply(apply_state.get_applied_index(), self.term());
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
         self.mut_store().set_applied_state(apply_state);
@@ -1856,7 +1866,11 @@ where
 
         ctx.raft_metrics.propose.all += 1;
 
-        let mut is_conf_change = false;
+        let req_admin_cmd_type = if !req.has_admin_request() {
+            None
+        } else {
+            Some(req.get_admin_request().get_cmd_type())
+        };
         let is_urgent = is_request_urgent(&req);
 
         let policy = self.inspect(&req);
@@ -1870,10 +1884,7 @@ where
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
             }
-            Ok(RequestPolicy::ProposeConfChange) => {
-                is_conf_change = true;
-                self.propose_conf_change(ctx, &req)
-            }
+            Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
             Err(e) => Err(e),
         };
 
@@ -1892,13 +1903,16 @@ where
                 }
                 self.should_wake_up = true;
                 let p = Proposal {
-                    is_conf_change,
+                    is_conf_change: req_admin_cmd_type == Some(AdminCmdType::ChangePeer),
                     index: idx,
                     term: self.term(),
                     cb,
                     txn_extra,
                     renew_lease_time: None,
                 };
+                if let Some(cmd_type) = req_admin_cmd_type {
+                    self.cmd_epoch_checker.propose(cmd_type, idx, self.term());
+                }
                 self.post_propose(ctx, p);
                 true
             }
@@ -2402,12 +2416,11 @@ where
 
         match req.get_admin_request().get_cmd_type() {
             AdminCmdType::Split | AdminCmdType::BatchSplit => ctx.insert(ProposalContext::SPLIT),
+            AdminCmdType::PrepareMerge => {
+                self.pre_propose_prepare_merge(poll_ctx, req)?;
+                ctx.insert(ProposalContext::PREPARE_MERGE);
+            }
             _ => {}
-        }
-
-        if req.get_admin_request().has_prepare_merge() {
-            self.pre_propose_prepare_merge(poll_ctx, req)?;
-            ctx.insert(ProposalContext::PREPARE_MERGE);
         }
 
         Ok(ctx)
@@ -2429,6 +2442,39 @@ where
 
         poll_ctx.raft_metrics.propose.normal += 1;
 
+        // If applied index's term is differ from current raft's term, leader transfer
+        // must happened.
+        if self.get_store().applied_index_term() != self.term() {
+            return Err(box_err!(
+                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                self.tag,
+                self.get_store().applied_index_term(),
+                self.term()
+            ));
+        }
+        if self.get_store().applied_index_term() == self.term() {
+            // Only when applied index's term is equal to current leader's term, the information
+            // in epoch checker is up to date and can be used to check epoch.
+            if !self
+                .cmd_epoch_checker
+                .propose_check_epoch(&req, self.term())
+            {
+                return Err(box_err!(
+                    "{} there are pending admin cmds that change epoch",
+                    self.tag
+                ));
+            }
+        } else if req.has_admin_request() {
+            // The admin request is rejected because it may need to update epoch checker which
+            // introduces a uncertainty and may breaks the correctness of epoch checker.
+            return Err(box_err!(
+                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                self.tag,
+                self.get_store().applied_index_term(),
+                self.term()
+            ));
+        }
+
         // TODO: validate request for unexpected changes.
         let ctx = match self.pre_propose(poll_ctx, &mut req) {
             Ok(ctx) => ctx,
@@ -2443,6 +2489,7 @@ where
                 return Err(e);
             }
         };
+
         let data = req.write_to_bytes()?;
 
         // TODO: use local histogram metrics
@@ -2591,6 +2638,26 @@ where
             );
             return Err(box_err!(
                 "{} there is a pending conf change, try later",
+                self.tag
+            ));
+        }
+        // Actually, according to the implementation of conf change in raft-rs, this check must be
+        // passed if the previous check that `pending_conf_index` should be less than or equal to
+        // `self.get_store().applied_index()` is passed.
+        if self.get_store().applied_index_term() != self.term() {
+            return Err(box_err!(
+                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                self.tag,
+                self.get_store().applied_index_term(),
+                self.term()
+            ));
+        }
+        if !self
+            .cmd_epoch_checker
+            .propose_check_epoch(&req, self.term())
+        {
+            return Err(box_err!(
+                "{} there are pending admin cmds that change epoch's conf_ver",
                 self.tag
             ));
         }
