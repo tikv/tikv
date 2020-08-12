@@ -316,27 +316,27 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result
 }
 
 #[inline]
-fn do_get_extremum<T, E>(args: &[Option<&T>], chooser: E) -> Result<Option<T>>
+fn do_get_extremum<'a, T, E>(args: &[Option<&'a T>], chooser: E) -> Result<Option<T::Owned>>
 where
-    T: Ord + Copy,
-    E: Fn(T, T) -> T,
+    T: Ord + ToOwned + ?Sized,
+    E: Fn(&'a T, &'a T) -> &'a T,
 {
     let first = args[0];
     match first {
         None => Ok(None),
         Some(first_val) => {
-            let mut res = *first_val;
+            let mut res = first_val;
             for arg in &args[1..] {
                 match arg {
                     None => {
                         return Ok(None);
                     }
                     Some(v) => {
-                        res = chooser(res, **v);
+                        res = chooser(res, *v);
                     }
                 }
             }
-            Ok(Some(res))
+            Ok(Some(res.to_owned()))
         }
     }
 }
