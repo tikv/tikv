@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam::atomic::AtomicCell;
-use crossbeam::channel;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::future::Future;
+use futures::{sync::mpsc, Sink, Stream};
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
@@ -109,7 +109,7 @@ pub enum Task {
         old_value_cb: OldValueCallback,
     },
     MinTS {
-        region_id: u64,
+        regions: Vec<u64>,
         min_ts: TimeStamp,
     },
     ResolverReady {
@@ -167,14 +167,9 @@ impl fmt::Debug for Task {
                 .field("type", &"multibatch")
                 .field("multibatch", &multi.len())
                 .finish(),
-            Task::MinTS {
-                ref region_id,
-                ref min_ts,
-            } => de
-                .field("type", &"mit_ts")
-                .field("region_id", region_id)
-                .field("min_ts", min_ts)
-                .finish(),
+            Task::MinTS { ref min_ts, .. } => {
+                de.field("type", &"mit_ts").field("min_ts", min_ts).finish()
+            }
             Task::ResolverReady {
                 ref observe_id,
                 ref region,
@@ -572,12 +567,14 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         }
     }
 
-    fn on_min_ts(&mut self, region_id: u64, min_ts: TimeStamp) {
-        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-            if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
-                if resolved_ts < self.min_resolved_ts {
-                    self.min_resolved_ts = resolved_ts;
-                    self.min_ts_region_id = region_id;
+    fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
+        for region_id in regions {
+            if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+                if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
+                    if resolved_ts < self.min_resolved_ts {
+                        self.min_resolved_ts = resolved_ts;
+                        self.min_ts_region_id = region_id;
+                    }
                 }
             }
         }
@@ -600,19 +597,18 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             move |tso: pd_client::Result<(TimeStamp, ())>| {
                 // Ignore get tso errors since we will retry every `min_ts_interval`.
                 let (min_ts, _) = tso.unwrap_or((TimeStamp::default(), ()));
-                let (tx, rx) = channel::unbounded();
+                let (tx, rx) = mpsc::channel(region_count);
                 // TODO: send a message to raftstore would consume too much cpu time,
                 // try to handle it outside raftstore.
                 for (region_id, observe_id) in regions {
-                    let scheduler_clone = scheduler.clone();
                     let tx_clone = tx.clone();
                     if let Err(e) = raft_router.significant_send(
                         region_id,
                         SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
                             if !resp.response.get_header().has_error() {
-                                tx_clone.send(Either::Left(region_id)).unwrap();
+                                tx_clone.send(Either::Left(region_id)).wait().unwrap();
                             } else {
-                                tx_clone.send(Either::Right(region_id)).unwrap();
+                                tx_clone.send(Either::Right(region_id)).wait().unwrap();
                             }
                         }))),
                     ) {
@@ -626,30 +622,32 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                             region_id,
                             err: Error::Request(e.into()),
                         };
-                        tx.send(Either::Right(region_id)).unwrap();
+                        tx.clone().send(Either::Right(region_id)).wait().unwrap();
                         if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                             error!("schedule cdc task failed"; "error" => ?e);
                         }
                     }
                 }
 
-                let ready_regions = vec![];
+                let mut ready_regions = vec![];
                 let mut ready_count = 0;
                 let wait_tso_fut = rx.for_each(move |res| {
-                    match res {
-                        Either::Left(region_id) => ready_regions.push(region_id),
-                        Either::Right(_) => (),
+                    if let Either::Left(region_id) = res {
+                        ready_regions.push(region_id);
                     }
                     ready_count += 1;
                     if ready_count >= region_count {
-                        match scheduler_clone.schedule(Task::MinTS { min_ts, ready_regions: ready_regions.clone() }) {
+                        match scheduler_clone.schedule(Task::MinTS {
+                            min_ts,
+                            regions: ready_regions.clone(),
+                        }) {
                             Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                             Err(err) => panic!(
                                 "failed to schedule min_ts event, min_ts: {}, error: {:?}",
                                 min_ts, err
                             ),
                         }
-                        return Err(_);
+                        return Err(());
                     }
                     Ok(())
                 });
@@ -866,7 +864,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
-            Task::MinTS { region_id, min_ts } => self.on_min_ts(region_id, min_ts),
+            Task::MinTS { regions, min_ts } => self.on_min_ts(regions, min_ts),
             Task::Register {
                 request,
                 downstream,
