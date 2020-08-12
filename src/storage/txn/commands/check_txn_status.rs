@@ -67,7 +67,7 @@ impl CheckTxnStatus {
     /// is committed, get the commit_ts; otherwise, if the transaction is rolled back or there's
     /// no information about the transaction, results will be both 0.
     pub fn check_txn_status<S: Snapshot, P: PdClient + 'static>(
-        mut self,
+        self,
         txn: &mut MvccTxn<S, P>,
     ) -> MvccResult<(TxnStatus, Option<ReleasedLock>)> {
         fail_point!("check_txn_status", |err| Err(make_txn_error(

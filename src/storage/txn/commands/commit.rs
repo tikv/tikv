@@ -1,14 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use pd_client::PdClient;
-use txn_types::{Key, LockType, TimeStamp, Write, WriteType};
+use txn_types::{Key, LockType, Write, WriteType};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC};
 use crate::storage::mvcc::{
-    has_data_in_range, txn::make_txn_error, Error as MvccError, ErrorInner as MvccErrorInner,
-    Result as MvccResult,
+    txn::make_txn_error, ErrorInner as MvccErrorInner, Result as MvccResult,
 };
 use crate::storage::mvcc::{MvccTxn, ReleasedLock};
 use crate::storage::txn::commands::{

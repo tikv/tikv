@@ -139,10 +139,10 @@ impl PrewritePessimistic {
             &self.primary,
             secondary_keys,
             value,
-            self.lock_ttl,
+            lock_ttl,
             self.for_update_ts,
             self.txn_size,
-            self.min_commit_ts,
+            min_commit_ts,
         )
     }
 }

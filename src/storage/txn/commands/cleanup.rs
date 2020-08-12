@@ -51,7 +51,7 @@ impl Cleanup {
     /// Returns the released lock. Returns error if the key is locked or has already been
     /// committed.
     pub fn cleanup<S: Snapshot, P: PdClient + 'static>(
-        mut self,
+        self,
         txn: &mut MvccTxn<S, P>,
         protect_rollback: bool,
     ) -> MvccResult<Option<ReleasedLock>> {
