@@ -840,6 +840,12 @@ impl TiKVServer {
         let raftkv = Arc::new(Mutex::new(self.engines.as_ref().unwrap().engine.clone()));
         unified_pool_builder
             .name_prefix(get_unified_read_pool_name())
+            .thread_count(cfg.min_thread_count, cfg.max_thread_count)
+            .stack_size(cfg.stack_size.0 as usize)
+            .max_tasks(
+                cfg.max_tasks_per_worker
+                    .saturating_mul(cfg.max_thread_count),
+            )
             .after_start(move || {
                 let engine = raftkv.lock().unwrap().clone();
                 set_tls_engine(engine);
@@ -848,11 +854,7 @@ impl TiKVServer {
                 fsm::flush_tls_ctx::<RocksEngine, W>();
                 destroy_tls_engine::<RaftKv<ServerRaftStoreRouter<RocksEngine>>>();
             })
-            .before_pause(
-                fsm::flush_tls_ctx::<RocksEngine, W>
-            )
-            .thread_count(cfg.min_thread_count, cfg.max_thread_count)
-            .stack_size(cfg.stack_size.0 as usize)
+            .before_pause(fsm::flush_tls_ctx::<RocksEngine, W>)
             .build()
     }
 

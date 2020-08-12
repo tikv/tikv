@@ -318,6 +318,11 @@ impl<T: PoolTicker> ReadPoolBuilder<T> {
         self
     }
 
+    pub fn max_tasks(&mut self, tasks: usize) -> &mut Self {
+        self.max_tasks = tasks;
+        self
+    }
+
     pub fn before_stop<F>(&mut self, f: F) -> &mut Self
     where
         F: Fn() + Send + Sync + 'static,

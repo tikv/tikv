@@ -64,6 +64,7 @@ use super::metrics::*;
 use super::super::RegionTask;
 use std::vec::Drain;
 use time::Timespec;
+use yatp::queue::Extras;
 use yatp::task::future::{reschedule, TaskCell};
 use yatp::Remote;
 
@@ -3258,9 +3259,16 @@ where
     fn register(&self, reg: Registration, receiver: Receiver<Msg<EK>>) {
         let fsm = Box::new(ApplyFsm::from_registration(reg));
         let core = self.core.clone();
-        self.remote.spawn(async move {
-            handle_normal::<EK, W>(fsm, receiver, core).await;
-        });
+
+        // Set every task of apply to high priority.
+        let extras = Extras::new_multilevel(0, Some(0));
+        let task_cell = TaskCell::new(
+            async move {
+                handle_normal::<EK, W>(fsm, receiver, core).await;
+            },
+            extras,
+        );
+        self.remote.spawn(task_cell);
     }
 }
 

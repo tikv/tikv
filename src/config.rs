@@ -1851,6 +1851,10 @@ mod readpool_tests {
             use_unified_pool: Some(false),
             ..Default::default()
         };
+        let scheduler = StorageReadPoolConfig {
+            use_unified_pool: Some(false),
+            ..Default::default()
+        };
         assert!(storage.validate().is_ok());
         let coprocessor = CoprReadPoolConfig {
             use_unified_pool: Some(false),
@@ -1861,6 +1865,7 @@ mod readpool_tests {
             unified,
             storage,
             coprocessor,
+            scheduler,
         };
         assert!(!cfg.is_unified_pool_enabled());
         assert!(cfg.validate().is_ok());
@@ -1882,6 +1887,7 @@ mod readpool_tests {
             unified,
             storage,
             coprocessor,
+            scheduler,
         };
         assert!(!invalid_cfg.is_unified_pool_enabled());
         assert!(invalid_cfg.validate().is_err());
@@ -1901,12 +1907,19 @@ mod readpool_tests {
             ..Default::default()
         };
         assert!(storage.validate().is_ok());
+        let scheduler = StorageReadPoolConfig {
+            use_unified_pool: Some(false),
+            ..Default::default()
+        };
+        assert!(scheduler.validate().is_ok());
+
         let coprocessor = CoprReadPoolConfig::default();
         assert!(coprocessor.validate().is_ok());
         let mut cfg = ReadPoolConfig {
             unified,
             storage,
             coprocessor,
+            scheduler,
         };
         cfg.adjust_use_unified_pool();
         assert!(cfg.is_unified_pool_enabled());

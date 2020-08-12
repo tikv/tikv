@@ -169,32 +169,45 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::TestEngineBuilder;
+    use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
+    use crate::storage::{RocksEngine as RocksKV, TestEngineBuilder};
+    use engine_rocks::{RocksEngine, RocksWriteBatch};
     use futures03::channel::oneshot;
     use kvproto::kvrpcpb::CommandPri;
+    use raftstore::store::fsm;
     use raftstore::store::ReadStats;
+    use std::sync::{Arc, Mutex};
     use std::thread;
+    use tikv_util::read_pool::{ReadPoolBuilder, ReadPoolError};
 
     #[derive(Clone)]
     struct DummyReporter;
 
     impl FlowStatsReporter for DummyReporter {
-        type Stat = ReadStats;
         fn report_read_stats(&self, _read_stats: ReadStats) {}
     }
 
     #[test]
     fn test_yatp_full() {
-        let config = UnifiedReadPoolConfig {
-            min_thread_count: 1,
-            max_thread_count: 2,
-            max_tasks_per_worker: 1,
-            ..Default::default()
-        };
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(&config, DummyReporter, engine);
+        let ticker =
+            ReporterTicker::<DummyReporter, RocksEngine, RocksWriteBatch>::new(DummyReporter {});
+        let kv = Arc::new(Mutex::new(engine));
+        let pool = ReadPoolBuilder::new(ticker)
+            .after_start(move || {
+                let engine = kv.lock().unwrap().clone();
+                set_tls_engine(engine);
+            })
+            .before_stop(|| unsafe {
+                fsm::flush_tls_ctx::<RocksEngine, RocksWriteBatch>();
+                destroy_tls_engine::<RocksKV>();
+            })
+            .max_tasks(2)
+            .before_pause(fsm::flush_tls_ctx::<RocksEngine, RocksWriteBatch>)
+            .thread_count(1, 1)
+            .build();
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
