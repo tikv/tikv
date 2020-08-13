@@ -273,6 +273,7 @@ impl<S: RaftStoreRouter<RocksEngine>> Debug for RaftKv<S> {
 
 impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
     type Snap = RegionSnapshot<RocksSnapshot>;
+    type Local = RocksEngine;
 
     fn kv_engine(&self) -> RocksEngine {
         self.engine.clone()
