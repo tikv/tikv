@@ -807,7 +807,6 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        // let (lock_type, short_value, is_pessimistic_txn)
         let mut lock = match self.reader.load_lock(&key)? {
             Some(mut lock) if lock.ts == self.start_ts => {
                 // A lock with larger min_commit_ts than current commit_ts can't be committed
@@ -843,11 +842,6 @@ impl<S: Snapshot> MvccTxn<S> {
                     // Commit with WriteType::Lock.
                     lock.lock_type = LockType::Lock;
                 }
-                // (
-                //     lock.lock_type,
-                //     lock.short_value.take(),
-                //     !lock.for_update_ts.is_zero(),
-                // )
                 lock
             }
             _ => {
