@@ -423,7 +423,9 @@ where
     fn commit_opt(&mut self, fsm: &mut ApplyFsm<E>, persistent: bool) {
         fsm.update_metrics(self);
         if persistent {
-            self.flush();
+            if self.flush() {
+                APPLY_FLUSH_TYPE_COUNTER.auto.inc();
+            }
             self.prepare_for(fsm);
         }
         self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
@@ -432,9 +434,10 @@ where
 
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
-    pub fn flush(&mut self) {
+    pub fn flush(&mut self) -> bool {
         let need_sync = self.core.enable_sync_log && self.sync_log_hint;
-        if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
+        let need_flush = self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty());
+        if need_flush {
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
             self.kv_wb()
@@ -484,6 +487,7 @@ where
             }
         }
         self.last_flush_time = Instant::now_coarse();
+        need_flush
     }
 
     /// Finishes `Apply`s for the fsm.
@@ -3012,7 +3016,9 @@ where
         }
         let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
         if let Some(mut old_ctx) = ctx.take() {
-            old_ctx.flush();
+            if old_ctx.flush() {
+                APPLY_FLUSH_TYPE_COUNTER.replace.inc();
+            }
         }
         ctx.replace(apply_ctx);
     });
@@ -3047,12 +3053,14 @@ where
             let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
             if let Some(apply_ctx) = ctx.as_mut() {
                 if !apply_ctx.flush_notifier.is_empty() {
+                    APPLY_FLUSH_TYPE_COUNTER.pause.inc();
                     apply_ctx.flush();
                 }
             }
         })
     }
 }
+
 pub fn maybe_flush_tls_ctx<E, W>()
 where
     E: KvEngine,
@@ -3068,7 +3076,9 @@ where
                 if !apply_ctx.flush_notifier.is_empty()
                     && apply_ctx.last_flush_time.elapsed() > MAX_FLUSH_WAIT_TIME
                 {
-                    apply_ctx.flush();
+                    if apply_ctx.flush() {
+                        APPLY_FLUSH_TYPE_COUNTER.wait.inc();
+                    }
                 }
             }
         })
