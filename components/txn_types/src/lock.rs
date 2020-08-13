@@ -75,7 +75,7 @@ pub struct Lock {
     pub secondaries: Vec<Vec<u8>>,
     // In some rare cases, a protected rollback may happen when there's already another
     // transaction's lock on the key. In this case, if the other transaction uses calculated
-    // timestamp as commit_ts, the protected rollback record may be overwritte. Checking Write CF
+    // timestamp as commit_ts, the protected rollback record may be overwritten. Checking Write CF
     // while committing is relatively expensive. So the solution is putting the ts of the rollback
     // to the lock.
     pub rollback_ts: Vec<TimeStamp>,

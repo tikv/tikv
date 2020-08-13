@@ -368,7 +368,7 @@ impl<S: Snapshot> MvccTxn<S> {
         }
 
         if self.start_ts < lock.ts || self.start_ts < lock.min_commit_ts {
-            // The rollback will surely note be overwritten by committing the lock. Do nothing.
+            // The rollback will surely not be overwritten by committing the lock. Do nothing.
             return;
         }
 
