@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use raft::{Progress, ProgressState, StateRole};
+use raftstore::store::util::is_learner;
 use raftstore::store::AbstractPeer;
 use std::collections::HashMap;
 
@@ -182,7 +183,7 @@ impl RegionMeta {
             peers.push(RegionPeer {
                 id: peer.get_id(),
                 store_id: peer.get_store_id(),
-                is_learner: peer.get_is_learner(),
+                is_learner: is_learner(&peer),
             });
         }
 
