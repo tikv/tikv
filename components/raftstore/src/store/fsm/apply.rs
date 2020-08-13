@@ -1797,7 +1797,7 @@ where
                                 "region" => ?&self.region
                             );
                             return Err(box_err!(
-                                "can't remove voter {:?} directly from region {:?}",
+                                "can not remove voter {:?} directly from region {:?}",
                                 peer,
                                 self.region
                             ));
@@ -1832,6 +1832,8 @@ where
             }
             confchange_cmd_metric::inc_success(change_type);
         }
+        let conf_ver = region.get_region_epoch().get_conf_ver() + changes.len() as u64;
+        region.mut_region_epoch().set_conf_ver(conf_ver);
         info!(
             "conf change successfully";
             "region_id" => self.region_id(),
@@ -1840,8 +1842,6 @@ where
             "original region" => ?&self.region,
             "current region" => ?&region,
         );
-        let conf_ver = region.get_region_epoch().get_conf_ver() + changes.len() as u64;
-        region.mut_region_epoch().set_conf_ver(conf_ver);
         Ok(region)
     }
 
@@ -1858,6 +1858,12 @@ where
         }
         let conf_ver = region.get_region_epoch().get_conf_ver() + change_num;
         region.mut_region_epoch().set_conf_ver(conf_ver);
+        info!(
+            "leave joint state successfully";
+            "region_id" => self.region_id(),
+            "peer_id" => self.id(),
+            "region" => ?&region,
+        );
         Ok(region)
     }
 

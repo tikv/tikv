@@ -709,8 +709,8 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
             })
             .collect();
 
-        if changes.is_empty() {
-            // Leave joint
+        if changes.len() <= 1 {
+            // Leave joint or simple confchange
             cc.set_transition(eraftpb::ConfChangeTransition::Auto);
         } else {
             // Enter joint

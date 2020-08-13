@@ -12,12 +12,12 @@ use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
 use tokio_timer::timer::Handle;
 
-use kvproto::metapb::{self, Region};
+use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb;
 use kvproto::replication_modepb::{
     DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
 };
-use raft::eraftpb;
+use raft::eraftpb::ConfChangeType;
 
 use keys::{self, data_key, enc_end_key, enc_start_key};
 use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
@@ -103,6 +103,29 @@ enum Operator {
         policy: pdpb::CheckPolicy,
         keys: Vec<Vec<u8>>,
     },
+    LeaveJoint {
+        policy: SchedulePolicy,
+    },
+    JointConfChange {
+        add_peers: Vec<metapb::Peer>,
+        to_add_peers: Vec<metapb::Peer>,
+        remove_peers: Vec<metapb::Peer>,
+        policy: SchedulePolicy,
+    },
+}
+
+fn change_peer(change_type: ConfChangeType, peer: metapb::Peer) -> pdpb::ChangePeer {
+    let mut cp = pdpb::ChangePeer::default();
+    cp.set_change_type(change_type);
+    cp.set_peer(peer);
+    cp
+}
+
+fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
+    region
+        .get_peers()
+        .iter()
+        .find(|&p| p.get_store_id() == store_id)
 }
 
 impl Operator {
@@ -115,9 +138,9 @@ impl Operator {
             Operator::AddPeer { ref peer, .. } => {
                 if let Either::Left(ref peer) = *peer {
                     let conf_change_type = if is_learner(&peer) {
-                        eraftpb::ConfChangeType::AddLearnerNode
+                        ConfChangeType::AddLearnerNode
                     } else {
-                        eraftpb::ConfChangeType::AddNode
+                        ConfChangeType::AddNode
                     };
                     new_pd_change_peer(conf_change_type, peer.clone())
                 } else {
@@ -125,7 +148,7 @@ impl Operator {
                 }
             }
             Operator::RemovePeer { ref peer, .. } => {
-                new_pd_change_peer(eraftpb::ConfChangeType::RemoveNode, peer.clone())
+                new_pd_change_peer(ConfChangeType::RemoveNode, peer.clone())
             }
             Operator::TransferLeader { ref peer, .. } => new_pd_transfer_leader(peer.clone()),
             Operator::MergeRegion {
@@ -156,6 +179,26 @@ impl Operator {
             Operator::SplitRegion {
                 policy, ref keys, ..
             } => new_split_region(policy, keys.clone()),
+            Operator::LeaveJoint { .. } => new_pd_change_peer_v2(vec![]),
+            Operator::JointConfChange {
+                ref to_add_peers,
+                ref remove_peers,
+                ..
+            } => {
+                let mut cps = Vec::with_capacity(to_add_peers.len() + remove_peers.len());
+                for peer in to_add_peers.iter() {
+                    let conf_change_type = if is_learner(&peer) {
+                        ConfChangeType::AddLearnerNode
+                    } else {
+                        ConfChangeType::AddNode
+                    };
+                    cps.push(change_peer(conf_change_type, peer.clone()));
+                }
+                for peer in remove_peers.iter() {
+                    cps.push(change_peer(ConfChangeType::RemoveNode, peer.clone()));
+                }
+                new_pd_change_peer_v2(cps)
+            }
         }
     }
 
@@ -216,6 +259,32 @@ impl Operator {
                 } else {
                     !policy.write().unwrap().schedule()
                 }
+            }
+            Operator::LeaveJoint { ref mut policy } => {
+                region.get_peers().iter().all(|p| {
+                    p.get_role() != PeerRole::IncomingVoter
+                        && p.get_role() != PeerRole::DemotingVoter
+                }) || !policy.schedule()
+            }
+            Operator::JointConfChange {
+                ref add_peers,
+                ref remove_peers,
+                ref mut policy,
+                ..
+            } => {
+                if !policy.schedule() {
+                    return true;
+                }
+
+                let add = add_peers
+                    .iter()
+                    .all(|peer| region.get_peers().iter().any(|p| p == peer));
+
+                let remove = remove_peers
+                    .iter()
+                    .all(|peer| region.get_peers().iter().all(|p| p != peer));
+
+                add && remove
             }
         }
     }
@@ -473,53 +542,19 @@ impl Cluster {
         leader: metapb::Peer,
     ) -> Result<pdpb::RegionHeartbeatResponse> {
         let conf_ver = region.get_region_epoch().get_conf_ver();
-        let end_key = enc_end_key(&region);
 
         // it can pass handle_heartbeat_version means it must exist.
         let cur_region = self.get_region_by_id(region.get_id()).unwrap().unwrap();
-
         let cur_conf_ver = cur_region.get_region_epoch().get_conf_ver();
+
         check_stale_region(&cur_region, &region)?;
 
-        let region_peer_len = region.get_peers().len();
-        let cur_region_peer_len = cur_region.get_peers().len();
-
         if conf_ver > cur_conf_ver {
-            match cur_region_peer_len.cmp(&region_peer_len) {
-                cmp::Ordering::Equal => {
-                    // For promote learner to voter.
-                    let get_learners =
-                        |r: &Region| r.get_peers().iter().filter(|p| is_learner(p)).count();
-                    let region_learner_len = get_learners(&region);
-                    let cur_region_learner_len = get_learners(&cur_region);
-                    assert_eq!(cur_region_learner_len, region_learner_len + 1);
-                }
-                cmp::Ordering::Greater => {
-                    // If ConfVer changed, TiKV has added/removed one peer already.
-                    // So pd and TiKV can't have same peer count and can only have
-                    // only one different peer.
-                    // E.g, we can't meet following cases:
-                    // 1) pd is (1, 2, 3), TiKV is (1)
-                    // 2) pd is (1), TiKV is (1, 2, 3)
-                    // 3) pd is (1, 2), TiKV is (3)
-                    // 4) pd id (1), TiKV is (2, 3)
-                    // must pd is (1, 2), TiKV is (1)
-                    assert_eq!(cur_region_peer_len - region_peer_len, 1);
-                    let peers = setdiff_peers(&cur_region, &region);
-                    assert_eq!(peers.len(), 1);
-                    assert!(setdiff_peers(&region, &cur_region).is_empty());
-                }
-                cmp::Ordering::Less => {
-                    // must pd is (1), TiKV is (1, 2)
-                    assert_eq!(region_peer_len - cur_region_peer_len, 1);
-                    let peers = setdiff_peers(&region, &cur_region);
-                    assert_eq!(peers.len(), 1);
-                    assert!(setdiff_peers(&cur_region, &region).is_empty());
-                }
-            }
-
             // update the region.
-            assert!(self.regions.insert(end_key, region.clone()).is_some());
+            assert!(self
+                .regions
+                .insert(enc_end_key(&region), region.clone())
+                .is_some());
         } else {
             must_same_peers(&cur_region, &region);
         }
@@ -694,21 +729,6 @@ fn must_same_peers(left: &metapb::Region, right: &metapb::Region) {
     }
 }
 
-// Left - Right, left (1, 2, 3), right (1, 2), left - right = (3)
-fn setdiff_peers(left: &metapb::Region, right: &metapb::Region) -> Vec<metapb::Peer> {
-    let mut peers = vec![];
-    for peer in left.get_peers() {
-        if let Some(p) = find_peer(right, peer.get_store_id()) {
-            assert_eq!(p.get_id(), peer.get_id());
-            continue;
-        }
-
-        peers.push(peer.clone())
-    }
-
-    peers
-}
-
 // For test when a node is already bootstraped the cluster with the first region
 pub fn bootstrap_with_first_region(pd_client: Arc<TestPdClient>) -> Result<()> {
     let mut region = metapb::Region::default();
@@ -846,6 +866,56 @@ impl TestPdClient {
         panic!("peer {:?} shouldn't be pending any more", peer);
     }
 
+    pub fn must_finish_joint_confchange(
+        &self,
+        region_id: u64,
+        add_peers: Vec<metapb::Peer>,
+        remove_peers: Vec<metapb::Peer>,
+    ) {
+        'retry: for _ in 1..500 {
+            sleep_ms(10);
+            let region = match self.get_region_by_id(region_id).wait().unwrap() {
+                Some(region) => region,
+                None => continue 'retry,
+            };
+            'next_add: for peer in add_peers.iter() {
+                match find_peer(&region, peer.get_store_id()) {
+                    Some(p) if p == peer => continue 'next_add,
+                    _ => continue 'retry,
+                }
+            }
+            'next_remove: for peer in remove_peers.iter() {
+                match find_peer(&region, peer.get_store_id()) {
+                    Some(p) if p == peer => continue 'retry,
+                    _ => continue 'next_remove,
+                }
+            }
+            return;
+        }
+        let region = self.get_region_by_id(region_id).wait().unwrap();
+        panic!(
+            "region {:?} did not apply joint confchange, add peers: {:?}, remove peers: {:?}",
+            region, add_peers, remove_peers
+        );
+    }
+
+    pub fn must_not_in_joint(&self, region_id: u64) {
+        for _ in 1..500 {
+            sleep_ms(10);
+            let region = match self.get_region_by_id(region_id).wait().unwrap() {
+                Some(region) => region,
+                None => continue,
+            };
+            if region.get_peers().iter().all(|p| {
+                p.get_role() != PeerRole::IncomingVoter && p.get_role() != PeerRole::DemotingVoter
+            }) {
+                return;
+            }
+        }
+        let region = self.get_region_by_id(region_id).wait().unwrap();
+        panic!("region {:?} failed to leave joint", region);
+    }
+
     pub fn add_region(&self, region: &metapb::Region) {
         self.cluster.wl().add_region(region)
     }
@@ -872,6 +942,79 @@ impl TestPdClient {
             policy: SchedulePolicy::TillSuccess,
         };
         self.schedule_operator(region_id, op);
+    }
+
+    pub fn joint_confchange(
+        &self,
+        region_id: u64,
+        mut changes: Vec<(ConfChangeType, metapb::Peer)>,
+    ) -> (Vec<metapb::Peer>, Vec<metapb::Peer>) {
+        let region = self.get_region_by_id(region_id).wait().unwrap().unwrap();
+        let (mut add_peers, mut remove_peers) = (Vec::new(), Vec::new());
+
+        let to_add_peers = changes
+            .iter()
+            .filter(|(c, _)| *c != ConfChangeType::RemoveNode)
+            .map(|(_, p)| p)
+            .cloned()
+            .collect();
+
+        // Simple confchange
+        if changes.len() == 1 {
+            match changes.pop().unwrap() {
+                (ConfChangeType::RemoveNode, p) => remove_peers.push(p),
+                (_, p) => add_peers.push(p),
+            }
+        } else {
+            // Joint confchange
+            for (change, mut peer) in changes {
+                match (
+                    find_peer(&region, peer.get_store_id()).map(|p| p.get_role()),
+                    change,
+                ) {
+                    (None, ConfChangeType::AddNode) => {
+                        peer.set_role(PeerRole::IncomingVoter);
+                        add_peers.push(peer);
+                    }
+                    (Some(PeerRole::Voter), ConfChangeType::AddLearnerNode) => {
+                        peer.set_role(PeerRole::DemotingVoter);
+                        add_peers.push(peer);
+                    }
+                    (Some(PeerRole::Learner), ConfChangeType::AddNode) => {
+                        peer.set_role(PeerRole::IncomingVoter);
+                        add_peers.push(peer);
+                    }
+                    (_, ConfChangeType::RemoveNode) => remove_peers.push(peer),
+                    _ => add_peers.push(peer),
+                }
+            }
+        }
+        let op = Operator::JointConfChange {
+            add_peers: add_peers.clone(),
+            to_add_peers,
+            remove_peers: remove_peers.clone(),
+            policy: SchedulePolicy::TillSuccess,
+        };
+        self.schedule_operator(region_id, op);
+        (add_peers, remove_peers)
+    }
+
+    pub fn leave_joint(&self, region_id: u64) {
+        let op = Operator::LeaveJoint {
+            policy: SchedulePolicy::TillSuccess,
+        };
+        self.schedule_operator(region_id, op);
+    }
+
+    pub fn is_in_joint(&self, region_id: u64) -> bool {
+        let region = self
+            .get_region_by_id(region_id)
+            .wait()
+            .unwrap()
+            .expect("region not exist");
+        region.get_peers().iter().any(|p| {
+            p.get_role() == PeerRole::IncomingVoter || p.get_role() == PeerRole::DemotingVoter
+        })
     }
 
     pub fn split_region(
@@ -918,6 +1061,20 @@ impl TestPdClient {
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.remove_peer(region_id, peer.clone());
         self.must_none_peer(region_id, peer);
+    }
+
+    pub fn must_joint_confchange(
+        &self,
+        region_id: u64,
+        changes: Vec<(ConfChangeType, metapb::Peer)>,
+    ) {
+        let (add, remove) = self.joint_confchange(region_id, changes.clone());
+        self.must_finish_joint_confchange(region_id, add, remove);
+    }
+
+    pub fn must_leave_joint(&self, region_id: u64) {
+        self.leave_joint(region_id);
+        self.must_not_in_joint(region_id);
     }
 
     pub fn merge_region(&self, from: u64, target: u64) {

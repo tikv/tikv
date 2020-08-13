@@ -1940,33 +1940,36 @@ where
         }
 
         // Check whether this request is valid
+        let mut check_dup = HashSet::default();
         for cp in change_peers.iter() {
             let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
-            if let Some(exist_peer) = self.get_peer_from_cache(peer.get_id()) {
-                match (exist_peer.get_role(), change_type) {
-                    (PeerRole::Voter, ConfChangeType::RemoveNode) => {
-                        if kind != ConfChangeKind::Simple {
-                            return Err(box_err!(
-                                "{} invalid conf change request, can't remove voter directly",
-                                self.tag
-                            ));
-                        }
-                    }
-                    (PeerRole::IncomingVoter, _) | (PeerRole::DemotingVoter, _) => {
-                        return Err(box_err!(
-                            "{} invalid conf change request, configuration is still in joint state",
-                            self.tag
-                        ));
-                    }
-                    (PeerRole::Voter, ConfChangeType::AddNode)
-                    | (PeerRole::Learner, ConfChangeType::AddLearnerNode) => {
-                        return Err(box_err!(
-                            "{} invalid conf change request, can't add duplicated node",
-                            self.tag
-                        ));
-                    }
-                    _ => {}
+
+            match (change_type, peer.get_role()) {
+                (ConfChangeType::RemoveNode, _)
+                | (ConfChangeType::AddNode, PeerRole::Voter)
+                | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {}
+                _ => {
+                    warn!(
+                        "invalid conf change request";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "request" => ?cp,
+                    );
+                    return Err(box_err!("{} invalid conf change request", self.tag));
                 }
+            }
+
+            if !check_dup.insert(peer.get_id()) {
+                warn!(
+                    "invalid conf change request, have duplicated command for the same peer";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "request" => ?cp,
+                );
+                return Err(box_err!(
+                    "{} invalid conf change request, have duplicated command for the same peer",
+                    self.tag
+                ));
             }
 
             if change_type == ConfChangeType::RemoveNode
@@ -2608,13 +2611,17 @@ where
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
         let admin = req.get_admin_request();
-        if admin.has_change_peer() {
+        let res = if admin.has_change_peer() {
             self.propose_conf_change_internal(ctx, admin.get_change_peer(), data)
         } else if admin.has_change_peer_v2() {
             self.propose_conf_change_internal(ctx, admin.get_change_peer_v2(), data)
         } else {
             unreachable!()
+        };
+        if let Err(ref e) = res {
+            warn!("failed to propose confchange"; "error" => ?e);
         }
+        res
     }
 
     // Fails in such cases:
