@@ -190,10 +190,7 @@ where
 }
 
 impl<S: Snapshot> ProposedAdminCmd<S> {
-    fn new(
-        epoch_state: AdminCmdEpochState,
-        index: u64,
-    ) -> ProposedAdminCmd<S> {
+    fn new(epoch_state: AdminCmdEpochState, index: u64) -> ProposedAdminCmd<S> {
         ProposedAdminCmd {
             epoch_state,
             index,
@@ -237,8 +234,10 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         }
     }
 
-    // Returns None if passing the epoch check, otherwise returns a index which is the last
-    // admin cmd index conflicted with this proposal.
+    /// Check if the proposal can be proposed on the basis of its epoch and previous proposed admin cmds.
+    ///
+    /// Returns None if passing the epoch check, otherwise returns a index which is the last
+    /// admin cmd index conflicted with this proposal.
     pub fn propose_check_epoch(&mut self, req: &RaftCmdRequest, term: u64) -> Option<u64> {
         self.maybe_update_term(term);
         let (check_ver, check_conf_ver) = if !req.has_admin_request() {
@@ -1872,8 +1871,11 @@ where
         self.raft_group
             .advance_apply(apply_state.get_applied_index());
 
-        self.cmd_epoch_checker
-            .advance_apply(apply_state.get_applied_index(), self.term(), self.region().to_owned());
+        self.cmd_epoch_checker.advance_apply(
+            apply_state.get_applied_index(),
+            self.term(),
+            self.region().to_owned(),
+        );
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
         self.mut_store().set_applied_state(apply_state);
@@ -2040,11 +2042,11 @@ where
                 cb.invoke_with_response(err_resp);
                 false
             }
-            Ok(Either::Left(idx)) => {
+            Ok(Either::Right(idx)) => {
                 self.cmd_epoch_checker.add_to_conflict_index(idx, cb);
                 false
             }
-            Ok(Either::Right(idx)) => {
+            Ok(Either::Left(idx)) => {
                 if is_urgent {
                     self.last_urgent_proposal_idx = idx;
                     // Eager flush to make urgent proposal be applied on all nodes as soon as
@@ -2577,6 +2579,11 @@ where
         Ok(ctx)
     }
 
+    /// Propose normal request to raft
+    ///
+    /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located on `index` position.
+    /// Ok(Either::Right(index)) means the proposal is rejected by `CmdEpochChecker` and the `index` is the position of
+    /// the last conflict admin cmd.
     fn propose_normal<T, C>(
         &mut self,
         poll_ctx: &mut PollContext<EK, ER, T, C>,
