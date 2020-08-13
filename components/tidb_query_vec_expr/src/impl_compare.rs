@@ -1050,6 +1050,29 @@ mod tests {
     }
 
     #[test]
+    fn test_least_int() {
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Some(1), Some(1)], Some(1)),
+            (vec![Some(1), Some(-1), None], None),
+            (vec![Some(-2), Some(-1), Some(1), Some(2)], Some(-1)),
+            (
+                vec![Some(i64::MIN), Some(0), Some(-1), Some(i64::MIN)],
+                Some(i64::MAX),
+            ),
+            (vec![Some(0), Some(4), Some(8), Some(8)], Some(0)),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestInt)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
     fn test_greatest_real() {
         let cases = vec![
             (vec![None, None], None),
@@ -1080,6 +1103,83 @@ mod tests {
                     Real::new(f64::MIN).ok(),
                 ],
                 Real::new(f64::INFINITY).ok(),
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestReal)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_string() {
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Some(b"aaa".to_owned().to_vec()), Some(b"bbb".to_owned().to_vec())], Some(b"bbb".to_owned().to_vec())),
+            (vec![Some(b"aaa".to_owned().to_vec()), None], None),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestString)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_least_string() {
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Some(b"aaa".to_owned().to_vec()), Some(b"bbb".to_owned().to_vec())], Some(b"aaa".to_owned().to_vec())),
+            (vec![Some(b"aaa".to_owned().to_vec()), None], None),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::LeastString)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_least_real() {
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Real::new(1.0).ok(), Real::new(-1.0).ok(), None], None),
+            (
+                vec![
+                    Real::new(1.0).ok(),
+                    Real::new(-1.0).ok(),
+                    Real::new(-2.0).ok(),
+                    Real::new(0f64).ok(),
+                ],
+                Real::new(-2.0).ok(),
+            ),
+            (
+                vec![
+                    Real::new(f64::MAX).ok(),
+                    Real::new(f64::MIN).ok(),
+                    Real::new(0f64).ok(),
+                ],
+                Real::new(f64::MIN).ok(),
+            ),
+            (vec![Real::new(f64::NAN).ok(), Real::new(0f64).ok()], None),
+            (
+                vec![
+                    Real::new(f64::INFINITY).ok(),
+                    Real::new(f64::NEG_INFINITY).ok(),
+                    Real::new(f64::MAX).ok(),
+                    Real::new(f64::MIN).ok(),
+                ],
+                Real::new(f64::NEG_INFINITY).ok(),
             ),
         ];
 
@@ -1131,6 +1231,64 @@ mod tests {
                     Some(b"2018-04-03 00:00:00.000000".to_owned().to_vec()),
                 ],
                 Some(b"2018-04-03 00:00:00.000000".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(vec![0, 159, 146, 150]), // Invalid utf-8 bytes
+                ],
+                None,
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestTime)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_least_time() {
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
+                ],
+                Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
+                    Some(b"invalid_time".to_owned().to_vec()),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-12 12:00:38.12003800000".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39.120050".to_owned().to_vec()),
+                    Some(b"2018-04-03 00:00:00.000000".to_owned().to_vec()),
+                ],
+                Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
             ),
             (
                 vec![
