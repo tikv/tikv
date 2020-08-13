@@ -1119,7 +1119,13 @@ mod tests {
     fn test_greatest_string() {
         let cases = vec![
             (vec![None, None], None),
-            (vec![Some(b"aaa".to_owned().to_vec()), Some(b"bbb".to_owned().to_vec())], Some(b"bbb".to_owned().to_vec())),
+            (
+                vec![
+                    Some(b"aaa".to_owned().to_vec()),
+                    Some(b"bbb".to_owned().to_vec()),
+                ],
+                Some(b"bbb".to_owned().to_vec()),
+            ),
             (vec![Some(b"aaa".to_owned().to_vec()), None], None),
         ];
 
@@ -1136,7 +1142,13 @@ mod tests {
     fn test_least_string() {
         let cases = vec![
             (vec![None, None], None),
-            (vec![Some(b"aaa".to_owned().to_vec()), Some(b"bbb".to_owned().to_vec())], Some(b"aaa".to_owned().to_vec())),
+            (
+                vec![
+                    Some(b"aaa".to_owned().to_vec()),
+                    Some(b"bbb".to_owned().to_vec()),
+                ],
+                Some(b"aaa".to_owned().to_vec()),
+            ),
             (vec![Some(b"aaa".to_owned().to_vec()), None], None),
         ];
 
