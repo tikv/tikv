@@ -7,7 +7,7 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::Collator;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::{time::MAX_TIMESTAMP, Time, TimeType};
+use tidb_query_datatype::codec::mysql::{Time, TimeType};
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::EvalContext;
 
@@ -303,7 +303,7 @@ pub fn greatest_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
 #[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
 pub fn least_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
-    do_get_extremum(args, max)
+    do_get_extremum(args, min)
 }
 
 #[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
@@ -342,11 +342,12 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result
 #[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
 #[inline]
 pub fn least_time(mut ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
-    let mut least = Some(Time::parse_from_i64(
+    //Max datetime range defined at https://dev.mysql.com/doc/refman/8.0/en/datetime.html
+    let mut least = Some(Time::parse_datetime(
         &mut ctx,
-        MAX_TIMESTAMP,
-        TimeType::DateTime,
+        "9999-12-31 23:59:59",
         0,
+        true,
     )?);
     for arg in args {
         match arg {
@@ -1055,10 +1056,10 @@ mod tests {
             (vec![None, None], None),
             (vec![Some(1), Some(1)], Some(1)),
             (vec![Some(1), Some(-1), None], None),
-            (vec![Some(-2), Some(-1), Some(1), Some(2)], Some(-1)),
+            (vec![Some(-2), Some(-1), Some(1), Some(2)], Some(-2)),
             (
-                vec![Some(i64::MIN), Some(0), Some(-1), Some(i64::MIN)],
-                Some(i64::MAX),
+                vec![Some(i64::MIN), Some(0), Some(-1), Some(i64::MAX)],
+                Some(i64::MIN),
             ),
             (vec![Some(0), Some(4), Some(8), Some(8)], Some(0)),
         ];
@@ -1066,7 +1067,7 @@ mod tests {
         for (row, expected) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
-                .evaluate(ScalarFuncSig::GreatestInt)
+                .evaluate(ScalarFuncSig::LeastInt)
                 .unwrap();
             assert_eq!(output, expected);
         }
@@ -1198,7 +1199,7 @@ mod tests {
         for (row, expected) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
-                .evaluate(ScalarFuncSig::GreatestReal)
+                .evaluate(ScalarFuncSig::LeastReal)
                 .unwrap();
             assert_eq!(output, expected);
         }
@@ -1300,7 +1301,7 @@ mod tests {
                     Some(b"2012-12-31 12:00:39.120050".to_owned().to_vec()),
                     Some(b"2018-04-03 00:00:00.000000".to_owned().to_vec()),
                 ],
-                Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                Some(b"2012-12-12 12:00:38.120038".to_owned().to_vec()),
             ),
             (
                 vec![
@@ -1314,8 +1315,9 @@ mod tests {
         for (row, expected) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
-                .evaluate(ScalarFuncSig::GreatestTime)
-                .unwrap();
+                .evaluate(ScalarFuncSig::LeastTime)
+                .unwrap() as Option<Vec<u8>>;
+
             assert_eq!(output, expected);
         }
     }
