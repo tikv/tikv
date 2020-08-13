@@ -332,6 +332,11 @@ lazy_static! {
             exponential_buckets(1f64, 5f64, 10).unwrap()
         )
         .unwrap();
+    pub static ref CPU_CORES_QUOTA_GAUGE: Gauge = register_gauge!(
+        "tikv_server_cpu_cores_quota",
+        "Total CPU cores quota for TiKV server"
+    )
+    .unwrap();
 }
 
 make_auto_flush_static_metric! {

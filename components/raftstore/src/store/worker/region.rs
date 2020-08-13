@@ -9,9 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Mutable};
+use error_code::ErrorCodeExt;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -220,10 +220,10 @@ where
 {
     engines: KvEngines<EK, ER>,
     batch_size: usize,
-    mgr: SnapManager<EK>,
+    mgr: SnapManager,
     use_delete_range: bool,
     pending_delete_ranges: PendingDeleteRanges,
-    coprocessor_host: CoprocessorHost<RocksEngine>,
+    coprocessor_host: CoprocessorHost<EK>,
     router: R,
 }
 
@@ -287,7 +287,7 @@ where
             kv_snap,
             notifier,
         ) {
-            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
+            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e, "error_code" => %e.error_code());
             return;
         }
 
@@ -395,7 +395,8 @@ where
                 SNAP_COUNTER.apply.abort.inc();
             }
             Err(e) => {
-                error!("failed to apply snap!!!"; "err" => %e);
+                error!("failed to apply snap!!!"; "err" => %e, "error_code" => %e.error_code());
+
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.fail.inc();
             }
@@ -424,6 +425,7 @@ where
                     "start_key" => log_wrappers::Key(start_key),
                     "end_key" => log_wrappers::Key(end_key),
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 return;
             }
@@ -439,6 +441,7 @@ where
                 "start_key" => log_wrappers::Key(start_key),
                 "end_key" => log_wrappers::Key(end_key),
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
         } else {
             info!(
@@ -573,10 +576,10 @@ where
 {
     pub fn new(
         engines: KvEngines<EK, ER>,
-        mgr: SnapManager<EK>,
+        mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
-        coprocessor_host: CoprocessorHost<RocksEngine>,
+        coprocessor_host: CoprocessorHost<EK>,
         router: R,
     ) -> Runner<EK, ER, R> {
         Runner {
@@ -837,7 +840,7 @@ mod tests {
         let engine = get_test_db_for_regions(&temp_dir, None, None, None, None, &[1]).unwrap();
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let shared_block_cache = false;
@@ -921,7 +924,7 @@ mod tests {
         let shared_block_cache = false;
         let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
@@ -969,7 +972,7 @@ mod tests {
             }
             let data = s1.get_data();
             let key = SnapKey::from_snap(&s1).unwrap();
-            let mgr = SnapManager::<RocksEngine>::new(snap_dir.path().to_str().unwrap(), None);
+            let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
             let mut s3 = mgr.get_snapshot_for_receiving(&key, &data[..]).unwrap();
             io::copy(&mut s2, &mut s3).unwrap();

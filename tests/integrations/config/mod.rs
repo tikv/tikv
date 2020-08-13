@@ -239,6 +239,7 @@ fn test_serde_custom_tikv_config() {
         info_log_dir: "/var".to_owned(),
         info_log_level: LogLevel::Info,
         rate_bytes_per_sec: ReadableSize::kb(1),
+        rate_limiter_refill_period: ReadableDuration::millis(10),
         rate_limiter_mode: DBRateLimiterMode::AllIo,
         auto_tuned: true,
         bytes_per_sync: ReadableSize::mb(1),
@@ -648,6 +649,9 @@ fn test_serde_custom_tikv_config() {
         wait_for_lock_timeout: ReadableDuration::millis(10),
         wake_up_delay_duration: ReadableDuration::millis(100),
         pipelined: true,
+    };
+    value.cdc = CdcConfig {
+        min_ts_interval: ReadableDuration::secs(4),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
