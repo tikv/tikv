@@ -419,7 +419,6 @@ mod tests {
         );
 
         let addr = Arc::new(Mutex::new(None));
-
         let mut server = Server::new(
             &cfg,
             &security_mgr,

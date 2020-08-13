@@ -82,7 +82,6 @@ pub fn run_tikv(config: TiKvConfig) {
 
     // Print resource quota.
     SysQuota::new().log_quota();
-
     CPU_CORES_QUOTA_GAUGE.set(SysQuota::new().cpu_cores_quota());
 
     // Do some prepare works before start.
