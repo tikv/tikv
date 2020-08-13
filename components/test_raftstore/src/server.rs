@@ -47,6 +47,7 @@ use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv, Server,
     ServerTransport,
 };
+use tikv::server::tracing::NullReporter;
 use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
@@ -277,6 +278,7 @@ impl Simulator for ServerCluster {
                 snap_mgr.clone(),
                 gc_worker.clone(),
                 None,
+                NullReporter::new(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
