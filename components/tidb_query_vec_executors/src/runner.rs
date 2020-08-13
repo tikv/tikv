@@ -114,6 +114,7 @@ impl BatchExecutorsRunner<()> {
                     BatchTopNExecutor::check_supported(&descriptor)
                         .map_err(|e| other_err!("BatchTopNExecutor: {}", e))?;
                 }
+                ExecType::TypeJoin => unimplemented!("TypeJoin only supported in TiFlash"),
             }
         }
 

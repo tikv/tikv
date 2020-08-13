@@ -81,6 +81,40 @@ impl<S: Snapshot> AnalyzeContext<S> {
         Ok(res_data)
     }
 
+    async fn handle_sample_index(
+        req: AnalyzeIndexReq,
+        scanner: &mut RangesScanner<TiKVStorage<SnapshotStore<S>>>,
+    ) -> Result<Vec<u8>> {
+        let mut collector = SampleCollector::new(
+            req.get_sample_size() as usize,
+            req.get_sketch_size() as usize,
+            req.get_cmsketch_depth() as usize,
+            req.get_cmsketch_width() as usize,
+        );
+
+        let mut row_count = 0;
+        let mut time_slice_start = Instant::now();
+        while let Some((key, _)) = scanner.next()? {
+            row_count += 1;
+            if row_count >= BATCH_MAX_SIZE {
+                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
+                row_count = 0;
+            }
+            let mut key = &key[..];
+            table::check_index_key(key)?;
+            key = &key[table::PREFIX_LEN + table::ID_LEN..];
+            collector.collect(key.to_vec());
+        }
+
+        let mut res = tipb::AnalyzeIndexResp::default();
+        res.set_collector(collector.into_proto());
+        let dt = box_try!(res.write_to_bytes());
+        Ok(dt)
+    }
+
     // handle_index is used to handle `AnalyzeIndexReq`,
     // it would build a histogram and count-min sketch of index values.
     async fn handle_index(
@@ -147,7 +181,9 @@ impl<S: Snapshot> AnalyzeContext<S> {
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
     async fn handle_request(&mut self) -> Result<Response> {
         let ret = match self.req.get_tp() {
-            AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
+            AnalyzeType::TypeIndex
+            | AnalyzeType::TypeCommonHandle
+            | AnalyzeType::TypeSampleIndex => {
                 let req = self.req.take_idx_req();
                 let ranges = mem::replace(&mut self.ranges, vec![]);
                 table::check_table_ranges(&ranges)?;
@@ -161,14 +197,20 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                     is_key_only: true,
                     is_scanned_range_aware: false,
                 });
-                let res = AnalyzeContext::handle_index(
-                    req,
-                    &mut scanner,
-                    self.req.get_tp() == AnalyzeType::TypeCommonHandle,
-                )
-                .await;
-                scanner.collect_storage_stats(&mut self.storage_stats);
-                res
+                if self.req.get_tp() == AnalyzeType::TypeSampleIndex {
+                    let res = AnalyzeContext::handle_sample_index(req, &mut scanner).await;
+                    scanner.collect_storage_stats(&mut self.storage_stats);
+                    res
+                } else {
+                    let res = AnalyzeContext::handle_index(
+                        req,
+                        &mut scanner,
+                        self.req.get_tp() == AnalyzeType::TypeCommonHandle,
+                    )
+                    .await;
+                    scanner.collect_storage_stats(&mut self.storage_stats);
+                    res
+                }
             }
 
             AnalyzeType::TypeColumn => {
