@@ -898,3 +898,17 @@
 
 ## Garbage ratio threshold to trigger a GC.
 # ratio-threshold = 1.1
+
+[tracing]
+## Jaeger agent to report minitrace tracing results
+## If set, used to be "127.0.0.1:6831"
+# jaeger-agent = ""
+
+## Number of threads for reporting tracing results to jaeger-agent
+## Ignored if jaeger-agent is empty.
+# num-threads = 1
+
+## Threshold to determine whether to report tracing results to jaeger-agent or not.
+## The tracing results will be reported if the duration of an entire traced procedure larger
+## than duration-threshold,
+# duration-threshold = "100ms"

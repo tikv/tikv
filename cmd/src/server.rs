@@ -56,7 +56,7 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
-        Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
+        tracing, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
     },
     storage::{self, config::StorageConfigManger},
 };
@@ -82,6 +82,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
     // Print resource quota.
     SysQuota::new().log_quota();
+
     CPU_CORES_QUOTA_GAUGE.set(SysQuota::new().cpu_cores_quota());
 
     // Do some prepare works before start.
@@ -555,6 +556,25 @@ impl TiKVServer {
 
         let server_config = Arc::new(self.config.server.clone());
 
+        // Create tracing reporter
+        let tracing_reporter: Arc<dyn tracing::Reporter> =
+            if self.config.tracing.jaeger_agent.is_empty() {
+                Arc::new(tracing::NullReporter::new())
+            } else {
+                let addr = &self.config.tracing.jaeger_agent;
+                let agent: SocketAddr = addr
+                    .parse()
+                    .unwrap_or_else(|_| fatal!("failed to parse into a socket address: {}", addr));
+                Arc::new(
+                    tracing::JaegerReporter::new(
+                        self.config.tracing.num_threads,
+                        self.config.tracing.duration_threshold.into(),
+                        agent,
+                    )
+                    .unwrap_or_else(|e| fatal!("failed to create tracing reporter: {}", e)),
+                )
+            };
+
         // Create server
         let server = Server::new(
             &server_config,
@@ -570,6 +590,7 @@ impl TiKVServer {
             snap_mgr.clone(),
             gc_worker.clone(),
             unified_read_pool,
+            tracing_reporter,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 

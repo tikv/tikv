@@ -16,6 +16,7 @@ use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
 use crate::server::gc_worker::GcWorker;
+use crate::server::tracing;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
 use engine_rocks::RocksEngine;
@@ -69,7 +70,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
 
 impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<E: Engine, L: LockManager>(
+    pub fn new<E: Engine, L: LockManager, R: tracing::Reporter + Clone + Send + 'static>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
@@ -79,6 +80,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         snap_mgr: SnapManager,
         gc_worker: GcWorker<E>,
         yatp_read_pool: Option<ReadPool>,
+        tracing_reporter: R,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.stats_concurrency > 0 {
@@ -113,6 +115,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
             Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
             security_mgr.clone(),
+            tracing_reporter,
         );
 
         let addr = SocketAddr::from_str(&cfg.addr)?;
@@ -416,6 +419,7 @@ mod tests {
         );
 
         let addr = Arc::new(Mutex::new(None));
+
         let mut server = Server::new(
             &cfg,
             &security_mgr,
@@ -429,6 +433,7 @@ mod tests {
             SnapManager::new(""),
             gc_worker,
             None,
+            tracing::NullReporter::new(),
         )
         .unwrap();
 

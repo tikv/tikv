@@ -2021,6 +2021,37 @@ impl Default for CdcConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct TracingConfig {
+    pub jaeger_agent: String,
+    pub num_threads: usize,
+    pub duration_threshold: ReadableDuration,
+}
+
+impl TracingConfig {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if !self.jaeger_agent.is_empty() {
+            config::check_addr(&self.jaeger_agent)?;
+            if self.num_threads == 0 {
+                return Err("tracing.num_threads cannot be 0".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for TracingConfig {
+    fn default() -> Self {
+        Self {
+            jaeger_agent: "".to_owned(),
+            num_threads: 1,
+            duration_threshold: ReadableDuration::millis(100),
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2103,6 +2134,9 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub cdc: CdcConfig,
+
+    #[config(skip)]
+    pub tracing: TracingConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2133,6 +2167,7 @@ impl Default for TiKvConfig {
             gc: GcConfig::default(),
             split: SplitConfig::default(),
             cdc: CdcConfig::default(),
+            tracing: TracingConfig::default(),
         }
     }
 }
@@ -2215,6 +2250,7 @@ impl TiKvConfig {
         self.backup.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
+        self.tracing.validate()?;
         Ok(())
     }
 

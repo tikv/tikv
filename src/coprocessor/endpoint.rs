@@ -457,24 +457,12 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let (_guard, collector) = minitrace::trace_may_enable(
-            req.is_trace_enabled,
-            tipb::Event::TiKvCoprGetRequest as u32,
-        );
-
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
         future::result(result_of_future)
             .flatten()
             .or_else(|e| Ok(make_error_response(e)))
-            .map(move |mut resp| {
-                if let Some(collector) = collector {
-                    let span_sets = collector.collect();
-                    resp.set_spans(tikv_util::trace::encode_spans(span_sets).collect())
-                }
-                resp
-            })
     }
 
     /// The real implementation of handling a stream request.

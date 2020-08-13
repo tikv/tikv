@@ -16,6 +16,7 @@ pub mod server;
 pub mod service;
 pub mod snap;
 pub mod status_server;
+pub mod tracing;
 pub mod transport;
 
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
