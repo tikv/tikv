@@ -10,6 +10,7 @@ use std::{cmp, error, u64};
 
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Mutable, Peekable, WriteBatch};
+use error_code::ErrorCodeExt;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1401,6 +1402,7 @@ where
                     "region_id" => self.get_region_id(),
                     "peer_id" => self.peer_id,
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -1419,6 +1421,7 @@ where
                     "failed to cleanup data, may leave some dirty data";
                     "region_id" => r.get_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -1568,7 +1571,7 @@ where
 }
 
 pub fn do_snapshot<E>(
-    mgr: SnapManager<E>,
+    mgr: SnapManager,
     engine: &E,
     kv_snap: E::Snapshot,
     region_id: u64,
@@ -2055,7 +2058,7 @@ mod tests {
 
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
@@ -2371,7 +2374,7 @@ mod tests {
 
         let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap").tempdir().unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
