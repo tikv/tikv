@@ -7,7 +7,7 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::Collator;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::{Time, TimeType};
+use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::EvalContext;
 
