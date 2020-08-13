@@ -906,9 +906,10 @@ impl TestPdClient {
                 Some(region) => region,
                 None => continue,
             };
-            if region.get_peers().iter().all(|p| {
-                p.get_role() != PeerRole::IncomingVoter && p.get_role() != PeerRole::DemotingVoter
-            }) {
+            let in_joint = region.get_peers().iter().any(|p| {
+                p.get_role() == PeerRole::IncomingVoter || p.get_role() == PeerRole::DemotingVoter
+            });
+            if !in_joint {
                 return;
             }
         }
@@ -1068,7 +1069,7 @@ impl TestPdClient {
         region_id: u64,
         changes: Vec<(ConfChangeType, metapb::Peer)>,
     ) {
-        let (add, remove) = self.joint_confchange(region_id, changes.clone());
+        let (add, remove) = self.joint_confchange(region_id, changes);
         self.must_finish_joint_confchange(region_id, add, remove);
     }
 
