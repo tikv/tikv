@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
+use futures::Future;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::{create_debug, DebugClient};
@@ -20,7 +21,7 @@ use super::*;
 use encryption::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngines, MiscExt};
-use pd_client::DummyPdClient;
+use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
@@ -46,6 +47,7 @@ use tikv::server::{
     ServerTransport,
 };
 use tikv::storage;
+use tikv::storage::concurrency_manager::ConcurrencyManager;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
@@ -197,13 +199,19 @@ impl Simulator for ServerCluster {
             .start_observe_lock_apply(&mut coprocessor_host)
             .unwrap();
 
+        let latest_ts = self
+            .pd_client
+            .get_tso()
+            .wait()
+            .expect("failed to get timestamp from PD");
+        let concurrency_manager = ConcurrencyManager::new(latest_ts);
         let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
         let store = create_raft_storage(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
             lock_mgr.clone(),
-            Arc::new(DummyPdClient::new()),
+            concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
         )?;
         self.storages.insert(node_id, raft_engine);
@@ -249,7 +257,8 @@ impl Simulator for ServerCluster {
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         ));
-        let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool.handle());
+        let cop =
+            coprocessor::Endpoint::new(&server_cfg, cop_read_pool.handle(), concurrency_manager);
         let mut server = None;
         for _ in 0..100 {
             let mut svr = Server::new(

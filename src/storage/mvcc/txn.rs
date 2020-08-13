@@ -4,12 +4,13 @@ use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::mvcc::{
     metrics::*, reader::MvccReader, reader::TxnCommitRecord, ErrorInner, Result,
 };
-use crate::storage::types::TxnStatus;
+use crate::storage::{
+    concurrency_manager::{ConcurrencyManager, KeyHandleGuard},
+    types::TxnStatus,
+};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures03::compat::Compat01As03;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
-use pd_client::PdClient;
-use std::{fmt, sync::Arc};
+use std::{cmp, fmt};
 use txn_types::{
     is_short_value, Key, Lock, LockType, Mutation, MutationType, OldValue, TimeStamp, TxnExtra,
     Value, Write, WriteType,
@@ -104,7 +105,7 @@ pub enum SecondaryLockStatus {
     RolledBack,
 }
 
-pub struct MvccTxn<S: Snapshot, P: PdClient + 'static> {
+pub struct MvccTxn<S: Snapshot> {
     reader: MvccReader<S>,
     start_ts: TimeStamp,
     write_size: usize,
@@ -112,16 +113,25 @@ pub struct MvccTxn<S: Snapshot, P: PdClient + 'static> {
     // collapse continuous rollbacks.
     collapse_rollback: bool,
     pub extra_op: ExtraOp,
-    pd_client: Arc<P>,
+    // `concurrency_manager` is used to set memory locks for prewritten keys.
+    // Prewritten locks of async commit transactions should be visible to
+    // readers before they are written to the engine.
+    concurrency_manager: ConcurrencyManager,
+    // After locks are stored in memory in prewrite, the KeyHandleGuard
+    // needs to be stored here.
+    // When the locks are written to the underlying engine, subsequent
+    // reading requests should be able to read the locks from the engine.
+    // So these guards can be released after finishing writing.
+    guards: Vec<KeyHandleGuard>,
 }
 
-impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
+impl<S: Snapshot> MvccTxn<S> {
     pub fn new(
         snapshot: S,
         start_ts: TimeStamp,
         fill_cache: bool,
-        pd_client: Arc<P>,
-    ) -> MvccTxn<S, P> {
+        concurrency_manager: ConcurrencyManager,
+    ) -> MvccTxn<S> {
         // FIXME: use session variable to indicate fill cache or not.
 
         // ScanMode is `None`, since in prewrite and other operations, keys are not given in
@@ -132,7 +142,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Self::from_reader(
             MvccReader::new(snapshot, None, fill_cache, IsolationLevel::Si),
             start_ts,
-            pd_client,
+            concurrency_manager,
         )
     }
 
@@ -144,16 +154,20 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         scan_mode: Option<ScanMode>,
         start_ts: TimeStamp,
         fill_cache: bool,
-        pd_client: Arc<P>,
-    ) -> MvccTxn<S, P> {
+        concurrency_manager: ConcurrencyManager,
+    ) -> MvccTxn<S> {
         Self::from_reader(
             MvccReader::new(snapshot, scan_mode, fill_cache, IsolationLevel::Si),
             start_ts,
-            pd_client,
+            concurrency_manager,
         )
     }
 
-    fn from_reader(reader: MvccReader<S>, start_ts: TimeStamp, pd_client: Arc<P>) -> MvccTxn<S, P> {
+    fn from_reader(
+        reader: MvccReader<S>,
+        start_ts: TimeStamp,
+        concurrency_manager: ConcurrencyManager,
+    ) -> MvccTxn<S> {
         MvccTxn {
             reader,
             start_ts,
@@ -161,7 +175,8 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             writes: WriteData::default(),
             collapse_rollback: true,
             extra_op: ExtraOp::Noop,
-            pd_client,
+            concurrency_manager,
+            guards: vec![],
         }
     }
 
@@ -179,6 +194,10 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
 
     pub fn take_extra(&mut self) -> TxnExtra {
         std::mem::take(&mut self.writes.extra)
+    }
+
+    pub fn take_guards(&mut self) -> Vec<KeyHandleGuard> {
+        std::mem::take(&mut self.guards)
     }
 
     pub fn take_statistics(&mut self) -> Statistics {
@@ -270,19 +289,24 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         if let Some(secondary_keys) = secondary_keys {
             lock.use_async_commit = true;
             lock.secondaries = secondary_keys.to_owned();
-            // We will reuse min_commit_ts for async commit for now.
-            assert!(
-                min_commit_ts.is_zero(),
-                "async commit is not yet compatible with large transactions"
-            );
 
-            // TODO(nrc) this is going to block all the other keys' processing and writing, we should
-            // do it async.
-            // TODO(nrc) this is also unsound! If we don't complete taking the lock until after another
-            // node gets a start ts to read the key, it can violate the snapshot property.
-            let ts = ::futures_executor::block_on(Compat01As03::new(self.pd_client.get_tso()))?;
-            lock.min_commit_ts = ts;
-            async_commit_ts = ts;
+            // This operation should not block because the latch makes sure only one thread
+            // is operating on this key.
+            let key_guard =
+                CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM.observe_closure_duration(|| {
+                    ::futures_executor::block_on(self.concurrency_manager.lock_key(&key))
+                });
+
+            async_commit_ts = key_guard.with_lock(|l| {
+                let max_read_ts = self.concurrency_manager.max_read_ts();
+                let min_commit_ts =
+                    cmp::max(cmp::max(max_read_ts, self.start_ts), for_update_ts).next();
+                lock.min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
+                *l = Some(lock.clone());
+                min_commit_ts
+            });
+
+            self.guards.push(key_guard);
         }
 
         self.put_lock(key, &lock);
@@ -325,6 +349,37 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             self.collapse_prev_rollback(key.clone())?;
         }
         Ok(self.unlock_key(key, is_pessimistic_txn))
+    }
+
+    /// Add the timestamp of the current rollback operation to another transaction's lock if
+    /// necessary.
+    ///
+    /// When putting rollback record on a key that's locked by another transaction, the second
+    /// transaction may overwrite the current rollback record when it's committed. Sometimes it may
+    /// break consistency. To solve the problem, add the timestamp of the current rollback to the
+    /// lock. So when the lock is committed, it can check if it will overwrite a rollback record
+    /// by checking the information in the lock.
+    fn mark_rollback_on_mismatching_lock(&mut self, key: &Key, mut lock: Lock, is_protected: bool) {
+        assert_ne!(lock.ts, self.start_ts);
+
+        if !is_protected {
+            // A non-protected rollback record is ok to be overwritten, so do nothing in this case.
+            return;
+        }
+
+        if self.start_ts < lock.min_commit_ts {
+            // The rollback will surely not be overwritten by committing the lock. Do nothing.
+            return;
+        }
+
+        if !lock.use_async_commit {
+            // Currently only async commit may use calculated commit_ts. Do nothing if it's not a
+            // async commit transaction.
+            return;
+        }
+
+        lock.rollback_ts.push(self.start_ts);
+        self.put_lock(key.clone(), &lock);
     }
 
     /// Checks the existence of the key according to `should_not_exist`.
@@ -752,8 +807,8 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         )
         .into()));
 
-        let (lock_type, short_value, is_pessimistic_txn) = match self.reader.load_lock(&key)? {
-            Some(ref mut lock) if lock.ts == self.start_ts => {
+        let mut lock = match self.reader.load_lock(&key)? {
+            Some(mut lock) if lock.ts == self.start_ts => {
                 // A lock with larger min_commit_ts than current commit_ts can't be committed
                 if commit_ts < lock.min_commit_ts {
                     info!(
@@ -787,11 +842,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     // Commit with WriteType::Lock.
                     lock.lock_type = LockType::Lock;
                 }
-                (
-                    lock.lock_type,
-                    lock.short_value.take(),
-                    !lock.for_update_ts.is_zero(),
-                )
+                lock
             }
             _ => {
                 return match self
@@ -826,13 +877,21 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 };
             }
         };
-        let write = Write::new(
-            WriteType::from_lock_type(lock_type).unwrap(),
+        let mut write = Write::new(
+            WriteType::from_lock_type(lock.lock_type).unwrap(),
             self.start_ts,
-            short_value,
+            lock.short_value.take(),
         );
+
+        for ts in &lock.rollback_ts {
+            if *ts == commit_ts {
+                write = write.set_overlapped_rollback(true);
+                break;
+            }
+        }
+
         self.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
-        Ok(self.unlock_key(key, is_pessimistic_txn))
+        Ok(self.unlock_key(key, lock.is_pessimistic_txn()))
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<Option<ReleasedLock>> {
@@ -851,9 +910,11 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
     fn check_txn_status_missing_lock(
         &mut self,
         primary_key: Key,
+        mismatch_lock: Option<Lock>,
         action: MissingLockAction,
     ) -> Result<TxnStatus> {
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
+
         match self
             .reader
             .get_txn_commit_record(&primary_key, self.start_ts)?
@@ -880,6 +941,14 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 // collapse previous rollback if exist.
                 if self.collapse_rollback {
                     self.collapse_prev_rollback(primary_key.clone())?;
+                }
+
+                if let (Some(l), None) = (mismatch_lock, overlapped_write.as_ref()) {
+                    self.mark_rollback_on_mismatching_lock(
+                        &primary_key,
+                        l,
+                        action == MissingLockAction::ProtectedRollback,
+                    );
                 }
 
                 // Insert a Rollback to Write CF in case that a stale prewrite
@@ -927,8 +996,9 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
                 self.check_write_and_rollback_lock(key, lock, is_pessimistic_txn)
             }
-            _ => match self.check_txn_status_missing_lock(
+            l => match self.check_txn_status_missing_lock(
                 key,
+                l,
                 MissingLockAction::rollback_protect(protect_rollback),
             )? {
                 TxnStatus::Committed { commit_ts } => {
@@ -1096,9 +1166,10 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             }
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-            _ => self
+            l => self
                 .check_txn_status_missing_lock(
                     primary_key,
+                    l,
                     MissingLockAction::rollback(rollback_if_not_exist),
                 )
                 .map(|s| (s, None)),
@@ -1121,6 +1192,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         start_ts: TimeStamp,
     ) -> Result<(SecondaryLockStatus, Option<ReleasedLock>)> {
         let mut released_lock = None;
+        let mut mismatch_lock = None;
         let (status, need_rollback, rollback_overlapped_write) =
             match self.reader.load_lock(&key)? {
                 Some(lock) if lock.ts == start_ts => {
@@ -1135,29 +1207,35 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                         (SecondaryLockStatus::Locked(lock), false, None)
                     }
                 }
-                _ => match self.reader.get_txn_commit_record(&key, start_ts)? {
-                    TxnCommitRecord::SingleRecord { commit_ts, write } => {
-                        let status = if write.write_type != WriteType::Rollback {
-                            SecondaryLockStatus::Committed(commit_ts)
-                        } else {
-                            SecondaryLockStatus::RolledBack
-                        };
-                        // We needn't write a rollback once there is a write record for it:
-                        // If it's a committed record, it cannot be changed.
-                        // If it's a rollback record, it either comes from another check_secondary_lock
-                        // (thus protected) or the client stops commit actively. So we don't need
-                        // to make it protected again.
-                        (status, false, None)
+                l => {
+                    mismatch_lock = l;
+                    match self.reader.get_txn_commit_record(&key, start_ts)? {
+                        TxnCommitRecord::SingleRecord { commit_ts, write } => {
+                            let status = if write.write_type != WriteType::Rollback {
+                                SecondaryLockStatus::Committed(commit_ts)
+                            } else {
+                                SecondaryLockStatus::RolledBack
+                            };
+                            // We needn't write a rollback once there is a write record for it:
+                            // If it's a committed record, it cannot be changed.
+                            // If it's a rollback record, it either comes from another check_secondary_lock
+                            // (thus protected) or the client stops commit actively. So we don't need
+                            // to make it protected again.
+                            (status, false, None)
+                        }
+                        TxnCommitRecord::OverlappedRollback { .. } => {
+                            (SecondaryLockStatus::RolledBack, false, None)
+                        }
+                        TxnCommitRecord::None { overlapped_write } => {
+                            (SecondaryLockStatus::RolledBack, true, overlapped_write)
+                        }
                     }
-                    TxnCommitRecord::OverlappedRollback { .. } => {
-                        (SecondaryLockStatus::RolledBack, false, None)
-                    }
-                    TxnCommitRecord::None { overlapped_write } => {
-                        (SecondaryLockStatus::RolledBack, true, overlapped_write)
-                    }
-                },
+                }
             };
         if need_rollback {
+            if let Some(l) = mismatch_lock {
+                self.mark_rollback_on_mismatching_lock(&key, l, true);
+            }
             // We must protect this rollback in case this rollback is collapsed and a stale
             // acquire_pessimistic_lock and prewrite succeed again.
             if let Some(write) = make_rollback(start_ts, true, rollback_overlapped_write) {
@@ -1286,7 +1364,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
     }
 }
 
-impl<S: Snapshot, P: PdClient + 'static> fmt::Debug for MvccTxn<S, P> {
+impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "txn @{}", self.start_ts)
     }
@@ -1357,21 +1435,6 @@ fn make_txn_error(s: Option<String>, key: &Key, start_ts: TimeStamp) -> ErrorInn
     }
 }
 
-/// Create a new MvccTxn using a u64 literal for the timestamp.
-///
-/// Intended to only be used in test code.
-#[macro_export]
-macro_rules! new_txn {
-    ($ss: expr, $ts: literal, $fill_cache: expr) => {
-        $crate::storage::mvcc::MvccTxn::new(
-            $ss,
-            $ts.into(),
-            $fill_cache,
-            ::std::sync::Arc::new(::pd_client::DummyPdClient::new()),
-        )
-    };
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1380,7 +1443,6 @@ mod tests {
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
     use kvproto::kvrpcpb::Context;
-    use pd_client::DummyPdClient;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
@@ -2046,7 +2108,8 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = new_txn!(snapshot, 10, true);
+        let cm = ConcurrencyManager::new(10.into());
+        let mut txn = MvccTxn::new(snapshot, 10.into(), true, cm.clone());
         let key = Key::from_raw(k);
         assert_eq!(txn.write_size(), 0);
 
@@ -2066,7 +2129,7 @@ mod tests {
             .unwrap();
 
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = new_txn!(snapshot, 10, true);
+        let mut txn = MvccTxn::new(snapshot, 10.into(), true, cm);
         txn.commit(key, 15.into()).unwrap();
         assert!(txn.write_size() > 0);
         engine
@@ -2092,7 +2155,8 @@ mod tests {
 
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = new_txn!(snapshot, 5, true);
+        let cm = ConcurrencyManager::new(10.into());
+        let mut txn = MvccTxn::new(snapshot, 5.into(), true, cm.clone());
         assert!(txn
             .prewrite(
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
@@ -2107,7 +2171,7 @@ mod tests {
 
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = new_txn!(snapshot, 5, true);
+        let mut txn = MvccTxn::new(snapshot, 5.into(), true, cm);
         assert!(txn
             .prewrite(
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
@@ -3054,7 +3118,7 @@ mod tests {
                     v,
                     expected_lock_info.get_primary_lock(),
                     &None,
-                    expected_lock_info.get_lock_version(),
+                    expected_lock_info.get_lock_version().into(),
                     false,
                     expected_lock_info.get_lock_ttl(),
                     TimeStamp::zero(),
@@ -3358,20 +3422,17 @@ mod tests {
             engine.write(&ctx, modifies).unwrap();
         };
 
-        let new_txn = |start_ts| {
+        let new_txn = |start_ts, cm| {
             let snapshot = engine.snapshot(&ctx).unwrap();
-            MvccTxn::new(
-                snapshot,
-                start_ts,
-                true,
-                Arc::new(::pd_client::DummyPdClient::new()),
-            )
+            MvccTxn::new(snapshot, start_ts, true, cm)
         };
 
         for case in cases {
             let (mutation, is_pessimistic, start_ts, commit_ts, old_value, check_old_value) = case;
             let mutation_type = mutation.mutation_type();
-            let mut txn = new_txn(start_ts.into());
+            let cm = ConcurrencyManager::new(start_ts.into());
+            let mut txn = new_txn(start_ts.into(), cm.clone());
+
             txn.extra_op = ExtraOp::ReadOldValue;
             if is_pessimistic {
                 txn.acquire_pessimistic_lock(
@@ -3385,7 +3446,7 @@ mod tests {
                 )
                 .unwrap();
                 write(WriteData::from_modifies(txn.into_modifies()));
-                txn = new_txn(start_ts.into());
+                txn = new_txn(start_ts.into(), cm.clone());
                 txn.extra_op = ExtraOp::ReadOldValue;
                 txn.pessimistic_prewrite(
                     mutation,
@@ -3414,7 +3475,7 @@ mod tests {
                 assert_eq!(extra.get_old_values()[&ts_key], (old_value, mutation_type));
             }
             write(WriteData::from_modifies(txn.into_modifies()));
-            let mut txn = new_txn(start_ts.into());
+            let mut txn = new_txn(start_ts.into(), cm);
             txn.commit(key.clone(), commit_ts.into()).unwrap();
             engine
                 .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
@@ -3428,13 +3489,11 @@ mod tests {
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
-        let mut pd_client = DummyPdClient::new();
-        pd_client.next_ts = TimeStamp::new(42);
-        let pd_client = Arc::new(pd_client);
+        let cm = ConcurrencyManager::new(42.into());
 
         let do_prewrite = || {
             let snapshot = engine.snapshot(&ctx).unwrap();
-            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
             let min_commit_ts = txn
                 .prewrite(
@@ -3456,7 +3515,7 @@ mod tests {
             min_commit_ts
         };
 
-        assert_eq!(do_prewrite(), 42.into());
+        assert_eq!(do_prewrite(), 43.into());
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
@@ -3467,25 +3526,25 @@ mod tests {
             lock.secondaries,
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
-        assert_eq!(lock.min_commit_ts, TimeStamp::new(42));
+
+        // max_read_ts in the concurrency manager is 42, so the min_commit_ts is 43.
+        assert_eq!(lock.min_commit_ts, TimeStamp::new(43));
 
         // A duplicate prewrite request should return the min_commit_ts in the primary key
-        assert_eq!(do_prewrite(), 42.into());
+        assert_eq!(do_prewrite(), 43.into());
     }
 
     #[test]
     fn test_async_pessimistic_prewrite_primary() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
-        let mut pd_client = DummyPdClient::new();
-        pd_client.next_ts = TimeStamp::new(42);
-        let pd_client = Arc::new(pd_client);
+        let cm = ConcurrencyManager::new(42.into());
 
         must_acquire_pessimistic_lock(&engine, b"key", b"key", 2, 2);
 
         let do_pessimistic_prewrite = || {
             let snapshot = engine.snapshot(&ctx).unwrap();
-            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
             let min_commit_ts = txn
                 .pessimistic_prewrite(
@@ -3509,7 +3568,7 @@ mod tests {
             min_commit_ts
         };
 
-        assert_eq!(do_pessimistic_prewrite(), 42.into());
+        assert_eq!(do_pessimistic_prewrite(), 43.into());
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
@@ -3520,10 +3579,12 @@ mod tests {
             lock.secondaries,
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
-        assert_eq!(lock.min_commit_ts, TimeStamp::new(42));
+
+        // max_read_ts in the concurrency manager is 42, so the min_commit_ts is 43.
+        assert_eq!(lock.min_commit_ts, TimeStamp::new(43));
 
         // A duplicate prewrite request should return the min_commit_ts in the primary key
-        assert_eq!(do_pessimistic_prewrite(), 42.into());
+        assert_eq!(do_pessimistic_prewrite(), 43.into());
     }
 
     #[test]
@@ -3532,12 +3593,10 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
 
-        let mut pd_client = DummyPdClient::new();
-        pd_client.next_ts = TimeStamp::new(42);
-        let pd_client = Arc::new(pd_client);
-
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+        let cm = ConcurrencyManager::new(42.into());
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
+
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
         txn.prewrite(
             mutation,
@@ -3555,7 +3614,7 @@ mod tests {
 
         let do_check_txn_status = |rollback_if_not_exist| {
             let snapshot = engine.snapshot(&ctx).unwrap();
-            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
             let (txn_status, released_lock) = txn
                 .check_txn_status(
                     Key::from_raw(b"key"),
@@ -3568,7 +3627,7 @@ mod tests {
                 txn_status,
                 TxnStatus::uncommitted(
                     0,
-                    42.into(), // min_commit_ts got from PD
+                    43.into(), // min_commit_ts calculated from max_read_ts
                     true,
                     vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
                 )
@@ -3583,13 +3642,13 @@ mod tests {
     fn test_check_async_commit_secondary_locks() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
-        let pd_client = Arc::new(DummyPdClient::new());
+        let cm = ConcurrencyManager::new(1.into());
 
         let check_secondary = |key, ts| {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let key = Key::from_raw(key);
             let ts = TimeStamp::new(ts);
-            let mut txn = MvccTxn::new(snapshot, ts, true, pd_client.clone());
+            let mut txn = MvccTxn::new(snapshot, ts, true, cm.clone());
             let res = txn.check_secondary_lock(&key, ts).unwrap();
             let modifies = txn.into_modifies();
             if !modifies.is_empty() {
@@ -3747,5 +3806,57 @@ mod tests {
         must_unlocked(&engine, k);
         must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60);
         must_unlocked(&engine, k);
+    }
+
+    #[test]
+    fn test_rollback_while_other_transaction_running() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k, v) = (b"k1", b"v1");
+
+        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 10, 0);
+        must_cleanup(&engine, k, 15, 0);
+        must_commit(&engine, k, 10, 15);
+        let w = must_written(&engine, k, 10, 15, WriteType::Put);
+        assert!(w.has_overlapped_rollback);
+
+        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 20, 0);
+        must_check_txn_status(&engine, k, 25, 0, 0, true, TxnStatus::LockNotExist);
+        must_commit(&engine, k, 20, 25);
+        let w = must_written(&engine, k, 20, 25, WriteType::Put);
+        assert!(w.has_overlapped_rollback);
+
+        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 30, 0);
+        must_check_secondary_lock(&engine, k, 35, SecondaryLockStatus::RolledBack);
+        must_commit(&engine, k, 30, 35);
+        let w = must_written(&engine, k, 30, 35, WriteType::Put);
+        assert!(w.has_overlapped_rollback);
+
+        // Do not commit with overlapped_rollback if the rollback ts doesn't equal to commit_ts.
+        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 40, 0);
+        must_cleanup(&engine, k, 44, 0);
+        must_commit(&engine, k, 40, 45);
+        let w = must_written(&engine, k, 40, 45, WriteType::Put);
+        assert!(!w.has_overlapped_rollback);
+
+        // Do not put rollback mark to the lock if the lock is not async commit or if lock.ts is
+        // before start_ts or min_commit_ts.
+        must_prewrite_put(&engine, k, v, k, 50);
+        must_cleanup(&engine, k, 55, 0);
+        let l = must_locked(&engine, k, 50);
+        assert!(l.rollback_ts.is_empty());
+        must_commit(&engine, k, 50, 56);
+
+        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 60, 0);
+        must_cleanup(&engine, k, 59, 0);
+        let l = must_locked(&engine, k, 60);
+        assert!(l.rollback_ts.is_empty());
+        must_commit(&engine, k, 60, 65);
+
+        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 70, 75);
+        must_cleanup(&engine, k, 74, 0);
+        must_cleanup(&engine, k, 75, 0);
+        let l = must_locked(&engine, k, 70);
+        assert_eq!(l.min_commit_ts, 75.into());
+        assert_eq!(l.rollback_ts, vec![75.into()]);
     }
 }

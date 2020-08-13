@@ -37,20 +37,41 @@ lazy_static! {
     static ref GC_CONTEXT: Mutex<Option<GcContext>> = Mutex::new(None);
 }
 
-pub fn init_compaction_filter(
-    db: RocksEngine,
-    safe_point: Arc<AtomicU64>,
-    cfg_tracker: GcWorkerConfigManager,
-    cluster_version: ClusterVersion,
-) {
-    info!("initialize GC context for compaction filter");
-    let mut gc_context = GC_CONTEXT.lock().unwrap();
-    *gc_context = Some(GcContext {
-        db: db.as_inner().clone(),
-        safe_point,
-        cfg_tracker,
-        cluster_version,
-    });
+pub trait CompactionFilterInitializer {
+    fn init_compaction_filter(
+        &self,
+        safe_point: Arc<AtomicU64>,
+        cfg_tracker: GcWorkerConfigManager,
+        cluster_version: ClusterVersion,
+    );
+}
+
+impl<T> CompactionFilterInitializer for T {
+    default fn init_compaction_filter(
+        &self,
+        _safe_point: Arc<AtomicU64>,
+        _cfg_tracker: GcWorkerConfigManager,
+        _cluster_version: ClusterVersion,
+    ) {
+    }
+}
+
+impl CompactionFilterInitializer for RocksEngine {
+    fn init_compaction_filter(
+        &self,
+        safe_point: Arc<AtomicU64>,
+        cfg_tracker: GcWorkerConfigManager,
+        cluster_version: ClusterVersion,
+    ) {
+        info!("initialize GC context for compaction filter");
+        let mut gc_context = GC_CONTEXT.lock().unwrap();
+        *gc_context = Some(GcContext {
+            db: self.as_inner().clone(),
+            safe_point,
+            cfg_tracker,
+            cluster_version,
+        });
+    }
 }
 
 pub struct WriteCompactionFilterFactory;
@@ -319,7 +340,7 @@ pub mod tests {
         let cfg = GcWorkerConfigManager(Arc::new(Default::default()));
         cfg.0.update(|v| v.enable_compaction_filter = true);
         let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
-        init_compaction_filter(engine.clone(), safe_point, cfg, cluster_version);
+        engine.init_compaction_filter(safe_point, cfg, cluster_version);
 
         let db = engine.as_inner();
         let handle = get_cf_handle(db, CF_WRITE).unwrap();

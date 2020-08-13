@@ -14,6 +14,7 @@ use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{compaction_job::CompactionJobInfo, KvEngines, MetricsFlusher};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use fs2::FileExt;
+use futures::Future;
 use futures_cpupool::Builder;
 use kvproto::{
     backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -54,9 +55,9 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
-        Node, RaftKv, Server, DEFAULT_CLUSTER_ID,
+        Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
     },
-    storage::{self, config::StorageConfigManger},
+    storage::{self, concurrency_manager::ConcurrencyManager, config::StorageConfigManger},
 };
 use tikv_util::config::VersionTrack;
 use tikv_util::{
@@ -80,6 +81,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
     // Print resource quota.
     SysQuota::new().log_quota();
+    CPU_CORES_QUOTA_GAUGE.set(SysQuota::new().cpu_cores_quota());
 
     // Do some prepare works before start.
     pre_start();
@@ -125,6 +127,7 @@ struct TiKVServer {
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
+    concurrency_manager: ConcurrencyManager,
 }
 
 struct Engines {
@@ -170,6 +173,13 @@ impl TiKVServer {
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();
 
+        // Initialize concurrency manager
+        let latest_ts = pd_client
+            .get_tso()
+            .wait()
+            .expect("failed to get timestamp from PD");
+        let concurrency_manager = ConcurrencyManager::new(latest_ts.into());
+
         TiKVServer {
             config,
             cfg_controller: Some(cfg_controller),
@@ -187,6 +197,7 @@ impl TiKVServer {
             coprocessor_host,
             to_stop: vec![Box::new(resolve_worker)],
             lock_files: vec![],
+            concurrency_manager,
         }
     }
 
@@ -504,7 +515,7 @@ impl TiKVServer {
             &self.config.storage,
             storage_read_pool_handle,
             lock_mgr.clone(),
-            self.pd_client.clone(),
+            self.concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
@@ -551,7 +562,11 @@ impl TiKVServer {
             &server_config,
             &self.security_mgr,
             storage,
-            coprocessor::Endpoint::new(&server_config, cop_read_pool_handle),
+            coprocessor::Endpoint::new(
+                &server_config,
+                cop_read_pool_handle,
+                self.concurrency_manager.clone(),
+            ),
             engines.raft_router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
@@ -632,6 +647,7 @@ impl TiKVServer {
         // Start CDC.
         let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
         let cdc_endpoint = cdc::Endpoint::new(
+            &self.config.cdc,
             self.pd_client.clone(),
             cdc_worker.scheduler(),
             raft_router,
@@ -754,6 +770,7 @@ impl TiKVServer {
             self.region_info_accessor.clone(),
             engines.engines.kv.as_inner().clone(),
             self.config.backup.clone(),
+            self.concurrency_manager.clone(),
         );
         self.cfg_controller.as_mut().unwrap().register(
             tikv::config::Module::Backup,
