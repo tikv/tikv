@@ -1077,21 +1077,22 @@ impl<S: Snapshot> MvccTxn<S> {
 
         match self.reader.load_lock(&primary_key)? {
             Some(mut lock) if lock.ts == self.start_ts => {
+                if lock.use_async_commit && (!caller_start_ts.is_zero() || !current_ts.is_zero()) {
+                    return Err(ErrorInner::Other(box_err!(
+                        "cannot call check_txn_status with caller_start_ts or current_ts set on async commit transaction"
+                    ))
+                    .into());
+                }
+
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
 
                 if lock.ts.physical() + lock.ttl < current_ts.physical() {
+                    assert!(!lock.use_async_commit);
                     // If the lock is expired, clean it up.
                     let released =
                         self.check_write_and_rollback_lock(primary_key, &lock, is_pessimistic_txn)?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
                     return Ok((TxnStatus::TtlExpire, released));
-                }
-
-                if !caller_start_ts.is_zero() && lock.use_async_commit {
-                    return Err(ErrorInner::Other(box_err!(
-                        "cannot push min_commit_ts of an async commit transaction"
-                    ))
-                    .into());
                 }
 
                 // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
