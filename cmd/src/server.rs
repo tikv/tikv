@@ -55,7 +55,7 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
-        Node, RaftKv, Server, DEFAULT_CLUSTER_ID,
+        Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
     },
     storage::{self, concurrency_manager::ConcurrencyManager, config::StorageConfigManger},
 };
@@ -81,6 +81,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
     // Print resource quota.
     SysQuota::new().log_quota();
+    CPU_CORES_QUOTA_GAUGE.set(SysQuota::new().cpu_cores_quota());
 
     // Do some prepare works before start.
     pre_start();
@@ -646,6 +647,7 @@ impl TiKVServer {
         // Start CDC.
         let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
         let cdc_endpoint = cdc::Endpoint::new(
+            &self.config.cdc,
             self.pd_client.clone(),
             cdc_worker.scheduler(),
             raft_router,
