@@ -42,12 +42,12 @@ use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::service::DebugService;
+use tikv::server::tracing::NullReporter;
 use tikv::server::Result as ServerResult;
 use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv, Server,
     ServerTransport,
 };
-use tikv::server::tracing::NullReporter;
 use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
