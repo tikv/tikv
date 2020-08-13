@@ -640,6 +640,34 @@ pub mod tests {
         );
     }
 
+    pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        secondary_keys: &Option<Vec<Vec<u8>>>,
+        ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        is_pessimistic_lock: bool,
+        min_commit_ts: impl Into<TimeStamp>,
+    ) {
+        assert!(secondary_keys.is_some());
+        must_prewrite_put_impl(
+            engine,
+            key,
+            value,
+            pk,
+            secondary_keys,
+            ts.into(),
+            is_pessimistic_lock,
+            0,
+            for_update_ts.into(),
+            0,
+            min_commit_ts.into(),
+            false,
+        );
+    }
+
     fn must_prewrite_put_err_impl<E: Engine>(
         engine: &E,
         key: &[u8],

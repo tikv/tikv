@@ -367,7 +367,7 @@ impl<S: Snapshot> MvccTxn<S> {
             return;
         }
 
-        if self.start_ts < lock.ts || self.start_ts < lock.min_commit_ts {
+        if self.start_ts < lock.min_commit_ts {
             // The rollback will surely not be overwritten by committing the lock. Do nothing.
             return;
         }
@@ -915,14 +915,6 @@ impl<S: Snapshot> MvccTxn<S> {
     ) -> Result<TxnStatus> {
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
 
-        if let Some(l) = mismatch_lock {
-            self.mark_rollback_on_mismatching_lock(
-                &primary_key,
-                l,
-                action == MissingLockAction::ProtectedRollback,
-            );
-        }
-
         match self
             .reader
             .get_txn_commit_record(&primary_key, self.start_ts)?
@@ -949,6 +941,14 @@ impl<S: Snapshot> MvccTxn<S> {
                 // collapse previous rollback if exist.
                 if self.collapse_rollback {
                     self.collapse_prev_rollback(primary_key.clone())?;
+                }
+
+                if let (Some(l), None) = (mismatch_lock, overlapped_write.as_ref()) {
+                    self.mark_rollback_on_mismatching_lock(
+                        &primary_key,
+                        l,
+                        action == MissingLockAction::ProtectedRollback,
+                    );
                 }
 
                 // Insert a Rollback to Write CF in case that a stale prewrite
@@ -3820,7 +3820,7 @@ mod tests {
         assert!(w.has_overlapped_rollback);
 
         must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 20, 0);
-        must_check_txn_status(&engine, k, 25, 30, 30, true, TxnStatus::LockNotExist);
+        must_check_txn_status(&engine, k, 25, 0, 0, true, TxnStatus::LockNotExist);
         must_commit(&engine, k, 20, 25);
         let w = must_written(&engine, k, 20, 25, WriteType::Put);
         assert!(w.has_overlapped_rollback);
