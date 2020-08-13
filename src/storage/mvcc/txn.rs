@@ -3591,6 +3591,11 @@ mod tests {
         };
         do_check_txn_status(true);
         do_check_txn_status(false);
+
+        // Disallow calling check_txn_status on async commit transactions with caller_start_ts or
+        // current_ts set.
+        must_check_txn_status_err(&engine, b"key", 2, 1, 0, true);
+        must_check_txn_status_err(&engine, b"key", 2, 0, 1, true);
     }
 
     #[test]
