@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::VecDeque;
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
@@ -149,8 +148,8 @@ pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionE
 
 #[derive(Debug, Copy, Clone)]
 pub struct AdminCmdEpochState {
-    check_ver: bool,
-    check_conf_ver: bool,
+    pub check_ver: bool,
+    pub check_conf_ver: bool,
     pub change_ver: bool,
     pub change_conf_ver: bool,
 }
@@ -174,7 +173,7 @@ impl AdminCmdEpochState {
 lazy_static! {
     /// WARNING: the existing data in `ADMIN_CMD_EPOCH_MAP` **MUST NOT** be changed!!!
     /// Changing any admin cmd's `AdminCmdEpochState` or the epoch-change behavior during executing
-    /// will break upgrade compatibility and correctness dependency of `RaftCmdEpochChecker`.
+    /// will break upgrade compatibility and correctness dependency of `CmdEpochChecker`.
     /// Please remember it is very difficult to fix the issues arising from not following the rule.
     ///
     /// If you really want to change an admin cmd behavior, please add a new admin cmd and **do not**
@@ -200,8 +199,8 @@ lazy_static! {
 
 /// WARNING: `NORMAL_REQ_CHECK_VER` and `NORMAL_REQ_CHECK_CONF_VER` **MUST NOT** be changed.
 /// The reason is the same as `ADMIN_CMD_EPOCH_MAP`.
-static NORMAL_REQ_CHECK_VER: bool = true;
-static NORMAL_REQ_CHECK_CONF_VER: bool = false;
+pub static NORMAL_REQ_CHECK_VER: bool = true;
+pub static NORMAL_REQ_CHECK_CONF_VER: bool = false;
 
 pub fn check_region_epoch(
     req: &RaftCmdRequest,
@@ -349,87 +348,6 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
 #[inline]
 pub fn is_region_initialized(r: &metapb::Region) -> bool {
     !r.get_peers().is_empty()
-}
-
-#[derive(Default)]
-pub struct RaftCmdEpochChecker {
-    // Although it's a deque, the max size of admin cmd is 2.(split/merge and change peer)
-    // because of the characteristics of the data from `ADMIN_CMD_EPOCH_MAP`.
-    proposed_admin_cmd: VecDeque<(AdminCmdEpochState, AdminCmdType, u64)>,
-    term: u64,
-}
-
-impl RaftCmdEpochChecker {
-    fn has_version_change_cmd(&self) -> bool {
-        for state in &self.proposed_admin_cmd {
-            if state.0.change_ver {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn has_conf_ver_change_cmd(&self) -> bool {
-        for state in &self.proposed_admin_cmd {
-            if state.0.change_conf_ver {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn maybe_update_term(&mut self, term: u64) {
-        assert!(term >= self.term);
-        if term > self.term {
-            self.term = term;
-            self.proposed_admin_cmd.clear();
-        }
-    }
-
-    fn check_epoch(&self, check_ver: bool, check_conf_ver: bool) -> bool {
-        (!check_ver || !self.has_version_change_cmd())
-            && (!check_conf_ver || !self.has_conf_ver_change_cmd())
-    }
-
-    pub fn propose_check_epoch(&mut self, req: &RaftCmdRequest, term: u64) -> bool {
-        self.maybe_update_term(term);
-        let (check_ver, check_conf_ver) = if !req.has_admin_request() {
-            (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
-        } else {
-            let cmd_type = req.get_admin_request().get_cmd_type();
-            // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
-            let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
-            (epoch_state.check_ver, epoch_state.check_ver)
-        };
-        self.check_epoch(check_ver, check_conf_ver)
-    }
-
-    pub fn propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
-        self.maybe_update_term(term);
-        // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
-        let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
-        assert!(self.check_epoch(epoch_state.check_ver, epoch_state.check_conf_ver));
-
-        if epoch_state.change_conf_ver || epoch_state.change_ver {
-            self.proposed_admin_cmd
-                .push_back((epoch_state, cmd_type, index));
-        }
-    }
-
-    pub fn advance_apply(&mut self, index: u64, term: u64) {
-        self.maybe_update_term(term);
-        let mut pop_count = 0;
-        for state in &self.proposed_admin_cmd {
-            if state.2 <= index {
-                pop_count += 1;
-            } else {
-                break;
-            }
-        }
-        for _ in 0..pop_count {
-            self.proposed_admin_cmd.pop_front();
-        }
-    }
 }
 
 /// Lease records an expired time, for examining the current moment is in lease or not.
