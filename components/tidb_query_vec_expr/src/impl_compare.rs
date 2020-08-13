@@ -1149,4 +1149,23 @@ mod tests {
             assert_eq!(output, expected);
         }
     }
+
+    #[test]
+    fn test_do_get_extrenum() {
+        let ints = [Some(1), Some(2), Some(3)];
+        let ints_ref = ints.iter().map(|it| it.as_ref()).collect::<Vec<_>>();
+
+        let ints_max = do_get_extremum(&ints_ref, max);
+        let ints_min = do_get_extremum(&ints_ref, min);
+        assert_eq!(ints_max.unwrap(), Some(3));
+        assert_eq!(ints_min.unwrap(), Some(1));
+
+        /// If any item in the array is None, result should be none
+        let ints_with_none = [Some(1), None, Some(3)];
+        let ints_ref = ints_with_none.iter().map(|it| it.as_ref()).collect::<Vec<_>>();
+        let ints_max = do_get_extremum(&ints_ref, max);
+        let ints_min = do_get_extremum(&ints_ref, min);
+        assert_eq!(ints_max.unwrap(), None);
+        assert_eq!(ints_min.unwrap(), None);
+    }
 }
