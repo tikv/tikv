@@ -13,7 +13,7 @@ use std::future::Future as StdFuture;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures03::channel::oneshot::{self, Canceled};
+use futures::channel::oneshot::{self, Canceled};
 use prometheus::{Histogram, IntCounter, IntGauge};
 use yatp::task::future;
 
@@ -226,7 +226,7 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
 
-    use futures03::executor::block_on;
+    use futures::executor::block_on;
 
     fn spawn_future_and_wait(pool: &FuturePool, duration: Duration) {
         block_on(

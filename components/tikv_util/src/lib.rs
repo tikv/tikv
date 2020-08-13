@@ -7,8 +7,6 @@
 #[macro_use(fail_point)]
 extern crate fail;
 #[macro_use]
-extern crate futures;
-#[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate quick_error;
@@ -33,6 +31,7 @@ use std::time::Duration;
 use std::{env, thread, u64};
 
 use fs2::FileExt;
+use futures::future::Either;
 use rand::rngs::ThreadRng;
 
 pub mod buffer_vec;
@@ -312,16 +311,17 @@ impl<T: FnOnce()> Drop for DeferContext<T> {
     }
 }
 
-/// Represents a value of one of two possible types (a more generic Result.)
-#[derive(Debug, Clone)]
-pub enum Either<L, R> {
-    Left(L),
-    Right(R),
+/// Provide more convenient functions for `futures::future::Either`
+pub trait EitherExt<L, R> {
+    fn as_ref(&self) -> Either<&L, &R>;
+    fn as_mut(&mut self) -> Either<&mut L, &mut R>;
+    fn left(self) -> Option<L>;
+    fn right(self) -> Option<R>;
 }
 
-impl<L, R> Either<L, R> {
+impl<L, R> EitherExt<L, R> for Either<L, R> {
     #[inline]
-    pub fn as_ref(&self) -> Either<&L, &R> {
+    fn as_ref(&self) -> Either<&L, &R> {
         match *self {
             Either::Left(ref l) => Either::Left(l),
             Either::Right(ref r) => Either::Right(r),
@@ -329,7 +329,7 @@ impl<L, R> Either<L, R> {
     }
 
     #[inline]
-    pub fn as_mut(&mut self) -> Either<&mut L, &mut R> {
+    fn as_mut(&mut self) -> Either<&mut L, &mut R> {
         match *self {
             Either::Left(ref mut l) => Either::Left(l),
             Either::Right(ref mut r) => Either::Right(r),
@@ -337,7 +337,7 @@ impl<L, R> Either<L, R> {
     }
 
     #[inline]
-    pub fn left(self) -> Option<L> {
+    fn left(self) -> Option<L> {
         match self {
             Either::Left(l) => Some(l),
             _ => None,
@@ -345,7 +345,7 @@ impl<L, R> Either<L, R> {
     }
 
     #[inline]
-    pub fn right(self) -> Option<R> {
+    fn right(self) -> Option<R> {
         match self {
             Either::Right(r) => Some(r),
             _ => None,

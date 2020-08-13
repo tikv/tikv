@@ -204,7 +204,8 @@ fn start_global_steady_timer() -> SteadyTimer {
 mod tests {
     use super::*;
     use crate::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
-    use futures::Future;
+    use futures::compat::Future01CompatExt;
+    use futures::executor::block_on;
     use std::sync::mpsc::RecvTimeoutError;
     use std::sync::mpsc::{self, Sender};
 
@@ -311,21 +312,11 @@ mod tests {
     }
 
     #[test]
-    fn test_global_timer() {
-        let handle = super::GLOBAL_TIMER_HANDLE.clone();
-        let delay =
-            handle.delay(::std::time::Instant::now() + std::time::Duration::from_millis(100));
-        let timer = Instant::now();
-        delay.wait().unwrap();
-        assert!(timer.elapsed() >= Duration::from_millis(100));
-    }
-
-    #[test]
     fn test_global_steady_timer() {
         let t = SteadyTimer::default();
         let timer = t.clock.now();
         let delay = t.delay(Duration::from_millis(100));
-        delay.wait().unwrap();
+        block_on(delay.compat()).unwrap();
         assert!(timer.elapsed() >= Duration::from_millis(100));
     }
 }
