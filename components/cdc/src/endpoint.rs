@@ -568,6 +568,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
+        let mut resolved_regions = Vec::with_capacity(regions.len());
+        self.min_resolved_ts = TimeStamp::max();
         for region_id in regions {
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                 if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
@@ -575,7 +577,22 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                         self.min_resolved_ts = resolved_ts;
                         self.min_ts_region_id = region_id;
                     }
+                    resolved_regions.push(region_id);
                 }
+            }
+        }
+        self.broadcast_resolved_ts(resolved_regions);
+    }
+
+    fn broadcast_resolved_ts(&self, regions: Vec<u64>) {
+        let mut event = Event::default();
+        event.regions = regions;
+        event.event = Some(Event_oneof_event::ResolvedTs(
+            self.min_resolved_ts.into_inner(),
+        ));
+        for (id, conn) in &self.connections {
+            if conn.get_sink().send((0, event.clone())).is_err() {
+                error!("send event failed"; "conn" => ?id);
             }
         }
     }
