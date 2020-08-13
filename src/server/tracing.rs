@@ -4,21 +4,22 @@ use super::Result;
 use minitrace::jaeger::thrift_compact_encode;
 use minitrace::Collector;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::ops::Deref;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::runtime::{Builder, Runtime};
-
-const BUFFER_SIZE: usize = 4096;
-
 /// Tracing Reporter
 pub trait Reporter: Send + Sync {
-    fn report(&self, collector: Collector);
+    fn report(&self, collector: Option<Collector>);
 }
 
-impl<Rpt: Reporter + ?Sized> Reporter for Arc<Rpt> {
-    fn report(&self, collector: Collector) {
-        self.as_ref().report(collector)
+impl<R, D> Reporter for D
+where
+    R: Reporter + ?Sized,
+    D: Deref<Target = R> + Send + Sync,
+{
+    fn report(&self, collector: Option<Collector>) {
+        self.deref().report(collector)
     }
 }
 
@@ -62,6 +63,7 @@ impl JaegerReporter {
             return Ok(());
         }
 
+        const BUFFER_SIZE: usize = 4096;
         let mut buf = Vec::with_capacity(BUFFER_SIZE);
         thrift_compact_encode(&mut buf, "TiKV", &trace_details, |_e| "*TODO*");
         udp_socket.send_to(&buf, agent).await?;
@@ -70,9 +72,11 @@ impl JaegerReporter {
 }
 
 impl Reporter for JaegerReporter {
-    fn report(&self, collector: Collector) {
-        self.runtime
-            .spawn(Self::report(self.agent, collector, self.duration_threshold));
+    fn report(&self, collector: Option<Collector>) {
+        if let Some(collector) = collector {
+            self.runtime
+                .spawn(Self::report(self.agent, collector, self.duration_threshold));
+        }
     }
 }
 
@@ -87,5 +91,5 @@ impl NullReporter {
 }
 
 impl Reporter for NullReporter {
-    fn report(&self, _collector: Collector) {}
+    fn report(&self, _collector: Option<Collector>) {}
 }

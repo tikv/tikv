@@ -70,7 +70,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
 
 impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<E: Engine, L: LockManager, R: tracing::Reporter + Clone + Send + 'static>(
+    pub fn new<E: Engine, L: LockManager, R: tracing::Reporter + Clone + 'static>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,

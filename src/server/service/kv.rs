@@ -138,14 +138,28 @@ impl<
     }
 }
 
+macro_rules! services_to_trace {
+    ($($name: ident -> $event: expr,)*) => {
+        macro_rules! trace_may_enable {
+            $(($name) => { minitrace::trace_may_enable(true, $event) };)*
+            ($_: ident) => { minitrace::trace_may_enable(false, 0u32) }
+        }
+    }
+}
+
+services_to_trace!(
+  kv_get -> 0u32,
+  raw_get -> 0u32,
+);
+
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
             if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
                 return;
             }
-            let (_root_span, collector) = minitrace::trace_enable(0u32 /*TODO*/ );
 
+            let (_root_span, collector) = trace_may_enable!($fn_name);
             let begin_instant = Instant::now_coarse();
             let reporter = self.tracing_reporter.clone();
             let future = $future_name(&self.storage, req)

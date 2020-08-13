@@ -909,6 +909,6 @@
 # num-threads = 1
 
 ## Threshold to determine whether to report tracing results to jaeger-agent or not.
-## The tracing results will be reported if the duration of an entire traced procedure larger
-## than duration-threshold,
+## The tracing results will be reported if the duration of a traced procedure larger
+## than duration-threshold.
 # duration-threshold = "100ms"
