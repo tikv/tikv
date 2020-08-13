@@ -1287,6 +1287,7 @@ mod tests {
 
     #[test]
     fn test_admin_cmd_epoch_map_include_all_cmd_type() {
+        #[cfg(feature = "protobuf-codec")]
         use protobuf::ProtobufEnum;
         for cmd_type in AdminCmdType::values() {
             assert!(ADMIN_CMD_EPOCH_MAP.contains_key(cmd_type));

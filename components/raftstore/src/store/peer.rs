@@ -2030,9 +2030,9 @@ where
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
             }
-            Ok(RequestPolicy::ProposeConfChange) => self
-                .propose_conf_change(ctx, &req)
-                .map(|x| Either::Right(x)),
+            Ok(RequestPolicy::ProposeConfChange) => {
+                self.propose_conf_change(ctx, &req).map(|x| Either::Left(x))
+            }
             Err(e) => Err(e),
         };
 
