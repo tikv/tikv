@@ -1334,7 +1334,7 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: KvEngine>(
 #[derive(Debug, PartialEq)]
 enum CheckMsgStatus {
     // The peer already exist
-    PeerExist,
+    PeerExist { force_send: bool },
     // The message can be dropped silently
     DropMsg,
     // Try to create the peer
@@ -1368,13 +1368,9 @@ impl<'a, EK: KvEngine, ER: KvEngine, T: Transport, C: PdClient> StoreFsmDelegate
                 // Last check on whether target peer is created, otherwise, the
                 // vote message will never be consumed.
                 if meta.regions.contains_key(&region_id) {
-                    return Ok(CheckMsgStatus::PeerExist);
+                    return Ok(CheckMsgStatus::PeerExist { force_send: true });
                 }
                 meta.pending_votes.push(msg.to_owned());
-                info!(
-                    "region doesn't exist yet, wait for it to be split";
-                    "region_id" => region_id
-                );
                 return Ok(CheckMsgStatus::DropMsg);
             }
             return Err(box_err!(
@@ -1525,9 +1521,9 @@ impl<'a, EK: KvEngine, ER: KvEngine, T: Transport, C: PdClient> StoreFsmDelegate
             return Ok(());
         }
         let check_msg_status = self.check_msg(&msg)?;
-        match check_msg_status {
+        let force_send = match check_msg_status {
             CheckMsgStatus::DropMsg => return Ok(()),
-            CheckMsgStatus::PeerExist => (),
+            CheckMsgStatus::PeerExist { force_send } => force_send,
             CheckMsgStatus::NewPeer | CheckMsgStatus::NewPeerFirst => {
                 if !self.maybe_create_peer(
                     region_id,
@@ -1536,9 +1532,21 @@ impl<'a, EK: KvEngine, ER: KvEngine, T: Transport, C: PdClient> StoreFsmDelegate
                 )? {
                     return Ok(());
                 }
+                false
             }
+        };
+        if force_send {
+            let ty = msg.get_message().get_msg_type();
+            if let Err(e) = self
+                .ctx
+                .router
+                .force_send(region_id, PeerMsg::RaftMessage(msg))
+            {
+                warn!("send msg failed"; "region_id" => region_id, "msg_type" => ?ty, "error" => ?e);
+            }
+        } else {
+            let _ = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
         }
-        let _ = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
         Ok(())
     }
 
@@ -1564,9 +1572,18 @@ impl<'a, EK: KvEngine, ER: KvEngine, T: Transport, C: PdClient> StoreFsmDelegate
             return Ok(false);
         }
 
+        let is_first_vote_msg = util::is_first_vote_msg(msg.get_message());
         if is_local_first {
+            let store_meta = if is_first_vote_msg {
+                Some(self.ctx.store_meta.lock().unwrap())
+            } else {
+                None
+            };
             let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             if pending_create_peers.contains_key(&region_id) {
+                if let Some(mut store_meta) = store_meta {
+                    store_meta.pending_votes.push(msg.to_owned());
+                }
                 return Ok(false);
             }
             pending_create_peers.insert(region_id, (msg.get_to_peer().get_id(), false));
@@ -1730,6 +1747,7 @@ impl<'a, EK: KvEngine, ER: KvEngine, T: Transport, C: PdClient> StoreFsmDelegate
             .router
             .force_send(region_id, PeerMsg::Start)
             .unwrap();
+
         Ok(true)
     }
 

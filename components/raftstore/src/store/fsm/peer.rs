@@ -2174,10 +2174,13 @@ where
                     .pending_votes
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
-                    let _ = self
+                    if let Err(e) = self
                         .ctx
                         .router
-                        .send(new_region_id, PeerMsg::RaftMessage(msg));
+                        .force_send(new_region_id, PeerMsg::RaftMessage(msg))
+                    {
+                        warn!("handle first vote msg failed"; "region_id" => region_id, "error" => ?e);
+                    }
                 }
             }
         }
