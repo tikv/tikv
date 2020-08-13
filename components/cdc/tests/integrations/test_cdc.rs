@@ -539,6 +539,7 @@ fn test_cdc_tso_failure() {
             match e.event.unwrap() {
                 Event_oneof_event::ResolvedTs(ts) => {
                     assert!(ts >= previous_ts);
+                    assert_eq!(e.regions, vec![1]);
                     previous_ts = ts;
                     counter += 1;
                 }
@@ -595,6 +596,25 @@ fn test_region_split() {
     // Ensure it is the previous region.
     assert_eq!(req.get_region_id(), region.get_id());
     req.set_region_epoch(region.get_region_epoch().clone());
+    let req_tx = req_tx
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        _ => panic!("unknown event"),
+    }
+
+    // Try to subscribe region again.
+    let region1 = suite.cluster.get_region(&[]);
+    req.region_id = region1.get_id();
+    req.set_region_epoch(region1.get_region_epoch().clone());
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     let mut events = receive_event(false);
     assert_eq!(events.len(), 1);
@@ -605,6 +625,31 @@ fn test_region_split() {
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         _ => panic!("unknown event"),
+    }
+
+    // Make sure resolved ts can be advanced normally.
+    let mut counter = 0;
+    let mut previous_ts = 0;
+    loop {
+        // Even if there is no write,
+        // resolved ts should be advanced regularly.
+        for e in receive_event(true) {
+            match e.event.unwrap() {
+                Event_oneof_event::ResolvedTs(ts) => {
+                    assert!(ts >= previous_ts);
+                    assert!(
+                        e.regions == vec![region.id, region1.id]
+                            || e.regions == vec![region1.id, region.id]
+                    );
+                    previous_ts = ts;
+                    counter += 1;
+                }
+                _ => panic!("unknown event"),
+            }
+        }
+        if counter > 5 {
+            break;
+        }
     }
 
     event_feed_wrap.as_ref().replace(None);
