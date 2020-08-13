@@ -29,14 +29,12 @@ impl RaftEngine for RocksEngine {
         Ok(state)
     }
 
-    #[allow(unused_variables)]
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
         let key = keys::raft_log_key(raft_group_id, index);
         let entry = box_try!(self.get_msg_cf(CF_DEFAULT, &key));
         Ok(entry)
     }
 
-    #[allow(unused_variables)]
     fn fetch_entries_to(
         &self,
         region_id: u64,
@@ -109,7 +107,6 @@ impl RaftEngine for RocksEngine {
         Err(Error::Storage(StorageError::Unavailable))
     }
 
-    #[allow(unused_variables)]
     fn consume(&self, batch: &mut Self::LogBatch, sync_log: bool) -> Result<usize> {
         let bytes = batch.data_size();
         let mut opts = WriteOptions::default();
