@@ -35,9 +35,10 @@ use crate::storage::kv::{
 };
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::metrics::{
-    self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC,
-    SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC,
-    SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
+    self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, KV_COMMAND_TAKE_OVER_COUNTER,
+    SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC, SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC,
+    SCHED_LATCH_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC,
+    SCHED_WRITING_BYTES_GAUGE,
 };
 use crate::storage::txn::commands::{WriteContext, WriteResult};
 use crate::storage::txn::{
@@ -133,6 +134,9 @@ impl TaskContext {
         SCHED_LATCH_HISTOGRAM_VEC
             .get(self.tag)
             .observe(self.latch_timer.elapsed_secs());
+        if self.lock.take_over_count != 0 {
+            KV_COMMAND_TAKE_OVER_COUNTER.inc();
+        }
     }
 }
 
@@ -215,12 +219,12 @@ impl<L: LockManager> SchedulerInner<L> {
         tctx
     }
 
-    fn take_task_cb(&self, cid: u64) -> Option<StorageCallback> {
-        self.task_contexts[id_index(cid)]
-            .lock()
-            .get_mut(&cid)
-            .and_then(|tctx| tctx.cb.take())
-    }
+    // fn take_task_cb(&self, cid: u64) -> Option<StorageCallback> {
+    // self.task_contexts[id_index(cid)]
+    // .lock()
+    // .get_mut(&cid)
+    // .and_then(|tctx| tctx.cb.take())
+    // }
 
     fn too_busy(&self) -> bool {
         fail_point!("txn_scheduler_busy", |_| true);
@@ -255,7 +259,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     pub(in crate::storage) fn new(
         engine: E,
         lock_mgr: L,
-
         concurrency_manager: ConcurrencyManager,
         concurrency: usize,
         worker_pool_size: usize,
@@ -294,7 +297,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
+    pub(in crate::storage) fn run_cmd(&self, mut cmd: Command, callback: StorageCallback) {
         // write flow control
         if cmd.need_flow_control() && self.inner.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
@@ -302,6 +305,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 err: StorageError::from(StorageErrorInner::SchedTooBusy),
             });
             return;
+        }
+        if self.inner.pipelined_pessimistic_lock {
+            cmd.enable_pipeline();
         }
         self.schedule_command(cmd, callback);
     }
@@ -518,13 +524,21 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.release_lock(&tctx.lock, cid);
     }
 
-    fn on_pipelined_write(&self, cid: u64, pr: ProcessResult, tag: metrics::CommandKind) {
+    fn on_pipelined_write(
+        &self,
+        cid: u64,
+        term: u64,
+        pr: ProcessResult,
+        tag: metrics::CommandKind,
+    ) {
         debug!("pipelined write"; "cid" => cid);
         SCHED_STAGE_COUNTER_VEC.get(tag).pipelined_write.inc();
         // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
         // The task ctx has been dequeued.
-        if let Some(cb) = self.inner.take_task_cb(cid) {
-            cb.execute(pr);
+        let mut task_contexts = self.inner.task_contexts[id_index(cid)].lock();
+        if let Some(tctx) = task_contexts.get_mut(&cid) {
+            tctx.cb.take().unwrap().execute(pr);
+            self.inner.latches.set_term(&tctx.lock, cid, term);
         }
         // It won't release locks here until write finished.
     }
@@ -595,14 +609,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
-        let pipelined = self.inner.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
+        let pipelined = task.cmd.pipelined();
 
         let context = WriteContext {
             lock_mgr: &self.inner.lock_mgr,
             concurrency_manager: self.inner.concurrency_manager.clone(),
             extra_op: task.extra_op,
             statistics,
-            pipelined_pessimistic_lock: self.inner.pipelined_pessimistic_lock,
+            latches: &self.inner.latches,
         };
 
         match task.cmd.process_write(snapshot, context) {
@@ -671,7 +685,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
                         // The write task is scheduled to engine successfully.
                         // Respond to client early.
-                        scheduler.on_pipelined_write(cid, pipelined_write_pr, tag);
+                        scheduler.on_pipelined_write(cid, ctx.get_term(), pipelined_write_pr, tag);
                     }
                 }
             }
@@ -731,6 +745,7 @@ mod tests {
                 Some(WaitTimeout::Default),
                 false,
                 TimeStamp::default(),
+                false,
                 Context::default(),
             )
             .into(),

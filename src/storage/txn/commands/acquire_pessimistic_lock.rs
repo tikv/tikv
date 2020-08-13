@@ -8,7 +8,7 @@ use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, Mvc
 use crate::storage::txn::commands::{
     Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
-use crate::storage::txn::{Error, ErrorInner, Result};
+use crate::storage::txn::{latch, Error, ErrorInner, Result};
 use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
     Result as StorageResult, Snapshot,
@@ -37,14 +37,28 @@ command! {
             /// later read in the same transaction.
             return_values: bool,
             min_commit_ts: TimeStamp,
+            pipelined: bool,
         }
+}
+
+impl AcquirePessimisticLock {
+    pub fn enable_pipeline(&mut self) {
+        self.pipelined = true;
+    }
 }
 
 impl CommandExt for AcquirePessimisticLock {
     ctx!();
     tag!(acquire_pessimistic_lock);
     ts!(start_ts);
-    command_method!(can_be_pipelined, bool, true);
+
+    fn enable_pipeline(&mut self) {
+        self.pipelined = true;
+    }
+
+    fn pipelined(&self) -> bool {
+        self.pipelined
+    }
 
     fn write_bytes(&self) -> usize {
         self.keys
@@ -53,7 +67,14 @@ impl CommandExt for AcquirePessimisticLock {
             .sum()
     }
 
-    gen_lock!(keys: multiple(|x| &x.0));
+    fn gen_lock(&self, latches: &latch::Latches) -> latch::Lock {
+        let mut lock = latches.gen_lock(self.keys.iter().map(|(k, _)| k));
+        lock.start_ts = self.start_ts;
+        if self.pipelined {
+            lock.strategy = latch::LockStrategy::CanBeTakenOver;
+        }
+        lock
+    }
 }
 
 fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {

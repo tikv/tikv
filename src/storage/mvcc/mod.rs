@@ -434,6 +434,7 @@ pub mod tests {
             0,
             TimeStamp::default(),
             false,
+            false,
         )?;
         Ok(())
     }
@@ -480,6 +481,7 @@ pub mod tests {
                 txn_size,
                 min_commit_ts,
                 pipelined_pessimistic_lock,
+                false,
             )
             .unwrap();
         }
@@ -670,6 +672,7 @@ pub mod tests {
                 0,
                 TimeStamp::default(),
                 pipelined_pessimistic_lock,
+                false,
             )
             .unwrap_err()
         }
@@ -756,6 +759,7 @@ pub mod tests {
                 0,
                 TimeStamp::default(),
                 false,
+                false,
             )
             .unwrap();
         }
@@ -812,6 +816,7 @@ pub mod tests {
                 for_update_ts,
                 0,
                 TimeStamp::default(),
+                false,
                 false,
             )
             .unwrap();

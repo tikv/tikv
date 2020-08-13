@@ -656,9 +656,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             AcquirePessimisticLock, Prewrite, PrewritePessimistic,
         };
 
-        let cmd: Command = cmd.into();
+        let mut cmd: Command = cmd.into();
 
-        match &cmd {
+        match &mut cmd {
             Command::Prewrite(Prewrite { mutations, .. }) => {
                 check_key_size!(
                     mutations.iter().map(|m| m.key().as_encoded()),
@@ -1556,6 +1556,7 @@ pub mod test_util {
             None,
             return_values,
             for_update_ts.next(),
+            false,
             Context::default(),
         )
     }
@@ -4800,6 +4801,7 @@ mod tests {
                     1,
                     TimeStamp::zero(),
                     None,
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -4998,6 +5000,7 @@ mod tests {
                     Some(WaitTimeout::Millis(100)),
                     false,
                     21.into(),
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx, 0),

@@ -547,6 +547,7 @@ impl<S: Snapshot> MvccTxn<S> {
         txn_size: u64,
         mut min_commit_ts: TimeStamp,
         pipelined_pessimistic_lock: bool,
+        write_through: bool,
     ) -> Result<TimeStamp> {
         if mutation.should_not_write() {
             return Err(box_err!(
@@ -564,39 +565,41 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        if let Some(lock) = self.reader.load_lock(&key)? {
-            if lock.ts != self.start_ts {
-                // Abort on lock belonging to other transaction if
-                // prewrites a pessimistic lock.
-                if is_pessimistic_lock {
-                    warn!(
-                        "prewrite failed (pessimistic lock not found)";
-                        "start_ts" => self.start_ts,
-                        "key" => %key,
-                        "lock_ts" => lock.ts
-                    );
-                    return Err(ErrorInner::PessimisticLockNotFound {
-                        start_ts: self.start_ts,
-                        key: key.into_raw()?,
+        if !write_through {
+            if let Some(lock) = self.reader.load_lock(&key)? {
+                if lock.ts != self.start_ts {
+                    // Abort on lock belonging to other transaction if
+                    // prewrites a pessimistic lock.
+                    if is_pessimistic_lock {
+                        warn!(
+                            "prewrite failed (pessimistic lock not found)";
+                            "start_ts" => self.start_ts,
+                            "key" => %key,
+                            "lock_ts" => lock.ts
+                        );
+                        return Err(ErrorInner::PessimisticLockNotFound {
+                            start_ts: self.start_ts,
+                            key: key.into_raw()?,
+                        }
+                        .into());
                     }
-                    .into());
+                    return Err(self
+                        .handle_non_pessimistic_lock_conflict(key, lock)
+                        .unwrap_err());
+                } else {
+                    if lock.lock_type != LockType::Pessimistic {
+                        // Duplicated command. No need to overwrite the lock and data.
+                        MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+                        return Ok(lock.min_commit_ts);
+                    }
+                    // The lock is pessimistic and owned by this txn, go through to overwrite it.
+                    // The ttl and min_commit_ts of the lock may have been pushed forward.
+                    lock_ttl = std::cmp::max(lock_ttl, lock.ttl);
+                    min_commit_ts = std::cmp::max(min_commit_ts, lock.min_commit_ts);
                 }
-                return Err(self
-                    .handle_non_pessimistic_lock_conflict(key, lock)
-                    .unwrap_err());
-            } else {
-                if lock.lock_type != LockType::Pessimistic {
-                    // Duplicated command. No need to overwrite the lock and data.
-                    MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-                    return Ok(lock.min_commit_ts);
-                }
-                // The lock is pessimistic and owned by this txn, go through to overwrite it.
-                // The ttl and min_commit_ts of the lock may have been pushed forward.
-                lock_ttl = std::cmp::max(lock_ttl, lock.ttl);
-                min_commit_ts = std::cmp::max(min_commit_ts, lock.min_commit_ts);
+            } else if is_pessimistic_lock {
+                self.amend_pessimistic_lock(pipelined_pessimistic_lock, &key)?;
             }
-        } else if is_pessimistic_lock {
-            self.amend_pessimistic_lock(pipelined_pessimistic_lock, &key)?;
         }
 
         self.check_extra_op(&key, mutation_type, None)?;
@@ -3404,6 +3407,7 @@ mod tests {
                     0,
                     TimeStamp::zero(),
                     false,
+                    false,
                 )
                 .unwrap();
             } else {
@@ -3502,6 +3506,7 @@ mod tests {
                     4.into(),
                     4,
                     TimeStamp::zero(),
+                    false,
                     false,
                 )
                 .unwrap();

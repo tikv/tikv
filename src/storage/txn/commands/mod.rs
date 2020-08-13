@@ -151,6 +151,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
                 secondary_keys,
+                false,
                 req.take_context(),
             )
         }
@@ -181,6 +182,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             WaitTimeout::from_encoded(req.get_wait_timeout()),
             req.get_return_values(),
             req.get_min_commit_ts().into(),
+            false,
             req.take_context(),
         )
     }
@@ -420,7 +422,9 @@ pub trait CommandExt: Display {
         false
     }
 
-    fn can_be_pipelined(&self) -> bool {
+    fn enable_pipeline(&mut self) {}
+
+    fn pipelined(&self) -> bool {
         false
     }
 
@@ -434,7 +438,7 @@ pub struct WriteContext<'a, L: LockManager> {
     pub concurrency_manager: ConcurrencyManager,
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
-    pub pipelined_pessimistic_lock: bool,
+    pub latches: &'a Latches,
 }
 
 impl Command {
@@ -556,8 +560,12 @@ impl Command {
         self.command_ext().gen_lock(latches)
     }
 
-    pub fn can_be_pipelined(&self) -> bool {
-        self.command_ext().can_be_pipelined()
+    pub fn enable_pipeline(&mut self) {
+        self.command_ext_mut().enable_pipeline();
+    }
+
+    pub fn pipelined(&self) -> bool {
+        self.command_ext().pipelined()
     }
 
     pub fn ctx(&self) -> &Context {

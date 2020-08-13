@@ -351,4 +351,9 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
+    pub static ref KV_COMMAND_TAKE_OVER_COUNTER: IntCounter = register_int_counter!(
+        "tikv_latch_take_over_count",
+        "Counter of commands taking over other commands"
+    )
+    .unwrap();
 }

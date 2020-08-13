@@ -4,11 +4,45 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::usize;
+use txn_types::TimeStamp;
 
 use parking_lot::{Mutex, MutexGuard};
 
 const WAITING_LIST_SHRINK_SIZE: usize = 8;
 const WAITING_LIST_MAX_CAPACITY: usize = 16;
+
+#[derive(Default, Clone)]
+struct WaitContext {
+    cid: u64,
+    key_hash: u64,
+    start_ts: TimeStamp,
+    can_be_taken_over: bool,
+    term: u64,
+}
+
+impl WaitContext {
+    fn new(cid: u64, lock: &Lock) -> Self {
+        Self {
+            cid,
+            key_hash: lock.required_hashes[lock.owned_count],
+            start_ts: lock.start_ts,
+            can_be_taken_over: lock.strategy == LockStrategy::CanBeTakenOver,
+            term: 0,
+        }
+    }
+
+    fn take_over(&self, other: &mut Self) -> bool {
+        assert_ne!(self.cid, other.cid);
+        assert_eq!(self.key_hash, other.key_hash);
+        if self.start_ts == other.start_ts && other.can_be_taken_over && other.term != 0 {
+            other.cid = self.cid;
+            other.can_be_taken_over = self.can_be_taken_over;
+            true
+        } else {
+            false
+        }
+    }
+}
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
 ///
@@ -20,7 +54,8 @@ const WAITING_LIST_MAX_CAPACITY: usize = 16;
 #[derive(Clone)]
 struct Latch {
     // store hash value of the key and command ID which requires this key.
-    pub waiting: VecDeque<Option<(u64, u64)>>,
+    // TODO
+    pub waiting: VecDeque<Option<WaitContext>>,
 }
 
 impl Latch {
@@ -32,11 +67,11 @@ impl Latch {
     }
 
     /// Find the first command ID in the queue whose hash value is equal to hash.
-    pub fn get_first_req_by_hash(&self, hash: u64) -> Option<u64> {
-        for item in self.waiting.iter() {
-            if let Some((h, cid)) = item {
-                if *h == hash {
-                    return Some(*cid);
+    pub fn get_first_req_by_hash(&mut self, hash: u64) -> Option<&mut WaitContext> {
+        for item in self.waiting.iter_mut() {
+            if let Some(ctx) = item {
+                if ctx.key_hash == hash {
+                    return item.as_mut();
                 }
             }
         }
@@ -47,18 +82,18 @@ impl Latch {
     /// If the element which would be removed does not appear at the front of the queue, it will leave
     /// a hole in the queue. So we must remove consecutive hole when remove the head of the
     /// queue to make the queue not too long.
-    pub fn pop_front(&mut self, key_hash: u64) -> Option<(u64, u64)> {
+    pub fn pop_front(&mut self, key_hash: u64, who: u64) -> Option<WaitContext> {
         if let Some(item) = self.waiting.pop_front() {
-            if let Some((k, _)) = item.as_ref() {
-                if *k == key_hash {
+            if let Some(ctx) = item.as_ref() {
+                if ctx.key_hash == key_hash && ctx.cid == who {
                     self.maybe_shrink();
                     return item;
                 }
                 self.waiting.push_front(item);
             }
             for it in self.waiting.iter_mut() {
-                if let Some((v, _)) = it {
-                    if *v == key_hash {
+                if let Some(ctx) = it {
+                    if ctx.key_hash == key_hash && ctx.cid == who {
                         return it.take();
                     }
                 }
@@ -67,8 +102,8 @@ impl Latch {
         None
     }
 
-    pub fn wait_for_wake(&mut self, key_hash: u64, cid: u64) {
-        self.waiting.push_back(Some((key_hash, cid)));
+    pub fn wait_for_wake(&mut self, ctx: WaitContext) {
+        self.waiting.push_back(Some(ctx));
     }
 
     /// For some hot keys, the waiting list maybe very long, so we should shrink the waiting
@@ -89,6 +124,13 @@ impl Latch {
     }
 }
 
+#[derive(Clone, PartialEq, Debug)]
+pub enum LockStrategy {
+    Normal,
+    TakeOver,
+    CanBeTakenOver,
+}
+
 /// Lock required for a command.
 #[derive(Clone)]
 pub struct Lock {
@@ -97,6 +139,12 @@ pub struct Lock {
 
     /// The number of latches that the command has acquired.
     pub owned_count: usize,
+
+    pub start_ts: TimeStamp,
+
+    pub strategy: LockStrategy,
+
+    pub take_over_count: usize,
 }
 
 impl Lock {
@@ -105,6 +153,9 @@ impl Lock {
         Lock {
             required_hashes,
             owned_count: 0,
+            start_ts: TimeStamp::zero(),
+            strategy: LockStrategy::Normal,
+            take_over_count: 0,
         }
     }
 
@@ -157,25 +208,28 @@ impl Latches {
     /// considered acquired if the command ID is the first one of elements in the queue which have
     /// the same hash value. Returns true if all the Latches are acquired, false otherwise.
     pub fn acquire(&self, lock: &mut Lock, who: u64) -> bool {
-        let mut acquired_count: usize = 0;
         for &key_hash in &lock.required_hashes[lock.owned_count..] {
+            let wait_ctx = WaitContext::new(who, lock);
             let mut latch = self.lock_latch(key_hash);
             match latch.get_first_req_by_hash(key_hash) {
-                Some(cid) => {
-                    if cid == who {
-                        acquired_count += 1;
+                Some(ctx) => {
+                    if ctx.cid == who {
+                        lock.owned_count += 1;
+                    } else if lock.strategy == LockStrategy::TakeOver && wait_ctx.take_over(ctx) {
+                        lock.owned_count += 1;
+                        lock.take_over_count += 1;
+                        continue;
                     } else {
-                        latch.wait_for_wake(key_hash, who);
+                        latch.wait_for_wake(wait_ctx);
                         break;
                     }
                 }
                 None => {
-                    latch.wait_for_wake(key_hash, who);
-                    acquired_count += 1;
+                    latch.wait_for_wake(wait_ctx);
+                    lock.owned_count += 1;
                 }
             }
         }
-        lock.owned_count += acquired_count;
         lock.acquired()
     }
 
@@ -186,14 +240,30 @@ impl Latches {
         let mut wakeup_list: Vec<u64> = vec![];
         for &key_hash in &lock.required_hashes[..lock.owned_count] {
             let mut latch = self.lock_latch(key_hash);
-            let (v, front) = latch.pop_front(key_hash).unwrap();
-            assert_eq!(front, who);
-            assert_eq!(v, key_hash);
-            if let Some(wakeup) = latch.get_first_req_by_hash(key_hash) {
-                wakeup_list.push(wakeup);
+            if latch.pop_front(key_hash, who).is_some() {
+                if let Some(wakeup) = latch.get_first_req_by_hash(key_hash) {
+                    wakeup_list.push(wakeup.cid);
+                }
+            } else {
+                assert_eq!(lock.strategy, LockStrategy::CanBeTakenOver);
             }
         }
         wakeup_list
+    }
+
+    pub fn set_term(&self, lock: &Lock, who: u64, term: u64) {
+        for &key_hash in &lock.required_hashes {
+            let mut latch = self.lock_latch(key_hash);
+            match latch.get_first_req_by_hash(key_hash) {
+                Some(ctx) => {
+                    assert_eq!(ctx.cid, who);
+                    assert!(ctx.can_be_taken_over);
+                    assert_eq!(ctx.term, 0);
+                    ctx.term = term;
+                }
+                None => panic!("must hold latch"),
+            }
+        }
     }
 
     /// Calculates the hash value of the `key`.
@@ -210,6 +280,13 @@ impl Latches {
     #[inline]
     fn lock_latch(&self, hash: u64) -> MutexGuard<Latch> {
         self.slots[(hash as usize) & (self.size - 1)].lock()
+    }
+
+    pub fn on_same_leader<H: Hash>(&self, key: &H, term: u64) -> bool {
+        let key_hash = self.calc_slot(key);
+        let mut latch = self.lock_latch(key_hash);
+        let prev_term = latch.get_first_req_by_hash(key_hash).unwrap().term;
+        prev_term != 0 && (term == prev_term || term == prev_term + 1)
     }
 }
 
@@ -335,5 +412,33 @@ mod tests {
         // finally d acquire lock success
         acquired_d = latches.acquire(&mut lock_d, cid_d);
         assert_eq!(acquired_d, true);
+    }
+
+    #[test]
+    fn test_on_same_leader() {
+        let latches = Latches::new(5);
+        let keys = &[b"a", b"b", b"c"];
+        let mut lock = latches.gen_lock(keys);
+        lock.start_ts = TimeStamp::new(10);
+        lock.strategy = LockStrategy::CanBeTakenOver;
+        assert!(latches.acquire(&mut lock, 1));
+        latches.set_term(&lock, 1, 10);
+        for k in keys {
+            assert!(latches.on_same_leader(k, 10));
+        }
+
+        let mut lock2 = latches.gen_lock(keys);
+        lock2.start_ts = TimeStamp::new(20);
+        lock2.strategy = LockStrategy::TakeOver;
+        assert!(!latches.acquire(&mut lock2, 2));
+
+        let mut lock3 = latches.gen_lock(keys);
+        lock3.start_ts = TimeStamp::new(10);
+        lock3.strategy = LockStrategy::TakeOver;
+        assert!(latches.acquire(&mut lock3, 3));
+        for k in keys {
+            assert!(latches.on_same_leader(k, 11));
+            assert!(!latches.on_same_leader(k, 12));
+        }
     }
 }

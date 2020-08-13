@@ -242,6 +242,7 @@ fn test_pipelined_pessimistic_lock() {
                 1,
                 11.into(),
                 None,
+                false,
                 Context::default(),
             ),
             expect_ok_callback(tx.clone(), 0),

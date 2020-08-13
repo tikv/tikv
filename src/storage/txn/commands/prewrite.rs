@@ -251,7 +251,7 @@ mod tests {
         Commit, Prewrite, Rollback, WriteContext, FORWARD_MIN_MUTATIONS_NUM,
     };
     use crate::storage::txn::LockInfo;
-    use crate::storage::txn::{Error, ErrorInner, Result};
+    use crate::storage::txn::{latch, Error, ErrorInner, Result};
     use crate::storage::DummyLockManager;
     use crate::storage::{
         concurrency_manager::ConcurrencyManager, Engine, PrewriteResult, ProcessResult, Snapshot,
@@ -429,7 +429,7 @@ mod tests {
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
-            pipelined_pessimistic_lock: false,
+            latches: &latch::Latches::new(1),
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         if let ProcessResult::PrewriteResult {
@@ -470,7 +470,7 @@ mod tests {
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
-            pipelined_pessimistic_lock: false,
+            latches: &latch::Latches::new(1),
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -494,7 +494,7 @@ mod tests {
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
-            pipelined_pessimistic_lock: false,
+            latches: &latch::Latches::new(1),
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;

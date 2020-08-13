@@ -9,7 +9,7 @@ use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::commands::{
     Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
-use crate::storage::txn::{Error, Result};
+use crate::storage::txn::{latch, Error, Result};
 use crate::storage::types::PrewriteResult;
 use crate::storage::{Error as StorageError, ProcessResult, Snapshot};
 
@@ -36,6 +36,7 @@ command! {
             /// All secondary keys in the whole transaction (i.e., as sent to all nodes, not only
             /// this node). Only present if using async commit.
             secondary_keys: Option<Vec<Vec<u8>>>,
+            pipelined: bool,
         }
 }
 
@@ -43,6 +44,14 @@ impl CommandExt for PrewritePessimistic {
     ctx!();
     tag!(prewrite);
     ts!(start_ts);
+
+    fn enable_pipeline(&mut self) {
+        self.pipelined = true;
+    }
+
+    fn pipelined(&self) -> bool {
+        false
+    }
 
     fn write_bytes(&self) -> usize {
         let mut bytes = 0;
@@ -61,7 +70,14 @@ impl CommandExt for PrewritePessimistic {
         bytes
     }
 
-    gen_lock!(mutations: multiple(|(x, _)| x.key()));
+    fn gen_lock(&self, latches: &latch::Latches) -> latch::Lock {
+        let mut lock = latches.gen_lock(self.mutations.iter().map(|(m, _)| m.key()));
+        lock.start_ts = self.start_ts;
+        if self.pipelined {
+            lock.strategy = latch::LockStrategy::TakeOver;
+        }
+        lock
+    }
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
@@ -85,12 +101,15 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
 
         let mut locks = vec![];
         let mut async_commit_ts = TimeStamp::zero();
-        for (m, is_pessimistic_lock) in self.mutations.clone().into_iter() {
+        for (m, is_pessimistic_lock) in self.mutations {
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
-
             if Some(m.key()) == async_commit_pk.as_ref() {
                 secondaries = &self.secondary_keys;
             }
+
+            let write_through = self.pipelined
+                && is_pessimistic_lock
+                && context.latches.on_same_leader(m.key(), self.ctx.get_term());
             match txn.pessimistic_prewrite(
                 m,
                 &self.primary,
@@ -100,7 +119,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
                 self.for_update_ts,
                 self.txn_size,
                 self.min_commit_ts,
-                context.pipelined_pessimistic_lock,
+                self.pipelined,
+                write_through,
             ) {
                 Ok(ts) => {
                     if secondaries.is_some() {

@@ -46,7 +46,7 @@ impl Default for Config {
         Self {
             wait_for_lock_timeout: ReadableDuration::millis(1000),
             wake_up_delay_duration: ReadableDuration::millis(20),
-            pipelined: false,
+            pipelined: true,
         }
     }
 }
