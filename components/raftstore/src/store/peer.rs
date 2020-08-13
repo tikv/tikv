@@ -303,7 +303,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         }
     }
 
-    pub fn add_to_conflict_index(&mut self, index: u64, cb: Callback<S>) {
+    pub fn add_to_conflict_cmd(&mut self, index: u64, cb: Callback<S>) {
         for state in self.proposed_admin_cmd.iter_mut().rev() {
             if state.index == index {
                 state.cbs.push(cb);
@@ -2043,7 +2043,7 @@ where
                 false
             }
             Ok(Either::Right(idx)) => {
-                self.cmd_epoch_checker.add_to_conflict_index(idx, cb);
+                self.cmd_epoch_checker.add_to_conflict_cmd(idx, cb);
                 false
             }
             Ok(Either::Left(idx)) => {
