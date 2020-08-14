@@ -1333,8 +1333,8 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: KvEngine>(
 
 #[derive(Debug, PartialEq)]
 enum CheckMsgStatus {
-    // The peer already exist
-    PeerExist { force_send: bool },
+    // The message is the first request vote message to an existing peer.
+    FirstRequestVote,
     // The message can be dropped silently
     DropMsg,
     // Try to create the peer
@@ -1362,22 +1362,15 @@ impl<'a, EK: KvEngine, ER: KvEngine, T: Transport, C: PdClient> StoreFsmDelegate
 
         if local_state.get_state() != PeerState::Tombstone {
             // Maybe split, but not registered yet.
-            self.ctx.raft_metrics.message_dropped.region_nonexistent += 1;
-            if util::is_first_vote_msg(msg.get_message()) {
-                let mut meta = self.ctx.store_meta.lock().unwrap();
-                // Last check on whether target peer is created, otherwise, the
-                // vote message will never be consumed.
-                if meta.regions.contains_key(&region_id) {
-                    return Ok(CheckMsgStatus::PeerExist { force_send: true });
-                }
-                meta.pending_votes.push(msg.to_owned());
-                return Ok(CheckMsgStatus::DropMsg);
+            if !util::is_first_vote_msg(msg.get_message()) {
+                self.ctx.raft_metrics.message_dropped.region_nonexistent += 1;
+                return Err(box_err!(
+                    "[region {}] region not exist but not tombstone: {:?}",
+                    region_id,
+                    local_state
+                ));
             }
-            return Err(box_err!(
-                "[region {}] region not exist but not tombstone: {:?}",
-                region_id,
-                local_state
-            ));
+            return Ok(CheckMsgStatus::FirstRequestVote);
         }
         debug!(
             "region is in tombstone state";
@@ -1521,32 +1514,44 @@ impl<'a, EK: KvEngine, ER: KvEngine, T: Transport, C: PdClient> StoreFsmDelegate
             return Ok(());
         }
         let check_msg_status = self.check_msg(&msg)?;
-        let force_send = match check_msg_status {
+        let is_first_vote = match check_msg_status {
             CheckMsgStatus::DropMsg => return Ok(()),
-            CheckMsgStatus::PeerExist { force_send } => force_send,
+            CheckMsgStatus::FirstRequestVote => true,
             CheckMsgStatus::NewPeer | CheckMsgStatus::NewPeerFirst => {
+                let is_first_vote = util::is_first_vote_msg(msg.get_message());
                 if !self.maybe_create_peer(
                     region_id,
                     &msg,
                     check_msg_status == CheckMsgStatus::NewPeerFirst,
                 )? {
-                    return Ok(());
+                    if !is_first_vote {
+                        // Can not create peer from the message and it's not the
+                        // first request vote message.
+                        return Ok(());
+                    }
                 }
-                false
+                is_first_vote
             }
         };
-        if force_send {
-            let ty = msg.get_message().get_msg_type();
+        if is_first_vote {
+            // To void losing request vote messages, either put it to
+            // pending_votes or force send.
+            let mut store_meta = self.ctx.store_meta.lock().unwrap();
+            if !store_meta.regions.contains_key(&region_id) {
+                store_meta.pending_votes.push(msg);
+                return Ok(());
+            }
             if let Err(e) = self
                 .ctx
                 .router
                 .force_send(region_id, PeerMsg::RaftMessage(msg))
             {
-                warn!("send msg failed"; "region_id" => region_id, "msg_type" => ?ty, "error" => ?e);
+                warn!("handle first request vote failed"; "region_id" => region_id, "error" => ?e);
             }
-        } else {
-            let _ = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
+            return Ok(());
         }
+
+        let _ = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
         Ok(())
     }
 
@@ -1572,18 +1577,9 @@ impl<'a, EK: KvEngine, ER: KvEngine, T: Transport, C: PdClient> StoreFsmDelegate
             return Ok(false);
         }
 
-        let is_first_vote_msg = util::is_first_vote_msg(msg.get_message());
         if is_local_first {
-            let store_meta = if is_first_vote_msg {
-                Some(self.ctx.store_meta.lock().unwrap())
-            } else {
-                None
-            };
             let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             if pending_create_peers.contains_key(&region_id) {
-                if let Some(mut store_meta) = store_meta {
-                    store_meta.pending_votes.push(msg.to_owned());
-                }
                 return Ok(false);
             }
             pending_create_peers.insert(region_id, (msg.get_to_peer().get_id(), false));
@@ -1641,7 +1637,6 @@ impl<'a, EK: KvEngine, ER: KvEngine, T: Transport, C: PdClient> StoreFsmDelegate
         }
 
         let mut is_overlapped = false;
-        let mut keep_vote_msg = false;
         let mut regions_to_destroy = vec![];
         for (_, id) in meta.region_ranges.range((
             Excluded(data_key(msg.get_start_key())),
@@ -1690,16 +1685,11 @@ impl<'a, EK: KvEngine, ER: KvEngine, T: Transport, C: PdClient> StoreFsmDelegate
                     exist_region.get_id(),
                     PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
                 );
-                // Maybe this peer is splitted from exist_region.
-                keep_vote_msg = true;
             }
         }
 
         if is_overlapped {
             self.ctx.raft_metrics.message_dropped.region_overlap += 1;
-            if keep_vote_msg && util::is_first_vote_msg(msg.get_message()) {
-                meta.pending_votes.push(msg.to_owned());
-            }
             return Ok(false);
         }
 
