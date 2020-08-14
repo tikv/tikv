@@ -309,6 +309,7 @@ pub mod tests {
     use crate::storage::txn::commands::{WriteCommand, WriteContext};
     use crate::storage::{
         concurrency_manager::ConcurrencyManager, types::TxnStatus, ProcessResult,
+        SecondaryLocksStatus,
     };
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -448,7 +449,7 @@ pub mod tests {
         value: &[u8],
         pk: &[u8],
         secondary_keys: &Option<Vec<Vec<u8>>>,
-        ts: impl Into<TimeStamp>,
+        ts: TimeStamp,
         is_pessimistic_lock: bool,
         lock_ttl: u64,
         for_update_ts: TimeStamp,
@@ -458,8 +459,8 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let cm = ConcurrencyManager::new(min_commit_ts);
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true, cm);
+        let cm = ConcurrencyManager::new(ts);
+        let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
         if for_update_ts.is_zero() {
@@ -503,7 +504,7 @@ pub mod tests {
             value,
             pk,
             &None,
-            ts,
+            ts.into(),
             false,
             0,
             TimeStamp::default(),
@@ -528,7 +529,7 @@ pub mod tests {
             value,
             pk,
             &None,
-            ts,
+            ts.into(),
             is_pessimistic_lock,
             0,
             for_update_ts.into(),
@@ -553,7 +554,7 @@ pub mod tests {
             value,
             pk,
             &None,
-            ts,
+            ts.into(),
             is_pessimistic_lock,
             0,
             for_update_ts.into(),
@@ -579,7 +580,7 @@ pub mod tests {
             value,
             pk,
             &None,
-            ts,
+            ts.into(),
             is_pessimistic_lock,
             lock_ttl,
             for_update_ts.into(),
@@ -625,6 +626,7 @@ pub mod tests {
         pk: &[u8],
         secondary_keys: &Option<Vec<Vec<u8>>>,
         ts: impl Into<TimeStamp>,
+        min_commit_ts: impl Into<TimeStamp>,
     ) {
         assert!(secondary_keys.is_some());
         must_prewrite_put_impl(
@@ -633,12 +635,40 @@ pub mod tests {
             value,
             pk,
             secondary_keys,
-            ts,
+            ts.into(),
             false,
             0,
             TimeStamp::default(),
             0,
-            TimeStamp::default(),
+            min_commit_ts.into(),
+            false,
+        );
+    }
+
+    pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        secondary_keys: &Option<Vec<Vec<u8>>>,
+        ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        is_pessimistic_lock: bool,
+        min_commit_ts: impl Into<TimeStamp>,
+    ) {
+        assert!(secondary_keys.is_some());
+        must_prewrite_put_impl(
+            engine,
+            key,
+            value,
+            pk,
+            secondary_keys,
+            ts.into(),
+            is_pessimistic_lock,
+            0,
+            for_update_ts.into(),
+            0,
+            min_commit_ts.into(),
             false,
         );
     }
@@ -1232,7 +1262,7 @@ pub mod tests {
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     pipelined_pessimistic_lock: false,
-                }
+                },
             )
             .is_err());
     }
@@ -1309,9 +1339,44 @@ pub mod tests {
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     pipelined_pessimistic_lock: false,
-                }
+                },
             )
             .is_err());
+    }
+
+    pub fn must_check_secondary_lock<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        lock_ts: impl Into<TimeStamp>,
+        expect_status: SecondaryLocksStatus,
+    ) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let lock_ts = lock_ts.into();
+        let cm = ConcurrencyManager::new(lock_ts);
+        let command = crate::storage::txn::commands::CheckSecondaryLocks {
+            ctx: ctx.clone(),
+            keys: vec![Key::from_raw(key)],
+            start_ts: lock_ts,
+        };
+        let result = command
+            .process_write(
+                snapshot,
+                WriteContext {
+                    lock_mgr: &DummyLockManager,
+                    concurrency_manager: cm,
+                    extra_op: Default::default(),
+                    statistics: &mut Default::default(),
+                    pipelined_pessimistic_lock: false,
+                },
+            )
+            .unwrap();
+        if let ProcessResult::SecondaryLocksStatus { status } = result.pr {
+            assert_eq!(status, expect_status);
+            write(engine, &ctx, result.to_be_write.modifies);
+        } else {
+            unreachable!();
+        }
     }
 
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
@@ -1329,12 +1394,13 @@ pub mod tests {
         write(engine, &ctx, txn.into_modifies());
     }
 
-    pub fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
+    pub fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) -> Lock {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
         assert_ne!(lock.lock_type, LockType::Pessimistic);
+        lock
     }
 
     pub fn must_locked_with_ttl<E: Engine>(

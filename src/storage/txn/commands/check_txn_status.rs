@@ -120,9 +120,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             }
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-            _ => txn
+            l => txn
                 .check_txn_status_missing_lock(
                     self.primary_key,
+                    l,
                     MissingLockAction::rollback(self.rollback_if_not_exist),
                 )
                 .map(|s| (s, None)),

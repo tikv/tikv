@@ -301,7 +301,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 let max_read_ts = self.concurrency_manager.max_read_ts();
                 let min_commit_ts =
                     cmp::max(cmp::max(max_read_ts, self.start_ts), for_update_ts).next();
-                lock.min_commit_ts = min_commit_ts;
+                lock.min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
                 *l = Some(lock.clone());
                 min_commit_ts
             });
@@ -349,6 +349,42 @@ impl<S: Snapshot> MvccTxn<S> {
             self.collapse_prev_rollback(key.clone())?;
         }
         Ok(self.unlock_key(key, is_pessimistic_txn))
+    }
+
+    /// Add the timestamp of the current rollback operation to another transaction's lock if
+    /// necessary.
+    ///
+    /// When putting rollback record on a key that's locked by another transaction, the second
+    /// transaction may overwrite the current rollback record when it's committed. Sometimes it may
+    /// break consistency. To solve the problem, add the timestamp of the current rollback to the
+    /// lock. So when the lock is committed, it can check if it will overwrite a rollback record
+    /// by checking the information in the lock.
+    pub(crate) fn mark_rollback_on_mismatching_lock(
+        &mut self,
+        key: &Key,
+        mut lock: Lock,
+        is_protected: bool,
+    ) {
+        assert_ne!(lock.ts, self.start_ts);
+
+        if !is_protected {
+            // A non-protected rollback record is ok to be overwritten, so do nothing in this case.
+            return;
+        }
+
+        if self.start_ts < lock.min_commit_ts {
+            // The rollback will surely not be overwritten by committing the lock. Do nothing.
+            return;
+        }
+
+        if !lock.use_async_commit {
+            // Currently only async commit may use calculated commit_ts. Do nothing if it's not a
+            // async commit transaction.
+            return;
+        }
+
+        lock.rollback_ts.push(self.start_ts);
+        self.put_lock(key.clone(), &lock);
     }
 
     /// Checks the existence of the key according to `should_not_exist`.
@@ -776,8 +812,8 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        let (lock_type, short_value, is_pessimistic_txn) = match self.reader.load_lock(&key)? {
-            Some(ref mut lock) if lock.ts == self.start_ts => {
+        let mut lock = match self.reader.load_lock(&key)? {
+            Some(mut lock) if lock.ts == self.start_ts => {
                 // A lock with larger min_commit_ts than current commit_ts can't be committed
                 if commit_ts < lock.min_commit_ts {
                     info!(
@@ -811,11 +847,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     // Commit with WriteType::Lock.
                     lock.lock_type = LockType::Lock;
                 }
-                (
-                    lock.lock_type,
-                    lock.short_value.take(),
-                    !lock.for_update_ts.is_zero(),
-                )
+                lock
             }
             _ => {
                 return match self
@@ -850,13 +882,21 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         };
-        let write = Write::new(
-            WriteType::from_lock_type(lock_type).unwrap(),
+        let mut write = Write::new(
+            WriteType::from_lock_type(lock.lock_type).unwrap(),
             self.start_ts,
-            short_value,
+            lock.short_value.take(),
         );
+
+        for ts in &lock.rollback_ts {
+            if *ts == commit_ts {
+                write = write.set_overlapped_rollback(true);
+                break;
+            }
+        }
+
         self.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
-        Ok(self.unlock_key(key, is_pessimistic_txn))
+        Ok(self.unlock_key(key, lock.is_pessimistic_txn()))
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<Option<ReleasedLock>> {
@@ -875,9 +915,11 @@ impl<S: Snapshot> MvccTxn<S> {
     pub(crate) fn check_txn_status_missing_lock(
         &mut self,
         primary_key: Key,
+        mismatch_lock: Option<Lock>,
         action: MissingLockAction,
     ) -> Result<TxnStatus> {
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
+
         match self
             .reader
             .get_txn_commit_record(&primary_key, self.start_ts)?
@@ -904,6 +946,14 @@ impl<S: Snapshot> MvccTxn<S> {
                 // collapse previous rollback if exist.
                 if self.collapse_rollback {
                     self.collapse_prev_rollback(primary_key.clone())?;
+                }
+
+                if let (Some(l), None) = (mismatch_lock, overlapped_write.as_ref()) {
+                    self.mark_rollback_on_mismatching_lock(
+                        &primary_key,
+                        l,
+                        action == MissingLockAction::ProtectedRollback,
+                    );
                 }
 
                 // Insert a Rollback to Write CF in case that a stale prewrite
@@ -951,8 +1001,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
                 self.check_write_and_rollback_lock(key, lock, is_pessimistic_txn)
             }
-            _ => match self.check_txn_status_missing_lock(
+            l => match self.check_txn_status_missing_lock(
                 key,
+                l,
                 MissingLockAction::rollback_protect(protect_rollback),
             )? {
                 TxnStatus::Committed { commit_ts } => {
@@ -2852,7 +2903,7 @@ mod tests {
                     v,
                     expected_lock_info.get_primary_lock(),
                     &None,
-                    expected_lock_info.get_lock_version(),
+                    expected_lock_info.get_lock_version().into(),
                     false,
                     expected_lock_info.get_lock_ttl(),
                     TimeStamp::zero(),
@@ -3563,5 +3614,57 @@ mod tests {
         must_unlocked(&engine, k);
         must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60);
         must_unlocked(&engine, k);
+    }
+
+    #[test]
+    fn test_rollback_while_other_transaction_running() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k, v) = (b"k1", b"v1");
+
+        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 10, 0);
+        must_cleanup(&engine, k, 15, 0);
+        must_commit(&engine, k, 10, 15);
+        let w = must_written(&engine, k, 10, 15, WriteType::Put);
+        assert!(w.has_overlapped_rollback);
+
+        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 20, 0);
+        must_check_txn_status(&engine, k, 25, 0, 0, true, TxnStatus::LockNotExist);
+        must_commit(&engine, k, 20, 25);
+        let w = must_written(&engine, k, 20, 25, WriteType::Put);
+        assert!(w.has_overlapped_rollback);
+
+        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 30, 0);
+        must_check_secondary_lock(&engine, k, 35, SecondaryLocksStatus::RolledBack);
+        must_commit(&engine, k, 30, 35);
+        let w = must_written(&engine, k, 30, 35, WriteType::Put);
+        assert!(w.has_overlapped_rollback);
+
+        // Do not commit with overlapped_rollback if the rollback ts doesn't equal to commit_ts.
+        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 40, 0);
+        must_cleanup(&engine, k, 44, 0);
+        must_commit(&engine, k, 40, 45);
+        let w = must_written(&engine, k, 40, 45, WriteType::Put);
+        assert!(!w.has_overlapped_rollback);
+
+        // Do not put rollback mark to the lock if the lock is not async commit or if lock.ts is
+        // before start_ts or min_commit_ts.
+        must_prewrite_put(&engine, k, v, k, 50);
+        must_cleanup(&engine, k, 55, 0);
+        let l = must_locked(&engine, k, 50);
+        assert!(l.rollback_ts.is_empty());
+        must_commit(&engine, k, 50, 56);
+
+        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 60, 0);
+        must_cleanup(&engine, k, 59, 0);
+        let l = must_locked(&engine, k, 60);
+        assert!(l.rollback_ts.is_empty());
+        must_commit(&engine, k, 60, 65);
+
+        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 70, 75);
+        must_cleanup(&engine, k, 74, 0);
+        must_cleanup(&engine, k, 75, 0);
+        let l = must_locked(&engine, k, 70);
+        assert_eq!(l.min_commit_ts, 75.into());
+        assert_eq!(l.rollback_ts, vec![75.into()]);
     }
 }

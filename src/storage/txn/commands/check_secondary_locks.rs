@@ -53,6 +53,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
 
         for key in self.keys {
             let mut released_lock = None;
+            let mut mismatch_lock = None;
             // Checks whether the given secondary lock exists.
             let (status, need_rollback, rollback_overlapped_write) =
                 match txn.reader.load_lock(&key)? {
@@ -71,32 +72,38 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                     }
                     // Searches the write CF for the commit record of the lock and returns the commit timestamp
                     // (0 if the lock is not committed).
-                    _ => match txn.reader.get_txn_commit_record(&key, self.start_ts)? {
-                        TxnCommitRecord::SingleRecord { commit_ts, write } => {
-                            let status = if write.write_type != WriteType::Rollback {
-                                SecondaryLockStatus::Committed(commit_ts)
-                            } else {
-                                SecondaryLockStatus::RolledBack
-                            };
-                            // We needn't write a rollback once there is a write record for it:
-                            // If it's a committed record, it cannot be changed.
-                            // If it's a rollback record, it either comes from another check_secondary_lock
-                            // (thus protected) or the client stops commit actively. So we don't need
-                            // to make it protected again.
-                            (status, false, None)
+                    l => {
+                        mismatch_lock = l;
+                        match txn.reader.get_txn_commit_record(&key, self.start_ts)? {
+                            TxnCommitRecord::SingleRecord { commit_ts, write } => {
+                                let status = if write.write_type != WriteType::Rollback {
+                                    SecondaryLockStatus::Committed(commit_ts)
+                                } else {
+                                    SecondaryLockStatus::RolledBack
+                                };
+                                // We needn't write a rollback once there is a write record for it:
+                                // If it's a committed record, it cannot be changed.
+                                // If it's a rollback record, it either comes from another check_secondary_lock
+                                // (thus protected) or the client stops commit actively. So we don't need
+                                // to make it protected again.
+                                (status, false, None)
+                            }
+                            TxnCommitRecord::OverlappedRollback { .. } => {
+                                (SecondaryLockStatus::RolledBack, false, None)
+                            }
+                            TxnCommitRecord::None { overlapped_write } => {
+                                (SecondaryLockStatus::RolledBack, true, overlapped_write)
+                            }
                         }
-                        TxnCommitRecord::OverlappedRollback { .. } => {
-                            (SecondaryLockStatus::RolledBack, false, None)
-                        }
-                        TxnCommitRecord::None { overlapped_write } => {
-                            (SecondaryLockStatus::RolledBack, true, overlapped_write)
-                        }
-                    },
+                    }
                 };
             // If the lock does not exist or is a pessimistic lock, to prevent the
             // status being changed, a rollback may be written and this rollback
             // needs to be protected.
             if need_rollback {
+                if let Some(l) = mismatch_lock {
+                    txn.mark_rollback_on_mismatching_lock(&key, l, true);
+                }
                 // We must protect this rollback in case this rollback is collapsed and a stale
                 // acquire_pessimistic_lock and prewrite succeed again.
                 if let Some(write) = make_rollback(self.start_ts, true, rollback_overlapped_write) {
