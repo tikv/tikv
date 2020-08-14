@@ -203,7 +203,7 @@ struct CmdEpochChecker<S>
 where
     S: Snapshot,
 {
-    // Although it's a deque, because of the characteristics of the data from `ADMIN_CMD_EPOCH_MAP`,
+    // Although it's a deque, because of the characteristics of the settings from `ADMIN_CMD_EPOCH_MAP`,
     // the max size of admin cmd is 2, i.e. split/merge and change peer.
     proposed_admin_cmd: VecDeque<ProposedAdminCmd<S>>,
     term: u64,
@@ -303,7 +303,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         }
     }
 
-    pub fn add_to_conflict_cmd(&mut self, index: u64, cb: Callback<S>) {
+    pub fn attach_to_conflict_cmd(&mut self, index: u64, cb: Callback<S>) {
         for state in self.proposed_admin_cmd.iter_mut().rev() {
             if state.index == index {
                 state.cbs.push(cb);
@@ -311,7 +311,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             }
         }
         panic!(
-            "index {} not found in proposed_admin_cmd, callback {:?}",
+            "index {} can not found in proposed_admin_cmd, callback {:?}",
             index, cb
         );
     }
@@ -2030,9 +2030,7 @@ where
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
             }
-            Ok(RequestPolicy::ProposeConfChange) => {
-                self.propose_conf_change(ctx, &req).map(|x| Either::Left(x))
-            }
+            Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
             Err(e) => Err(e),
         };
 
@@ -2043,7 +2041,9 @@ where
                 false
             }
             Ok(Either::Right(idx)) => {
-                self.cmd_epoch_checker.add_to_conflict_cmd(idx, cb);
+                if !cb.is_none() {
+                    self.cmd_epoch_checker.attach_to_conflict_cmd(idx, cb);
+                }
                 false
             }
             Ok(Either::Left(idx)) => {
@@ -2607,14 +2607,7 @@ where
                 .cmd_epoch_checker
                 .propose_check_epoch(&req, self.term())
             {
-                if req.has_admin_request() {
-                    return Err(box_err!(
-                        "{} there are pending admin cmds that change epoch",
-                        self.tag
-                    ));
-                } else {
-                    return Ok(Either::Right(index));
-                }
+                return Ok(Either::Right(index));
             }
         } else if req.has_admin_request() {
             // The admin request is rejected because it may need to update epoch checker which
@@ -2771,11 +2764,14 @@ where
     // 2. Removing the leader is not allowed in the configuration;
     // 3. The conf change makes the raft group not healthy;
     // 4. The conf change is dropped by raft group internally.
+    /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located on `index` position.
+    /// Ok(Either::Right(index)) means the proposal is rejected by `CmdEpochChecker` and the `index` is the position of
+    /// the last conflict admin cmd.
     fn propose_conf_change<T, C>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T, C>,
         req: &RaftCmdRequest,
-    ) -> Result<u64> {
+    ) -> Result<Either<u64, u64>> {
         if self.pending_merge_state.is_some() {
             return Err(box_err!(
                 "{} peer in merging mode, can't do proposal.",
@@ -2804,15 +2800,11 @@ where
                 self.term()
             ));
         }
-        if self
+        if let Some(index) = self
             .cmd_epoch_checker
             .propose_check_epoch(&req, self.term())
-            .is_some()
         {
-            return Err(box_err!(
-                "{} there are pending admin cmds that change epoch's conf_ver",
-                self.tag
-            ));
+            return Ok(Either::Right(index));
         }
 
         self.check_conf_change(ctx, req)?;
@@ -2847,7 +2839,7 @@ where
             return Err(Error::NotLeader(self.region_id, None));
         }
 
-        Ok(propose_index)
+        Ok(Either::Left(propose_index))
     }
 
     fn handle_read<T, C>(

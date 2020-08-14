@@ -172,7 +172,7 @@ impl AdminCmdEpochState {
 
 lazy_static! {
     /// WARNING: the existing settings in `ADMIN_CMD_EPOCH_MAP` **MUST NOT** be changed!!!
-    /// Changing any admin cmd's `AdminCmdEpochState` or the epoch-change behavior during executing
+    /// Changing any admin cmd's `AdminCmdEpochState` or the epoch-change behavior during applying
     /// will break upgrade compatibility and correctness dependency of `CmdEpochChecker`.
     /// Please remember it is very difficult to fix the issues arising from not following this rule.
     ///
