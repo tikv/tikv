@@ -140,14 +140,10 @@ fn test_split_lost_request_vote() {
     {
         let store_meta = cluster.store_metas.get(&3).unwrap();
         let meta = store_meta.lock().unwrap();
-        assert!(meta
-            .pending_votes
-            .iter()
-            .find(|m| {
-                m.region_id == new_region.id
-                    && raftstore::store::util::is_first_vote_msg(m.get_message())
-            })
-            .is_some());
+        assert!(meta.pending_votes.iter().any(|m| {
+            m.region_id == new_region.id
+                && raftstore::store::util::is_first_vote_msg(m.get_message())
+        }));
     }
 
     // After the follower split success, it will response to the pending vote.
@@ -216,11 +212,13 @@ fn test_pause_split_when_snap_gen_never_split() {
     fail::remove(region_split_skip_max_count);
 }
 
+type FilterSender<T> = Mutex<mpsc::Sender<T>>;
+
 // Filter prevote message and record the range.
 struct PrevoteRangeFilter {
     filter: RegionPacketFilter,
-    before: Option<Mutex<mpsc::Sender<(Vec<u8>, Vec<u8>)>>>,
-    after: Option<Mutex<mpsc::Sender<()>>>,
+    before: Option<FilterSender<(Vec<u8>, Vec<u8>)>>,
+    after: Option<FilterSender<()>>,
 }
 
 impl Filter for PrevoteRangeFilter {
