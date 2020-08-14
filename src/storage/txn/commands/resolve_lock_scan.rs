@@ -50,7 +50,6 @@ impl CommandExt for ResolveLockScan {
     command_method!(is_sys_cmd, bool, true);
 
     fn write_bytes(&self) -> usize {
-        // todo: how can I calculate this?
         0
     }
 
@@ -73,60 +72,59 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockScan {
             !ctx.get_not_fill_cache(),
             context.concurrency_manager,
         );
-        let iter = reader.scan_locks_iter(self.first_scan_key.as_ref(), |lock| {
-            txn_status.contains_key(&lock.ts)
-        });
+        let iter = reader.scan_locks_iter(self.first_scan_key.as_ref())?;
         let mut rows = 0;
         let mut next_first_scan_key = None;
-        if let Ok(iter) = iter {
-            let mut released_locks = HashMap::default();
-            for item in iter {
-                let (current_key, current_lock) = item?;
-                if txn.write_size() >= MAX_TXN_WRITE_SIZE {
-                    next_first_scan_key = Some((current_key, current_lock));
-                    break;
-                }
-                let mut lock = context.latches.gen_lock(std::iter::once(&current_key));
-                if context.latches.acquire(&mut lock, context.cid) {
-                    // when latch is acquired successfully, we can resolve the lock
-                    txn.set_start_ts(current_lock.ts);
-                    let commit_ts = *txn_status
-                        .get(&current_lock.ts)
-                        .expect("txn status not found");
-
-                    let released = if commit_ts.is_zero() {
-                        txn.rollback(current_key.clone())?
-                    } else if commit_ts > current_lock.ts {
-                        txn.commit(current_key.clone(), commit_ts)?
-                    } else {
-                        return Err(Error::from(ErrorInner::InvalidTxnTso {
-                            start_ts: current_lock.ts,
-                            commit_ts,
-                        }));
-                    };
-                    released_locks
-                        .entry(current_lock.ts)
-                        .or_insert_with(|| ReleasedLocks::new(current_lock.ts, commit_ts))
-                        .push(released);
-                    rows += 1;
-                    context.latches.release(&lock, context.cid);
-                } else {
-                    // else "spawn" another `ResolveLockScan` command which will wait for this (key, lock) group
-                    next_first_scan_key = Some((current_key, current_lock));
-                    break;
-                }
+        let mut released_locks = HashMap::default();
+        for item in iter {
+            let (current_key, current_lock) = item?;
+            if !txn_status.contains_key(&current_lock.ts) {
+                continue;
             }
-            released_locks
-                .into_iter()
-                .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
-        }
+            if txn.write_size() >= MAX_TXN_WRITE_SIZE {
+                next_first_scan_key = Some((current_key, current_lock));
+                break;
+            }
+            let mut lock = context.latches.gen_lock(std::iter::once(&current_key));
+            if context.latches.acquire(&mut lock, context.cid) {
+                // when latch is acquired successfully, we can resolve the lock
+                txn.set_start_ts(current_lock.ts);
+                let commit_ts = *txn_status
+                    .get(&current_lock.ts)
+                    .expect("txn status not found");
 
+                let released = if commit_ts.is_zero() {
+                    txn.rollback(current_key.clone())?
+                } else if commit_ts > current_lock.ts {
+                    txn.commit(current_key.clone(), commit_ts)?
+                } else {
+                    return Err(Error::from(ErrorInner::InvalidTxnTso {
+                        start_ts: current_lock.ts,
+                        commit_ts,
+                    }));
+                };
+                released_locks
+                    .entry(current_lock.ts)
+                    .or_insert_with(|| ReleasedLocks::new(current_lock.ts, commit_ts))
+                    .push(released);
+                rows += 1;
+                context.latches.release(&lock, context.cid);
+            } else {
+                // else "spawn" another `ResolveLockScan` command which will wait for this (key, lock) group
+                next_first_scan_key = Some((current_key, current_lock));
+                break;
+            }
+        }
+        reader.statistics.lock.processed += released_locks.len();
+        released_locks
+            .into_iter()
+            .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
         let pr = if next_first_scan_key.is_none() {
             ProcessResult::Res
         } else {
             ProcessResult::NextCommand {
                 cmd: ResolveLockScan::new(
-                    txn_status.clone(),
+                    txn_status,
                     next_first_scan_key.map(|it| it.0).take(),
                     ctx.clone(),
                 )

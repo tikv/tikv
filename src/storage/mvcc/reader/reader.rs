@@ -14,33 +14,27 @@ use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
-pub struct ScanLocksIter<'a, S: Snapshot, F: Fn(&Lock) -> bool> {
+pub struct ScanLocksIter<'a, S: Snapshot> {
     lock: &'a mut CfStatistics,
     cursor: &'a mut Cursor<S::Iter>,
-    filter_function: F,
 }
 
-impl<'a, S: Snapshot, F: Fn(&Lock) -> bool> Iterator for ScanLocksIter<'a, S, F> {
+impl<'a, S: Snapshot> Iterator for ScanLocksIter<'a, S> {
     type Item = Result<(Key, Lock)>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let valid = self.cursor.valid();
-            if let Err(e) = valid {
-                return Some(Err(e.into()));
-            }
-            let key = Key::from_encoded_slice(self.cursor.key(&mut self.lock));
-            let lock = Lock::parse(self.cursor.value(&mut self.lock));
-            if let Err(e) = lock {
-                return Some(Err(e.into()));
-            }
-            let lock = lock.unwrap();
-            self.cursor.next(&mut self.lock);
-            if (self.filter_function)(&lock) {
-                self.lock.processed += 1;
-                return Some(Ok((key, lock)));
-            }
+        let valid = self.cursor.valid();
+        if valid.is_err() || !valid.unwrap() {
+            return None;
         }
+        let key = Key::from_encoded_slice(self.cursor.key(&mut self.lock));
+        let lock = Lock::parse(self.cursor.value(&mut self.lock));
+        if let Err(e) = lock {
+            return Some(Err(e.into()));
+        }
+        let lock = lock.unwrap();
+        self.cursor.next(&mut self.lock);
+        Some(Ok((key, lock)))
     }
 }
 
@@ -419,11 +413,7 @@ impl<S: Snapshot> MvccReader<S> {
         Ok((locks, false))
     }
 
-    pub fn scan_locks_iter<F: Fn(&Lock) -> bool>(
-        &mut self,
-        start: Option<&Key>,
-        filter: F,
-    ) -> Result<ScanLocksIter<S, F>> {
+    pub fn scan_locks_iter(&mut self, start: Option<&Key>) -> Result<ScanLocksIter<S>> {
         self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
@@ -442,7 +432,6 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(ScanLocksIter {
             lock: &mut self.statistics.lock,
             cursor,
-            filter_function: filter,
         })
     }
 
