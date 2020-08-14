@@ -912,3 +912,7 @@
 ## The tracing results will be reported if the duration of a traced procedure larger
 ## than duration-threshold.
 # duration-threshold = "100ms"
+
+## The maximum number of spans to report with each invocation. If the number of spans producing
+## by a traced procedure greater than spans-max-length, it will be truncated to this amount.
+# spans-max-length = 1000

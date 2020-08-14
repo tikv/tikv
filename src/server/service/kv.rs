@@ -9,7 +9,7 @@ use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
-use crate::server::tracing;
+use crate::server::tracing::{self, Event};
 use crate::server::Error;
 use crate::storage::{
     errors::{
@@ -39,7 +39,6 @@ use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
-use tipb::Event;
 use txn_types::{self, Key};
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
@@ -143,7 +142,7 @@ macro_rules! requests_to_trace {
     ($($name: ident -> $event: expr,)*) => {
         macro_rules! trace_may_enable {
             $(($name) => { minitrace::trace_may_enable(true, $event as u32) };)*
-            ($_: ident) => { minitrace::trace_may_enable(true, 0u32) }
+            ($_: ident) => { minitrace::trace_may_enable(false, 0u32) }
         }
     }
 }
@@ -165,6 +164,7 @@ macro_rules! handle_request {
             let begin_instant = Instant::now_coarse();
 
             let (_root_span, collector) = trace_may_enable!($fn_name);
+            tracing::property(tracing::Key::Foo, "Bar".to_string());
             let reporter = self.tracing_reporter.clone();
 
             let future = $future_name(&self.storage, req)

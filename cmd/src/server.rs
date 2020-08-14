@@ -568,6 +568,7 @@ impl TiKVServer {
                     tracing::JaegerReporter::new(
                         self.config.tracing.num_threads,
                         self.config.tracing.duration_threshold.into(),
+                        self.config.tracing.spans_max_length,
                         agent,
                     )
                     .unwrap_or_else(|e| fatal!("failed to create tracing reporter: {}", e)),

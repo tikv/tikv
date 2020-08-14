@@ -2028,6 +2028,7 @@ pub struct TracingConfig {
     pub jaeger_agent: String,
     pub num_threads: usize,
     pub duration_threshold: ReadableDuration,
+    pub spans_max_length: usize,
 }
 
 impl TracingConfig {
@@ -2036,6 +2037,9 @@ impl TracingConfig {
             config::check_addr(&self.jaeger_agent)?;
             if self.num_threads == 0 {
                 return Err("tracing.num_threads cannot be 0".into());
+            }
+            if self.spans_max_length == 0 {
+                return Err("tracing.spans_max_length cannot be 0".into());
             }
         }
         Ok(())
@@ -2048,6 +2052,7 @@ impl Default for TracingConfig {
             jaeger_agent: "".to_owned(),
             num_threads: 1,
             duration_threshold: ReadableDuration::millis(100),
+            spans_max_length: 1000,
         }
     }
 }
