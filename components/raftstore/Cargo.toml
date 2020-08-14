@@ -43,6 +43,7 @@ crossbeam = "0.7.2"
 engine_rocks = { path = "../engine_rocks" }
 encryption = { path = "../encryption" }
 engine_traits = { path = "../engine_traits" }
+error_code = { path = "../error_code" }
 fail = "0.3"
 openssl = "0.10"
 fs2 = "0.4"
@@ -72,6 +73,7 @@ smallvec = "1.4"
 sst_importer = { path = "../sst_importer" }
 tempfile = "3.0"
 tidb_query_datatype = { path = "../tidb_query_datatype" }
+tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
 tokio = { version = "0.2", features = ["sync"] }
@@ -89,6 +91,6 @@ rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6"
 git = "https://github.com/tikv/yatp.git"
 
 [dev-dependencies]
-engine = { path = "../engine" }
 panic_hook = { path = "../panic_hook" }
 test_sst_importer = { path = "../test_sst_importer" }
+engine_panic = { path = "../engine_panic" }

@@ -10,6 +10,7 @@ use std::{cmp, error, u64};
 
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Mutable, Peekable, WriteBatch};
+use error_code::ErrorCodeExt;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -20,7 +21,7 @@ use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
 use crate::store::fsm::GenSnapTask;
-use crate::store::util::conf_state_from_region;
+use crate::store::util;
 use crate::store::ProposalContext;
 use crate::{Error, Result};
 use into_other::into_other;
@@ -480,7 +481,7 @@ fn init_raft_state(
         Some(s) => s,
         None => {
             let mut raft_state = RaftLocalState::default();
-            if !region.get_peers().is_empty() {
+            if util::is_region_initialized(region) {
                 // new split region
                 raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
                 raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
@@ -504,7 +505,7 @@ fn init_apply_state(
             Some(s) => s,
             None => {
                 let mut apply_state = RaftApplyState::default();
-                if !region.get_peers().is_empty() {
+                if util::is_region_initialized(region) {
                     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
                     let state = apply_state.mut_truncated_state();
                     state.set_index(RAFT_INIT_LOG_INDEX);
@@ -696,7 +697,7 @@ where
     }
 
     pub fn is_initialized(&self) -> bool {
-        !self.region().get_peers().is_empty()
+        util::is_region_initialized(self.region())
     }
 
     pub fn initial_state(&self) -> raft::Result<RaftState> {
@@ -714,7 +715,7 @@ where
         }
         Ok(RaftState::new(
             hard_state,
-            conf_state_from_region(self.region()),
+            util::conf_state_from_region(self.region()),
         ))
     }
 
@@ -1158,7 +1159,6 @@ where
     /// Delete all data that is not covered by `new_region`.
     fn clear_extra_data(
         &self,
-        region_id: u64,
         old_region: &metapb::Region,
         new_region: &metapb::Region,
     ) -> Result<()> {
@@ -1166,18 +1166,28 @@ where
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
         if old_start_key < new_start_key {
             box_try!(self.region_sched.schedule(RegionTask::destroy(
-                region_id,
+                old_region.get_id(),
                 old_start_key,
                 new_start_key
             )));
         }
         if new_end_key < old_end_key {
             box_try!(self.region_sched.schedule(RegionTask::destroy(
-                region_id,
+                old_region.get_id(),
                 new_end_key,
                 old_end_key
             )));
         }
+        Ok(())
+    }
+
+    /// Delete all extra split data from the `start_key` to `end_key`.
+    pub fn clear_extra_split_data(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+        box_try!(self.region_sched.schedule(RegionTask::destroy(
+            self.get_region_id(),
+            start_key,
+            end_key
+        )));
         Ok(())
     }
 
@@ -1382,8 +1392,7 @@ where
         };
         // cleanup data before scheduling apply task
         if self.is_initialized() {
-            if let Err(e) = self.clear_extra_data(self.get_region_id(), self.region(), &snap_region)
-            {
+            if let Err(e) = self.clear_extra_data(self.region(), &snap_region) {
                 // No need panic here, when applying snapshot, the deletion will be tried
                 // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
                 // [b, c) will be kept in rocksdb until a covered snapshot is applied or
@@ -1393,6 +1402,7 @@ where
                     "region_id" => self.get_region_id(),
                     "peer_id" => self.peer_id,
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -1401,16 +1411,17 @@ where
         // serve read request otherwise a corrupt data may be returned.
         // For now, it is ensured by
         // 1. After `PrepareMerge` log is committed, the source region leader's lease will be
-        //    suspected immediately which makes local reader invalid to serve read request.
-        // 2. No read request can be responsed during merging.
+        //    suspected immediately which makes the local reader not serve read request.
+        // 2. No read request can be responsed in peer fsm during merging.
         // These conditions are used to prevent reading **stale** data in the past.
-        // At present, they are used to prevent reading **corrupt** data.
+        // At present, they are also used to prevent reading **corrupt** data.
         for r in &ctx.destroyed_regions {
-            if let Err(e) = self.clear_extra_data(r.get_id(), r, &snap_region) {
+            if let Err(e) = self.clear_extra_data(r, &snap_region) {
                 error!(
                     "failed to cleanup data, may leave some dirty data";
                     "region_id" => r.get_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -1560,7 +1571,7 @@ where
 }
 
 pub fn do_snapshot<E>(
-    mgr: SnapManager<E>,
+    mgr: SnapManager,
     engine: &E,
     kv_snap: E::Snapshot,
     region_id: u64,
@@ -1619,7 +1630,7 @@ where
     snapshot.mut_metadata().set_index(key.idx);
     snapshot.mut_metadata().set_term(key.term);
 
-    let conf_state = conf_state_from_region(state.get_region());
+    let conf_state = util::conf_state_from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
     let mut s = mgr.get_snapshot_for_building(&key)?;
@@ -1700,9 +1711,9 @@ mod tests {
     use crate::store::worker::RegionRunner;
     use crate::store::worker::RegionTask;
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
-    use engine::Engines;
-    use engine_rocks::raw_util::new_engine;
-    use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
+    use engine_rocks::util::new_engine;
+    use engine_rocks::{RocksEngine, RocksSnapshot, RocksWriteBatch};
+    use engine_traits::KvEngines;
     use engine_traits::{Iterable, SyncMutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
@@ -1724,18 +1735,16 @@ mod tests {
         sched: Scheduler<RegionTask<RocksSnapshot>>,
         path: &TempDir,
     ) -> PeerStorage<RocksEngine, RocksEngine> {
-        let kv_db =
-            Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
+        let kv_db = new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = path.path().join(Path::new("raft"));
-        let raft_db =
-            Arc::new(new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap());
+        let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let shared_block_cache = false;
-        let engines = Engines::new(kv_db, raft_db, shared_block_cache);
-        bootstrap_store(&engines.c(), 1, 1).unwrap();
+        let engines = KvEngines::new(kv_db, raft_db, shared_block_cache);
+        bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
-        prepare_bootstrap_cluster(&engines.c(), &region).unwrap();
-        PeerStorage::new(engines.c(), &region, sched, 0, "".to_owned()).unwrap()
+        prepare_bootstrap_cluster(&engines, &region).unwrap();
+        PeerStorage::new(engines, &region, sched, 0, "".to_owned()).unwrap()
     }
 
     struct ReadyContext {
@@ -2049,7 +2058,7 @@ mod tests {
 
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
@@ -2365,7 +2374,7 @@ mod tests {
 
         let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap").tempdir().unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
@@ -2553,18 +2562,17 @@ mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
-        let kv_db = Arc::new(new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
+        let kv_db = new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = td.path().join(Path::new("raft"));
-        let raft_db =
-            Arc::new(new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap());
+        let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let shared_block_cache = false;
-        let engines = Engines::new(kv_db, raft_db, shared_block_cache);
-        bootstrap_store(&engines.c(), 1, 1).unwrap();
+        let engines = KvEngines::new(kv_db, raft_db, shared_block_cache);
+        bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
-        prepare_bootstrap_cluster(&engines.c(), &region).unwrap();
+        prepare_bootstrap_cluster(&engines, &region).unwrap();
         let build_storage = || -> Result<PeerStorage<RocksEngine, RocksEngine>> {
-            PeerStorage::new(engines.c(), &region, sched.clone(), 0, "".to_owned())
+            PeerStorage::new(engines.clone(), &region, sched.clone(), 0, "".to_owned())
         };
         let mut s = build_storage().unwrap();
         let mut raft_state = RaftLocalState::default();
@@ -2580,39 +2588,28 @@ mod tests {
         let log_key = keys::raft_log_key(1, 11);
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(11, RAFT_INIT_LOG_TERM))
             .unwrap();
         raft_state.mut_hard_state().set_commit(12);
-        engines
-            .raft
-            .c()
-            .put_msg(&raft_state_key, &raft_state)
-            .unwrap();
+        engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
         assert!(build_storage().is_err());
 
         let log_key = keys::raft_log_key(1, 20);
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(20, RAFT_INIT_LOG_TERM))
             .unwrap();
         raft_state.set_last_index(20);
-        engines
-            .raft
-            .c()
-            .put_msg(&raft_state_key, &raft_state)
-            .unwrap();
+        engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
         s = build_storage().unwrap();
         let initial_state = s.initial_state().unwrap();
         assert_eq!(initial_state.hard_state, *raft_state.get_hard_state());
 
         // Missing last log is invalid.
-        engines.raft.c().delete(&log_key).unwrap();
+        engines.raft.delete(&log_key).unwrap();
         assert!(build_storage().is_err());
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(20, RAFT_INIT_LOG_TERM))
             .unwrap();
 
@@ -2626,7 +2623,6 @@ mod tests {
         let apply_state_key = keys::apply_state_key(1);
         engines
             .kv
-            .c()
             .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
             .unwrap();
         assert!(build_storage().is_err());
@@ -2636,7 +2632,6 @@ mod tests {
         apply_state.set_commit_term(RAFT_INIT_LOG_TERM);
         engines
             .kv
-            .c()
             .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
             .unwrap();
         assert!(build_storage().is_err());
@@ -2644,7 +2639,6 @@ mod tests {
         let log_key = keys::raft_log_key(1, 14);
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM))
             .unwrap();
         raft_state.mut_hard_state().set_commit(14);
@@ -2655,7 +2649,6 @@ mod tests {
         // log term miss match is invalid.
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM - 1))
             .unwrap();
         assert!(build_storage().is_err());
@@ -2663,15 +2656,10 @@ mod tests {
         // hard state term miss match is invalid.
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM))
             .unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM - 1);
-        engines
-            .raft
-            .c()
-            .put_msg(&raft_state_key, &raft_state)
-            .unwrap();
+        engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
         assert!(build_storage().is_err());
 
         // last index < recorded_commit_index is invalid.
@@ -2680,28 +2668,18 @@ mod tests {
         let log_key = keys::raft_log_key(1, 13);
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(13, RAFT_INIT_LOG_TERM))
             .unwrap();
-        engines
-            .raft
-            .c()
-            .put_msg(&raft_state_key, &raft_state)
-            .unwrap();
+        engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
         assert!(build_storage().is_err());
 
         // last_commit_index > commit_index is invalid.
         raft_state.set_last_index(20);
         raft_state.mut_hard_state().set_commit(12);
-        engines
-            .raft
-            .c()
-            .put_msg(&raft_state_key, &raft_state)
-            .unwrap();
+        engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
         apply_state.set_last_commit_index(13);
         engines
             .kv
-            .c()
             .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
             .unwrap();
         assert!(build_storage().is_err());

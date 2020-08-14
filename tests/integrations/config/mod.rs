@@ -8,13 +8,13 @@ use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
-use engine::rocks::{
+use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
+use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
-use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
-use raftstore::coprocessor::Config as CopConfig;
+use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
 use raftstore::store::Config as RaftstoreConfig;
 use security::SecurityConfig;
 use tikv::config::*;
@@ -25,7 +25,7 @@ use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::collections::HashSet;
-use tikv_util::config::{ReadableDuration, ReadableSize};
+use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
 
 mod dynamic;
 mod test_config_client;
@@ -55,6 +55,7 @@ fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
     value.log_level = Level::Debug;
     value.log_file = "foo".to_owned();
+    value.log_format = LogFormat::Json;
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.server = ServerConfig {
@@ -92,8 +93,6 @@ fn test_serde_custom_tikv_config() {
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),
         enable_request_batch: false,
-        request_batch_enable_cross_command: true,
-        request_batch_wait_duration: ReadableDuration::millis(10),
     };
     value.readpool = ReadPoolConfig {
         unified: UnifiedReadPoolConfig {
@@ -240,6 +239,7 @@ fn test_serde_custom_tikv_config() {
         info_log_dir: "/var".to_owned(),
         info_log_level: LogLevel::Info,
         rate_bytes_per_sec: ReadableSize::kb(1),
+        rate_limiter_refill_period: ReadableDuration::millis(10),
         rate_limiter_mode: DBRateLimiterMode::AllIo,
         auto_tuned: true,
         bytes_per_sync: ReadableSize::mb(1),
@@ -614,7 +614,7 @@ fn test_serde_custom_tikv_config() {
         reserve_space: ReadableSize::gb(2),
         block_cache: BlockCacheConfig {
             shared: true,
-            capacity: Some(ReadableSize::gb(40)),
+            capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
             num_shard_bits: 10,
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
@@ -628,6 +628,7 @@ fn test_serde_custom_tikv_config() {
         region_split_size: ReadableSize::mb(12),
         region_max_keys: 100000,
         region_split_keys: 100000,
+        consistency_check_method: ConsistencyCheckMethod::Mvcc,
     };
     let mut cert_allowed_cn = HashSet::default();
     cert_allowed_cn.insert("example.tikv.com".to_owned());
@@ -648,6 +649,7 @@ fn test_serde_custom_tikv_config() {
             previous_master_key: MasterKeyConfig::Plaintext,
         },
     };
+    value.backup = BackupConfig { num_threads: 456 };
     value.import = ImportConfig {
         num_threads: 123,
         stream_channel_window: 123,
@@ -659,12 +661,15 @@ fn test_serde_custom_tikv_config() {
         batch_keys: 256,
         max_write_bytes_per_sec: ReadableSize::mb(10),
         enable_compaction_filter: true,
+        compaction_filter_skip_version_check: true,
     };
     value.pessimistic_txn = PessimisticTxnConfig {
-        enabled: false,
         wait_for_lock_timeout: ReadableDuration::millis(10),
         wake_up_delay_duration: ReadableDuration::millis(100),
         pipelined: true,
+    };
+    value.cdc = CdcConfig {
+        min_ts_interval: ReadableDuration::secs(4),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
@@ -749,11 +754,11 @@ fn test_block_cache_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-cache-compatible.toml");
     let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
     assert!(cfg.storage.block_cache.shared);
-    assert!(cfg.storage.block_cache.capacity.is_none());
+    assert!(cfg.storage.block_cache.capacity.0.is_none());
     cfg.compatible_adjust();
-    assert!(cfg.storage.block_cache.capacity.is_some());
+    assert!(cfg.storage.block_cache.capacity.0.is_some());
     assert_eq!(
-        cfg.storage.block_cache.capacity.unwrap().0,
+        cfg.storage.block_cache.capacity.0.unwrap().0,
         cfg.rocksdb.defaultcf.block_cache_size.0
             + cfg.rocksdb.writecf.block_cache_size.0
             + cfg.rocksdb.lockcf.block_cache_size.0

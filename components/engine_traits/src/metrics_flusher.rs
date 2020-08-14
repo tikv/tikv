@@ -41,6 +41,7 @@ impl<K: KvEngine, R: KvEngine> MetricsFlusher<K, R> {
         let h = ThreadBuilder::new()
             .name("metrics-flusher".to_owned())
             .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
                 let mut last_reset = Instant::now();
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
                     kv_db.flush_metrics("kv", shared_block_cache);
@@ -51,6 +52,7 @@ impl<K: KvEngine, R: KvEngine> MetricsFlusher<K, R> {
                         last_reset = Instant::now();
                     }
                 }
+                tikv_alloc::remove_thread_memory_accessor();
             })?;
 
         self.handle = Some(h);

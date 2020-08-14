@@ -1,5 +1,6 @@
 log-level = "debug"
 log-file = "foo"
+log-format = "json"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
@@ -61,8 +62,6 @@ stats-concurrency = 10
 heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
-request-batch-enable-cross-command = true
-request-batch-wait-duration = "10ms"
 
 [server.labels]
 a = "b"
@@ -164,6 +163,7 @@ region-max-size = "12MB"
 region-split-size = "12MB"
 region-max-keys = 100000
 region-split-keys = 100000
+consistency-check-method = "mvcc"
 
 [rocksdb]
 wal-recovery-mode = 1
@@ -183,6 +183,7 @@ info-log-roll-time = "12s"
 info-log-keep-log-file-num = 1000
 info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
+rate-limiter-refill-period = "10ms"
 rate-limiter-mode = 3
 auto-tuned = true
 bytes-per-sync = "1MB"
@@ -569,6 +570,9 @@ path = "/master/key/path"
 [security.encryption.previous-master-key]
 type = "plaintext"
 
+[backup]
+num-threads = 456
+
 [import]
 num-threads = 123
 stream-channel-window = 123
@@ -579,9 +583,13 @@ ratio-threshold = 1.2
 batch-keys = 256
 max-write-bytes-per-sec = "10MB"
 enable-compaction-filter = true
+compaction-filter-skip-version-check = true
 
 [pessimistic-txn]
-enabled = false
+enabled = false # test backward compatibility
 wait-for-lock-timeout = "10ms"
-wake-up-delay-duration = 100 # test backward compatible
+wake-up-delay-duration = 100 # test backward compatibility
 pipelined = true
+
+[cdc]
+min-ts-interval = "4s"

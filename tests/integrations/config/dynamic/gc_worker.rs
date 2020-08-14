@@ -25,7 +25,7 @@ fn setup_cfg_controller(
     cfg: TiKvConfig,
 ) -> (GcWorker<tikv::storage::kv::RocksEngine>, ConfigController) {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let mut gc_worker = GcWorker::new(engine, None, None, None, cfg.gc.clone());
+    let mut gc_worker = GcWorker::new(engine, None, cfg.gc.clone(), Default::default());
     gc_worker.start().unwrap();
 
     let cfg_controller = ConfigController::new(cfg);

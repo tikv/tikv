@@ -514,8 +514,10 @@ impl PdClient for RpcClient {
                     .with_label_values(&["store_heartbeat"])
                     .observe(duration_to_sec(timer.elapsed()));
                 check_resp_header(resp.get_header())?;
-                if cluster_version.set(resp.get_cluster_version()).is_err() {
-                    warn!("invalid cluster version: {}", resp.get_cluster_version());
+                match cluster_version.set(resp.get_cluster_version()) {
+                    Err(_) => warn!("invalid cluster version: {}", resp.get_cluster_version()),
+                    Ok(true) => info!("set cluster version to {}", resp.get_cluster_version()),
+                    _ => {}
                 };
                 Ok(resp)
             })) as PdFuture<_>
@@ -694,5 +696,23 @@ impl PdClient for RpcClient {
         self.leader_client
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
+    }
+}
+
+pub struct DummyPdClient {
+    pub next_ts: TimeStamp,
+}
+
+impl DummyPdClient {
+    pub fn new() -> DummyPdClient {
+        DummyPdClient {
+            next_ts: TimeStamp::zero(),
+        }
+    }
+}
+
+impl PdClient for DummyPdClient {
+    fn get_tso(&self) -> PdFuture<TimeStamp> {
+        Box::new(future::ok(self.next_ts))
     }
 }

@@ -40,44 +40,39 @@ pub fn pi() -> Result<Option<Real>> {
 
 #[rpn_fn]
 #[inline]
-pub fn crc32(arg: Option<BytesRef>) -> Result<Option<Int>> {
-    Ok(arg
-        .as_ref()
-        .map(|bytes| i64::from(tikv_util::file::calc_crc32_bytes(&bytes))))
+pub fn crc32(arg: BytesRef) -> Result<Option<Int>> {
+    Ok(Some(i64::from(tikv_util::file::calc_crc32_bytes(&arg))))
 }
 
 #[inline]
 #[rpn_fn]
-pub fn log_1_arg(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| f64_to_real(n.ln())))
+pub fn log_1_arg(arg: &Real) -> Result<Option<Real>> {
+    Ok(f64_to_real(arg.ln()))
 }
 
 #[inline]
 #[rpn_fn]
 #[allow(clippy::float_cmp)]
-pub fn log_2_arg(arg0: Option<&Real>, arg1: Option<&Real>) -> Result<Option<Real>> {
-    Ok(match (arg0, arg1) {
-        (Some(base), Some(n)) => {
-            if **base <= 0f64 || **base == 1f64 || **n <= 0f64 {
-                None
-            } else {
-                f64_to_real(n.log(**base))
-            }
+pub fn log_2_arg(arg0: &Real, arg1: &Real) -> Result<Option<Real>> {
+    Ok({
+        if **arg0 <= 0f64 || **arg0 == 1f64 || **arg1 <= 0f64 {
+            None
+        } else {
+            f64_to_real(arg1.log(**arg0))
         }
-        _ => None,
     })
 }
 
 #[inline]
 #[rpn_fn]
-pub fn log2(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| f64_to_real(n.log2())))
+pub fn log2(arg: &Real) -> Result<Option<Real>> {
+    Ok(f64_to_real(arg.log2()))
 }
 
 #[inline]
 #[rpn_fn]
-pub fn log10(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| f64_to_real(n.log10())))
+pub fn log10(arg: &Real) -> Result<Option<Real>> {
+    Ok(f64_to_real(arg.log10()))
 }
 
 // If the given f64 is finite, returns `Some(Real)`. Otherwise returns None.
@@ -91,16 +86,12 @@ fn f64_to_real(n: f64) -> Option<Real> {
 
 #[inline]
 #[rpn_fn(capture = [ctx])]
-pub fn ceil<C: Ceil>(ctx: &mut EvalContext, arg: Option<&C::Input>) -> Result<Option<C::Output>> {
-    if let Some(arg) = arg {
-        C::ceil(ctx, arg)
-    } else {
-        Ok(None)
-    }
+pub fn ceil<C: Ceil>(ctx: &mut EvalContext, arg: &C::Input) -> Result<Option<C::Output>> {
+    C::ceil(ctx, arg)
 }
 
 pub trait Ceil {
-    type Input: Evaluable;
+    type Input: Evaluable + EvaluableRet;
     type Output: EvaluableRet;
 
     fn ceil(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
@@ -171,16 +162,12 @@ impl Ceil for CeilIntToInt {
 }
 
 #[rpn_fn(capture = [ctx])]
-pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: Option<&T::Input>) -> Result<Option<T::Output>> {
-    if let Some(arg) = arg {
-        T::floor(ctx, arg)
-    } else {
-        Ok(None)
-    }
+pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: &T::Input) -> Result<Option<T::Output>> {
+    T::floor(ctx, arg)
 }
 
 pub trait Floor {
-    type Input: Evaluable;
+    type Input: Evaluable + EvaluableRet;
     type Output: EvaluableRet;
     fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
 }
@@ -250,144 +237,118 @@ impl Floor for FloorIntToInt {
 
 #[rpn_fn]
 #[inline]
-fn abs_int(arg: Option<&Int>) -> Result<Option<Int>> {
-    match arg {
-        None => Ok(None),
-        Some(arg) => match (*arg).checked_abs() {
-            None => Err(Error::overflow("BIGINT", &format!("abs({})", *arg)).into()),
-            Some(arg_abs) => Ok(Some(arg_abs)),
-        },
+fn abs_int(arg: &Int) -> Result<Option<Int>> {
+    match (*arg).checked_abs() {
+        None => Err(Error::overflow("BIGINT", &format!("abs({})", *arg)).into()),
+        Some(arg_abs) => Ok(Some(arg_abs)),
     }
 }
 
 #[rpn_fn]
 #[inline]
-fn abs_uint(arg: Option<&Int>) -> Result<Option<Int>> {
-    Ok(arg.cloned())
+fn abs_uint(arg: &Int) -> Result<Option<Int>> {
+    Ok(Some(arg.to_owned()))
 }
 
 #[rpn_fn]
 #[inline]
-fn abs_real(arg: Option<&Real>) -> Result<Option<Real>> {
-    match arg {
-        Some(arg) => Ok(Some(num_traits::Signed::abs(arg))),
-        None => Ok(None),
-    }
+fn abs_real(arg: &Real) -> Result<Option<Real>> {
+    Ok(Some(num_traits::Signed::abs(arg)))
 }
 
 #[rpn_fn]
 #[inline]
-fn abs_decimal(arg: Option<&Decimal>) -> Result<Option<Decimal>> {
-    match arg {
-        Some(arg) => {
-            let res: codec::Result<Decimal> = arg.to_owned().abs().into();
-            Ok(Some(res?))
-        }
-        None => Ok(None),
-    }
+fn abs_decimal(arg: &Decimal) -> Result<Option<Decimal>> {
+    let res: codec::Result<Decimal> = arg.to_owned().abs().into();
+    Ok(Some(res?))
 }
 
 #[inline]
 #[rpn_fn]
-fn sign(arg: Option<&Real>) -> Result<Option<Int>> {
-    Ok(arg.and_then(|n| {
-        if **n > 0f64 {
-            Some(1)
-        } else if **n == 0f64 {
-            Some(0)
+fn sign(arg: &Real) -> Result<Option<Int>> {
+    Ok(Some({
+        if **arg > 0f64 {
+            1
+        } else if **arg == 0f64 {
+            0
         } else {
-            Some(-1)
+            -1
         }
     }))
 }
 
 #[inline]
 #[rpn_fn]
-fn sqrt(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| {
-        if **n < 0f64 {
+fn sqrt(arg: &Real) -> Result<Option<Real>> {
+    Ok({
+        if **arg < 0f64 {
             None
         } else {
-            let res = n.sqrt();
+            let res = arg.sqrt();
             if res.is_nan() {
                 None
             } else {
                 Some(Real::from(res))
             }
         }
-    }))
+    })
 }
 
 #[inline]
 #[rpn_fn]
-fn radians(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| Real::new(**n * std::f64::consts::PI / 180_f64).ok()))
+fn radians(arg: &Real) -> Result<Option<Real>> {
+    Ok(Real::new(**arg * std::f64::consts::PI / 180_f64).ok())
 }
 
 #[inline]
 #[rpn_fn]
-pub fn exp(arg: Option<&Real>) -> Result<Option<Real>> {
-    match arg {
-        Some(x) => {
-            let ret = x.exp();
-            if ret.is_infinite() {
-                Err(Error::overflow("DOUBLE", &format!("exp({})", x)).into())
-            } else {
-                Ok(Real::new(ret).ok())
-            }
-        }
-        None => Ok(None),
+pub fn exp(arg: &Real) -> Result<Option<Real>> {
+    let ret = arg.exp();
+    if ret.is_infinite() {
+        Err(Error::overflow("DOUBLE", &format!("exp({})", arg)).into())
+    } else {
+        Ok(Real::new(ret).ok())
     }
 }
 
 #[inline]
 #[rpn_fn]
-fn sin(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|arg| Real::new(arg.sin()).ok()))
+fn sin(arg: &Real) -> Result<Option<Real>> {
+    Ok(Real::new(arg.sin()).ok())
 }
 
 #[inline]
 #[rpn_fn]
-fn cos(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|arg| Real::new(arg.cos()).ok()))
+fn cos(arg: &Real) -> Result<Option<Real>> {
+    Ok(Real::new(arg.cos()).ok())
 }
 
 #[inline]
 #[rpn_fn]
-fn tan(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|arg| Real::new(arg.tan()).ok()))
+fn tan(arg: &Real) -> Result<Option<Real>> {
+    Ok(Real::new(arg.tan()).ok())
 }
 
 #[inline]
 #[rpn_fn]
-fn cot(arg: Option<&Real>) -> Result<Option<Real>> {
-    match arg {
-        Some(arg) => {
-            let tan = arg.tan();
-            let cot = tan.recip();
-            if cot.is_infinite() {
-                Err(Error::overflow("DOUBLE", format!("cot({})", arg)).into())
-            } else {
-                Ok(Real::new(cot).ok())
-            }
-        }
-        None => Ok(None),
+fn cot(arg: &Real) -> Result<Option<Real>> {
+    let tan = arg.tan();
+    let cot = tan.recip();
+    if cot.is_infinite() {
+        Err(Error::overflow("DOUBLE", format!("cot({})", arg)).into())
+    } else {
+        Ok(Real::new(cot).ok())
     }
 }
 
 #[inline]
 #[rpn_fn]
-fn pow(lhs: Option<&Real>, rhs: Option<&Real>) -> Result<Option<Real>> {
-    match (lhs, rhs) {
-        (Some(lhs), Some(rhs)) => {
-            let pow = (lhs.into_inner()).pow(rhs.into_inner());
-            if pow.is_infinite() {
-                Err(Error::overflow("DOUBLE", format!("{}.pow({})", lhs, rhs)).into())
-            } else {
-                Ok(Real::new(pow).ok())
-            }
-        }
-        _ => Ok(None),
+fn pow(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
+    let pow = (lhs.into_inner()).pow(rhs.into_inner());
+    if pow.is_infinite() {
+        Err(Error::overflow("DOUBLE", format!("{}.pow({})", lhs, rhs)).into())
+    } else {
+        Ok(Real::new(pow).ok())
     }
 }
 
@@ -399,7 +360,7 @@ fn rand() -> Result<Option<Real>> {
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 fn rand_with_seed_first_gen(seed: Option<&i64>) -> Result<Option<Real>> {
     let mut rng = MySQLRng::new_with_seed(seed.cloned().unwrap_or(0));
     let res = rng.gen();
@@ -408,137 +369,104 @@ fn rand_with_seed_first_gen(seed: Option<&i64>) -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn]
-fn degrees(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| Real::new(n.to_degrees()).ok()))
+fn degrees(arg: &Real) -> Result<Option<Real>> {
+    Ok(Real::new(arg.to_degrees()).ok())
 }
 
 #[inline]
 #[rpn_fn]
-pub fn asin(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|arg| Real::new(arg.asin()).ok()))
+pub fn asin(arg: &Real) -> Result<Option<Real>> {
+    Ok(Real::new(arg.asin()).ok())
 }
 
 #[inline]
 #[rpn_fn]
-pub fn acos(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|arg| Real::new(arg.acos()).ok()))
+pub fn acos(arg: &Real) -> Result<Option<Real>> {
+    Ok(Real::new(arg.acos()).ok())
 }
 
 #[inline]
 #[rpn_fn]
-pub fn atan_1_arg(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|arg| Real::new(arg.atan()).ok()))
+pub fn atan_1_arg(arg: &Real) -> Result<Option<Real>> {
+    Ok(Real::new(arg.atan()).ok())
 }
 
 #[inline]
 #[rpn_fn]
-pub fn atan_2_args(arg0: Option<&Real>, arg1: Option<&Real>) -> Result<Option<Real>> {
-    Ok(match (arg0, arg1) {
-        (Some(arg0), Some(arg1)) => Real::new(arg0.atan2(arg1.into_inner())).ok(),
-        _ => None,
-    })
+pub fn atan_2_args(arg0: &Real, arg1: &Real) -> Result<Option<Real>> {
+    Ok(Real::new(arg0.atan2(arg1.into_inner())).ok())
 }
 
 #[inline]
 #[rpn_fn]
-pub fn conv(
-    n: Option<BytesRef>,
-    from_base: Option<&Int>,
-    to_base: Option<&Int>,
-) -> Result<Option<Bytes>> {
+pub fn conv(n: BytesRef, from_base: &Int, to_base: &Int) -> Result<Option<Bytes>> {
     use tidb_query_shared_expr::conv::conv as conv_impl;
-    if let (Some(n), Some(from_base), Some(to_base)) = (n, from_base, to_base) {
-        let s = String::from_utf8_lossy(n);
-        Ok(conv_impl(s.as_ref(), *from_base, *to_base))
+    let s = String::from_utf8_lossy(n);
+    Ok(conv_impl(s.as_ref(), *from_base, *to_base))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn round_real(arg: &Real) -> Result<Option<Real>> {
+    Ok(Real::new(arg.round()).ok())
+}
+
+#[inline]
+#[rpn_fn]
+pub fn round_int(arg: &Int) -> Result<Option<Int>> {
+    Ok(Some(arg.to_owned()))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn round_dec(arg: &Decimal) -> Result<Option<Decimal>> {
+    let res: codec::Result<Decimal> = arg
+        .to_owned()
+        .round(DEFAULT_FSP, RoundMode::HalfEven)
+        .into();
+    Ok(Some(res?))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_int_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
+    let x = arg0;
+    let d = arg1;
+    Ok(Some(if *d >= 0 {
+        *x
+    } else if *d <= -(I64_TEN_POWS.len() as i64) {
+        0
     } else {
-        Ok(None)
-    }
+        let shift = I64_TEN_POWS[-*d as usize];
+        *x / shift * shift
+    }))
 }
 
 #[inline]
 #[rpn_fn]
-pub fn round_real(arg: Option<&Real>) -> Result<Option<Real>> {
-    match arg {
-        Some(arg) => Ok(Real::new(arg.round()).ok()),
-        None => Ok(None),
-    }
+pub fn truncate_int_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
+    Ok(Some(*arg0))
 }
 
 #[inline]
 #[rpn_fn]
-pub fn round_int(arg: Option<&Int>) -> Result<Option<Int>> {
-    Ok(arg.cloned())
+pub fn truncate_real_with_int(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
+    let x = arg0;
+    let d = arg1;
+    let d = if *d >= 0 {
+        (*d).min(i64::from(i32::max_value())) as i32
+    } else {
+        (*d).max(i64::from(i32::min_value())) as i32
+    };
+    Ok(Some(truncate_real(*x, d)))
 }
 
 #[inline]
 #[rpn_fn]
-pub fn round_dec(arg: Option<&Decimal>) -> Result<Option<Decimal>> {
-    match arg {
-        Some(arg) => {
-            let res: codec::Result<Decimal> = arg
-                .to_owned()
-                .round(DEFAULT_FSP, RoundMode::HalfEven)
-                .into();
-            Ok(Some(res?))
-        }
-        None => Ok(None),
-    }
-}
-
-#[inline]
-#[rpn_fn]
-pub fn truncate_int_with_int(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Option<Int>> {
-    match (arg0, arg1) {
-        (Some(x), Some(d)) => {
-            if *d >= 0 {
-                Ok(Some(*x))
-            } else {
-                if *d <= -(I64_TEN_POWS.len() as i64) {
-                    return Ok(Some(0));
-                }
-                let shift = I64_TEN_POWS[-*d as usize];
-                Ok(Some(*x / shift * shift))
-            }
-        }
-        _ => Ok(None),
-    }
-}
-
-#[inline]
-#[rpn_fn]
-pub fn truncate_int_with_uint(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Option<Int>> {
-    match (arg0, arg1) {
-        (Some(x), Some(_)) => Ok(Some(*x)),
-        _ => Ok(None),
-    }
-}
-
-#[inline]
-#[rpn_fn]
-pub fn truncate_real_with_int(arg0: Option<&Real>, arg1: Option<&Int>) -> Result<Option<Real>> {
-    match (arg0, arg1) {
-        (Some(x), Some(d)) => {
-            let d = if *d >= 0 {
-                (*d).min(i64::from(i32::max_value())) as i32
-            } else {
-                (*d).max(i64::from(i32::min_value())) as i32
-            };
-            Ok(Some(truncate_real(*x, d)))
-        }
-        _ => Ok(None),
-    }
-}
-
-#[inline]
-#[rpn_fn]
-pub fn truncate_real_with_uint(arg0: Option<&Real>, arg1: Option<&Int>) -> Result<Option<Real>> {
-    match (arg0, arg1) {
-        (Some(x), Some(d)) => {
-            let d = (*d as u64).min(i32::max_value() as u64) as i32;
-            Ok(Some(truncate_real(*x, d)))
-        }
-        _ => Ok(None),
-    }
+pub fn truncate_real_with_uint(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
+    let x = arg0;
+    let d = (*arg1 as u64).min(i32::max_value() as u64) as i32;
+    Ok(Some(truncate_real(*x, d)))
 }
 
 pub fn truncate_real(x: Real, d: i32) -> Real {
@@ -555,47 +483,38 @@ pub fn truncate_real(x: Real, d: i32) -> Real {
 
 #[inline]
 #[rpn_fn]
-pub fn round_with_frac_int(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Option<Int>> {
-    match (arg0, arg1) {
-        (Some(number), Some(digits)) => {
-            if *digits >= 0 {
-                Ok(Some(*number))
-            } else {
-                let power = 10.0_f64.powi(-digits as i32);
-                let frac = *number as f64 / power;
-                Ok(Some((frac.round() * power) as i64))
-            }
-        }
-        _ => Ok(None),
+pub fn round_with_frac_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
+    let number = arg0;
+    let digits = arg1;
+    if *digits >= 0 {
+        Ok(Some(*number))
+    } else {
+        let power = 10.0_f64.powi(-digits as i32);
+        let frac = *number as f64 / power;
+        Ok(Some((frac.round() * power) as i64))
     }
 }
 
 #[rpn_fn]
 #[inline]
-fn round_with_frac_dec(arg0: Option<&Decimal>, arg1: Option<&Int>) -> Result<Option<Decimal>> {
-    match (arg0, arg1) {
-        (Some(number), Some(digits)) => {
-            let res: codec::Result<Decimal> = number
-                .to_owned()
-                .round(*digits as i8, RoundMode::HalfEven)
-                .into();
-            Ok(Some(res?))
-        }
-        _ => Ok(None),
-    }
+fn round_with_frac_dec(arg0: &Decimal, arg1: &Int) -> Result<Option<Decimal>> {
+    let number = arg0;
+    let digits = arg1;
+    let res: codec::Result<Decimal> = number
+        .to_owned()
+        .round(*digits as i8, RoundMode::HalfEven)
+        .into();
+    Ok(Some(res?))
 }
 
 #[inline]
 #[rpn_fn]
-pub fn round_with_frac_real(arg0: Option<&Real>, arg1: Option<&Int>) -> Result<Option<Real>> {
-    match (arg0, arg1) {
-        (Some(number), Some(digits)) => {
-            let power = 10.0_f64.powi(-digits as i32);
-            let frac = *number / power;
-            Ok(Some(Real::from(frac.round() * power)))
-        }
-        _ => Ok(None),
-    }
+pub fn round_with_frac_real(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
+    let number = arg0;
+    let digits = arg1;
+    let power = 10.0_f64.powi(-digits as i32);
+    let frac = *number / power;
+    Ok(Some(Real::from(frac.round() * power)))
 }
 
 thread_local! {

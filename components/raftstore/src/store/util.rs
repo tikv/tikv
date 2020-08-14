@@ -301,6 +301,11 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
     })
 }
 
+#[inline]
+pub fn is_region_initialized(r: &metapb::Region) -> bool {
+    !r.get_peers().is_empty()
+}
+
 /// Lease records an expired time, for examining the current moment is in lease or not.
 /// It's dedicated to the Raft leader lease mechanism, contains either state of
 ///   1. Suspect Timestamp
@@ -656,6 +661,14 @@ macro_rules! report_perf_context {
             observe_perf_context_type!($ctx, perf_context, $metric, db_mutex_lock_nanos);
             observe_perf_context_type!($ctx, $metric, pre_and_post_process);
             observe_perf_context_type!($ctx, $metric, write_thread_wait);
+            observe_perf_context_type!(
+                $ctx,
+                perf_context,
+                $metric,
+                write_scheduling_flushes_compactions_time
+            );
+            observe_perf_context_type!($ctx, perf_context, $metric, db_condition_wait_nanos);
+            observe_perf_context_type!($ctx, perf_context, $metric, write_delay_time);
         }
     };
 }
@@ -680,6 +693,9 @@ pub struct PerfContextStatistics {
     pub write_memtable_time: u64,
     pub write_thread_wait: u64,
     pub db_mutex_lock_nanos: u64,
+    pub write_scheduling_flushes_compactions_time: u64,
+    pub db_condition_wait_nanos: u64,
+    pub write_delay_time: u64,
 }
 
 impl PerfContextStatistics {
@@ -692,6 +708,9 @@ impl PerfContextStatistics {
             write_thread_wait: 0,
             write_memtable_time: 0,
             db_mutex_lock_nanos: 0,
+            write_scheduling_flushes_compactions_time: 0,
+            db_condition_wait_nanos: 0,
+            write_delay_time: 0,
         }
     }
 
@@ -706,6 +725,9 @@ impl PerfContextStatistics {
         self.db_mutex_lock_nanos = 0;
         self.write_thread_wait = 0;
         self.write_memtable_time = 0;
+        self.write_scheduling_flushes_compactions_time = 0;
+        self.db_condition_wait_nanos = 0;
+        self.write_delay_time = 0;
     }
 }
 
@@ -1208,5 +1230,14 @@ mod tests {
             let quorum = super::integration_on_half_fail_quorum_fn(voter_count);
             assert_eq!(quorum, expected_quorum);
         }
+    }
+
+    #[test]
+    fn test_is_region_initialized() {
+        let mut region = metapb::Region::default();
+        assert_eq!(is_region_initialized(&region), false);
+        let peers = vec![new_peer(1, 2)];
+        region.set_peers(peers.into());
+        assert_eq!(is_region_initialized(&region), true);
     }
 }

@@ -22,6 +22,7 @@ pub trait KvEngine:
     + SstExt
     + TablePropertiesExt
     + CompactExt
+    + RangePropertiesExt
     + MiscExt
     + Send
     + Sync
@@ -53,9 +54,4 @@ pub trait KvEngine:
     /// This only exists as a temporary hack during refactoring.
     /// It cannot be used forever.
     fn bad_downcast<T: 'static>(&self) -> &T;
-}
-
-pub trait WriteBatchVecExt<E: KvEngine> {
-    fn write_batch_vec(e: &E, vec_size: usize, cap: usize) -> Self;
-    fn write_to_engine(&self, e: &E, opts: &WriteOptions) -> Result<()>;
 }

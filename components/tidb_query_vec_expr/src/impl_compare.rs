@@ -11,7 +11,7 @@ use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::EvalContext;
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn compare<C: Comparer>(lhs: Option<&C::T>, rhs: Option<&C::T>) -> Result<Option<i64>>
 where
@@ -20,7 +20,7 @@ where
     C::compare(lhs, rhs)
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn compare_json<F: CmpOp>(lhs: Option<JsonRef>, rhs: Option<JsonRef>) -> Result<Option<i64>> {
     Ok(match (lhs, rhs) {
@@ -30,7 +30,7 @@ pub fn compare_json<F: CmpOp>(lhs: Option<JsonRef>, rhs: Option<JsonRef>) -> Res
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn compare_bytes<C: Collator, F: CmpOp>(
     lhs: Option<BytesRef>,
@@ -47,7 +47,7 @@ pub fn compare_bytes<C: Collator, F: CmpOp>(
 }
 
 pub trait Comparer {
-    type T: Evaluable;
+    type T: Evaluable + EvaluableRet;
 
     fn compare(lhs: Option<&Self::T>, rhs: Option<&Self::T>) -> Result<Option<i64>>;
 }
@@ -56,7 +56,7 @@ pub struct BasicComparer<T: Evaluable + Ord, F: CmpOp> {
     _phantom: std::marker::PhantomData<(T, F)>,
 }
 
-impl<T: Evaluable + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
+impl<T: Evaluable + EvaluableRet + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
     type T = T;
 
     #[inline]
@@ -225,7 +225,7 @@ impl CmpOp for CmpOpNullEQ {
     }
 }
 
-#[rpn_fn(varg)]
+#[rpn_fn(nullable, varg)]
 #[inline]
 pub fn coalesce<T: Evaluable + EvaluableRet>(args: &[Option<&T>]) -> Result<Option<T>> {
     for arg in args {
@@ -236,7 +236,7 @@ pub fn coalesce<T: Evaluable + EvaluableRet>(args: &[Option<&T>]) -> Result<Opti
     Ok(None)
 }
 
-#[rpn_fn(varg)]
+#[rpn_fn(nullable, varg)]
 #[inline]
 pub fn coalesce_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     for arg in args {
@@ -247,7 +247,7 @@ pub fn coalesce_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     Ok(None)
 }
 
-#[rpn_fn(varg)]
+#[rpn_fn(nullable, varg)]
 #[inline]
 pub fn coalesce_json(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     for arg in args {
@@ -258,19 +258,19 @@ pub fn coalesce_json(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     Ok(None)
 }
 
-#[rpn_fn(varg, min_args = 2)]
+#[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
 pub fn greatest_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
     do_get_extremum(args, max)
 }
 
-#[rpn_fn(varg, min_args = 2)]
+#[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
 pub fn greatest_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
     do_get_extremum(args, |x, y| x.max(y))
 }
 
-#[rpn_fn(varg, min_args = 2, capture = [ctx])]
+#[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
 #[inline]
 pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     let mut greatest = None;

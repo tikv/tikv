@@ -48,7 +48,7 @@ See [Governance](https://github.com/tikv/community/blob/master/GOVERNANCE.md).
 
 ## Documentation
 
-For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/3.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/deep-dive/introduction/).
+For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/4.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/deep-dive/introduction/).
 
 > **Note:**
 >
@@ -77,25 +77,25 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 TiKV was originally a component of [TiDB](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage a TiKV cluster. You can use TiKV together with TiDB or separately on its own.
 
-We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's website](https://tikv.org/docs/3.0/concepts/overview/).
+We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's website](https://tikv.org/docs/4.0/concepts/overview/).
 
 ### Testing deployment
 
-- [Try TiKV and TiDB](https://tikv.org/docs/3.0/tasks/try/)
+- [Try TiKV and TiDB](https://tikv.org/docs/4.0/tasks/try/introduction/)
 
     You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://pingcap.com/docs/).
 
 - Try TiKV separately
-    - [Deploy TiKV Using Docker Compose/Swarm](https://tikv.org/docs/3.0/tasks/deploy/docker-compose/): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
-    - [Deploy TiKV Using Docker](https://tikv.org/docs/3.0/tasks/deploy/docker/): To deploy a multi-node TiKV testing cluster using Docker
-    - [Deploy TiKV Using Binary Files](https://tikv.org/docs/3.0/tasks/deploy/binary/): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
+    - [Deploy TiKV Using Docker Stack](https://tikv.org/docs/4.0/tasks/try/docker-stack/): To quickly test TiKV separately without TiDB on a single machine
+    - [Deploy TiKV Using Docker](https://tikv.org/docs/4.0/tasks/deploy/docker/): To deploy a multi-node TiKV testing cluster using Docker
+    - [Deploy TiKV Using Binary Files](https://tikv.org/docs/4.0/tasks/deploy/binary/): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
 
 ### Production deployment
 
 For the production environment, use [Ansible](https://github.com/pingcap/tidb-ansible) to deploy the cluster.
 
 - [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/how-to/deploy/orchestrated/ansible.md)
-- [Deploy TiKV separately Using Ansible](https://tikv.org/docs/3.0/tasks/deploy/ansible/)
+- [Deploy TiKV separately Using Ansible](https://tikv.org/docs/4.0/tasks/deploy/ansible/)
 
 ## Client drivers
 
@@ -108,7 +108,7 @@ These are the clients for TiKV:
 - [Rust](https://github.com/tikv/client-rust)
 - [C](https://github.com/tikv/client-c)
 
-If you want to try the Go client, see [Go Client](https://tikv.org/docs/3.0/reference/clients/go/).
+If you want to try the Go client, see [Go Client](https://tikv.org/docs/4.0/reference/clients/go/).
 
 ## Community Meeting
 
@@ -118,7 +118,7 @@ Quick links:
 
 *   [Meeting notes](https://docs.google.com/document/d/1CWUAkBrcm9KPclAu8fWHZzByZ0yhsQdRggnEdqtRMQ8/edit)
 *   [Zoom meeting link](https://zoom.us/my/cncftikvproject)
-*   [Recorded videos](https://www.youtube.com/playlist?list=PLj6h78yzYM2PveKciToM4JeQlvenS538V)
+*   [Recorded videos](https://www.youtube.com/playlist?list=PLR6NVnaTxyL2B2ZyKw5XDzkGN72YF7vuN)
 
 ## Security
 

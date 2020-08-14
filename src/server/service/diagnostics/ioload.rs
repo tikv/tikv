@@ -40,6 +40,18 @@ pub struct IoLoad {
     /// total wait time for all requests
     /// units: milliseconds
     pub time_in_queue: f64,
+    /// number of discard I/Os processed
+    /// units: requests
+    pub discard_io: Option<f64>,
+    /// number of discard I/Os merged with in-queue I/O
+    /// units: requests
+    pub discard_merged: Option<f64>,
+    /// number of sectors discarded
+    /// units: sectors
+    pub discard_sectors: Option<f64>,
+    /// total wait time for discard requests
+    /// units: milliseconds
+    pub discard_ticks: Option<f64>,
 }
 
 impl IoLoad {
@@ -73,7 +85,9 @@ impl IoLoad {
                         .split_whitespace()
                         .map(|w| w.parse().unwrap_or_default())
                         .collect::<Vec<f64>>();
-                    if parts.len() != 11 {
+                    // A not too old Linux kernel supports the first 11 block statistics.
+                    // Others stats are supported by Linux 4.19+, we consider them as optional ones.
+                    if parts.len() < 11 {
                         continue;
                     }
                     let load = IoLoad {
@@ -88,6 +102,10 @@ impl IoLoad {
                         in_flight: parts[8],
                         io_ticks: parts[9],
                         time_in_queue: parts[10],
+                        discard_io: parts.get(11).cloned(),
+                        discard_merged: parts.get(12).cloned(),
+                        discard_sectors: parts.get(13).cloned(),
+                        discard_ticks: parts.get(14).cloned(),
                     };
                     result.insert(format!("{:?}", entry.file_name()), load);
                 }

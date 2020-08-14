@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use async_stream::stream;
-use engine_traits::Snapshot;
+use engine_traits::KvEngine;
 use futures03::compat::Compat01As03;
 use futures03::executor::block_on;
 use futures03::future::{ok, poll_fn};
@@ -88,7 +88,7 @@ static MISSING_ACTIONS: &[u8] = b"Missing param actions";
 #[cfg(feature = "failpoints")]
 static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 
-pub struct StatusServer<S, R> {
+pub struct StatusServer<E, R> {
     thread_pool: Runtime,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
@@ -98,7 +98,7 @@ pub struct StatusServer<S, R> {
     cfg_controller: ConfigController,
     router: R,
     security_config: Arc<SecurityConfig>,
-    _snap: PhantomData<S>,
+    _snap: PhantomData<E>,
 }
 
 impl StatusServer<(), ()> {
@@ -139,9 +139,9 @@ impl StatusServer<(), ()> {
     }
 }
 
-impl<S, R> StatusServer<S, R>
+impl<E, R> StatusServer<E, R>
 where
-    S: 'static,
+    E: 'static,
     R: 'static + Send,
 {
     pub fn new(
@@ -561,10 +561,10 @@ where
     }
 }
 
-impl<S, R> StatusServer<S, R>
+impl<E, R> StatusServer<E, R>
 where
-    S: Snapshot,
-    R: 'static + Send + CasualRouter<S> + Clone,
+    E: KvEngine,
+    R: 'static + Send + CasualRouter<E> + Clone,
 {
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
@@ -600,7 +600,7 @@ where
         match router.send(
             id,
             CasualMessage::AccessPeer(Box::new(move |peer| {
-                if let Err(meta) = tx.send(region_meta::RegionMeta::new(&peer.peer)) {
+                if let Err(meta) = tx.send(region_meta::RegionMeta::new(peer)) {
                     error!("receiver dropped, region meta: {:?}", meta)
                 }
             })),
@@ -974,7 +974,7 @@ mod tests {
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
     use configuration::Configuration;
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::RocksEngine;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
     use security::SecurityConfig;
@@ -984,8 +984,8 @@ mod tests {
     #[derive(Clone)]
     struct MockRouter;
 
-    impl CasualRouter<RocksSnapshot> for MockRouter {
-        fn send(&self, region_id: u64, _: CasualMessage<RocksSnapshot>) -> raftstore::Result<()> {
+    impl CasualRouter<RocksEngine> for MockRouter {
+        fn send(&self, region_id: u64, _: CasualMessage<RocksEngine>) -> raftstore::Result<()> {
             Err(raftstore::Error::RegionNotFound(region_id))
         }
     }
@@ -1352,22 +1352,20 @@ mod tests {
         let uri = Uri::builder()
             .scheme("https")
             .authority(status_server.listening_addr().to_string().as_str())
-            .path_and_query("/metrics")
+            .path_and_query("/region")
             .build()
             .unwrap();
 
         if expected {
             let handle = status_server.thread_pool.spawn(async move {
                 let res = client.get(uri).await.unwrap();
-                assert_eq!(res.status(), StatusCode::OK);
+                assert_eq!(res.status(), StatusCode::NOT_FOUND);
             });
             block_on(handle).unwrap();
         } else {
             let handle = status_server.thread_pool.spawn(async move {
-                client
-                    .get(uri)
-                    .await
-                    .expect_err("response status should be err");
+                let res = client.get(uri).await.unwrap();
+                assert_eq!(res.status(), StatusCode::FORBIDDEN);
             });
             let _ = block_on(handle);
         }

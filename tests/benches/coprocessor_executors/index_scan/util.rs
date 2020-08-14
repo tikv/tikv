@@ -87,8 +87,10 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScan
             black_box(Arc::new(EvalConfig::default())),
             black_box(columns.to_vec()),
             black_box(ranges.to_vec()),
+            black_box(0),
             black_box(false),
             black_box(unique),
+            black_box(false),
         )
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,
@@ -109,14 +111,14 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
     type P = IndexScanParam;
 
     fn build(
-        batch: bool,
+        _batch: bool,
         columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
         unique: bool,
     ) -> Box<dyn RequestHandler> {
         let exec = index_scan(columns, unique);
-        crate::util::build_dag_handler::<T>(&[exec], ranges, store, batch)
+        crate::util::build_dag_handler::<T>(&[exec], ranges, store)
     }
 }
 
