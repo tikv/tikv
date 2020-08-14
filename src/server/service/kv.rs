@@ -39,6 +39,7 @@ use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
+use tipb::Event;
 use txn_types::{self, Key};
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
@@ -138,18 +139,20 @@ impl<
     }
 }
 
-macro_rules! services_to_trace {
+macro_rules! requests_to_trace {
     ($($name: ident -> $event: expr,)*) => {
         macro_rules! trace_may_enable {
-            $(($name) => { minitrace::trace_may_enable(true, $event) };)*
-            ($_: ident) => { minitrace::trace_may_enable(false, 0u32) }
+            $(($name) => { minitrace::trace_may_enable(true, $event as u32) };)*
+            ($_: ident) => { minitrace::trace_may_enable(true, 0u32) }
         }
     }
 }
 
-services_to_trace!(
-  kv_get -> 0u32,
-  raw_get -> 0u32,
+requests_to_trace!(
+  raw_get -> Event::TiKvRawGet,
+  coprocessor -> Event::TiKvCoprocessor,
+
+  // ...
 );
 
 macro_rules! handle_request {
@@ -159,9 +162,11 @@ macro_rules! handle_request {
                 return;
             }
 
-            let (_root_span, collector) = trace_may_enable!($fn_name);
             let begin_instant = Instant::now_coarse();
+
+            let (_root_span, collector) = trace_may_enable!($fn_name);
             let reporter = self.tracing_reporter.clone();
+
             let future = $future_name(&self.storage, req)
                 .and_then(|res| sink.success(res).map_err(Error::from))
                 .map(move |_| {
@@ -327,9 +332,14 @@ impl<
             return;
         }
         let begin_instant = Instant::now_coarse();
+
+        let (_root_span, collector) = trace_may_enable!(coprocessor);
+        let reporter = self.tracing_reporter.clone();
+
         let future = future_cop(&self.cop, Some(ctx.peer()), req)
             .and_then(|resp| sink.success(resp).map_err(Error::from))
             .map(move |_| {
+                reporter.report(collector);
                 GRPC_MSG_HISTOGRAM_STATIC
                     .coprocessor
                     .observe(duration_to_sec(begin_instant.elapsed()))

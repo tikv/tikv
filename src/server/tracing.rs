@@ -3,11 +3,14 @@
 use super::Result;
 use minitrace::jaeger::thrift_compact_encode;
 use minitrace::Collector;
+use protobuf::ProtobufEnum;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::time::Duration;
+use tipb::Event;
 use tokio::net::UdpSocket;
 use tokio::runtime::{Builder, Runtime};
+
 /// Tracing Reporter
 pub trait Reporter: Send + Sync {
     fn report(&self, collector: Option<Collector>);
@@ -65,7 +68,11 @@ impl JaegerReporter {
 
         const BUFFER_SIZE: usize = 4096;
         let mut buf = Vec::with_capacity(BUFFER_SIZE);
-        thrift_compact_encode(&mut buf, "TiKV", &trace_details, |_e| "*TODO*");
+        thrift_compact_encode(&mut buf, "TiKV", &trace_details, |event| {
+            Event::enum_descriptor_static()
+                .value_by_number(event as _)
+                .name()
+        });
         udp_socket.send_to(&buf, agent).await?;
         Ok(())
     }
