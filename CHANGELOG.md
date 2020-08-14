@@ -2,6 +2,10 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.18]
+### Msic
+- Change gc failure log to warning [#8444](https://github.com/tikv/tikv/pull/8444)
+
 ## [3.0.17]
 ### Bugfixes
 - Fix a bug that might read stale data during region merging [#8111](https://github.com/tikv/tikv/pull/8111)
