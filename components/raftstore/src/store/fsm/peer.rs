@@ -1927,7 +1927,7 @@ where
                         .raft
                         .assign_commit_groups(&[(peer.id, group_id.unwrap())]);
                 }
-                if self.fsm.peer.peer_id() == peer_id && is_learner(&self.fsm.peer.peer) {
+                if self.fsm.peer.peer_id() == peer_id {
                     self.fsm.peer.peer = peer.clone();
                 }
 

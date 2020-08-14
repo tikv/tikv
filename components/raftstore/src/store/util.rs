@@ -300,7 +300,7 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
     lhs.get_peers().iter().all(|lp| {
         rhs.get_peers()
             .iter()
-            .any(|rp| rp.get_store_id() == lp.get_store_id() && is_learner(rp) == is_learner(lp))
+            .any(|rp| rp.get_store_id() == lp.get_store_id() && rp.get_role() == lp.get_role())
     })
 }
 
@@ -609,6 +609,8 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
     // Here `learners` means learner peers, and `nodes` means voter peers.
     let mut conf_state = ConfState::default();
     for p in region.get_peers() {
+        // TODO: when using joint consensus we also need to consider joint state
+        // which contains other roles like IncommingVoter and DemotingVoter
         if is_learner(p) {
             conf_state.mut_learners().push(p.get_id());
         } else {

@@ -1445,7 +1445,7 @@ where
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
-        if apply_snap_result.is_some() && is_learner(&self.peer) {
+        if apply_snap_result.is_some() {
             // The peer may change from learner to voter after snapshot applied.
             let peer = self
                 .region()
