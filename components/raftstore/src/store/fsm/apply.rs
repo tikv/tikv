@@ -1269,9 +1269,8 @@ where
         }
 
         let (mut response, exec_result) = match cmd_type {
-            AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2 => {
-                self.exec_change_peer(ctx, request)
-            }
+            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
+            AdminCmdType::ChangePeerV2 => panic!("unsupported admin command type"),
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
