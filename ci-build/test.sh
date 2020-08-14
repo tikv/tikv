@@ -8,15 +8,13 @@ panic() {
     exit 1
 }
 
-echo "limit maxfiles 1024 unlimited" | sudo tee -a /etc/launchd.conf;
 pushd /tmp;
-wget https://github.com/aws/aws-sdk-cpp/archive/1.8.14.tar.gz -O /tmp/aws-sdk.tar.gz;
-tar -xvf /tmp/aws-sdk.tar.gz > /dev/null;
+git clone https://github.com/curl/curl;
+pushd curl;
+./configure;
+make;
+make install;
 popd;
-pushd /tmp/aws-sdk-cpp-1.8.14;
-cmake -DBUILD_ONLY='kinesis;core;s3;transfer' -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_TESTING=OFF .;
-make -j4 all;
-sudo make install;
 popd;
 
 if [[ "$SKIP_FORMAT_CHECK" != "true" ]]; then
