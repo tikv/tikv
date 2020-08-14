@@ -147,11 +147,14 @@ macro_rules! requests_to_trace {
     }
 }
 
+// Here to register requests to trace. It's in compile time to determine which
+// request will be traced.
+//
+// As format:
+//  $request_name -> $event_enum_value,
 requests_to_trace!(
   raw_get -> Event::TiKvRawGet,
   coprocessor -> Event::TiKvCoprocessor,
-
-  // ...
 );
 
 macro_rules! handle_request {

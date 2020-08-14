@@ -93,10 +93,13 @@ impl JaegerReporter {
         let mut udp_socket = UdpSocket::bind(local_addr).await?;
 
         let mut trace_details = collector.collect();
+
+        // Check if duration reaches `duration_threshold`
         if Duration::from_nanos(trace_details.elapsed_ns) < threshold {
             return Ok(());
         }
 
+        // Check if len of spans reaches `spans_max_length`
         if trace_details.spans.len() > spans_max_length {
             trace_details.spans.sort_unstable_by_key(|s| s.begin_cycles);
             trace_details.spans.truncate(spans_max_length);
@@ -108,6 +111,7 @@ impl JaegerReporter {
             &mut buf,
             "TiKV",
             &trace_details,
+            // transform numerical event to string
             |event| {
                 #[cfg(feature = "protobuf-codec")]
                 return Event::enum_descriptor_static()
@@ -119,6 +123,7 @@ impl JaegerReporter {
                     Event::from_i32(event as _).unwrap_or(Event::Unknown)
                 );
             },
+            // transform encoded property in protobuf to key-value strings
             |bytes| {
                 if let Ok(mut property) = protobuf::parse_from_bytes::<TracingProperty>(bytes) {
                     let value = property.take_value();
@@ -154,7 +159,7 @@ impl Reporter for JaegerReporter {
     }
 }
 
-/// A tracing reporter ignores all tracing results passed to it
+/// A tracing reporter drops all tracing results passed to it, like `/dev/null`
 #[derive(Clone, Copy)]
 pub struct NullReporter;
 
