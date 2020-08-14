@@ -9,7 +9,7 @@ use std::{cmp, u64};
 use batch_system::{BasicMailbox, Fsm};
 use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt};
+use engine_traits::{KvEngine, Engines, Snapshot, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use futures::Future;
 use kvproto::errorpb;
@@ -165,7 +165,7 @@ where
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask<EK::Snapshot>>,
-        engines: KvEngines<EK, ER>,
+        engines: Engines<EK, ER>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match util::find_peer(region, store_id) {
@@ -212,7 +212,7 @@ where
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask<EK::Snapshot>>,
-        engines: KvEngines<EK, ER>,
+        engines: Engines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,
     ) -> Result<SenderFsmPair<EK, ER>> {

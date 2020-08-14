@@ -13,7 +13,7 @@ use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{
-    KvEngine, KvEngines, Mutable, WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
+    KvEngine, Engines, Mutable, WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -285,7 +285,7 @@ where
     pub global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
-    pub engines: KvEngines<EK, ER>,
+    pub engines: Engines<EK, ER>,
     pub kv_wb: EK::WriteBatch,
     pub raft_wb: ER::LogBatch,
     pub pending_count: usize,
@@ -833,7 +833,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T, C> {
     trans: T,
     pd_client: Arc<C>,
     global_stat: GlobalStoreStat,
-    pub engines: KvEngines<EK, ER>,
+    pub engines: Engines<EK, ER>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
 }
@@ -1097,7 +1097,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
-        engines: KvEngines<EK, ER>,
+        engines: Engines<EK, ER>,
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,

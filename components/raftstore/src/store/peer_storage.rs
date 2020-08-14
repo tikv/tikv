@@ -9,7 +9,7 @@ use std::time::Instant;
 use std::{cmp, error, u64};
 
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, KvEngines, Mutable, Peekable, WriteBatch};
+use engine_traits::{KvEngine, Engines, Mutable, Peekable, WriteBatch};
 use error_code::ErrorCodeExt;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
@@ -408,7 +408,7 @@ impl InvokeContext {
 }
 
 pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
-    engines: &KvEngines<EK, ER>,
+    engines: &Engines<EK, ER>,
     raft_wb: &mut ER::LogBatch,
     region_id: u64,
 ) -> Result<()> {
@@ -440,7 +440,7 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
 }
 
 fn init_applied_index_term<EK: KvEngine, ER: RaftEngine>(
-    engines: &KvEngines<EK, ER>,
+    engines: &Engines<EK, ER>,
     region: &Region,
     apply_state: &RaftApplyState,
 ) -> Result<u64> {
@@ -466,7 +466,7 @@ fn init_applied_index_term<EK: KvEngine, ER: RaftEngine>(
 }
 
 fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
-    engines: &KvEngines<EK, ER>,
+    engines: &Engines<EK, ER>,
     region: &Region,
 ) -> Result<RaftLocalState> {
     if let Some(state) = engines.raft.get_raft_state(region.get_id())? {
@@ -485,7 +485,7 @@ fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
 }
 
 fn init_apply_state<EK: KvEngine, ER: RaftEngine>(
-    engines: &KvEngines<EK, ER>,
+    engines: &Engines<EK, ER>,
     region: &Region,
 ) -> Result<RaftApplyState> {
     Ok(
@@ -510,7 +510,7 @@ fn init_apply_state<EK: KvEngine, ER: RaftEngine>(
 
 fn validate_states<EK: KvEngine, ER: RaftEngine>(
     region_id: u64,
-    engines: &KvEngines<EK, ER>,
+    engines: &Engines<EK, ER>,
     raft_state: &mut RaftLocalState,
     apply_state: &RaftApplyState,
 ) -> Result<()> {
@@ -556,7 +556,7 @@ fn validate_states<EK: KvEngine, ER: RaftEngine>(
 }
 
 fn init_last_term<EK: KvEngine, ER: RaftEngine>(
-    engines: &KvEngines<EK, ER>,
+    engines: &Engines<EK, ER>,
     region: &Region,
     raft_state: &RaftLocalState,
     apply_state: &RaftApplyState,
@@ -586,7 +586,7 @@ pub struct PeerStorage<EK, ER>
 where
     EK: KvEngine,
 {
-    pub engines: KvEngines<EK, ER>,
+    pub engines: Engines<EK, ER>,
 
     peer_id: u64,
     region: metapb::Region,
@@ -647,7 +647,7 @@ where
     ER: RaftEngine,
 {
     pub fn new(
-        engines: KvEngines<EK, ER>,
+        engines: Engines<EK, ER>,
         region: &metapb::Region,
         region_sched: Scheduler<RegionTask<EK::Snapshot>>,
         peer_id: u64,
@@ -1477,7 +1477,7 @@ fn get_sync_log_from_entry(entry: &Entry) -> bool {
 
 /// Delete all meta belong to the region. Results are stored in `wb`.
 pub fn clear_meta<EK, ER>(
-    engines: &KvEngines<EK, ER>,
+    engines: &Engines<EK, ER>,
     kv_wb: &mut EK::WriteBatch,
     raft_wb: &mut ER::LogBatch,
     region_id: u64,
@@ -1645,7 +1645,7 @@ mod tests {
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use engine_rocks::util::new_engine;
     use engine_rocks::{RocksEngine, RocksSnapshot, RocksWriteBatch};
-    use engine_traits::KvEngines;
+    use engine_traits::Engines;
     use engine_traits::{Iterable, SyncMutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
@@ -1671,7 +1671,7 @@ mod tests {
         let raft_path = path.path().join(Path::new("raft"));
         let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let shared_block_cache = false;
-        let engines = KvEngines::new(kv_db, raft_db, shared_block_cache);
+        let engines = Engines::new(kv_db, raft_db, shared_block_cache);
         bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
@@ -1960,7 +1960,7 @@ mod tests {
 
     fn generate_and_schedule_snapshot(
         gen_task: GenSnapTask,
-        engines: &KvEngines<RocksEngine, RocksEngine>,
+        engines: &Engines<RocksEngine, RocksEngine>,
         sched: &Scheduler<RegionTask<RocksSnapshot>>,
     ) -> Result<()> {
         let apply_state: RaftApplyState = engines
@@ -2498,7 +2498,7 @@ mod tests {
         let raft_path = td.path().join(Path::new("raft"));
         let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let shared_block_cache = false;
-        let engines = KvEngines::new(kv_db, raft_db, shared_block_cache);
+        let engines = Engines::new(kv_db, raft_db, shared_block_cache);
         bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);

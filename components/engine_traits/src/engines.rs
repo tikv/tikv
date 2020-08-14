@@ -7,15 +7,15 @@ use crate::errors::Result;
 use crate::options::WriteOptions;
 
 #[derive(Clone, Debug)]
-pub struct KvEngines<K, R> {
+pub struct Engines<K, R> {
     pub kv: K,
     pub raft: R,
     pub shared_block_cache: bool,
 }
 
-impl<K: KvEngine, R: RaftEngine> KvEngines<K, R> {
+impl<K: KvEngine, R: RaftEngine> Engines<K, R> {
     pub fn new(kv_engine: K, raft_engine: R, shared_block_cache: bool) -> Self {
-        KvEngines {
+        Engines {
             kv: kv_engine,
             raft: raft_engine,
             shared_block_cache,

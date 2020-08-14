@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, KvEngines, Mutable};
+use engine_traits::{KvEngine, Engines, Mutable};
 use error_code::ErrorCodeExt;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
@@ -219,7 +219,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    engines: KvEngines<EK, ER>,
+    engines: Engines<EK, ER>,
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
@@ -576,7 +576,7 @@ where
     R: CasualRouter<EK>,
 {
     pub fn new(
-        engines: KvEngines<EK, ER>,
+        engines: Engines<EK, ER>,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
@@ -743,7 +743,7 @@ mod tests {
     use engine_traits::{
         CFHandleExt, CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
     };
-    use engine_traits::{KvEngine, KvEngines};
+    use engine_traits::{KvEngine, Engines};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
@@ -845,7 +845,7 @@ mod tests {
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let shared_block_cache = false;
-        let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
+        let engines = Engines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
         let (router, _) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
             engines,
@@ -923,7 +923,7 @@ mod tests {
         }
 
         let shared_block_cache = false;
-        let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
+        let engines = Engines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("snap-manager");
