@@ -1029,7 +1029,7 @@ impl<S: Snapshot> MvccTxn<S> {
         }
         Ok(())
     }
-  
+
     pub fn gc(&mut self, key: Key, safe_point: TimeStamp) -> Result<GcInfo> {
         let mut remove_older = false;
         let mut ts = TimeStamp::max();

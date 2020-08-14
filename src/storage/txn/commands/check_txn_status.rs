@@ -6,7 +6,7 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC;
 use crate::storage::mvcc::txn::MissingLockAction;
-use crate::storage::mvcc::{Error as MvccError, MvccTxn};
+use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn};
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
@@ -74,6 +74,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
 
         let result = match txn.reader.load_lock(&self.primary_key)? {
             Some(mut lock) if lock.ts == self.lock_ts => {
+                if lock.use_async_commit
+                    && (!self.caller_start_ts.is_zero() || !self.current_ts.is_zero())
+                {
+                    return Err(MvccError::from(MvccErrorInner::Other(box_err!(
+                        "cannot call check_txn_status with caller_start_ts or current_ts set on async commit transaction"
+                    ))).into());
+                }
+
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
 
                 if lock.ts.physical() + lock.ttl < self.current_ts.physical() {
@@ -97,6 +105,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                         // Push forward the min_commit_ts so that reading won't be blocked by locks.
                         && self.caller_start_ts >= lock.min_commit_ts
                     {
+                        assert!(!lock.use_async_commit);
                         lock.min_commit_ts = self.caller_start_ts.next();
 
                         if lock.min_commit_ts < self.current_ts {
