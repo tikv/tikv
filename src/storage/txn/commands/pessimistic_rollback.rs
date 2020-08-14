@@ -2,7 +2,7 @@
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, ReleasedLock, Result as MvccResult};
+use crate::storage::mvcc::{MvccTxn, Result as MvccResult};
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
@@ -35,30 +35,8 @@ impl CommandExt for PessimisticRollback {
     gen_lock!(keys: multiple);
 }
 
-impl PessimisticRollback {
-    /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
-    pub fn pessimistic_rollback<S: Snapshot>(
-        &mut self,
-        txn: &mut MvccTxn<S>,
-        key: Key,
-    ) -> MvccResult<Option<ReleasedLock>> {
-        fail_point!("pessimistic_rollback", |err| Err(
-            crate::storage::mvcc::txn::make_txn_error(err, &key, self.start_ts,).into()
-        ));
-
-        if let Some(lock) = txn.reader.load_lock(&key)? {
-            if lock.lock_type == LockType::Pessimistic
-                && lock.ts == self.start_ts
-                && lock.for_update_ts <= self.for_update_ts
-            {
-                return Ok(txn.unlock_key(key, true));
-            }
-        }
-        Ok(None)
-    }
-}
-
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
+    /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(
             snapshot,
@@ -72,8 +50,28 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
 
         let rows = keys.len();
         let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
-        for k in keys {
-            released_locks.push(self.pessimistic_rollback(&mut txn, k)?);
+        for key in keys {
+            fail_point!("pessimistic_rollback", |err| Err(
+                crate::storage::mvcc::Error::from(crate::storage::mvcc::txn::make_txn_error(
+                    err,
+                    &key,
+                    self.start_ts
+                ))
+                .into()
+            ));
+            let released_lock: MvccResult<_> = if let Some(lock) = txn.reader.load_lock(&key)? {
+                if lock.lock_type == LockType::Pessimistic
+                    && lock.ts == self.start_ts
+                    && lock.for_update_ts <= self.for_update_ts
+                {
+                    Ok(txn.unlock_key(key, true))
+                } else {
+                    Ok(None)
+                }
+            } else {
+                Ok(None)
+            };
+            released_locks.push(released_lock?);
         }
         released_locks.wake_up(context.lock_mgr);
 

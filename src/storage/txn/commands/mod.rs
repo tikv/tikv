@@ -335,7 +335,7 @@ struct ReleasedLocks {
     pessimistic: bool,
 }
 
-pub(super) struct WriteResult {
+pub struct WriteResult {
     pub ctx: Context,
     pub to_be_write: WriteData,
     pub rows: usize,
@@ -585,6 +585,6 @@ pub trait ReadCommand<S: Snapshot>: CommandExt {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult>;
 }
 
-pub(super) trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
+pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult>;
 }

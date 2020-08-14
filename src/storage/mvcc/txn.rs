@@ -27,7 +27,7 @@ pub struct GcInfo {
 
 /// Generate the Write record that should be written that means to to perform a specified rollback
 /// operation.
-pub(in crate::storage) fn make_rollback(
+pub(crate) fn make_rollback(
     start_ts: TimeStamp,
     protected: bool,
     overlapped_write: Option<Write>,
@@ -62,7 +62,7 @@ impl MissingLockAction {
         }
     }
 
-    pub(in crate::storage) fn rollback(rollback_if_not_exist: bool) -> MissingLockAction {
+    pub(crate) fn rollback(rollback_if_not_exist: bool) -> MissingLockAction {
         if rollback_if_not_exist {
             MissingLockAction::ProtectedRollback
         } else {
@@ -106,12 +106,12 @@ pub enum SecondaryLockStatus {
 }
 
 pub struct MvccTxn<S: Snapshot> {
-    pub(in crate::storage) reader: MvccReader<S>,
+    pub(crate) reader: MvccReader<S>,
     start_ts: TimeStamp,
     write_size: usize,
     writes: WriteData,
     // collapse continuous rollbacks.
-    pub(in crate::storage) collapse_rollback: bool,
+    pub(crate) collapse_rollback: bool,
     pub extra_op: ExtraOp,
     // `concurrency_manager` is used to set memory locks for prewritten keys.
     // Prewritten locks of async commit transactions should be visible to
@@ -210,17 +210,13 @@ impl<S: Snapshot> MvccTxn<S> {
         self.write_size
     }
 
-    pub(in crate::storage) fn put_lock(&mut self, key: Key, lock: &Lock) {
+    pub(crate) fn put_lock(&mut self, key: Key, lock: &Lock) {
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
         self.writes.modifies.push(write);
     }
 
-    pub(in crate::storage) fn unlock_key(
-        &mut self,
-        key: Key,
-        pessimistic: bool,
-    ) -> Option<ReleasedLock> {
+    pub(crate) fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
         let released = ReleasedLock::new(&key, pessimistic);
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
@@ -240,7 +236,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.modifies.push(write);
     }
 
-    pub(in crate::storage) fn put_write(&mut self, key: Key, ts: TimeStamp, value: Value) {
+    pub(crate) fn put_write(&mut self, key: Key, ts: TimeStamp, value: Value) {
         let write = Modify::Put(CF_WRITE, key.append_ts(ts), value);
         self.write_size += write.size();
         self.writes.modifies.push(write);
@@ -319,7 +315,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
     // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
     // to do the rollback differs according to whether there's an overlapped write record.
-    pub(in crate::storage) fn check_write_and_rollback_lock(
+    pub(crate) fn check_write_and_rollback_lock(
         &mut self,
         key: Key,
         lock: &Lock,
@@ -876,7 +872,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.cleanup(key, TimeStamp::zero(), false)
     }
 
-    pub(in crate::storage) fn check_txn_status_missing_lock(
+    pub(crate) fn check_txn_status_missing_lock(
         &mut self,
         primary_key: Key,
         action: MissingLockAction,
@@ -974,7 +970,7 @@ impl<S: Snapshot> MvccTxn<S> {
         }
     }
 
-    pub(in crate::storage) fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
+    pub(crate) fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
         if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
             if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
                 self.delete_write(key, commit_ts);
@@ -1106,11 +1102,7 @@ impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
 }
 
 #[cfg(feature = "failpoints")]
-pub(in crate::storage) fn make_txn_error(
-    s: Option<String>,
-    key: &Key,
-    start_ts: TimeStamp,
-) -> ErrorInner {
+pub(crate) fn make_txn_error(s: Option<String>, key: &Key, start_ts: TimeStamp) -> ErrorInner {
     if let Some(s) = s {
         match s.to_ascii_lowercase().as_str() {
             "keyislocked" => {
@@ -1181,6 +1173,9 @@ mod tests {
     use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
+    use crate::storage::txn::commands::{WriteCommand, WriteContext};
+    use crate::storage::DummyLockManager;
+    use crate::storage::{ProcessResult, SecondaryLocksStatus};
     use kvproto::kvrpcpb::Context;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
 
@@ -3353,7 +3348,6 @@ mod tests {
 
         let do_check_txn_status = |rollback_if_not_exist| {
             let snapshot = engine.snapshot(&ctx).unwrap();
-            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
             let command = crate::storage::txn::commands::CheckTxnStatus {
                 ctx: Default::default(),
                 primary_key: Key::from_raw(b"key"),
@@ -3362,17 +3356,31 @@ mod tests {
                 current_ts: 0.into(),
                 rollback_if_not_exist,
             };
-            let (txn_status, released_lock) = command.check_txn_status(&mut txn).unwrap();
-            assert_eq!(
-                txn_status,
-                TxnStatus::uncommitted(
-                    0,
-                    43.into(), // min_commit_ts calculated from max_read_ts
-                    true,
-                    vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()],
+            let result = command
+                .process_write(
+                    snapshot,
+                    WriteContext {
+                        lock_mgr: &DummyLockManager,
+                        concurrency_manager: cm.clone(),
+                        extra_op: Default::default(),
+                        statistics: &mut Default::default(),
+                        pipelined_pessimistic_lock: false,
+                    },
                 )
-            );
-            assert!(released_lock.is_none());
+                .unwrap();
+            if let ProcessResult::TxnStatus { txn_status } = result.pr {
+                assert_eq!(
+                    txn_status,
+                    TxnStatus::uncommitted(
+                        0,
+                        43.into(), // min_commit_ts calculated from max_read_ts
+                        true,
+                        vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()],
+                    )
+                );
+            } else {
+                unreachable!();
+            }
         };
         do_check_txn_status(true);
         do_check_txn_status(false);
@@ -3388,20 +3396,31 @@ mod tests {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let key = Key::from_raw(key);
             let ts = TimeStamp::new(ts);
-            let mut txn = MvccTxn::new(snapshot, ts, true, cm.clone());
-            let mut command = crate::storage::txn::commands::CheckSecondaryLocks {
+            let command = crate::storage::txn::commands::CheckSecondaryLocks {
                 ctx: Default::default(),
-                keys: vec![],
+                keys: vec![key],
                 start_ts: ts,
             };
-            let res = command.check_secondary_lock(&mut txn, &key).unwrap();
-            let modifies = txn.into_modifies();
-            if !modifies.is_empty() {
-                engine
-                    .write(&ctx, WriteData::from_modifies(modifies))
-                    .unwrap();
+            let result = command
+                .process_write(
+                    snapshot,
+                    WriteContext {
+                        lock_mgr: &DummyLockManager,
+                        concurrency_manager: cm.clone(),
+                        extra_op: Default::default(),
+                        statistics: &mut Default::default(),
+                        pipelined_pessimistic_lock: false,
+                    },
+                )
+                .unwrap();
+            if !result.to_be_write.modifies.is_empty() {
+                engine.write(&ctx, result.to_be_write).unwrap();
             }
-            res
+            if let ProcessResult::SecondaryLocksStatus { status } = result.pr {
+                status
+            } else {
+                unreachable!();
+            }
         };
 
         must_prewrite_lock(&engine, b"k1", b"key", 1);
@@ -3420,23 +3439,17 @@ mod tests {
 
         assert_eq!(
             check_secondary(b"k1", 7),
-            (SecondaryLockStatus::Committed(9.into()), None)
+            SecondaryLocksStatus::Committed(9.into())
         );
         must_get_commit_ts(&engine, b"k1", 7, 9);
-        assert_eq!(
-            check_secondary(b"k1", 5),
-            (SecondaryLockStatus::RolledBack, None)
-        );
+        assert_eq!(check_secondary(b"k1", 5), SecondaryLocksStatus::RolledBack);
         must_get_rollback_ts(&engine, b"k1", 5);
         assert_eq!(
             check_secondary(b"k1", 1),
-            (SecondaryLockStatus::Committed(3.into()), None)
+            SecondaryLocksStatus::Committed(3.into())
         );
         must_get_commit_ts(&engine, b"k1", 1, 3);
-        assert_eq!(
-            check_secondary(b"k1", 6),
-            (SecondaryLockStatus::RolledBack, None)
-        );
+        assert_eq!(check_secondary(b"k1", 6), SecondaryLocksStatus::RolledBack);
         must_get_rollback_protected(&engine, b"k1", 6, true);
 
         // ----------------------------
@@ -3451,9 +3464,8 @@ mod tests {
         //               | 5: rollback
         //               | 3: start_ts = 1
 
-        let (status, released_lock) = check_secondary(b"k1", 11);
-        assert_eq!(status, SecondaryLockStatus::RolledBack);
-        assert!(released_lock.unwrap().pessimistic);
+        let status = check_secondary(b"k1", 11);
+        assert_eq!(status, SecondaryLocksStatus::RolledBack);
         must_get_rollback_protected(&engine, b"k1", 11, true);
 
         // ----------------------------
@@ -3470,7 +3482,7 @@ mod tests {
         //               |  3: start_ts = 1
 
         match check_secondary(b"k1", 13) {
-            (SecondaryLockStatus::Locked(_), None) => {}
+            SecondaryLocksStatus::Locked(_) => {}
             res => panic!("unexpected lock status: {:?}", res),
         }
         must_locked(&engine, b"k1", 13);
@@ -3490,13 +3502,13 @@ mod tests {
         //               |  3: start_ts = 1
 
         match check_secondary(b"k1", 14) {
-            (SecondaryLockStatus::RolledBack, None) => {}
+            SecondaryLocksStatus::RolledBack => {}
             res => panic!("unexpected lock status: {:?}", res),
         }
         must_get_rollback_protected(&engine, b"k1", 14, true);
 
         match check_secondary(b"k1", 15) {
-            (SecondaryLockStatus::RolledBack, None) => {}
+            SecondaryLocksStatus::RolledBack => {}
             res => panic!("unexpected lock status: {:?}", res),
         }
         must_get_overlapped_rollback(&engine, b"k1", 15, 13, WriteType::Lock);

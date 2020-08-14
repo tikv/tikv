@@ -2,7 +2,9 @@
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{ErrorInner as MvccErrorInner, MvccTxn, Result as MvccResult};
+use crate::storage::mvcc::{
+    Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, Result as MvccResult,
+};
 use crate::storage::txn::commands::{
     Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
@@ -38,51 +40,8 @@ impl CommandExt for TxnHeartBeat {
     gen_lock!(primary_key);
 }
 
-impl TxnHeartBeat {
-    /// Update a primary key's TTL if `advise_ttl > lock.ttl`.
-    ///
-    /// Returns the new TTL.
-    pub fn txn_heart_beat<S: Snapshot>(&mut self, txn: &mut MvccTxn<S>) -> MvccResult<u64> {
-        fail_point!("txn_heart_beat", |err| Err(
-            crate::storage::mvcc::txn::make_txn_error(err, &self.primary_key, self.start_ts,)
-                .into()
-        ));
-
-        if let Some(mut lock) = txn.reader.load_lock(&self.primary_key)? {
-            if lock.ts == self.start_ts {
-                if lock.ttl < self.advise_ttl {
-                    lock.ttl = self.advise_ttl;
-                    txn.put_lock(self.primary_key.clone(), &lock);
-                } else {
-                    debug!(
-                        "txn_heart_beat with advise_ttl not large than current ttl";
-                        "primary_key" => %self.primary_key,
-                        "start_ts" => self.start_ts,
-                        "advise_ttl" => self.advise_ttl,
-                        "current_ttl" => lock.ttl,
-                    );
-                }
-                return Ok(lock.ttl);
-            }
-        }
-
-        debug!(
-            "txn_heart_beat invoked but lock is absent";
-            "primary_key" => %self.primary_key,
-            "start_ts" => self.start_ts,
-            "advise_ttl" => self.advise_ttl,
-        );
-        Err(MvccErrorInner::TxnLockNotFound {
-            start_ts: self.start_ts,
-            commit_ts: TimeStamp::zero(),
-            key: self.primary_key.clone().into_raw()?,
-        }
-        .into())
-    }
-}
-
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         // TxnHeartBeat never remove locks. No need to wake up waiters.
         let mut txn = MvccTxn::new(
             snapshot,
@@ -90,11 +49,59 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             !self.ctx.get_not_fill_cache(),
             context.concurrency_manager,
         );
-        let lock_ttl = self.txn_heart_beat(&mut txn)?;
+        fail_point!("txn_heart_beat", |err| Err(MvccError::from(
+            crate::storage::mvcc::txn::make_txn_error(err, &self.primary_key, self.start_ts,)
+        )
+        .into()));
+
+        let lock_ttl: MvccResult<_> =
+            if let Some(mut lock) = txn.reader.load_lock(&self.primary_key)? {
+                if lock.ts == self.start_ts {
+                    if lock.ttl < self.advise_ttl {
+                        lock.ttl = self.advise_ttl;
+                        txn.put_lock(self.primary_key.clone(), &lock);
+                    } else {
+                        debug!(
+                            "txn_heart_beat with advise_ttl not large than current ttl";
+                            "primary_key" => %self.primary_key,
+                            "start_ts" => self.start_ts,
+                            "advise_ttl" => self.advise_ttl,
+                            "current_ttl" => lock.ttl,
+                        );
+                    }
+                    Ok(lock.ttl)
+                } else {
+                    debug!(
+                        "txn_heart_beat invoked but lock is absent";
+                        "primary_key" => %self.primary_key,
+                        "start_ts" => self.start_ts,
+                        "advise_ttl" => self.advise_ttl,
+                    );
+                    Err(MvccErrorInner::TxnLockNotFound {
+                        start_ts: self.start_ts,
+                        commit_ts: TimeStamp::zero(),
+                        key: self.primary_key.clone().into_raw()?,
+                    }
+                    .into())
+                }
+            } else {
+                debug!(
+                "txn_heart_beat invoked but lock is absent";
+                "primary_key" => %self.primary_key,
+                "start_ts" => self.start_ts,
+                "advise_ttl" => self.advise_ttl,
+                );
+                Err(MvccErrorInner::TxnLockNotFound {
+                    start_ts: self.start_ts,
+                    commit_ts: TimeStamp::zero(),
+                    key: self.primary_key.clone().into_raw()?,
+                }
+                .into())
+            };
 
         context.statistics.add(&txn.take_statistics());
         let pr = ProcessResult::TxnStatus {
-            txn_status: TxnStatus::uncommitted(lock_ttl, TimeStamp::zero(), false, vec![]),
+            txn_status: TxnStatus::uncommitted(lock_ttl?, TimeStamp::zero(), false, vec![]),
         };
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {

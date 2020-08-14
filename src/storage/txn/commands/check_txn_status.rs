@@ -6,7 +6,7 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC;
 use crate::storage::mvcc::txn::MissingLockAction;
-use crate::storage::mvcc::{MvccTxn, ReleasedLock, Result as MvccResult};
+use crate::storage::mvcc::{Error as MvccError, MvccTxn};
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
@@ -49,31 +49,30 @@ impl CommandExt for CheckTxnStatus {
     gen_lock!(primary_key);
 }
 
-impl CheckTxnStatus {
-    /// Check the status of a transaction.
-    ///
-    /// This operation checks whether a transaction has expired its primary lock's TTL, rollback the
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
+    /// checks whether a transaction has expired its primary lock's TTL, rollback the
     /// transaction if expired, or update the transaction's min_commit_ts according to the metadata
     /// in the primary lock.
-    ///
     /// When transaction T1 meets T2's lock, it may invoke this on T2's primary key. In this
     /// situation, `self.start_ts` is T2's `start_ts`, `caller_start_ts` is T1's `start_ts`, and
     /// the `current_ts` is literally the timestamp when this function is invoked. It may not be
     /// accurate.
-    ///
-    /// Returns (`lock_ttl`, `commit_ts`, `is_pessimistic_txn`).
-    /// After checking, if the lock is still alive, it retrieves the Lock's TTL; if the transaction
-    /// is committed, get the commit_ts; otherwise, if the transaction is rolled back or there's
-    /// no information about the transaction, results will be both 0.
-    pub fn check_txn_status<S: Snapshot>(
-        self,
-        txn: &mut MvccTxn<S>,
-    ) -> MvccResult<(TxnStatus, Option<ReleasedLock>)> {
-        fail_point!("check_txn_status", |err| Err(
-            crate::storage::mvcc::txn::make_txn_error(err, &self.primary_key, self.lock_ts,).into()
-        ));
+    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        let mut txn = MvccTxn::new(
+            snapshot,
+            self.lock_ts,
+            !self.ctx.get_not_fill_cache(),
+            context.concurrency_manager,
+        );
 
-        match txn.reader.load_lock(&self.primary_key)? {
+        let mut released_locks = ReleasedLocks::new(self.lock_ts, TimeStamp::zero());
+        let ctx = mem::take(&mut self.ctx);
+        fail_point!("check_txn_status", |err| Err(MvccError::from(
+            crate::storage::mvcc::txn::make_txn_error(err, &self.primary_key, self.lock_ts)
+        )
+        .into()));
+
+        let result = match txn.reader.load_lock(&self.primary_key)? {
             Some(mut lock) if lock.ts == self.lock_ts => {
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
 
@@ -85,39 +84,39 @@ impl CheckTxnStatus {
                         is_pessimistic_txn,
                     )?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
-                    return Ok((TxnStatus::TtlExpire, released));
-                }
+                    Ok((TxnStatus::TtlExpire, released))
+                } else {
+                    if !lock.min_commit_ts.is_zero()
+                        // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
+                        // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
+                        // during rolling update.
+                        // If the caller_start_ts is max, it's a point get in the autocommit transaction.
+                        // We don't push forward lock's min_commit_ts and the point get can ingore the lock
+                        // next time because it's not committed.
+                        && !self.caller_start_ts.is_max()
+                        // Push forward the min_commit_ts so that reading won't be blocked by locks.
+                        && self.caller_start_ts >= lock.min_commit_ts
+                    {
+                        lock.min_commit_ts = self.caller_start_ts.next();
 
-                // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
-                // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
-                // during rolling update.
-                if !lock.min_commit_ts.is_zero()
-                    // If the caller_start_ts is max, it's a point get in the autocommit transaction.
-                    // We don't push forward lock's min_commit_ts and the point get can ingore the lock
-                    // next time because it's not committed.
-                    && !self.caller_start_ts.is_max()
-                    // Push forward the min_commit_ts so that reading won't be blocked by locks.
-                    && self.caller_start_ts >= lock.min_commit_ts
-                {
-                    lock.min_commit_ts = self.caller_start_ts.next();
+                        if lock.min_commit_ts < self.current_ts {
+                            lock.min_commit_ts = self.current_ts;
+                        }
 
-                    if lock.min_commit_ts < self.current_ts {
-                        lock.min_commit_ts = self.current_ts;
+                        txn.put_lock(self.primary_key, &lock);
+                        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
                     }
 
-                    txn.put_lock(self.primary_key, &lock);
-                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
+                    Ok((
+                        TxnStatus::uncommitted(
+                            lock.ttl,
+                            lock.min_commit_ts,
+                            lock.use_async_commit,
+                            lock.secondaries,
+                        ),
+                        None,
+                    ))
                 }
-
-                Ok((
-                    TxnStatus::uncommitted(
-                        lock.ttl,
-                        lock.min_commit_ts,
-                        lock.use_async_commit,
-                        lock.secondaries,
-                    ),
-                    None,
-                ))
             }
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
@@ -127,22 +126,9 @@ impl CheckTxnStatus {
                     MissingLockAction::rollback(self.rollback_if_not_exist),
                 )
                 .map(|s| (s, None)),
-        }
-    }
-}
+        };
+        let (txn_status, released) = result?;
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        let mut txn = MvccTxn::new(
-            snapshot,
-            self.lock_ts,
-            !self.ctx.get_not_fill_cache(),
-            context.concurrency_manager,
-        );
-
-        let mut released_locks = ReleasedLocks::new(self.lock_ts, TimeStamp::zero());
-        let ctx = mem::take(&mut self.ctx);
-        let (txn_status, released) = self.check_txn_status(&mut txn)?;
         released_locks.push(released);
         // The lock is released here only when the `check_txn_status` returns `TtlExpire`.
         if let TxnStatus::TtlExpire = txn_status {

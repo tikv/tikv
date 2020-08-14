@@ -305,7 +305,11 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot, WriteData};
-    use crate::storage::{concurrency_manager::ConcurrencyManager, types::TxnStatus};
+    use crate::storage::lock_manager::DummyLockManager;
+    use crate::storage::txn::commands::{WriteCommand, WriteContext};
+    use crate::storage::{
+        concurrency_manager::ConcurrencyManager, types::TxnStatus, ProcessResult,
+    };
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use txn_types::Key;
@@ -1046,17 +1050,22 @@ pub mod tests {
         let for_update_ts = for_update_ts.into();
         let cm = ConcurrencyManager::new(for_update_ts);
         let start_ts = start_ts.into();
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
-        let mut command = crate::storage::txn::commands::PessimisticRollback {
+        let command = crate::storage::txn::commands::PessimisticRollback {
             ctx: ctx.clone(),
-            keys: vec![],
+            keys: vec![Key::from_raw(key)],
             start_ts,
             for_update_ts,
         };
-        command
-            .pessimistic_rollback(&mut txn, Key::from_raw(key))
-            .unwrap();
-        write(engine, &ctx, txn.into_modifies());
+        let lock_mgr = DummyLockManager;
+        let write_context = WriteContext {
+            lock_mgr: &lock_mgr,
+            concurrency_manager: cm,
+            extra_op: Default::default(),
+            statistics: &mut Default::default(),
+            pipelined_pessimistic_lock: false,
+        };
+        let result = command.process_write(snapshot, write_context).unwrap();
+        write(engine, &ctx, result.to_be_write.modifies);
     }
 
     pub fn must_commit<E: Engine>(
@@ -1163,16 +1172,39 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
-        let mut command = crate::storage::txn::commands::TxnHeartBeat {
+        let command = crate::storage::txn::commands::TxnHeartBeat {
             ctx: Context::default(),
             primary_key: Key::from_raw(primary_key),
             start_ts,
             advise_ttl,
         };
-        let ttl = command.txn_heart_beat(&mut txn).unwrap();
-        write(engine, &ctx, txn.into_modifies());
-        assert_eq!(ttl, expect_ttl);
+        let result = command
+            .process_write(
+                snapshot,
+                WriteContext {
+                    lock_mgr: &DummyLockManager,
+                    concurrency_manager: cm,
+                    extra_op: Default::default(),
+                    statistics: &mut Default::default(),
+                    pipelined_pessimistic_lock: false,
+                },
+            )
+            .unwrap();
+        if let ProcessResult::TxnStatus {
+            txn_status:
+                TxnStatus::Uncommitted {
+                    lock_ttl,
+                    min_commit_ts: _,
+                    use_async_commit: _,
+                    secondaries: _,
+                },
+        } = result.pr
+        {
+            write(engine, &ctx, result.to_be_write.modifies);
+            assert_eq!(lock_ttl, expect_ttl);
+        } else {
+            unreachable!();
+        }
     }
 
     pub fn must_txn_heart_beat_err<E: Engine>(
@@ -1185,14 +1217,24 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
-        let mut command = crate::storage::txn::commands::TxnHeartBeat {
+        let command = crate::storage::txn::commands::TxnHeartBeat {
             ctx,
             primary_key: Key::from_raw(primary_key),
             start_ts,
             advise_ttl,
         };
-        command.txn_heart_beat(&mut txn).unwrap_err();
+        assert!(command
+            .process_write(
+                snapshot,
+                WriteContext {
+                    lock_mgr: &DummyLockManager,
+                    concurrency_manager: cm,
+                    extra_op: Default::default(),
+                    statistics: &mut Default::default(),
+                    pipelined_pessimistic_lock: false,
+                }
+            )
+            .is_err());
     }
 
     pub fn must_check_txn_status<E: Engine>(
@@ -1209,7 +1251,6 @@ pub mod tests {
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
         let lock_ts: TimeStamp = lock_ts.into();
-        let mut txn = MvccTxn::new(snapshot, lock_ts, true, cm);
         let command = crate::storage::txn::commands::CheckTxnStatus {
             ctx: Context::default(),
             primary_key: Key::from_raw(primary_key),
@@ -1218,9 +1259,24 @@ pub mod tests {
             current_ts,
             rollback_if_not_exist,
         };
-        let (txn_status, _) = command.check_txn_status(&mut txn).unwrap();
-        assert_eq!(txn_status, expect_status);
-        write(engine, &ctx, txn.into_modifies());
+        let result = command
+            .process_write(
+                snapshot,
+                WriteContext {
+                    lock_mgr: &DummyLockManager,
+                    concurrency_manager: cm,
+                    extra_op: Default::default(),
+                    statistics: &mut Default::default(),
+                    pipelined_pessimistic_lock: false,
+                },
+            )
+            .unwrap();
+        if let ProcessResult::TxnStatus { txn_status } = result.pr {
+            assert_eq!(txn_status, expect_status);
+        } else {
+            unreachable!();
+        }
+        write(engine, &ctx, result.to_be_write.modifies);
     }
 
     pub fn must_check_txn_status_err<E: Engine>(
@@ -1236,7 +1292,6 @@ pub mod tests {
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
         let lock_ts: TimeStamp = lock_ts.into();
-        let mut txn = MvccTxn::new(snapshot, lock_ts, true, cm);
         let command = crate::storage::txn::commands::CheckTxnStatus {
             ctx,
             primary_key: Key::from_raw(primary_key),
@@ -1245,7 +1300,18 @@ pub mod tests {
             current_ts,
             rollback_if_not_exist,
         };
-        command.check_txn_status(&mut txn).unwrap_err();
+        assert!(command
+            .process_write(
+                snapshot,
+                WriteContext {
+                    lock_mgr: &DummyLockManager,
+                    concurrency_manager: cm,
+                    extra_op: Default::default(),
+                    statistics: &mut Default::default(),
+                    pipelined_pessimistic_lock: false,
+                }
+            )
+            .is_err());
     }
 
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
