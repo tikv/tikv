@@ -1123,9 +1123,17 @@ impl<S: Snapshot> MvccTxn<S> {
 
         match self.reader.load_lock(&primary_key)? {
             Some(mut lock) if lock.ts == self.start_ts => {
+                if lock.use_async_commit && (!caller_start_ts.is_zero() || !current_ts.is_zero()) {
+                    return Err(ErrorInner::Other(box_err!(
+                        "cannot call check_txn_status with caller_start_ts or current_ts set on async commit transaction"
+                    ))
+                    .into());
+                }
+
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
 
                 if lock.ts.physical() + lock.ttl < current_ts.physical() {
+                    assert!(!lock.use_async_commit);
                     // If the lock is expired, clean it up.
                     let released =
                         self.check_write_and_rollback_lock(primary_key, &lock, is_pessimistic_txn)?;
@@ -1144,6 +1152,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     // Push forward the min_commit_ts so that reading won't be blocked by locks.
                     && caller_start_ts >= lock.min_commit_ts
                 {
+                    assert!(!lock.use_async_commit);
                     lock.min_commit_ts = caller_start_ts.next();
 
                     if lock.min_commit_ts < current_ts {
@@ -3636,6 +3645,11 @@ mod tests {
         };
         do_check_txn_status(true);
         do_check_txn_status(false);
+
+        // Disallow calling check_txn_status on async commit transactions with caller_start_ts or
+        // current_ts set.
+        must_check_txn_status_err(&engine, b"key", 2, 1, 0, true);
+        must_check_txn_status_err(&engine, b"key", 2, 0, 1, true);
     }
 
     #[test]
