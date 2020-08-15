@@ -33,6 +33,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
+use minitrace::prelude::*;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
@@ -184,7 +185,7 @@ macro_rules! handle_request {
                     GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
                 });
 
-            ctx.spawn(future);
+            ctx.spawn(future.trace_task(Event::TiKvGrpcio as u32));
         }
     }
 }

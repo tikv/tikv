@@ -224,6 +224,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     where
         F: FnOnce(&E) -> R,
     {
+        let _g = minitrace::new_span(tracing::Event::TiKvTlsEngine as u32);
+
         // Safety: the read pools ensure that a TLS engine exists.
         unsafe { with_tls_engine(f) }
     }

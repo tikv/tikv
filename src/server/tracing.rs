@@ -2,7 +2,7 @@
 
 use super::Result;
 use minitrace::jaeger::thrift_compact_encode;
-use minitrace::Collector;
+use minitrace::{Collector, TraceDetails};
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::time::Duration;
@@ -80,7 +80,7 @@ impl JaegerReporter {
 
     async fn report(
         agent: SocketAddr,
-        collector: Collector,
+        mut trace_details: TraceDetails,
         threshold: Duration,
         spans_max_length: usize,
     ) -> Result<()> {
@@ -91,8 +91,6 @@ impl JaegerReporter {
         }
         .parse()?;
         let mut udp_socket = UdpSocket::bind(local_addr).await?;
-
-        let mut trace_details = collector.collect();
 
         // Check if duration reaches `duration_threshold`
         if Duration::from_nanos(trace_details.elapsed_ns) < threshold {
@@ -151,7 +149,7 @@ impl Reporter for JaegerReporter {
         if let Some(collector) = collector {
             self.runtime.spawn(Self::report(
                 self.agent,
-                collector,
+                collector.collect(),
                 self.duration_threshold,
                 self.spans_max_length,
             ));
