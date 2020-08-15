@@ -35,24 +35,22 @@ pub fn property(key: Key, value: String) {
 }
 
 /// Tracing Reporter
-pub trait Reporter {
-    const IS_NULL: bool;
-
+pub trait Reporter: Send + Sync {
     fn report(&self, collector: Option<Collector>);
-    fn is_null(&self) -> bool {
-        Self::IS_NULL
-    }
+    fn is_null(&self) -> bool;
 }
 
 impl<R, D> Reporter for D
 where
     R: Reporter + ?Sized,
-    D: Deref<Target = R>,
+    D: Deref<Target = R> + Send + Sync,
 {
-    const IS_NULL: bool = R::IS_NULL;
-
     fn report(&self, collector: Option<Collector>) {
         self.deref().report(collector)
+    }
+
+    fn is_null(&self) -> bool {
+        self.deref().is_null()
     }
 }
 
@@ -152,8 +150,6 @@ impl JaegerReporter {
 }
 
 impl Reporter for JaegerReporter {
-    const IS_NULL: bool = false;
-
     fn report(&self, collector: Option<Collector>) {
         if let Some(collector) = collector {
             self.runtime.spawn(Self::report(
@@ -163,6 +159,10 @@ impl Reporter for JaegerReporter {
                 self.spans_max_length,
             ));
         }
+    }
+
+    fn is_null(&self) -> bool {
+        false
     }
 }
 
@@ -177,7 +177,9 @@ impl NullReporter {
 }
 
 impl Reporter for NullReporter {
-    const IS_NULL: bool = true;
-
     fn report(&self, _collector: Option<Collector>) {}
+
+    fn is_null(&self) -> bool {
+        true
+    }
 }

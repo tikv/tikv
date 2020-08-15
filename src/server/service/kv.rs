@@ -149,7 +149,7 @@ macro_rules! requests_to_trace {
 }
 
 // Here to register requests to trace. It's in compile time to determine which
-// requests won't be traced.
+// requests will be traced.
 //
 // As format:
 //  $request_name -> $event_enum_value,
@@ -168,7 +168,7 @@ macro_rules! handle_request {
             let begin_instant = Instant::now_coarse();
 
             let (_root_span, collector) = trace_may_enable!($fn_name, !self.tracing_reporter.is_null());
-            tracing::property(tracing::Key::Foo, "Bar".to_string()); // FIXME: for demonstration
+            tracing::property(tracing::Key::Foo, "Bar".to_string()); // FIXME: For demonstration
             let reporter = self.tracing_reporter.clone();
 
             let future = $future_name(&self.storage, req)
