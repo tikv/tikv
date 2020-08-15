@@ -167,7 +167,7 @@ macro_rules! handle_request {
             let begin_instant = Instant::now_coarse();
 
             let (_root_span, collector) = trace_may_enable!($fn_name);
-            tracing::property(tracing::Key::Foo, "Bar".to_string());
+            tracing::property(tracing::Key::Foo, "Bar".to_string()); // FIXME: For demonstration
             let reporter = self.tracing_reporter.clone();
 
             let future = $future_name(&self.storage, req)
