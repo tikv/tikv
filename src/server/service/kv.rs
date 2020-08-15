@@ -142,14 +142,14 @@ impl<
 macro_rules! requests_to_trace {
     ($($name: ident -> $event: expr,)*) => {
         macro_rules! trace_may_enable {
-            $(($name) => { minitrace::trace_may_enable(true, $event as u32) };)*
-            ($_: ident) => { minitrace::trace_may_enable(false, 0u32) }
+            $(($name, $enable: expr) => { minitrace::trace_may_enable($enable, $event as u32) };)*
+            ($_: ident, $__: expr) => { minitrace::trace_may_enable(false, 0u32) }
         }
     }
 }
 
 // Here to register requests to trace. It's in compile time to determine which
-// requests will be traced.
+// requests won't be traced.
 //
 // As format:
 //  $request_name -> $event_enum_value,
@@ -167,8 +167,8 @@ macro_rules! handle_request {
 
             let begin_instant = Instant::now_coarse();
 
-            let (_root_span, collector) = trace_may_enable!($fn_name);
-            tracing::property(tracing::Key::Foo, "Bar".to_string()); // FIXME: For demonstration
+            let (_root_span, collector) = trace_may_enable!($fn_name, !self.tracing_reporter.is_null());
+            tracing::property(tracing::Key::Foo, "Bar".to_string()); // FIXME: for demonstration
             let reporter = self.tracing_reporter.clone();
 
             let future = $future_name(&self.storage, req)
@@ -337,7 +337,8 @@ impl<
         }
         let begin_instant = Instant::now_coarse();
 
-        let (_root_span, collector) = trace_may_enable!(coprocessor);
+        let (_root_span, collector) =
+            trace_may_enable!(coprocessor, !self.tracing_reporter.is_null());
         let reporter = self.tracing_reporter.clone();
 
         let future = future_cop(&self.cop, Some(ctx.peer()), req)

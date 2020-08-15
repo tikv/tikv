@@ -70,7 +70,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
 
 impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<E: Engine, L: LockManager, R: tracing::Reporter + Clone + 'static>(
+    pub fn new<E, L, R>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
@@ -81,7 +81,12 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         gc_worker: GcWorker<E>,
         yatp_read_pool: Option<ReadPool>,
         tracing_reporter: R,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        E: Engine,
+        L: LockManager,
+        R: tracing::Reporter + Send + Clone + 'static,
+    {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.stats_concurrency > 0 {
             Some(
