@@ -148,7 +148,7 @@ macro_rules! requests_to_trace {
 }
 
 // Here to register requests to trace. It's in compile time to determine which
-// request will be traced.
+// requests will be traced.
 //
 // As format:
 //  $request_name -> $event_enum_value,

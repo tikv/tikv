@@ -901,7 +901,7 @@
 
 [tracing]
 ## Jaeger agent to report minitrace tracing results
-## If set, used to be "127.0.0.1:6831"
+## Commomly, it's set to "127.0.0.1:6831".
 # jaeger-agent = ""
 
 ## Number of threads for reporting tracing results to jaeger-agent
