@@ -3864,7 +3864,7 @@ mod tests {
             );
         });
 
-        router.schedule_task(2, Msg::destroy(2, true, false));
+        router.schedule_task(2, Msg::destroy(2, false));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Destroy {
