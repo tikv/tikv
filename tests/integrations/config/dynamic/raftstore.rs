@@ -111,6 +111,7 @@ fn start_raftstore(
             Worker::new("split"),
             AutoSplitController::default(),
             Arc::default(),
+            None,
         )
         .unwrap();
     (cfg_controller, raft_router, system)
@@ -127,21 +128,6 @@ where
             tx.send(()).unwrap();
         })))
         .unwrap();
-    rx.recv_timeout(Duration::from_secs(3)).unwrap();
-}
-
-fn validate_apply<F>(router: &mut ApplyRouter<RocksEngine>, validate: F)
-where
-    F: FnOnce(bool) + Send + 'static,
-{
-    let (tx, rx) = mpsc::channel();
-    router.schedule(ApplyTask::Validate(
-        0,
-        Box::new(move |(_, sync_log): (_, bool)| {
-            validate(sync_log);
-            tx.send(()).unwrap();
-        }),
-    ));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 }
 
@@ -190,9 +176,6 @@ fn test_update_apply_store_config() {
     validate_store(&raft_router, move |cfg: &Config| {
         assert_eq!(cfg.sync_log, true);
     });
-    validate_apply(&mut apply_router, |sync_log| {
-        assert_eq!(sync_log, true);
-    });
 
     // dispatch updated config
     cfg_controller
@@ -202,9 +185,6 @@ fn test_update_apply_store_config() {
     // both configs should be updated
     validate_store(&raft_router, move |cfg: &Config| {
         assert_eq!(cfg.sync_log, false);
-    });
-    validate_apply(&mut apply_router, |sync_log| {
-        assert_eq!(sync_log, false);
     });
 
     system.shutdown();

@@ -261,7 +261,7 @@ where
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
-    pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<ER>>,
+    pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub router: RaftRouter<EK, ER>,
     pub apply_batch_system: Arc<dyn ApplyBatchSystem<EK>>,
@@ -816,7 +816,7 @@ pub struct RaftPollerBuilder<T, C> {
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksSnapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
-    raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
+    raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     pub router: RaftRouter<RocksEngine, RocksEngine>,
     pub importer: Arc<SSTImporter>,
@@ -1067,7 +1067,7 @@ struct Workers {
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
-    raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
+    raftlog_gc_worker: Worker<RaftlogGcTask>,
     region_worker: Worker<RegionTask<RocksSnapshot>>,
     coprocessor_host: CoprocessorHost<RocksEngine>,
     future_poller: ThreadPool,
@@ -1264,7 +1264,7 @@ impl RaftBatchSystem {
         let timer = region_runner.new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
 
-        let raftlog_gc_runner = RaftlogGcRunner::new(None);
+        let raftlog_gc_runner = RaftlogGcRunner::new(None, engines.clone());
         box_try!(workers.raftlog_gc_worker.start(raftlog_gc_runner));
 
         let compact_runner = CompactRunner::new(engines.kv.clone());

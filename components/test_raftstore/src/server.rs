@@ -197,6 +197,7 @@ impl Simulator for ServerCluster {
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
+            storage_read_pool.handle(),
             lock_mgr.clone(),
             Arc::new(DummyPdClient::new()),
             false,
@@ -323,6 +324,7 @@ impl Simulator for ServerCluster {
             importer.clone(),
             split_check_worker,
             AutoSplitController::default(),
+            None,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

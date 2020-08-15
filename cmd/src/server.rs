@@ -461,7 +461,7 @@ impl TiKVServer {
         };
         let remote = unified_read_pool
             .as_ref()
-            .map_or(None, |pool| pool.remote().clone());
+            .map_or(None, |pool| pool.remote());
 
         let storage_read_pool_handle = if self.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()

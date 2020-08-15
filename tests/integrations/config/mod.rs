@@ -121,6 +121,16 @@ fn test_serde_custom_tikv_config() {
             max_tasks_per_worker_low: 3000,
             stack_size: ReadableSize::mb(12),
         },
+        scheduler: StorageReadPoolConfig {
+            use_unified_pool: Some(false),
+            high_concurrency: 2,
+            normal_concurrency: 4,
+            low_concurrency: 6,
+            max_tasks_per_worker_high: 2000,
+            max_tasks_per_worker_normal: 1000,
+            max_tasks_per_worker_low: 3000,
+            stack_size: ReadableSize::mb(12),
+        },
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),

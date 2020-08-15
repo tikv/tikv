@@ -4,7 +4,7 @@ use crate::storage::kv::{FlowStatsReporter, Statistics};
 use crate::storage::metrics::*;
 use engine_traits::{KvEngine, WriteBatch, WriteBatchVecExt};
 use prometheus::local::*;
-use raftstore::store::fsm::maybe_flush_tls_ctx;
+use raftstore::store::fsm::flush_tls_ctx;
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::time::Duration;
@@ -97,7 +97,7 @@ where
     fn clone(&self) -> Self {
         Self {
             reporter: self.reporter.clone(),
-            last_tick_time: self.last_tick_time.clone(),
+            last_tick_time: self.last_tick_time,
             tick_count: 0,
             _phantom1: PhantomData,
             _phantom2: PhantomData,
@@ -141,10 +141,10 @@ where
             return;
         }
         self.tick_count = 0;
-        maybe_flush_tls_ctx::<E, W>();
         if self.last_tick_time.elapsed() < TICK_INTERVAL {
             return;
         }
+        flush_tls_ctx::<E, W>();
         self.last_tick_time = Instant::now();
         crate::storage::metrics::tls_flush(&self.reporter);
         crate::coprocessor::metrics::tls_flush(&self.reporter);

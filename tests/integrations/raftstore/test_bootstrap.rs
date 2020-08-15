@@ -107,6 +107,7 @@ fn test_node_bootstrap_with_prepared_data() {
         importer,
         Worker::new("split"),
         AutoSplitController::default(),
+        None,
     )
     .unwrap();
     assert!(Arc::clone(&engine)

@@ -4,7 +4,7 @@ use std::cmp::Ord;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -72,7 +72,6 @@ const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const WRITE_BATCH_LIMIT: usize = 16;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
-const MAX_FLUSH_WAIT_TIME: Duration = Duration::from_millis(50);
 
 type FlushCallback = Box<dyn FnOnce(bool) + Send>;
 
@@ -349,7 +348,6 @@ where
     core: ApplyContextCore<E>,
     // TxnExtra collected from applied cmds.
     txn_extras: MustConsumeVec<TxnExtra>,
-    last_flush_time: Instant,
 }
 
 impl<E, W> ApplyContext<E, W>
@@ -370,7 +368,6 @@ where
             perf_context_statistics,
             sync_log_hint: false,
             txn_extras: MustConsumeVec::new("extra data from txn"),
-            last_flush_time: Instant::now_coarse(),
         }
     }
 
@@ -423,9 +420,8 @@ where
     fn commit_opt(&mut self, fsm: &mut ApplyFsm<E>, persistent: bool) {
         fsm.update_metrics(self);
         if persistent {
-            if self.flush() {
-                APPLY_FLUSH_TYPE_COUNTER.auto.inc();
-            }
+            self.flush();
+            APPLY_FLUSH_TYPE_COUNTER.auto.inc();
             self.prepare_for(fsm);
         }
         self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
@@ -435,9 +431,8 @@ where
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
     pub fn flush(&mut self) -> bool {
-        let need_sync = self.core.enable_sync_log && self.sync_log_hint;
-        let need_flush = self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty());
-        if need_flush {
+        let need_sync = self.sync_log_hint;
+        if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
             self.kv_wb()
@@ -462,6 +457,10 @@ where
             }
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
+        } else if need_sync {
+            self.core.engine.sync().unwrap_or_else(|e| {
+                panic!("failed to sync wal of engine: {:?}", e);
+            });
         }
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
         self.core.host.on_flush_apply(
@@ -486,8 +485,7 @@ where
                 cb(need_sync);
             }
         }
-        self.last_flush_time = Instant::now_coarse();
-        need_flush
+        need_sync
     }
 
     /// Finishes `Apply`s for the fsm.
@@ -617,55 +615,6 @@ fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
     false
 }
 
-/// A struct that stores the state related to Merge.
-///
-/// When executing a `CommitMerge`, the source peer may have not applied
-/// to the required index, so the target peer has to abort current execution
-/// and wait for it asynchronously.
-///
-/// When rolling the stack, all states required to recover are stored in
-/// this struct.
-/// TODO: check whether generator/coroutine is a good choice in this case.
-struct WaitSourceMergeState {
-    /// A flag that indicates whether the source peer has applied to the required
-    /// index. If the source peer is ready, this flag should be set to the region id
-    /// of source peer.
-    logs_up_to_date: Arc<AtomicU64>,
-}
-
-struct YieldState<E>
-where
-    E: KvEngine,
-{
-    /// All of the entries that need to continue to be applied after
-    /// the source peer has applied its logs.
-    pending_entries: Vec<Entry>,
-    /// All of messages that need to continue to be handled after
-    /// the source peer has applied its logs and pending entries
-    /// are all handled.
-    pending_msgs: Vec<Msg<E>>,
-}
-
-impl<E> Debug for YieldState<E>
-where
-    E: KvEngine,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("YieldState")
-            .field("pending_entries", &self.pending_entries.len())
-            .field("pending_msgs", &self.pending_msgs.len())
-            .finish()
-    }
-}
-
-impl Debug for WaitSourceMergeState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WaitSourceMergeState")
-            .field("logs_up_to_date", &self.logs_up_to_date)
-            .finish()
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct NewSplitPeer {
     pub peer_id: u64,
@@ -738,8 +687,6 @@ where
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
-
-    last_sync_apply_index: u64,
 }
 
 impl<E> ApplyFsm<E>
@@ -752,7 +699,6 @@ where
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
             region: reg.region,
             pending_remove: false,
-            last_sync_apply_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
             applied_index_term: reg.applied_index_term,
             term: reg.term,
@@ -781,7 +727,6 @@ where
         self.term = reg.term;
         self.region = reg.region;
         self.applied_index_term = reg.applied_index_term;
-        self.last_sync_apply_index = reg.apply_state.get_applied_index();
         self.apply_state = reg.apply_state;
         self.clear_all_commands_as_stale();
     }
@@ -848,10 +793,6 @@ where
     }
 
     fn write_apply_state<W: WriteBatch + WriteBatchVecExt<E>>(&mut self, wb: &mut W) {
-        if self.last_sync_apply_index >= self.apply_state.get_applied_index() {
-            return;
-        }
-        self.last_sync_apply_index = self.apply_state.get_applied_index();
         wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
@@ -2543,7 +2484,7 @@ where
     },
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
-    Validate(u64, Box<dyn FnOnce((&ApplyFsm<E>, bool)) + Send>),
+    Validate(u64, Box<dyn FnOnce(&ApplyFsm<E>) + Send>),
 }
 
 impl<E> Msg<E>
@@ -2769,7 +2710,6 @@ where
         ctx: &mut ApplyContext<E, W>,
         callback: Box<dyn FnOnce(u64)>,
     ) {
-        fail_point!("after_handle_catch_up_logs_for_merge");
         fail_point!(
             "after_handle_catch_up_logs_for_merge_1003",
             self.id() == 1003,
@@ -2799,7 +2739,7 @@ where
         }
         let applied_index = self.apply_state.get_applied_index();
         assert!(snap_task.commit_index() <= applied_index);
-        if self.uncommit_data || self.last_sync_apply_index < applied_index {
+        if self.uncommit_data {
             apply_ctx.prepare_write_batch();
             self.write_apply_state(apply_ctx.kv_wb_mut());
             fail_point!(
@@ -2937,7 +2877,7 @@ where
                 cb,
             } => self.handle_change(apply_ctx, cmd, region_epoch, cb),
             #[cfg(any(test, feature = "testexport"))]
-            Msg::Validate(_, f) => f((&self, apply_ctx.core.enable_sync_log)),
+            Msg::Validate(_, f) => f(&self),
         }
     }
 }
@@ -2962,8 +2902,6 @@ pub struct ApplyContextCore<E: KvEngine> {
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     notifier: Notifier<E>,
     engine: E,
-    // Indicates that WAL can be synchronized when data is written to KV engine.
-    enable_sync_log: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
     store_id: u64,
@@ -2981,7 +2919,6 @@ impl<E: KvEngine> Clone for ApplyContextCore<E> {
             pending_create_peers: self.pending_create_peers.clone(),
             notifier: self.notifier.clone(),
             engine: self.engine.clone(),
-            enable_sync_log: self.enable_sync_log,
             use_delete_range: self.use_delete_range,
             store_id: self.store_id,
             yield_duration: self.yield_duration,
@@ -3016,9 +2953,8 @@ where
         }
         let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
         if let Some(mut old_ctx) = ctx.take() {
-            if old_ctx.flush() {
-                APPLY_FLUSH_TYPE_COUNTER.replace.inc();
-            }
+            old_ctx.flush();
+            APPLY_FLUSH_TYPE_COUNTER.replace.inc();
         }
         ctx.replace(apply_ctx);
     });
@@ -3029,15 +2965,13 @@ where
     E: KvEngine,
     W: WriteBatch + WriteBatchVecExt<E>,
 {
-    unsafe {
-        TLS_APPLY_CONTEXT.with(|e| {
-            if (*e.get()).is_null() {
-                return None;
-            }
-            let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
-            ctx.take()
-        })
-    }
+    TLS_APPLY_CONTEXT.with(|e| unsafe {
+        if (*e.get()).is_null() {
+            return None;
+        }
+        let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
+        ctx.take()
+    })
 }
 
 pub fn flush_tls_ctx<E, W>()
@@ -3045,44 +2979,18 @@ where
     E: KvEngine,
     W: WriteBatch + WriteBatchVecExt<E>,
 {
-    unsafe {
-        TLS_APPLY_CONTEXT.with(|e| {
-            if (*e.get()).is_null() {
-                return;
+    TLS_APPLY_CONTEXT.with(|e| unsafe {
+        if (*e.get()).is_null() {
+            return;
+        }
+        let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
+        if let Some(apply_ctx) = ctx.as_mut() {
+            if !apply_ctx.flush_notifier.is_empty() {
+                APPLY_FLUSH_TYPE_COUNTER.pause.inc();
+                apply_ctx.flush();
             }
-            let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
-            if let Some(apply_ctx) = ctx.as_mut() {
-                if !apply_ctx.flush_notifier.is_empty() {
-                    APPLY_FLUSH_TYPE_COUNTER.pause.inc();
-                    apply_ctx.flush();
-                }
-            }
-        })
-    }
-}
-
-pub fn maybe_flush_tls_ctx<E, W>()
-where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
-{
-    unsafe {
-        TLS_APPLY_CONTEXT.with(|e| {
-            if (*e.get()).is_null() {
-                return;
-            }
-            let ctx = &mut *(*e.get() as *mut Option<ApplyContext<E, W>>);
-            if let Some(apply_ctx) = ctx.as_mut() {
-                if !apply_ctx.flush_notifier.is_empty()
-                    && apply_ctx.last_flush_time.elapsed() > MAX_FLUSH_WAIT_TIME
-                {
-                    if apply_ctx.flush() {
-                        APPLY_FLUSH_TYPE_COUNTER.wait.inc();
-                    }
-                }
-            }
-        })
-    }
+        }
+    })
 }
 
 pub struct ApplyRunner<E, W>
@@ -3138,9 +3046,7 @@ where
         local: &mut yatp::pool::Local<Self::TaskCell>,
         task_cell: Self::TaskCell,
     ) -> bool {
-        let finished = self.inner.handle(local, task_cell);
-        maybe_flush_tls_ctx::<E, W>();
-        finished
+        self.inner.handle(local, task_cell)
     }
 
     fn pause(&mut self, local: &mut yatp::pool::Local<Self::TaskCell>) -> bool {
@@ -3181,10 +3087,10 @@ async fn handle_normal<E, W>(
                         set_tls_ctx(ctx);
                         if let Err(e) = f.await {
                             error!(
-                                "execute raft command";
-                                "region_id" => fsm.region_id(),
-                                "err" => ?e,
-                            );
+                            "execute raft command";
+                            "region_id" => fsm.region_id(),
+                            "err" => ?e,
+                                );
                             return;
                         }
                         fsm.uncommit_data = false;
@@ -3193,6 +3099,7 @@ async fn handle_normal<E, W>(
                         set_tls_ctx(ctx);
                     }
                     if let Some(msg) = receiver.recv().await {
+                        fsm.handle_start = Instant::now_coarse();
                         apply_ctx = take_tls_ctx().or_else(|| {
                             Some(ApplyContext::<E, W>::new(core.lock().unwrap().clone()))
                         });
@@ -3302,7 +3209,6 @@ pub fn create_apply_batch_system<W: WriteBatch + WriteBatchVecExt<RocksEngine> +
         engine,
         notifier,
         pending_create_peers,
-        enable_sync_log: cfg.sync_log,
         store_id,
         yield_duration: cfg.apply_yield_duration.0,
         use_delete_range: cfg.use_delete_range,
@@ -3469,7 +3375,7 @@ mod tests {
         let (validate_tx, validate_rx) = mpsc::channel();
         router.schedule(Msg::Validate(
             0,
-            Box::new(move |(delegate, _): (&ApplyFsm<RocksEngine>, _)| {
+            Box::new(move |delegate| {
                 validate(delegate);
                 validate_tx.send(()).unwrap();
             }),

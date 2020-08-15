@@ -773,6 +773,7 @@ fn test_double_run_node() {
             importer,
             Worker::new("split"),
             AutoSplitController::default(),
+            None,
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
