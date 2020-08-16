@@ -10,7 +10,7 @@ use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
 use super::{Error, Result};
-use crate::codec::data_type::{ChunkRef, VectorValue};
+use crate::codec::data_type::{ChunkRef, LogicalRows, VectorValue};
 use crate::codec::datum;
 use crate::codec::datum_codec::DatumPayloadDecoder;
 use crate::codec::mysql::decimal::{
@@ -122,6 +122,41 @@ impl Column {
     }
 
     pub fn from_vector_value(
+        field_type: &FieldType,
+        v: &VectorValue,
+        logical_rows: LogicalRows,
+    ) -> Result<Self> {
+        use crate::codec::data_type::*;
+        if let LogicalRows::Identical { size } = logical_rows {
+            if size == v.len() {
+                match v {
+                    VectorValue::Bytes(vec) => Ok(Self {
+                        length: vec.len(),
+                        null_cnt: vec.bitmap.null_cnt(),
+                        null_bitmap: vec.bitmap.data.clone(),
+                        var_offsets: vec.var_offset.clone(),
+                        fixed_len: 0,
+                        data: vec.data.clone(),
+                    }),
+                    VectorValue::Json(vec) => Ok(Self {
+                        length: vec.len(),
+                        null_cnt: vec.bitmap.null_cnt(),
+                        null_bitmap: vec.bitmap.data.clone(),
+                        var_offsets: vec.var_offset.clone(),
+                        fixed_len: 0,
+                        data: vec.data.clone(),
+                    }),
+                    _ => Self::from_vector_value_slowpath(field_type, &v, logical_rows.as_slice()),
+                }
+            } else {
+                return Self::from_vector_value_slowpath(field_type, &v, logical_rows.as_slice());
+            }
+        } else {
+            return Self::from_vector_value_slowpath(field_type, &v, logical_rows.as_slice());
+        }
+    }
+
+    pub fn from_vector_value_slowpath(
         field_type: &FieldType,
         v: &VectorValue,
         logical_rows: &[usize],
@@ -890,6 +925,7 @@ impl<T: BufferWriter> ChunkColumnEncoder for T {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::data_type::*;
     use crate::codec::datum::Datum;
     use std::{f64, u64};
     use tipb::FieldType;
@@ -923,6 +959,46 @@ mod tests {
         }
     }
 
+    macro_rules! test_column_encode {
+        ($data_chunked:ident, $fields:ident) => {
+            let logical_rows_vec: Vec<usize> = (1..$data_chunked.len()).collect();
+            let logical_rows = LogicalRows::from_slice(logical_rows_vec.as_slice());
+            let logical_rows_all = LogicalRows::new_ident($data_chunked.len());
+            let vec_value = VectorValue::from($data_chunked);
+            for field in &$fields {
+                // test partial rows
+                let column = Column::from_vector_value(field, &vec_value, logical_rows).unwrap();
+                let column_slowpath =
+                    Column::from_vector_value_slowpath(field, &vec_value, logical_rows.as_slice())
+                        .unwrap();
+                test_column_eq(&column, &column_slowpath);
+
+                // test all rows
+                let column =
+                    Column::from_vector_value(field, &vec_value, logical_rows_all).unwrap();
+                let column_slowpath = Column::from_vector_value_slowpath(
+                    field,
+                    &vec_value,
+                    logical_rows_all.as_slice(),
+                )
+                .unwrap();
+                test_column_eq(&column, &column_slowpath);
+
+                // test 0-element column
+                let column = Column::new(field.as_accessor().tp(), 0);
+                let mut truncated_vec_value = vec_value.clone();
+                truncated_vec_value.truncate(0);
+                let vec_column = Column::from_vector_value(
+                    field,
+                    &truncated_vec_value,
+                    LogicalRows::new_ident(0),
+                )
+                .unwrap();
+                test_column_eq(&column, &vec_column);
+            }
+        };
+    }
+
     #[test]
     fn test_column_u64() {
         let mut fields: Vec<FieldType> = vec![
@@ -942,7 +1018,25 @@ mod tests {
             Datum::U64(u64::MIN),
             Datum::U64(u64::MAX),
         ];
-        test_colum_datum(fields, data);
+        test_colum_datum(fields.clone(), data.clone());
+
+        let data_chunked = ChunkedVecSized::<Int>::from_vec(
+            data.iter()
+                .cycle()
+                .take(1000)
+                .map(|x| x.as_int().unwrap())
+                .collect(),
+        );
+        test_column_encode!(data_chunked, fields);
+    }
+
+    fn test_column_eq(a: &Column, b: &Column) {
+        assert_eq!(a.length, b.length);
+        assert_eq!(a.null_cnt, b.null_cnt);
+        assert_eq!(a.null_bitmap, b.null_bitmap);
+        assert_eq!(a.var_offsets, b.var_offsets);
+        assert_eq!(a.data, b.data);
+        assert_eq!(a.fixed_len, b.fixed_len);
     }
 
     fn test_colum_datum(fields: Vec<FieldType>, data: Vec<Datum>) {
@@ -962,7 +1056,17 @@ mod tests {
     fn test_column_f64() {
         let fields: Vec<FieldType> = vec![FieldTypeTp::Double.into()];
         let data = vec![Datum::Null, Datum::F64(f64::MIN), Datum::F64(f64::MAX)];
-        test_colum_datum(fields, data);
+        test_colum_datum(fields.clone(), data.clone());
+
+        let data_chunked = ChunkedVecSized::<Real>::from_vec(
+            data.iter()
+                .cycle()
+                .take(1000)
+                .map(|x| x.as_real().unwrap().map(|x| Real::new(x).unwrap()))
+                .collect(),
+        );
+
+        test_column_encode!(data_chunked, fields);
     }
 
     #[test]
@@ -973,7 +1077,16 @@ mod tests {
             Datum::F64(std::f32::MIN.into()),
             Datum::F64(std::f32::MAX.into()),
         ];
-        test_colum_datum(fields, data);
+        test_colum_datum(fields.clone(), data.clone());
+
+        let data_chunked = ChunkedVecSized::<Real>::from_vec(
+            data.iter()
+                .cycle()
+                .take(1000)
+                .map(|x| x.as_real().unwrap().map(|x| Real::new(x).unwrap()))
+                .collect(),
+        );
+        test_column_encode!(data_chunked, fields);
     }
 
     #[test]
@@ -986,7 +1099,16 @@ mod tests {
         ];
         let time = Time::parse_datetime(&mut ctx, "2012-12-31 11:30:45", -1, true).unwrap();
         let data = vec![Datum::Null, Datum::Time(time)];
-        test_colum_datum(fields, data);
+        test_colum_datum(fields.clone(), data.clone());
+
+        let data_chunked = ChunkedVecSized::<DateTime>::from_vec(
+            data.iter()
+                .cycle()
+                .take(1000)
+                .map(|x| x.as_time().unwrap().map(|x| x.into_owned()))
+                .collect(),
+        );
+        test_column_encode!(data_chunked, fields);
     }
 
     #[test]
@@ -994,7 +1116,16 @@ mod tests {
         let fields: Vec<FieldType> = vec![FieldTypeTp::Duration.into()];
         let duration = Duration::parse(&mut EvalContext::default(), b"10:11:12", 0).unwrap();
         let data = vec![Datum::Null, Datum::Dur(duration)];
-        test_colum_datum(fields, data);
+        test_colum_datum(fields.clone(), data.clone());
+
+        let data_chunked = ChunkedVecSized::<Duration>::from_vec(
+            data.iter()
+                .cycle()
+                .take(1000)
+                .map(|x| x.as_duration().unwrap())
+                .collect(),
+        );
+        test_column_encode!(data_chunked, fields);
     }
 
     #[test]
@@ -1002,7 +1133,16 @@ mod tests {
         let fields: Vec<FieldType> = vec![FieldTypeTp::NewDecimal.into()];
         let dec: Decimal = "1234.00".parse().unwrap();
         let data = vec![Datum::Null, Datum::Dec(dec)];
-        test_colum_datum(fields, data);
+        test_colum_datum(fields.clone(), data.clone());
+
+        let data_chunked = ChunkedVecSized::<Decimal>::from_vec(
+            data.iter()
+                .cycle()
+                .take(1000)
+                .map(|x| x.as_decimal().unwrap().map(|x| x.into_owned()))
+                .collect(),
+        );
+        test_column_encode!(data_chunked, fields);
     }
 
     #[test]
@@ -1011,7 +1151,16 @@ mod tests {
         let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
 
         let data = vec![Datum::Null, Datum::Json(json)];
-        test_colum_datum(fields, data);
+        test_colum_datum(fields.clone(), data.clone());
+
+        let data_chunked = ChunkedVecJson::from_vec(
+            data.iter()
+                .cycle()
+                .take(1000)
+                .map(|x| x.as_json().unwrap().map(|x| x.into_owned()))
+                .collect(),
+        );
+        test_column_encode!(data_chunked, fields);
     }
 
     #[test]
@@ -1026,6 +1175,15 @@ mod tests {
             FieldTypeTp::LongBlob.into(),
         ];
         let data = vec![Datum::Null, Datum::Bytes(b"xxx".to_vec())];
-        test_colum_datum(fields, data);
+        test_colum_datum(fields.clone(), data.clone());
+
+        let data_chunked = ChunkedVecBytes::from_vec(
+            data.iter()
+                .cycle()
+                .take(1000)
+                .map(|x| x.as_string().unwrap().map(|x| x.into_owned()))
+                .collect(),
+        );
+        test_column_encode!(data_chunked, fields);
     }
 }

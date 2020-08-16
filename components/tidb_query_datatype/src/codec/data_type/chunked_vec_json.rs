@@ -15,10 +15,10 @@ use std::convert::TryFrom;
 /// and `var_offset` indicates the starting position of each element.
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecJson {
-    data: Vec<u8>,
-    bitmap: BitVec,
-    length: usize,
-    var_offset: Vec<usize>,
+    pub(crate) data: Vec<u8>,
+    pub(crate) bitmap: BitVec,
+    pub(crate) length: usize,
+    pub(crate) var_offset: Vec<usize>,
 }
 
 impl ChunkedVecJson {

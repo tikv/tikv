@@ -3,7 +3,7 @@
 use tipb::FieldType;
 
 use super::LazyBatchColumn;
-use crate::codec::data_type::VectorValue;
+use crate::codec::data_type::{LogicalRows, VectorValue};
 use crate::codec::Result;
 use crate::expr::EvalContext;
 
@@ -146,7 +146,7 @@ impl LazyBatchColumnVec {
     // TODO: Move to other place.
     pub fn encode_chunk(
         &mut self,
-        logical_rows: &[usize],
+        logical_rows: LogicalRows,
         output_offsets: &[u32],
         schema: &[FieldType],
         output: &mut Vec<u8>,

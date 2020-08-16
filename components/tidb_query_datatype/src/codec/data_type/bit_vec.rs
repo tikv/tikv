@@ -5,8 +5,8 @@
 /// `BitVec` is mainly used to implement bitmap in ChunkedVec.
 #[derive(Debug, PartialEq, Clone)]
 pub struct BitVec {
-    data: Vec<u8>,
-    length: usize,
+    pub(crate) data: Vec<u8>,
+    pub(crate) length: usize,
 }
 
 impl BitVec {
@@ -72,6 +72,16 @@ impl BitVec {
         let mask = (1 << (idx & 7)) as u8;
         let pos = idx >> 3;
         (self.data[pos] & mask) != 0
+    }
+
+    pub fn null_cnt(&self) -> usize {
+        let mut cnt = 0;
+        for i in 0..self.length {
+            if !self.get(i) {
+                cnt += 1;
+            }
+        }
+        cnt
     }
 }
 
@@ -303,5 +313,21 @@ mod test {
             cnt += 1;
         }
         assert_eq!(cnt, size);
+    }
+
+    fn test_null_cnt() {
+        let mut x = BitVec::with_capacity(0);
+        x.push(true);
+        x.push(false);
+        x.push(true);
+        x.push(false);
+        x.push(true);
+        x.push(false);
+        x.push(true);
+        x.push(false);
+        x.push(true);
+        x.push(false);
+        x.truncate(6);
+        assert_eq!(x.null_cnt(), 3);
     }
 }

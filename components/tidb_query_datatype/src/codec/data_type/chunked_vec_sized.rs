@@ -16,9 +16,8 @@ use crate::impl_chunked_vec_common;
 /// that element. Otherwise, `data` stores actual data, and `bitmap` bit is true.
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecSized<T: Sized> {
-    data: Vec<T>,
-    bitmap: BitVec,
-    phantom: std::marker::PhantomData<T>,
+    pub(crate) data: Vec<T>,
+    pub(crate) bitmap: BitVec,
 }
 
 impl<T: Sized + Clone> ChunkedVecSized<T> {
@@ -28,7 +27,6 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
         Self {
             data: Vec::with_capacity(capacity),
             bitmap: BitVec::with_capacity(capacity),
-            phantom: std::marker::PhantomData,
         }
     }
 
