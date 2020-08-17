@@ -168,7 +168,7 @@ macro_rules! handle_request {
             let begin_instant = Instant::now_coarse();
 
             let (_root_span, collector) = trace_may_enable!($fn_name, !self.tracing_reporter.is_null());
-            tracing::property(tracing::Key::Foo, "Bar".to_string()); // FIXME: For demonstration
+            tracing::property(tracing::Key::Foo, "Bar".to_string()); // FIXME: for demonstration
             let reporter = self.tracing_reporter.clone();
 
             let future = $future_name(&self.storage, req)
@@ -195,7 +195,7 @@ impl<
         T: RaftStoreRouter<RocksEngine> + 'static,
         E: Engine,
         L: LockManager,
-        R: tracing::Reporter + Clone + Send + 'static,
+        R: tracing::Reporter + Clone + 'static,
     > Tikv for Service<T, E, L, R>
 {
     handle_request!(kv_get, future_get, GetRequest, GetResponse);
