@@ -257,7 +257,7 @@ impl ApplySnapshotObserver for LockObserver {
         }
     }
 
-    fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, cf: CfName, _path: &str) {
+    fn apply_sst(&self, _: &mut ObserverContext<'_>, cf: CfName, _path: &str) {
         if cf == CF_LOCK {
             error!("cannot collect all applied lock: snapshot of lock cf applied from sst file");
             self.state.mark_dirty();
@@ -685,7 +685,11 @@ mod tests {
         start_collecting(&c, 100).unwrap();
 
         // Apply plain file to other CFs. Nothing happens.
-        coprocessor_host.apply_plain_kvs_from_snapshot(&Region::default(), CF_DEFAULT, &lock_kvs);
+        coprocessor_host.post_apply_plain_kvs_from_snapshot(
+            &Region::default(),
+            CF_DEFAULT,
+            &lock_kvs,
+        );
         assert_eq!(get_collected_locks(&c, 100).unwrap(), (vec![], true));
 
         // Apply plain file to lock cf. Locks with ts before 100 will be collected.
@@ -694,7 +698,7 @@ mod tests {
             .filter(|l| l.get_lock_version() <= 100)
             .cloned()
             .collect();
-        coprocessor_host.apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
+        coprocessor_host.post_apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_locks.clone(), true)
@@ -722,16 +726,16 @@ mod tests {
         // dropped.
         start_collecting(&c, 110).unwrap();
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
-        coprocessor_host.apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
+        coprocessor_host.post_apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks.clone(), true));
 
         // Apply SST file to other cfs. Nothing happens.
-        coprocessor_host.pre_apply_sst_from_snapshot(&Region::default(), CF_DEFAULT, "");
+        coprocessor_host.post_apply_sst_from_snapshot(&Region::default(), CF_DEFAULT, "");
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks.clone(), true));
 
         // Apply SST file to lock cf is not supported. This will cause error and therefore
         // `is_clean` will be set to false.
-        coprocessor_host.pre_apply_sst_from_snapshot(&Region::default(), CF_LOCK, "");
+        coprocessor_host.post_apply_sst_from_snapshot(&Region::default(), CF_LOCK, "");
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks, false));
     }
 
@@ -749,7 +753,7 @@ mod tests {
         // `is_clean` should be reset after invoking `start_collecting`.
         start_collecting(&c, 2).unwrap();
         assert_eq!(get_collected_locks(&c, 2).unwrap(), (vec![], true));
-        coprocessor_host.apply_plain_kvs_from_snapshot(
+        coprocessor_host.post_apply_plain_kvs_from_snapshot(
             &Region::default(),
             CF_LOCK,
             &[(keys::data_key(&k), v)],

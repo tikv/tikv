@@ -375,7 +375,7 @@ where
         }
     }
 
-    pub fn apply_plain_kvs_from_snapshot(
+    pub fn post_apply_plain_kvs_from_snapshot(
         &self,
         region: &Region,
         cf: CfName,
@@ -390,11 +390,11 @@ where
         );
     }
 
-    pub fn pre_apply_sst_from_snapshot(&self, region: &Region, cf: CfName, path: &str) {
+    pub fn post_apply_sst_from_snapshot(&self, region: &Region, cf: CfName, path: &str) {
         loop_ob!(
             region,
             &self.registry.apply_snapshot_observers,
-            pre_apply_sst,
+            apply_sst,
             cf,
             path
         );
@@ -606,7 +606,7 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn pre_apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &str) {
+        fn apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &str) {
             self.called.fetch_add(10, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -684,9 +684,9 @@ mod tests {
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         assert_all!(&[&ob.called], &[36]);
 
-        host.apply_plain_kvs_from_snapshot(&region, "default", &[]);
+        host.post_apply_plain_kvs_from_snapshot(&region, "default", &[]);
         assert_all!(&[&ob.called], &[45]);
-        host.pre_apply_sst_from_snapshot(&region, "default", "");
+        host.post_apply_sst_from_snapshot(&region, "default", "");
         assert_all!(&[&ob.called], &[55]);
         let observe_id = ObserveID::new();
         host.prepare_for_apply(observe_id, 0);

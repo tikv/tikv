@@ -97,9 +97,9 @@ pub trait ApplySnapshotObserver: Coprocessor {
     /// pairs will be passed to the function.
     fn apply_plain_kvs(&self, _: &mut ObserverContext<'_>, _: CfName, _: &[(Vec<u8>, Vec<u8>)]) {}
 
-    /// Hook to call before applying sst file. Currently the content of the snapshot can't be
+    /// Hook to call after applying sst file. Currently the content of the snapshot can't be
     /// passed to the observer.
-    fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName, _path: &str) {}
+    fn apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName, _path: &str) {}
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use
