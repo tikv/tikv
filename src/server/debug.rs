@@ -11,7 +11,7 @@ use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine_rocks::util::get_cf_handle;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
-    IterOptions, Iterable, Iterator as EngineIterator, Engines, Mutable, Peekable,
+    Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable,
     RangePropertiesExt, SeekKey, TableProperties, TablePropertiesCollection, TablePropertiesExt,
     WriteBatch, WriteOptions,
 };

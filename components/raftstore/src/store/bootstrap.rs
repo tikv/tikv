@@ -6,7 +6,7 @@ use super::peer_storage::{
 use super::util::new_peer;
 use crate::Result;
 use engine_rocks::RocksEngine;
-use engine_traits::{Iterable, Engines, Mutable, SyncMutable, WriteBatchExt};
+use engine_traits::{Engines, Iterable, Mutable, SyncMutable, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
 use raft_engine::RaftEngine;
 

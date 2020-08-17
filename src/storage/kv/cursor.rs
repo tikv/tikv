@@ -499,7 +499,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 #[cfg(test)]
 mod tests {
     use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_traits::{IterOptions, Engines, SyncMutable};
+    use engine_traits::{Engines, IterOptions, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, Engines, Mutable};
+use engine_traits::{Engines, KvEngine, Mutable};
 use error_code::ErrorCodeExt;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
@@ -743,7 +743,7 @@ mod tests {
     use engine_traits::{
         CFHandleExt, CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
     };
-    use engine_traits::{KvEngine, Engines};
+    use engine_traits::{Engines, KvEngine};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;

@@ -9,7 +9,7 @@ use std::{cmp, u64};
 use batch_system::{BasicMailbox, Fsm};
 use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, Engines, Snapshot, WriteBatchExt};
+use engine_traits::{Engines, KvEngine, Snapshot, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use futures::Future;
 use kvproto::errorpb;

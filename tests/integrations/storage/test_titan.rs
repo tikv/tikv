@@ -11,7 +11,7 @@ use engine_rocks::util::get_cf_handle;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
 use engine_traits::{
-    CompactExt, KvEngine, Engines, MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT,
+    CompactExt, Engines, KvEngine, MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT,
     CF_WRITE,
 };
 use keys::data_key;

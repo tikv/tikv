@@ -9,7 +9,7 @@ use std::time::Instant;
 use std::{cmp, error, u64};
 
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, Engines, Mutable, Peekable, WriteBatch};
+use engine_traits::{Engines, KvEngine, Mutable, Peekable, WriteBatch};
 use error_code::ErrorCodeExt;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
