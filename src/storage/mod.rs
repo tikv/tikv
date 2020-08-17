@@ -53,6 +53,7 @@ use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::{
     borrow::Cow,
+    iter,
     sync::{atomic, Arc},
 };
 use tikv_util::time::Instant;
@@ -259,19 +260,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 if enable_async_commit {
                     // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                    concurrency_manager.update_max_read_ts(start_ts);
-                    if ctx.get_isolation_level() == IsolationLevel::Si {
-                        concurrency_manager
-                            .read_key_check(&key, |lock| {
-                                Lock::check_ts_conflict(
-                                    Cow::Borrowed(lock),
-                                    &key,
-                                    start_ts,
-                                    &bypass_locks,
-                                )
-                            })
-                            .map_err(mvcc::Error::from)?;
-                    }
+                    async_commit_check_keys(
+                        &concurrency_manager,
+                        iter::once(&key),
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        &bypass_locks,
+                    )?;
                 }
 
                 let snapshot =
@@ -351,22 +346,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let region_id = ctx.get_region_id();
                         if enable_async_commit {
                             // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                            concurrency_manager.update_max_read_ts(start_ts);
-                            if isolation_level == IsolationLevel::Si {
-                                if let Err(e) = concurrency_manager
-                                    .read_key_check(&key, |lock| {
-                                        Lock::check_ts_conflict(
-                                            Cow::Borrowed(lock),
-                                            &key,
-                                            start_ts,
-                                            &bypass_locks,
-                                        )
-                                    })
-                                    .map_err(mvcc::Error::from)
-                                {
-                                    req_snaps.push(Err(e));
-                                    continue;
-                                }
+                            if let Err(e) = async_commit_check_keys(
+                                &concurrency_manager,
+                                iter::once(&key),
+                                start_ts,
+                                ctx.get_isolation_level(),
+                                &bypass_locks,
+                            ) {
+                                req_snaps.push(Err(e));
+                                continue;
                             }
                         }
 
@@ -474,21 +462,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 if enable_async_commit {
                     // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                    concurrency_manager.update_max_read_ts(start_ts);
-                    if ctx.get_isolation_level() == IsolationLevel::Si {
-                        for key in &keys {
-                            concurrency_manager
-                                .read_key_check(&key, |lock| {
-                                    Lock::check_ts_conflict(
-                                        Cow::Borrowed(lock),
-                                        &key,
-                                        start_ts,
-                                        &bypass_locks,
-                                    )
-                                })
-                                .map_err(mvcc::Error::from)?;
-                        }
-                    }
+                    async_commit_check_keys(
+                        &concurrency_manager,
+                        &keys,
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        &bypass_locks,
+                    )?;
                 }
 
                 let snapshot =
@@ -1396,6 +1376,26 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
         CommandPri::Normal => CommandPriority::normal,
         CommandPri::High => CommandPriority::high,
     }
+}
+
+fn async_commit_check_keys<'a>(
+    concurrency_manager: &ConcurrencyManager,
+    keys: impl IntoIterator<Item = &'a Key>,
+    ts: TimeStamp,
+    isolation_level: IsolationLevel,
+    bypass_locks: &TsSet,
+) -> Result<()> {
+    concurrency_manager.update_max_read_ts(ts);
+    if isolation_level == IsolationLevel::Si {
+        for key in keys {
+            concurrency_manager
+                .read_key_check(&key, |lock| {
+                    Lock::check_ts_conflict(Cow::Borrowed(lock), &key, ts, bypass_locks)
+                })
+                .map_err(mvcc::Error::from)?;
+        }
+    }
+    Ok(())
 }
 
 /// A builder to build a temporary `Storage<E>`.
