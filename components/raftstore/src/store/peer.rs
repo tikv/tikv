@@ -209,10 +209,7 @@ where
     term: u64,
 }
 
-impl<S> Default for CmdEpochChecker<S>
-where
-    S: Snapshot,
-{
+impl<S: Snapshot> Default for CmdEpochChecker<S> {
     fn default() -> CmdEpochChecker<S> {
         CmdEpochChecker {
             proposed_admin_cmd: VecDeque::new(),
@@ -278,10 +275,9 @@ impl<S: Snapshot> CmdEpochChecker<S> {
 
     pub fn advance_apply(&mut self, index: u64, term: u64, region: metapb::Region) {
         self.maybe_update_term(term);
-        let mut pop_count = 0;
-        for state in self.proposed_admin_cmd.iter_mut() {
+        while !self.proposed_admin_cmd.is_empty() {
+            let state = self.proposed_admin_cmd.front_mut().unwrap();
             if state.index <= index {
-                pop_count += 1;
                 for cb in state.cbs.drain(..) {
                     let mut resp = cmd_resp::new_error(Error::EpochNotMatch(
                         format!(
@@ -297,8 +293,6 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             } else {
                 break;
             }
-        }
-        for _ in 0..pop_count {
             self.proposed_admin_cmd.pop_front();
         }
     }
@@ -314,6 +308,16 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             "index {} can not found in proposed_admin_cmd, callback {:?}",
             index, cb
         );
+    }
+}
+
+impl<S: Snapshot> Drop for CmdEpochChecker<S> {
+    fn drop(&mut self) {
+        for state in self.proposed_admin_cmd.drain(..) {
+            for cb in state.cbs {
+                apply::notify_stale_req(self.term, cb);
+            }
+        }
     }
 }
 
