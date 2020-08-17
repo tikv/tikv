@@ -48,12 +48,16 @@ use crate::{Error as RaftStoreError, Result as RaftStoreResult};
 pub mod snap_io;
 
 // Data in CF_RAFT should be excluded for a snapshot.
-pub const SNAPSHOT_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+// NOTE: the order of these CFs makes matter after `DefaultCompactionFilter` is introduced.
+// `CF_WRITE` must be applied before `CF_DEFAULT`, otherwise data in `CF_DEFAULT` could be
+// deleted incorrectly.
+pub const SNAPSHOT_CFS: &[CfName] = &[CF_LOCK, CF_WRITE, CF_DEFAULT];
 pub const SNAPSHOT_CFS_ENUM_PAIR: &[(CfNames, CfName)] = &[
-    (CfNames::default, CF_DEFAULT),
     (CfNames::lock, CF_LOCK),
     (CfNames::write, CF_WRITE),
+    (CfNames::default, CF_DEFAULT),
 ];
+
 pub const SNAPSHOT_VERSION: u64 = 2;
 
 /// Name prefix for the self-generated snapshot file.

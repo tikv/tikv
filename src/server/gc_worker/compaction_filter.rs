@@ -12,8 +12,8 @@ use engine_rocks::raw::{
 };
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, MiscExt, Mutable, Peekable, SeekKey, WriteBatch,
-    WriteBatchExt, WriteOptions, CF_LOCK, CF_WRITE,
+    IterOptions, Iterable, Iterator, MiscExt, Mutable, SeekKey, WriteBatch, WriteBatchExt,
+    WriteOptions, CF_WRITE,
 };
 use pd_client::ClusterVersion;
 use txn_types::{Key, WriteRef, WriteType};
@@ -319,12 +319,10 @@ impl CompactionFilterFactory for DefaultCompactionFilterFactory {
 
 pub struct DefaultCompactionFilter {
     safe_point: u64,
-    engine: RocksEngine,
 
     key_prefix: Vec<u8>,
     // Valid transactions for `key_prefix`.
     valid_transactions: Vec<u64>,
-    is_locked: bool,
 
     write_iter: RocksEngineIterator,
 
@@ -349,10 +347,8 @@ impl DefaultCompactionFilter {
 
         DefaultCompactionFilter {
             safe_point,
-            engine,
             key_prefix: vec![],
             valid_transactions: vec![],
-            is_locked: false,
             write_iter,
             versions: 0,
             deleted: 0,
@@ -370,13 +366,6 @@ impl DefaultCompactionFilter {
             self.total_deleted += self.deleted;
             self.deleted = 0;
         }
-    }
-
-    fn key_is_locked(&self, key_prefix: &[u8]) -> bool {
-        self.engine
-            .get_value_cf(CF_LOCK, key_prefix)
-            .unwrap()
-            .is_some()
     }
 }
 
@@ -400,34 +389,31 @@ impl CompactionFilter for DefaultCompactionFilter {
             Err(_) => return false,
         };
 
+        if start_ts > self.safe_point {
+            return false;
+        }
+
+        self.versions += 1;
         if self.key_prefix != key_prefix {
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
             self.valid_transactions.clear();
-            self.is_locked = false;
             self.switch_key_metrics();
 
-            if self.key_is_locked(key_prefix) {
-                self.is_locked = true;
-            } else {
-                let mut valid = self.write_iter.seek(SeekKey::Key(key_prefix)).unwrap();
-                while valid {
-                    let (key, value) = (self.write_iter.key(), self.write_iter.value());
-                    if !key.starts_with(key_prefix) {
-                        // All versions in write cf are scaned.
-                        break;
-                    }
-                    let write = WriteRef::parse(value).unwrap();
-                    self.valid_transactions.push(write.start_ts.into_inner());
-                    valid = self.write_iter.next().unwrap();
+            // Is it possible that the key is still locked? The answer is no
+            // because safe points can only be updated after all locks are resolved.
+            let mut valid = self.write_iter.seek(SeekKey::Key(key_prefix)).unwrap();
+            while valid {
+                let (key, value) = (self.write_iter.key(), self.write_iter.value());
+                if !key.starts_with(key_prefix) {
+                    // All versions in write cf are scaned.
+                    break;
                 }
-                self.valid_transactions.sort();
+                let write = WriteRef::parse(value).unwrap();
+                self.valid_transactions.push(write.start_ts.into_inner());
+                valid = self.write_iter.next().unwrap();
             }
-        }
-
-        self.versions += 1;
-        if start_ts > self.safe_point || self.is_locked {
-            return false;
+            self.valid_transactions.sort();
         }
 
         if self.valid_transactions.binary_search(&start_ts).is_err() {
