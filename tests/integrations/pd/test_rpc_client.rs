@@ -5,12 +5,11 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use futures03::compat::Compat;
 use futures03::executor::block_on;
-use futures_cpupool::Builder;
 use grpcio::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
+use tokio::runtime::Builder;
 
 use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
 use raftstore::store;
@@ -130,23 +129,23 @@ fn test_rpc_client() {
     }
 
     let poller = Builder::new()
-        .pool_size(1)
-        .name_prefix(thd_name!("poller"))
-        .create();
+        .threaded_scheduler()
+        .thread_name(thd_name!("poller"))
+        .core_threads(1)
+        .build()
+        .unwrap();
     let (tx, rx) = mpsc::channel();
-    let f = Compat::new(client.handle_region_heartbeat_response(1, move |resp| {
+    let f = client.handle_region_heartbeat_response(1, move |resp| {
         let _ = tx.send(resp);
-    }));
-    poller.spawn(f).forget();
-    poller
-        .spawn(Compat::new(client.region_heartbeat(
-            store::RAFT_INIT_LOG_TERM,
-            region.clone(),
-            peer.clone(),
-            RegionStat::default(),
-            None,
-        )))
-        .forget();
+    });
+    poller.spawn(f);
+    poller.spawn(client.region_heartbeat(
+        store::RAFT_INIT_LOG_TERM,
+        region.clone(),
+        peer.clone(),
+        RegionStat::default(),
+        None,
+    ));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     let region_info = client.get_region_info(region_key).unwrap();
@@ -411,26 +410,26 @@ fn test_region_heartbeat_on_leader_change() {
 
     let client = new_client(eps, None);
     let poller = Builder::new()
-        .pool_size(1)
-        .name_prefix(thd_name!("poller"))
-        .create();
+        .threaded_scheduler()
+        .thread_name(thd_name!("poller"))
+        .core_threads(1)
+        .build()
+        .unwrap();
     let (tx, rx) = mpsc::channel();
-    let f = Compat::new(client.handle_region_heartbeat_response(1, move |resp| {
+    let f = client.handle_region_heartbeat_response(1, move |resp| {
         tx.send(resp).unwrap();
-    }));
-    poller.spawn(f).forget();
+    });
+    poller.spawn(f);
     let region = metapb::Region::default();
     let peer = metapb::Peer::default();
     let stat = RegionStat::default();
-    poller
-        .spawn(Compat::new(client.region_heartbeat(
-            store::RAFT_INIT_LOG_TERM,
-            region.clone(),
-            peer.clone(),
-            stat.clone(),
-            None,
-        )))
-        .forget();
+    poller.spawn(client.region_heartbeat(
+        store::RAFT_INIT_LOG_TERM,
+        region.clone(),
+        peer.clone(),
+        stat.clone(),
+        None,
+    ));
     rx.recv_timeout(LeaderChange::get_leader_interval())
         .unwrap();
 
@@ -448,15 +447,13 @@ fn test_region_heartbeat_on_leader_change() {
                 thread::sleep(LeaderChange::get_leader_interval());
             }
         }
-        poller
-            .spawn(Compat::new(client.region_heartbeat(
-                store::RAFT_INIT_LOG_TERM,
-                region.clone(),
-                peer.clone(),
-                stat.clone(),
-                None,
-            )))
-            .forget();
+        poller.spawn(client.region_heartbeat(
+            store::RAFT_INIT_LOG_TERM,
+            region.clone(),
+            peer.clone(),
+            stat.clone(),
+            None,
+        ));
         rx.recv_timeout(LeaderChange::get_leader_interval())
             .unwrap();
     };

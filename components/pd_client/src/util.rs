@@ -70,14 +70,14 @@ impl Stream for HeartbeatReceiver {
 
             self.receiver.take();
 
-            let inner_lock = self.inner.clone();
-            let mut inner = inner_lock.wl();
+            let mut inner = self.inner.wl();
             let mut receiver = None;
             if let Either::Left(ref mut recv) = inner.hb_receiver {
                 receiver = recv.take();
             }
             if receiver.is_some() {
                 debug!("heartbeat receiver is refreshed");
+                drop(inner);
                 self.receiver = receiver;
             } else {
                 inner.hb_receiver = Either::Right(Some(cx.waker().clone()));
