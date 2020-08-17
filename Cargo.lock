@@ -1499,7 +1499,7 @@ checksum = "473a1265acc8ff1e808cd0a1af8cee3c2ee5200916058a2ca113c29f2d903571"
 dependencies = [
  "cfg-if",
  "libc",
- "wasi",
+ "wasi 0.7.0",
 ]
 
 [[package]]
@@ -2150,20 +2150,22 @@ dependencies = [
 [[package]]
 name = "minitrace"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#de69110975b42d898f4ba2d25fb4d334de80edd3"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#53269789a828b0105491f74db6c39901b7540b70"
 dependencies = [
  "crossbeam",
  "futures 0.1.29",
  "futures 0.3.4",
  "lazy_static",
  "minitrace-attribute",
+ "minstant",
  "pin-project",
+ "rand 0.7.3",
 ]
 
 [[package]]
 name = "minitrace-attribute"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#de69110975b42d898f4ba2d25fb4d334de80edd3"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#53269789a828b0105491f74db6c39901b7540b70"
 dependencies = [
  "proc-macro-error 1.0.2",
  "quote",
@@ -2177,6 +2179,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7108aff85b876d06f22503dcce091e29f76733b2bfdd91eebce81f5e68203a10"
 dependencies = [
  "adler32",
+]
+
+[[package]]
+name = "minstant"
+version = "0.0.0"
+source = "git+https://github.com/zhongzc/minstant.git#48a631c19532d05e32420262779a51621b509021"
+dependencies = [
+ "lazy_static 1.4.0",
+ "libc",
+ "wasi 0.10.0+wasi-snapshot-preview1",
 ]
 
 [[package]]
@@ -4880,7 +4892,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/zhongzc/tipb.git?branch=tracing#c30c0a058bd9ecdf87c56a6a84e71c4920d907c5"
+source = "git+https://github.com/zhongzc/tipb.git?branch=tracing#fbbf1d14bae40a4b4d34054f0672eeaedd7511c4"
 dependencies = [
  "lazy_static",
  "prost",
@@ -5391,6 +5403,12 @@ name = "wasi"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b89c3ce4ce14bdc6fb6beaf9ec7928ca331de5df7e5ea278375642a2f478570d"
+
+[[package]]
+name = "wasi"
+version = "0.10.0+wasi-snapshot-preview1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a143597ca7c7793eff794def352d41792a93c481eb1042423ff7ff72ba2c31f"
 
 [[package]]
 name = "wasm-bindgen"

@@ -86,7 +86,6 @@ impl JaegerReporter {
     async fn report(
         agent: SocketAddr,
         mut trace_details: TraceDetails,
-        threshold: Duration,
         spans_max_length: usize,
     ) -> Result<()> {
         let local_addr: SocketAddr = if agent.is_ipv4() {
@@ -96,11 +95,6 @@ impl JaegerReporter {
         }
         .parse()?;
         let mut udp_socket = UdpSocket::bind(local_addr).await?;
-
-        // Check if duration reaches `duration_threshold`
-        if Duration::from_nanos(trace_details.elapsed_ns) < threshold {
-            return Ok(());
-        }
 
         // Check if len of spans reaches `spans_max_length`
         if trace_details.spans.len() > spans_max_length {
@@ -152,10 +146,16 @@ impl JaegerReporter {
 impl Reporter for JaegerReporter {
     fn report(&self, collector: Option<Collector>) {
         if let Some(collector) = collector {
+            let trace_details = collector.collect();
+
+            // Check if duration reaches `duration_threshold`
+            if Duration::from_nanos(trace_details.elapsed_ns) < self.duration_threshold {
+                return;
+            }
+
             self.runtime.spawn(Self::report(
                 self.agent,
-                collector.collect(),
-                self.duration_threshold,
+                trace_details,
                 self.spans_max_length,
             ));
         }

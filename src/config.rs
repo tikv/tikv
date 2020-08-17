@@ -2026,7 +2026,7 @@ impl Default for CdcConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct TracingConfig {
     pub jaeger_agent: String,
-    pub num_threads: usize,
+    pub num_report_threads: usize,
     pub duration_threshold: ReadableDuration,
     pub spans_max_length: usize,
 }
@@ -2035,7 +2035,7 @@ impl TracingConfig {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if !self.jaeger_agent.is_empty() {
             config::check_addr(&self.jaeger_agent)?;
-            if self.num_threads == 0 {
+            if self.num_report_threads == 0 {
                 return Err("tracing.num_threads cannot be 0".into());
             }
             if self.spans_max_length == 0 {
@@ -2050,7 +2050,7 @@ impl Default for TracingConfig {
     fn default() -> Self {
         Self {
             jaeger_agent: "".to_owned(),
-            num_threads: 1,
+            num_report_threads: 1,
             duration_threshold: ReadableDuration::millis(100),
             spans_max_length: 1000,
         }

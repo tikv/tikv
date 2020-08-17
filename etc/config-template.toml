@@ -906,7 +906,7 @@
 
 ## Number of threads for reporting tracing results to jaeger-agent
 ## Ignored if jaeger-agent is empty.
-# num-threads = 1
+# num-report-threads = 1
 
 ## Threshold to determine whether to report tracing results to jaeger-agent or not.
 ## The tracing results will be reported if the duration of a traced procedure larger

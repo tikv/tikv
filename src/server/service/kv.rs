@@ -173,6 +173,7 @@ macro_rules! handle_request {
 
             let future = $future_name(&self.storage, req)
                 .and_then(|res| sink.success(res).map_err(Error::from))
+                .trace_task(Event::TiKvGrpcio as u32)
                 .map(move |_| {
                     reporter.report(collector);
                     GRPC_MSG_HISTOGRAM_STATIC.$fn_name.observe(duration_to_sec(begin_instant.elapsed()));
@@ -185,7 +186,7 @@ macro_rules! handle_request {
                     GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
                 });
 
-            ctx.spawn(future.trace_task(Event::TiKvGrpcio as u32));
+            ctx.spawn(future);
         }
     }
 }
@@ -343,6 +344,7 @@ impl<
 
         let future = future_cop(&self.cop, Some(ctx.peer()), req)
             .and_then(|resp| sink.success(resp).map_err(Error::from))
+            .trace_task(Event::TiKvGrpcio as u32)
             .map(move |_| {
                 reporter.report(collector);
                 GRPC_MSG_HISTOGRAM_STATIC

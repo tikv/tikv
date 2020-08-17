@@ -566,7 +566,7 @@ impl TiKVServer {
                     .unwrap_or_else(|_| fatal!("failed to parse into a socket address: {}", addr));
                 Arc::new(
                     tracing::JaegerReporter::new(
-                        self.config.tracing.num_threads,
+                        self.config.tracing.num_report_threads,
                         self.config.tracing.duration_threshold.into(),
                         self.config.tracing.spans_max_length,
                         agent,
