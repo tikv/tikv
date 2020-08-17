@@ -474,7 +474,7 @@ impl Default for DefaultCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
-            target_file_size_base: ReadableSize::mb(8),
+            target_file_size_base: ReadableSize::mb(128),
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: 20,
             level0_stop_writes_trigger: 36,
@@ -491,9 +491,9 @@ impl Default for DefaultCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: false,
+            enable_compaction_guard: true,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
-            compaction_guard_max_output_file_size: ReadableSize::mb(120),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
         }
     }
@@ -548,7 +548,7 @@ impl Default for WriteCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
-            target_file_size_base: ReadableSize::mb(8),
+            target_file_size_base: ReadableSize::mb(128),
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: 20,
             level0_stop_writes_trigger: 36,
@@ -565,9 +565,9 @@ impl Default for WriteCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: false,
+            enable_compaction_guard: true,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
-            compaction_guard_max_output_file_size: ReadableSize::mb(120),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
         }
     }
@@ -649,7 +649,7 @@ impl Default for LockCfConfig {
             enable_doubly_skiplist: true,
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
-            compaction_guard_max_output_file_size: ReadableSize::mb(120),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
         }
     }
@@ -720,7 +720,7 @@ impl Default for RaftCfConfig {
             enable_doubly_skiplist: true,
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
-            compaction_guard_max_output_file_size: ReadableSize::mb(120),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
         }
     }
@@ -791,7 +791,7 @@ impl Default for VersionCfConfig {
             enable_doubly_skiplist: true,
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
-            compaction_guard_max_output_file_size: ReadableSize::mb(120),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
         }
     }
@@ -1121,7 +1121,7 @@ impl Default for RaftDefaultCfConfig {
             enable_doubly_skiplist: true,
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
-            compaction_guard_max_output_file_size: ReadableSize::mb(120),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
         }
     }
@@ -3055,7 +3055,7 @@ mod tests {
                 &cfg.storage.data_dir,
                 cfg.rocksdb.build_opt(),
                 cfg.rocksdb
-                    .build_cf_opts(&cfg.storage.block_cache.build_shared_cache()),
+                    .build_cf_opts(&cfg.storage.block_cache.build_shared_cache(), None),
             )
             .unwrap(),
         ));
