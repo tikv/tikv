@@ -3,8 +3,9 @@
 use std::{cell::Cell, ffi::CString};
 
 use crate::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
-use engine_rocks::raw::{
-    SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerState,
+use engine_traits::{
+    SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerRequest,
+    SstPartitionerResult,
 };
 use keys::data_end_key;
 
@@ -78,19 +79,25 @@ pub struct CompactionGuardGenerator {
 }
 
 impl SstPartitioner for CompactionGuardGenerator {
-    fn should_partition(&self, state: &SstPartitionerState) -> bool {
-        let pos = self.pos.get();
-        (state.current_output_file_size >= self.min_output_file_size)
-            && ((state.current_output_file_size >= self.max_output_file_size)
-                || ((pos < self.boundaries.len())
-                    && (self.boundaries[pos].as_slice() <= state.next_key)))
-    }
-
-    fn reset(&self, key: &[u8]) {
+    fn should_partition(&self, req: &SstPartitionerRequest) -> SstPartitionerResult {
         let mut pos = self.pos.get();
-        while pos < self.boundaries.len() && self.boundaries[pos].as_slice() <= key {
+        while pos < self.boundaries.len() && self.boundaries[pos].as_slice() <= req.prev_user_key {
             pos += 1;
         }
         self.pos.set(pos);
+        if (req.current_output_file_size >= self.min_output_file_size)
+            && ((req.current_output_file_size >= self.max_output_file_size)
+                || ((pos < self.boundaries.len())
+                    && (self.boundaries[pos].as_slice() <= req.current_user_key)))
+        {
+            SstPartitionerResult::Required
+        } else {
+            SstPartitionerResult::NotRequired
+        }
+    }
+
+    fn can_do_trivial_move(&self, _smallest_key: &[u8], _largest_key: &[u8]) -> bool {
+        // Always allow trivial move
+        true
     }
 }

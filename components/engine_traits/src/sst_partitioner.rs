@@ -3,9 +3,16 @@
 use std::ffi::CString;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SstPartitionerState<'a> {
-    pub next_key: &'a [u8],
+pub struct SstPartitionerRequest<'a> {
+    pub prev_user_key: &'a [u8],
+    pub current_user_key: &'a [u8],
     pub current_output_file_size: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SstPartitionerResult {
+    NotRequired,
+    Required,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,8 +25,8 @@ pub struct SstPartitionerContext<'a> {
 }
 
 pub trait SstPartitioner {
-    fn should_partition(&self, state: &SstPartitionerState) -> bool;
-    fn reset(&self, key: &[u8]);
+    fn should_partition(&self, req: &SstPartitionerRequest) -> SstPartitionerResult;
+    fn can_do_trivial_move(&self, smallest_key: &[u8], largest_key: &[u8]) -> bool;
 }
 
 pub trait SstPartitionerFactory: Sync + Send {

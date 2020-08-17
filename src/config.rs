@@ -37,8 +37,9 @@ use engine_rocks::util::{
     FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
 use engine_rocks::{
-    RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener, RocksdbLogger,
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
+    RocksSstPartitionerFactory, RocksdbLogger, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
@@ -431,10 +432,12 @@ macro_rules! build_cf_opt {
         }
         if let Some(accessor) = $region_info_accessor {
             if $opt.enable_compaction_guard {
-                cf_opts.set_sst_partitioner_factory(CompactionGuardGeneratorFactory::new(
-                    accessor.clone(),
-                    $opt.compaction_guard_min_output_file_size.0,
-                    $opt.compaction_guard_max_output_file_size.0,
+                cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(
+                    CompactionGuardGeneratorFactory::new(
+                        accessor.clone(),
+                        $opt.compaction_guard_min_output_file_size.0,
+                        $opt.compaction_guard_max_output_file_size.0,
+                    ),
                 ));
             }
         }

@@ -2,7 +2,7 @@
 
 use std::ffi::CString;
 
-pub(crate) struct RocksSstPartitionerFactory<F: engine_traits::SstPartitionerFactory>(pub F);
+pub struct RocksSstPartitionerFactory<F: engine_traits::SstPartitionerFactory>(pub F);
 
 impl<F: engine_traits::SstPartitionerFactory> rocksdb::SstPartitionerFactory
     for RocksSstPartitionerFactory<F>
@@ -30,17 +30,29 @@ impl<F: engine_traits::SstPartitionerFactory> rocksdb::SstPartitionerFactory
     }
 }
 
-pub(crate) struct RocksSstPartitioner<P: engine_traits::SstPartitioner>(P);
+pub struct RocksSstPartitioner<P: engine_traits::SstPartitioner>(P);
 
 impl<P: engine_traits::SstPartitioner> rocksdb::SstPartitioner for RocksSstPartitioner<P> {
-    fn should_partition(&self, state: &rocksdb::SstPartitionerState) -> bool {
-        let st = engine_traits::SstPartitionerState {
-            next_key: state.next_key,
-            current_output_file_size: state.current_output_file_size,
+    fn should_partition(
+        &self,
+        request: &rocksdb::SstPartitionerRequest,
+    ) -> rocksdb::SstPartitionerResult {
+        let req = engine_traits::SstPartitionerRequest {
+            prev_user_key: request.prev_user_key,
+            current_user_key: request.current_user_key,
+            current_output_file_size: request.current_output_file_size,
         };
-        self.0.should_partition(&st)
+        match self.0.should_partition(&req) {
+            engine_traits::SstPartitionerResult::NotRequired => {
+                rocksdb::SstPartitionerResult::NotRequired
+            }
+            engine_traits::SstPartitionerResult::Required => {
+                rocksdb::SstPartitionerResult::Required
+            }
+        }
     }
-    fn reset(&self, key: &[u8]) {
-        self.0.reset(key);
+
+    fn can_do_trivial_move(&self, smallest_key: &[u8], largest_key: &[u8]) -> bool {
+        self.0.can_do_trivial_move(smallest_key, largest_key)
     }
 }
