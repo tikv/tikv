@@ -11,7 +11,7 @@
 use crate::{setup::*, signal_handler};
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine};
-use engine_traits::{compaction_job::CompactionJobInfo, KvEngines, MetricsFlusher};
+use engine_traits::{compaction_job::CompactionJobInfo, Engines, MetricsFlusher};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use fs2::FileExt;
 use futures::Future;
@@ -121,7 +121,7 @@ struct TiKVServer {
     state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
-    engines: Option<Engines>,
+    engines: Option<TiKVEngines>,
     servers: Option<Servers>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
@@ -130,8 +130,8 @@ struct TiKVServer {
     concurrency_manager: ConcurrencyManager,
 }
 
-struct Engines {
-    engines: KvEngines<RocksEngine, RocksEngine>,
+struct TiKVEngines {
+    engines: Engines<RocksEngine, RocksEngine>,
     store_meta: Arc<Mutex<StoreMeta>>,
     engine: RaftKv<ServerRaftStoreRouter<RocksEngine>>,
     raft_router: ServerRaftStoreRouter<RocksEngine>,
@@ -401,7 +401,7 @@ impl TiKVServer {
         )
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
-        let engines = KvEngines::new(
+        let engines = Engines::new(
             RocksEngine::from_db(Arc::new(kv_engine)),
             RocksEngine::from_db(Arc::new(raft_engine)),
             block_cache.is_some(),
@@ -438,7 +438,7 @@ impl TiKVServer {
 
         let engine = RaftKv::new(raft_router.clone(), engines.kv.clone());
 
-        self.engines = Some(Engines {
+        self.engines = Some(TiKVEngines {
             engines,
             store_meta,
             engine,
@@ -795,7 +795,7 @@ impl TiKVServer {
     }
 
     fn init_metrics_flusher(&mut self) {
-        let mut metrics_flusher = Box::new(MetricsFlusher::new(KvEngines::new(
+        let mut metrics_flusher = Box::new(MetricsFlusher::new(Engines::new(
             self.engines.as_ref().unwrap().engines.kv.clone(),
             self.engines.as_ref().unwrap().engines.raft.clone(),
             self.engines.as_ref().unwrap().engines.shared_block_cache,
