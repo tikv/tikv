@@ -1370,6 +1370,10 @@ impl<'a, EK: KvEngine, ER: KvEngine, T: Transport, C: PdClient> StoreFsmDelegate
                     local_state
                 ));
             }
+            info!(
+                "region doesn't exist yet, wait for it to be split";
+                "region_id" => region_id
+            );
             return Ok(CheckMsgStatus::FirstRequestVote);
         }
         debug!(
@@ -1514,26 +1518,27 @@ impl<'a, EK: KvEngine, ER: KvEngine, T: Transport, C: PdClient> StoreFsmDelegate
             return Ok(());
         }
         let check_msg_status = self.check_msg(&msg)?;
-        let is_first_vote = match check_msg_status {
+        let is_first_request_vote = match check_msg_status {
             CheckMsgStatus::DropMsg => return Ok(()),
             CheckMsgStatus::FirstRequestVote => true,
             CheckMsgStatus::NewPeer | CheckMsgStatus::NewPeerFirst => {
-                let is_first_vote = util::is_first_vote_msg(msg.get_message());
                 if !self.maybe_create_peer(
                     region_id,
                     &msg,
                     check_msg_status == CheckMsgStatus::NewPeerFirst,
                 )? {
-                    if !is_first_vote {
+                    if !util::is_first_vote_msg(msg.get_message()) {
                         // Can not create peer from the message and it's not the
                         // first request vote message.
                         return Ok(());
                     }
+                    true
+                } else {
+                    false
                 }
-                is_first_vote
             }
         };
-        if is_first_vote {
+        if is_first_request_vote {
             // To void losing request vote messages, either put it to
             // pending_votes or force send.
             let mut store_meta = self.ctx.store_meta.lock().unwrap();
@@ -1737,7 +1742,6 @@ impl<'a, EK: KvEngine, ER: KvEngine, T: Transport, C: PdClient> StoreFsmDelegate
             .router
             .force_send(region_id, PeerMsg::Start)
             .unwrap();
-
         Ok(true)
     }
 
