@@ -9,6 +9,7 @@
 //! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and
 //! [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
+pub mod concurrency_manager;
 pub mod config;
 pub mod errors;
 pub mod kv;
@@ -34,6 +35,7 @@ pub use self::{
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::{
+    concurrency_manager::ConcurrencyManager,
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
     lock_manager::{DummyLockManager, LockManager},
@@ -46,14 +48,17 @@ use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::Future;
 use futures03::prelude::*;
-use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
-use pd_client::{DummyPdClient, PdClient};
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
-use std::sync::{atomic, Arc};
+use std::{
+    borrow::Cow,
+    iter,
+    sync::{atomic, Arc},
+};
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
-use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -78,14 +83,18 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 /// to it, so that multiple versions can be saved at the same time.
 /// Raw operations use raw keys, which are saved directly to the engine without memcomparable-
 /// encoding and appending timestamp.
-pub struct Storage<E: Engine, L: LockManager, P: PdClient + 'static> {
+pub struct Storage<E: Engine, L: LockManager> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
-    sched: TxnScheduler<E, L, P>,
+    sched: TxnScheduler<E, L>,
 
     /// The thread pool used to run most read operations.
     read_pool: ReadPoolHandle,
+
+    concurrency_manager: ConcurrencyManager,
+
+    enable_async_commit: bool,
 
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
@@ -96,7 +105,7 @@ pub struct Storage<E: Engine, L: LockManager, P: PdClient + 'static> {
     max_key_size: usize,
 }
 
-impl<E: Engine, L: LockManager, P: PdClient + 'static> Clone for Storage<E, L, P> {
+impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
     #[inline]
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
@@ -111,11 +120,13 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Clone for Storage<E, L, P
             read_pool: self.read_pool.clone(),
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
+            concurrency_manager: self.concurrency_manager.clone(),
+            enable_async_commit: self.enable_async_commit,
         }
     }
 }
 
-impl<E: Engine, L: LockManager, P: PdClient + 'static> Drop for Storage<E, L, P> {
+impl<E: Engine, L: LockManager> Drop for Storage<E, L> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
@@ -147,24 +158,25 @@ macro_rules! check_key_size {
     };
 }
 
-impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
+impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,
         config: &Config,
         read_pool: ReadPoolHandle,
         lock_mgr: L,
-        pd_client: Arc<P>,
+        concurrency_manager: ConcurrencyManager,
         pipelined_pessimistic_lock: bool,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
             lock_mgr,
-            pd_client,
+            concurrency_manager.clone(),
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
             pipelined_pessimistic_lock,
+            config.enable_async_commit,
         );
 
         info!("Storage started.");
@@ -173,14 +185,21 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             engine,
             sched,
             read_pool,
+            concurrency_manager,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
+            enable_async_commit: config.enable_async_commit,
         })
     }
 
     /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()
+    }
+
+    #[cfg(test)]
+    pub fn get_concurrency_manager(&self) -> ConcurrencyManager {
+        self.concurrency_manager.clone()
     }
 
     /// Get a snapshot of `engine`.
@@ -219,6 +238,8 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let enable_async_commit = self.enable_async_commit;
+        let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -236,6 +257,18 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
+
+                if enable_async_commit {
+                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                    async_commit_check_keys(
+                        &concurrency_manager,
+                        iter::once(&key),
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        &bypass_locks,
+                    )?;
+                }
+
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
@@ -288,63 +321,107 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
-        let res = self.read_pool.spawn_handle(
-            async move {
-                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
-                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                    .get(CMD)
-                    .observe(requests.len() as f64);
-                let command_duration = tikv_util::time::Instant::now_coarse();
-                let read_id = Some(ThreadReadId::new());
-                let mut statistics = Statistics::default();
-                let mut results = Vec::default();
-                let mut snaps = vec![];
-                for req in requests {
-                    let snap = Self::with_tls_engine(|engine| {
-                        Self::snapshot(engine, read_id.clone(), req.get_context())
-                    });
-                    snaps.push((req, snap));
-                }
-                Self::with_tls_engine(|engine| engine.release_snapshot());
-                for (mut req, snap) in snaps {
-                    let key = Key::from_raw(req.get_key());
-                    let mut ctx = req.take_context();
-                    let isolation_level = ctx.get_isolation_level();
-                    let fill_cache = !ctx.get_not_fill_cache();
-                    let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
-                    match snap.await {
-                        Ok(snapshot) => {
-                            match PointGetterBuilder::new(snapshot, req.get_version().into())
-                                .fill_cache(fill_cache)
-                                .isolation_level(isolation_level)
-                                .multi(false)
-                                .bypass_locks(bypass_locks)
-                                .build()
-                            {
-                                Ok(mut point_getter) => {
-                                    let v = point_getter.get(&key);
-                                    let stat = point_getter.take_statistics();
-                                    metrics::tls_collect_read_flow(ctx.get_region_id(), &stat);
-                                    statistics.add(&stat);
-                                    results.push(v.map_err(|e| Error::from(txn::Error::from(e))));
-                                }
-                                Err(e) => results.push(Err(Error::from(txn::Error::from(e)))),
+        let enable_async_commit = self.enable_async_commit;
+        let concurrency_manager = self.concurrency_manager.clone();
+        let res =
+            self.read_pool.spawn_handle(
+                async move {
+                    KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(requests.len() as f64);
+                    let command_duration = tikv_util::time::Instant::now_coarse();
+                    let read_id = Some(ThreadReadId::new());
+                    let mut statistics = Statistics::default();
+                    let mut results = Vec::default();
+                    let mut req_snaps = vec![];
+
+                    for mut req in requests {
+                        let key = Key::from_raw(req.get_key());
+                        let start_ts = req.get_version().into();
+                        let mut ctx = req.take_context();
+                        let isolation_level = ctx.get_isolation_level();
+                        let fill_cache = !ctx.get_not_fill_cache();
+                        let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
+                        let region_id = ctx.get_region_id();
+                        if enable_async_commit {
+                            // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                            if let Err(e) = async_commit_check_keys(
+                                &concurrency_manager,
+                                iter::once(&key),
+                                start_ts,
+                                ctx.get_isolation_level(),
+                                &bypass_locks,
+                            ) {
+                                req_snaps.push(Err(e));
+                                continue;
                             }
                         }
-                        Err(e) => {
-                            results.push(Err(e));
+
+                        let snap = Self::with_tls_engine(|engine| {
+                            Self::snapshot(engine, read_id.clone(), req.get_context())
+                        });
+                        req_snaps.push(Ok((
+                            snap,
+                            key,
+                            start_ts,
+                            isolation_level,
+                            fill_cache,
+                            bypass_locks,
+                            region_id,
+                        )));
+                    }
+                    Self::with_tls_engine(|engine| engine.release_snapshot());
+                    for req_snap in req_snaps {
+                        let (
+                            snap,
+                            key,
+                            start_ts,
+                            isolation_level,
+                            fill_cache,
+                            bypass_locks,
+                            region_id,
+                        ) = match req_snap {
+                            Ok(req_snap) => req_snap,
+                            Err(e) => {
+                                results.push(Err(e.into()));
+                                continue;
+                            }
+                        };
+                        match snap.await {
+                            Ok(snapshot) => {
+                                match PointGetterBuilder::new(snapshot, start_ts)
+                                    .fill_cache(fill_cache)
+                                    .isolation_level(isolation_level)
+                                    .multi(false)
+                                    .bypass_locks(bypass_locks)
+                                    .build()
+                                {
+                                    Ok(mut point_getter) => {
+                                        let v = point_getter.get(&key);
+                                        let stat = point_getter.take_statistics();
+                                        metrics::tls_collect_read_flow(region_id, &stat);
+                                        statistics.add(&stat);
+                                        results
+                                            .push(v.map_err(|e| Error::from(txn::Error::from(e))));
+                                    }
+                                    Err(e) => results.push(Err(Error::from(txn::Error::from(e)))),
+                                }
+                            }
+                            Err(e) => {
+                                results.push(Err(e));
+                            }
                         }
                     }
-                }
-                metrics::tls_collect_scan_details(CMD, &statistics);
-                SCHED_HISTOGRAM_VEC_STATIC
-                    .get(CMD)
-                    .observe(command_duration.elapsed_secs());
-                Ok(results)
-            },
-            priority,
-            thread_rng().next_u64(),
-        );
+                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+                    Ok(results)
+                },
+                priority,
+                thread_rng().next_u64(),
+            );
         res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
             .flatten()
     }
@@ -361,6 +438,8 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let enable_async_commit = self.enable_async_commit;
+        let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -380,6 +459,18 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
+
+                if enable_async_commit {
+                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                    async_commit_check_keys(
+                        &concurrency_manager,
+                        &keys,
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        &bypass_locks,
+                    )?;
+                }
+
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
@@ -454,6 +545,8 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let enable_async_commit = self.enable_async_commit;
+        let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -481,6 +574,24 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
+
+                if enable_async_commit {
+                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                    concurrency_manager.update_max_read_ts(start_ts);
+                    if ctx.get_isolation_level() == IsolationLevel::Si {
+                        concurrency_manager
+                            .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
+                                Lock::check_ts_conflict(
+                                    Cow::Borrowed(lock),
+                                    &key,
+                                    start_ts,
+                                    &bypass_locks,
+                                )
+                            })
+                            .map_err(mvcc::Error::from)?;
+                    }
+                }
+
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
@@ -1267,6 +1378,26 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
     }
 }
 
+fn async_commit_check_keys<'a>(
+    concurrency_manager: &ConcurrencyManager,
+    keys: impl IntoIterator<Item = &'a Key>,
+    ts: TimeStamp,
+    isolation_level: IsolationLevel,
+    bypass_locks: &TsSet,
+) -> Result<()> {
+    concurrency_manager.update_max_read_ts(ts);
+    if isolation_level == IsolationLevel::Si {
+        for key in keys {
+            concurrency_manager
+                .read_key_check(&key, |lock| {
+                    Lock::check_ts_conflict(Cow::Borrowed(lock), &key, ts, bypass_locks)
+                })
+                .map_err(mvcc::Error::from)?;
+        }
+    }
+    Ok(())
+}
+
 /// A builder to build a temporary `Storage<E>`.
 ///
 /// Only used for test purpose.
@@ -1281,9 +1412,14 @@ pub struct TestStorageBuilder<E: Engine, L: LockManager> {
 impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     /// Build `Storage<RocksEngine>`.
     pub fn new(lock_mgr: DummyLockManager) -> Self {
+        // Enable async commit in tests by default
+        let config = Config {
+            enable_async_commit: true,
+            ..Default::default()
+        };
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
-            config: Config::default(),
+            config,
             pipelined_pessimistic_lock: false,
             lock_mgr,
         }
@@ -1292,9 +1428,14 @@ impl TestStorageBuilder<RocksEngine, DummyLockManager> {
 
 impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L) -> Self {
+        // Enable async commit in tests by default
+        let config = Config {
+            enable_async_commit: true,
+            ..Default::default()
+        };
         Self {
             engine,
-            config: Config::default(),
+            config,
             pipelined_pessimistic_lock: false,
             lock_mgr,
         }
@@ -1314,7 +1455,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     }
 
     /// Build a `Storage<E>`.
-    pub fn build(self) -> Result<Storage<E, L, DummyPdClient>> {
+    pub fn build(self) -> Result<Storage<E, L>> {
         let read_pool = build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
@@ -1325,7 +1466,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             &self.config,
             ReadPool::from(read_pool).handle(),
             self.lock_mgr,
-            Arc::new(DummyPdClient::new()),
+            ConcurrencyManager::new(1.into()),
             self.pipelined_pessimistic_lock,
         )
     }
@@ -1447,8 +1588,8 @@ pub mod test_util {
         )
     }
 
-    pub fn delete_pessimistic_lock<E: Engine, L: LockManager, P: PdClient + 'static>(
-        storage: &Storage<E, L, P>,
+    pub fn delete_pessimistic_lock<E: Engine, L: LockManager>(
+        storage: &Storage<E, L>,
         key: Key,
         start_ts: u64,
         for_update_ts: u64,
@@ -1474,6 +1615,7 @@ mod tests {
     use super::{test_util::*, *};
 
     use crate::config::TitanDBConfig;
+    use crate::storage::mvcc::LockType;
     use crate::storage::{
         config::BlockCacheConfig,
         kv::{Error as EngineError, ErrorInner as EngineErrorInner},
@@ -3411,11 +3553,9 @@ mod tests {
         expect_multi_values(
             results.clone().collect(),
             block_on(async {
-                let snapshot = <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::snapshot(
-                    &engine, None, &ctx,
-                )
-                .await?;
-                <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::forward_raw_scan(
+                let snapshot =
+                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, None, &ctx).await?;
+                <Storage<RocksEngine, DummyLockManager>>::forward_raw_scan(
                     &snapshot,
                     &"".to_string(),
                     &Key::from_encoded(b"c1".to_vec()),
@@ -3429,11 +3569,9 @@ mod tests {
         expect_multi_values(
             results.rev().collect(),
             block_on(async move {
-                let snapshot = <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::snapshot(
-                    &engine, None, &ctx,
-                )
-                .await?;
-                <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::reverse_raw_scan(
+                let snapshot =
+                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, None, &ctx).await?;
+                <Storage<RocksEngine, DummyLockManager>>::reverse_raw_scan(
                     &snapshot,
                     &"".to_string(),
                     &Key::from_encoded(b"d3".to_vec()),
@@ -3468,9 +3606,7 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, false,
-            ),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
             true
         );
 
@@ -3480,9 +3616,7 @@ mod tests {
             (b"c".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, false,
-            ),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
             true
         );
 
@@ -3492,9 +3626,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, false,
-            ),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
             false
         );
 
@@ -3505,9 +3637,7 @@ mod tests {
             (b"a".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, false,
-            ),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
             false
         );
 
@@ -3517,9 +3647,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, true,
-            ),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
             true
         );
 
@@ -3529,9 +3657,7 @@ mod tests {
             (b"a3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, true,
-            ),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
             true
         );
 
@@ -3541,9 +3667,7 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, true,
-            ),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
             false
         );
 
@@ -3553,9 +3677,7 @@ mod tests {
             (b"c3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, true,
-            ),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
             false
         );
     }
@@ -4424,20 +4546,15 @@ mod tests {
                 commands::CheckTxnStatus::new(
                     k.clone(),
                     ts(10, 0),
-                    ts(12, 0),
-                    ts(15, 0),
+                    0.into(),
+                    0.into(),
                     true,
                     Context::default(),
                 ),
                 expect_value_callback(
                     tx.clone(),
                     0,
-                    uncommitted(
-                        100,
-                        TimeStamp::zero(),
-                        true,
-                        vec![b"k1".to_vec(), b"k2".to_vec()],
-                    ),
+                    uncommitted(100, ts(10, 1), true, vec![b"k1".to_vec(), b"k2".to_vec()]),
                 ),
             )
             .unwrap();
@@ -4710,6 +4827,7 @@ mod tests {
                     10.into(),
                     1,
                     TimeStamp::zero(),
+                    None,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -5267,5 +5385,70 @@ mod tests {
             0.into(),
             false,
         );
+    }
+
+    #[test]
+    fn test_check_memory_locks() {
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .build()
+            .unwrap();
+        let cm = storage.get_concurrency_manager();
+        let key = Key::from_raw(b"key");
+        let guard = block_on(cm.lock_key(&key));
+        guard.with_lock(|lock| {
+            *lock = Some(txn_types::Lock::new(
+                LockType::Put,
+                b"key".to_vec(),
+                10.into(),
+                100,
+                Some(vec![]),
+                0.into(),
+                1,
+                20.into(),
+            ));
+        });
+
+        let mut ctx = Context::default();
+        ctx.set_isolation_level(IsolationLevel::Si);
+
+        // Test get
+        assert!(storage
+            .get(ctx.clone(), key.clone(), 100.into())
+            .wait()
+            .is_err());
+
+        // Test batch_get
+        assert!(storage
+            .batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into())
+            .wait()
+            .is_err());
+
+        // Test scan
+        assert!(storage
+            .scan(
+                ctx.clone(),
+                Key::from_raw(b"a"),
+                None,
+                10,
+                0,
+                100.into(),
+                false,
+                false
+            )
+            .wait()
+            .is_err());
+
+        // Test batch_get_command
+        let mut req1 = GetRequest::default();
+        req1.set_context(ctx.clone());
+        req1.set_key(b"a".to_vec());
+        req1.set_version(50);
+        let mut req2 = GetRequest::default();
+        req2.set_context(ctx);
+        req2.set_key(b"key".to_vec());
+        req2.set_version(100);
+        let res = storage.batch_get_command(vec![req1, req2]).wait().unwrap();
+        assert!(res[0].is_ok());
+        assert!(res[1].is_err());
     }
 }
