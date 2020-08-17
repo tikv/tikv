@@ -435,6 +435,7 @@ pub struct WriteContext<'a, L: LockManager> {
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub pipelined_pessimistic_lock: bool,
+    pub enable_async_commit: bool,
 }
 
 impl Command {

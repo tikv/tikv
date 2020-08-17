@@ -3,14 +3,14 @@
 use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 
 use engine_rocks::RocksEngine;
-use engine_traits::{KvEngines, Peekable, CF_RAFT};
+use engine_traits::{Engines, Peekable, CF_RAFT};
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::collections::HashMap;
 use tikv_util::config::*;
 
 fn get_raft_msg_or_default<M: protobuf::Message + Default>(
-    engines: &KvEngines<RocksEngine, RocksEngine>,
+    engines: &Engines<RocksEngine, RocksEngine>,
     key: &[u8],
 ) -> M {
     engines
@@ -46,7 +46,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn check_compacted(
-    all_engines: &HashMap<u64, KvEngines<RocksEngine, RocksEngine>>,
+    all_engines: &HashMap<u64, Engines<RocksEngine, RocksEngine>>,
     before_states: &HashMap<u64, RaftTruncatedState>,
     compact_count: u64,
 ) -> bool {
