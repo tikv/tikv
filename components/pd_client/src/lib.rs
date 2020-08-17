@@ -28,10 +28,9 @@ pub use self::util::validate_endpoints;
 pub use self::util::RECONNECT_INTERVAL_SEC;
 
 use std::ops::Deref;
-use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-use futures::future::Future;
+use futures::future::BoxFuture;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
@@ -40,7 +39,7 @@ use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;
 
 pub type Key = Vec<u8>;
-pub type PdFuture<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
+pub type PdFuture<T> = BoxFuture<'static, Result<T>>;
 
 #[derive(Default, Clone)]
 pub struct RegionStat {

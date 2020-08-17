@@ -2784,7 +2784,7 @@ dependencies = [
  "slog-global",
  "tikv_alloc",
  "tikv_util",
- "tokio 0.2.13",
+ "tokio-timer",
  "txn_types",
 ]
 

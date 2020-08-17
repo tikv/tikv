@@ -28,7 +28,9 @@ use kvproto::pdpb::{
 };
 use security::SecurityManager;
 use tikv_util::collections::HashSet;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
+use tokio_timer::timer::Handle;
 
 use super::{ClusterVersion, Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
 
@@ -89,6 +91,7 @@ impl Stream for HeartbeatReceiver {
 
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
+    timer: Handle,
     pub(crate) inner: Arc<RwLock<Inner>>,
 }
 
@@ -104,6 +107,7 @@ impl LeaderClient {
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
 
         LeaderClient {
+            timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: Arc::new(RwLock::new(Inner {
                 env,
                 hb_sender: Either::Left(Some(tx)),
@@ -150,6 +154,7 @@ impl LeaderClient {
             reconnect_count: retry,
             request_sent: 0,
             client: LeaderClient {
+                timer: self.timer.clone(),
                 inner: Arc::clone(&self.inner),
             },
             req,
@@ -255,7 +260,12 @@ where
                 false
             }
             Err(_) => {
-                tokio::time::delay_for(Duration::from_secs(RECONNECT_INTERVAL_SEC)).await;
+                let _ = self
+                    .client
+                    .timer
+                    .delay(Instant::now() + Duration::from_secs(RECONNECT_INTERVAL_SEC))
+                    .compat()
+                    .await;
                 true
             }
         }
