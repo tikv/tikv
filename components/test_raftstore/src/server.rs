@@ -20,7 +20,7 @@ use tempfile::{Builder, TempDir};
 use super::*;
 use encryption::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngines, MiscExt};
+use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
@@ -141,7 +141,7 @@ impl Simulator for ServerCluster {
         &mut self,
         node_id: u64,
         mut cfg: TiKvConfig,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RocksEngine>,
