@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Duration;
+use std::{borrow::Cow, time::Duration};
 
 use async_stream::try_stream;
 use futures::{future, Future, Stream};
@@ -10,17 +10,18 @@ use futures03::channel::mpsc;
 use futures03::prelude::*;
 use tokio::sync::Semaphore;
 
+use kvproto::kvrpcpb::IsolationLevel;
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
-use tipb::{AnalyzeReq, AnalyzeType};
-use tipb::{ChecksumRequest, ChecksumScanOn};
-use tipb::{DagRequest, ExecType};
+use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 
 use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
+use crate::storage::concurrency_manager::ConcurrencyManager;
 use crate::storage::kv::{self, with_tls_engine};
+use crate::storage::mvcc::Error as MvccError;
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 
 use crate::coprocessor::cache::CachedRequestHandler;
@@ -30,6 +31,7 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use minitrace::prelude::*;
+use txn_types::Lock;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -43,6 +45,8 @@ pub struct Endpoint<E: Engine> {
     /// The concurrency limiter of the coprocessor.
     semaphore: Option<Arc<Semaphore>>,
 
+    concurrency_manager: ConcurrencyManager,
+
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     ///
     /// Note that this limit is ignored if we are using Prost.
@@ -51,7 +55,6 @@ pub struct Endpoint<E: Engine> {
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
     stream_channel_size: usize,
-    enable_batch_if_possible: bool,
 
     /// The soft time limit of handling Coprocessor requests.
     max_handle_duration: Duration,
@@ -64,6 +67,7 @@ impl<E: Engine> Clone for Endpoint<E> {
         Self {
             read_pool: self.read_pool.clone(),
             semaphore: self.semaphore.clone(),
+            concurrency_manager: self.concurrency_manager.clone(),
             ..*self
         }
     }
@@ -72,7 +76,11 @@ impl<E: Engine> Clone for Endpoint<E> {
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
-    pub fn new(cfg: &Config, read_pool: ReadPoolHandle) -> Self {
+    pub fn new(
+        cfg: &Config,
+        read_pool: ReadPoolHandle,
+        concurrency_manager: ConcurrencyManager,
+    ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
         // using too much memory. However, if there are a number of large requests, small requests
         // will still be blocked. This needs to be improved.
@@ -85,9 +93,9 @@ impl<E: Engine> Endpoint<E> {
         Self {
             read_pool,
             semaphore,
+            concurrency_manager,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
-            enable_batch_if_possible: cfg.end_point_enable_batch_if_possible,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
@@ -95,9 +103,37 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
+    fn check_memory_locks(
+        &self,
+        req_ctx: &ReqContext,
+        key_ranges: &[coppb::KeyRange],
+    ) -> Result<()> {
+        let start_ts = req_ctx.txn_start_ts;
+        self.concurrency_manager.update_max_read_ts(start_ts);
+        if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
+            for range in key_ranges {
+                let start_key = txn_types::Key::from_raw(range.get_start());
+                let end_key = txn_types::Key::from_raw(range.get_end());
+                self.concurrency_manager
+                    .read_range_check(Some(&start_key), Some(&end_key), |key, lock| {
+                        Lock::check_ts_conflict(
+                            Cow::Borrowed(lock),
+                            key,
+                            start_ts,
+                            &req_ctx.bypass_locks,
+                        )
+                    })
+                    .map_err(MvccError::from)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Parse the raw `Request` to create `RequestHandlerBuilder` and `ReqContext`.
     /// Returns `Err` if fails.
-    fn parse_request(
+    ///
+    /// It also checks if there are locks in memory blocking this read request.
+    fn parse_request_and_check_memory_locks(
         &self,
         mut req: coppb::Request,
         peer: Option<String>,
@@ -194,11 +230,13 @@ impl<E: Engine> Endpoint<E> {
                     self.max_handle_duration,
                     peer,
                     Some(is_desc_scan),
-                    Some(start_ts),
+                    start_ts.into(),
                     cache_match_version,
                 );
+
+                self.check_memory_locks(&req_ctx, &ranges)?;
+
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
-                let enable_batch_if_possible = self.enable_batch_if_possible;
                 builder = Box::new(move |snap, req_ctx: &ReqContext| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
                     let data_version = snap.get_data_version();
@@ -220,7 +258,6 @@ impl<E: Engine> Endpoint<E> {
                         req.get_is_cache_enabled(),
                     )
                     .data_version(data_version)
-                    .enable_batch_if_possible(enable_batch_if_possible)
                     .build()
                 });
             }
@@ -244,9 +281,12 @@ impl<E: Engine> Endpoint<E> {
                     self.max_handle_duration,
                     peer,
                     None,
-                    Some(start_ts),
+                    start_ts.into(),
                     cache_match_version,
                 );
+
+                self.check_memory_locks(&req_ctx, &ranges)?;
+
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
                     statistics::analyze::AnalyzeContext::new(
@@ -275,9 +315,12 @@ impl<E: Engine> Endpoint<E> {
                     self.max_handle_duration,
                     peer,
                     None,
-                    Some(start_ts),
+                    start_ts.into(),
                     cache_match_version,
                 );
+
+                self.check_memory_locks(&req_ctx, &ranges)?;
+
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
                     checksum::ChecksumContext::new(checksum, ranges, start_ts, snap, req_ctx)
@@ -413,7 +456,7 @@ impl<E: Engine> Endpoint<E> {
         );
 
         let result_of_future = self
-            .parse_request(req, peer, false)
+            .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
         future::result(result_of_future)
             .flatten()
@@ -533,11 +576,11 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
-        let result_of_stream =
-            self.parse_request(req, peer, true)
-                .and_then(|(handler_builder, req_ctx)| {
-                    self.handle_stream_request(req_ctx, handler_builder)
-                }); // Result<Stream<Resp, Error>, Error>
+        let result_of_stream = self
+            .parse_request_and_check_memory_locks(req, peer, true)
+            .and_then(|(handler_builder, req_ctx)| {
+                self.handle_stream_request(req_ctx, handler_builder)
+            }); // Result<Stream<Resp, Error>, Error>
 
         futures03::stream::once(futures03::future::ready(result_of_stream)) // Stream<Stream<Resp, Error>, Error>
             .try_flatten() // Stream<Resp, Error>
@@ -592,7 +635,7 @@ mod tests {
     use std::thread;
     use std::vec;
 
-    use futures03::executor::block_on_stream;
+    use futures03::executor::{block_on, block_on_stream};
 
     use tipb::Executor;
     use tipb::Expr;
@@ -603,6 +646,7 @@ mod tests {
     use crate::storage::kv::RocksEngine;
     use crate::storage::TestEngineBuilder;
     use protobuf::Message;
+    use txn_types::{Key, LockType};
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
@@ -754,7 +798,8 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
+        let cm = ConcurrencyManager::new(1.into());
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         // a normal request
         let handler_builder =
@@ -775,7 +820,7 @@ mod tests {
             Duration::from_secs(0),
             None,
             None,
-            None,
+            TimeStamp::max(),
             None,
         );
         assert!(cop
@@ -791,7 +836,8 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
+        let cm = ConcurrencyManager::new(1.into());
+        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
         cop.recursion_limit = 100;
 
         let req = {
@@ -827,7 +873,8 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
+        let cm = ConcurrencyManager::new(1.into());
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         let mut req = coppb::Request::default();
         req.set_tp(9999);
@@ -846,7 +893,8 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
+        let cm = ConcurrencyManager::new(1.into());
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         let mut req = coppb::Request::default();
         req.set_tp(REQ_TYPE_DAG);
@@ -887,7 +935,8 @@ mod tests {
             .collect::<Vec<_>>(),
         );
 
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
+        let cm = ConcurrencyManager::new(1.into());
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         let (tx, rx) = mpsc::channel();
 
@@ -928,7 +977,8 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
+        let cm = ConcurrencyManager::new(1.into());
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
@@ -947,7 +997,8 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
+        let cm = ConcurrencyManager::new(1.into());
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         // Fail immediately
         let handler_builder =
@@ -993,7 +1044,8 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
+        let cm = ConcurrencyManager::new(1.into());
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
         let resp_vec = block_on_stream(
@@ -1014,7 +1066,8 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
+        let cm = ConcurrencyManager::new(1.into());
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         // handler returns `finished == true` should not be called again.
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1103,12 +1156,14 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
+        let cm = ConcurrencyManager::new(1.into());
         let cop = Endpoint::<RocksEngine>::new(
             &Config {
                 end_point_stream_channel_size: 3,
                 ..Config::default()
             },
             read_pool.handle(),
+            cm,
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1167,7 +1222,8 @@ mod tests {
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
-        let cop = Endpoint::<RocksEngine>::new(&config, read_pool.handle());
+        let cm = ConcurrencyManager::new(1.into());
+        let cop = Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm);
 
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -1422,5 +1478,49 @@ mod tests {
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
+    }
+
+    #[test]
+    fn test_check_memory_locks() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new(1.into());
+        let key = Key::from_raw(b"key");
+        let guard = block_on(cm.lock_key(&key));
+        guard.with_lock(|lock| {
+            *lock = Some(txn_types::Lock::new(
+                LockType::Put,
+                b"key".to_vec(),
+                10.into(),
+                100,
+                Some(vec![]),
+                0.into(),
+                1,
+                20.into(),
+            ));
+        });
+
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
+
+        let mut req = coppb::Request::default();
+        req.mut_context().set_isolation_level(IsolationLevel::Si);
+        req.set_start_ts(100);
+        req.set_tp(REQ_TYPE_DAG);
+        let mut key_range = coppb::KeyRange::default();
+        key_range.set_start(b"a".to_vec());
+        key_range.set_end(b"z".to_vec());
+        req.mut_ranges().push(key_range);
+        let mut dag = DagRequest::default();
+        dag.mut_executors().push(Executor::default());
+        req.set_data(dag.write_to_bytes().unwrap());
+
+        let resp = cop
+            .parse_and_handle_unary_request(req, None)
+            .wait()
+            .unwrap();
+        assert_eq!(resp.get_locked().get_key(), b"key");
     }
 }

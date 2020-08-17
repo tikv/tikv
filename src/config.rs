@@ -164,7 +164,7 @@ fn get_background_job_limit(
     // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
     // the rest shared by flush and compaction.
     let max_background_jobs: i32 =
-        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1) as i32));
+        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1.0) as i32));
     // Cap max_sub_compactions to allow at least two compactions.
     let max_compactions = max_background_jobs - max_background_jobs / 4;
     let max_sub_compactions: u32 = cmp::max(
@@ -839,6 +839,8 @@ pub struct DbConfig {
     #[config(skip)]
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
+    #[config(skip)]
+    pub rate_limiter_refill_period: ReadableDuration,
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
@@ -896,6 +898,7 @@ impl Default for DbConfig {
             info_log_dir: "".to_owned(),
             info_log_level: LogLevel::Info,
             rate_bytes_per_sec: ReadableSize::kb(0),
+            rate_limiter_refill_period: ReadableDuration::millis(100),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
             auto_tuned: false,
             bytes_per_sync: ReadableSize::mb(1),
@@ -939,6 +942,7 @@ impl DbConfig {
         if self.rate_bytes_per_sec.0 > 0 {
             opts.set_ratelimiter_with_auto_tuned(
                 self.rate_bytes_per_sec.0 as i64,
+                (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
                 self.rate_limiter_mode,
                 self.auto_tuned,
             );
@@ -1489,7 +1493,7 @@ const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 impl Default for UnifiedReadPoolConfig {
     fn default() -> UnifiedReadPoolConfig {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.8) as usize;
+        let mut concurrency = (cpu_num * 0.8) as usize;
         concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             min_thread_count: 1,
@@ -1725,7 +1729,7 @@ readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 impl Default for StorageReadPoolConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.5) as usize;
+        let mut concurrency = (cpu_num * 0.5) as usize;
         concurrency = cmp::max(DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY, concurrency);
         concurrency = cmp::min(DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY, concurrency);
         Self {
@@ -1767,7 +1771,7 @@ readpool_config!(
 impl Default for CoprReadPoolConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.8) as usize;
+        let mut concurrency = (cpu_num * 0.8) as usize;
         concurrency = cmp::max(DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             use_unified_pool: None,
@@ -1997,7 +2001,22 @@ impl Default for BackupConfig {
         let cpu_num = SysQuota::new().cpu_cores_quota();
         Self {
             // use at most 75% of vCPU by default
-            num_threads: (cpu_num - cpu_num / 4).clamp(1, 32),
+            num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct CdcConfig {
+    pub min_ts_interval: ReadableDuration,
+}
+
+impl Default for CdcConfig {
+    fn default() -> Self {
+        Self {
+            min_ts_interval: ReadableDuration::secs(1),
         }
     }
 }
@@ -2081,6 +2100,9 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub split: SplitConfig,
+
+    #[config(submodule)]
+    pub cdc: CdcConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2110,6 +2132,7 @@ impl Default for TiKvConfig {
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
             split: SplitConfig::default(),
+            cdc: CdcConfig::default(),
         }
     }
 }
