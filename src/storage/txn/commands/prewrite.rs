@@ -163,6 +163,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
         // Set extra op here for getting the write record when check write conflict in prewrite.
         txn.extra_op = context.extra_op;
 
+        // If async commit is disabled in TiKV, set the secondary_keys in the request to None
+        // so we won't do anything for async commit.
+        if !context.enable_async_commit {
+            self.secondary_keys = None;
+        }
+
         let async_commit_pk: Option<Key> = self
             .secondary_keys
             .as_ref()
@@ -430,6 +436,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            enable_async_commit: true,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         if let ProcessResult::PrewriteResult {
@@ -471,6 +478,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            enable_async_commit: true,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -495,6 +503,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            enable_async_commit: true,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
