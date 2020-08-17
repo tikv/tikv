@@ -10,7 +10,7 @@ use futures::compat::Sink01CompatExt;
 use futures::compat::Stream01CompatExt;
 use futures::compat::{Compat, Future01CompatExt};
 use futures::executor::block_on;
-use futures::future::{self, FutureExt, TryFutureExt};
+use futures::future::{self, FutureExt};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use futures::stream::TryStreamExt;
@@ -337,7 +337,7 @@ impl PdClient for RpcClient {
                     panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
                 });
             Box::pin(async move {
-                let mut resp = handler.compat().map_err(Error::Grpc).await?;
+                let mut resp = handler.compat().await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_region_by_id"])
                     .observe(duration_to_sec(timer.elapsed()));
@@ -403,13 +403,13 @@ impl PdClient for RpcClient {
                 .unwrap_or_else(|e| panic!("send request to unbounded channel failed {:?}", e));
             inner.hb_sender = Either::Right(tx);
             Box::pin(async move {
+                let mut sender = sender.sink_compat().sink_map_err(Error::Grpc);
                 let result = sender
-                    .sink_compat()
-                    .sink_map_err(Error::Grpc)
                     .send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
                     .await;
                 match result {
                     Ok(()) => {
+                        sender.get_mut().get_mut().cancel();
                         info!("cancel region heartbeat sender");
                         Ok(())
                     }
@@ -448,7 +448,7 @@ impl PdClient for RpcClient {
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_split", e));
 
             Box::pin(async move {
-                let resp = handler.compat().map_err(Error::Grpc).await?;
+                let resp = handler.compat().await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["ask_split"])
                     .observe(duration_to_sec(timer.elapsed()));
@@ -482,7 +482,7 @@ impl PdClient for RpcClient {
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_batch_split", e));
 
             Box::pin(async move {
-                let resp = handler.compat().map_err(Error::Grpc).await?;
+                let resp = handler.compat().await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["ask_batch_split"])
                     .observe(duration_to_sec(timer.elapsed()));
@@ -516,7 +516,7 @@ impl PdClient for RpcClient {
                 .store_heartbeat_async_opt(&req, Self::call_option())
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "store_heartbeat", e));
             Box::pin(async move {
-                let resp = handler.compat().map_err(Error::Grpc).await?;
+                let resp = handler.compat().await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["store_heartbeat"])
                     .observe(duration_to_sec(timer.elapsed()));
@@ -551,7 +551,7 @@ impl PdClient for RpcClient {
                     panic!("fail to request PD {} err {:?}", "report_batch_split", e)
                 });
             Box::pin(async move {
-                let resp = handler.compat().map_err(Error::Grpc).await?;
+                let resp = handler.compat().await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["report_batch_split"])
                     .observe(duration_to_sec(timer.elapsed()));
@@ -604,7 +604,7 @@ impl PdClient for RpcClient {
                     panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e)
                 });
             Box::pin(async move {
-                let resp = handler.compat().map_err(Error::Grpc).await?;
+                let resp = handler.compat().await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_gc_safe_point"])
                     .observe(duration_to_sec(timer.elapsed()));
@@ -683,7 +683,7 @@ impl PdClient for RpcClient {
             cli.client_stub
                 .spawn(Compat::new(send_once.unit_error().boxed()));
             Box::pin(async move {
-                let resp = resp_stream.compat().map_err(Error::Grpc).try_next().await?;
+                let resp = resp_stream.compat().try_next().await?;
                 // Now we can safely drop sink without
                 // causing a Cancel error.
                 let _ = keep_req_rx
