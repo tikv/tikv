@@ -7,6 +7,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use futures::channel::mpsc as future_mpsc;
+use futures::compat::Future01CompatExt;
 use futures::StreamExt;
 use futures_executor::block_on;
 use futures_util::io::AsyncReadExt;
@@ -21,6 +22,7 @@ use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use kvproto::tikvpb::TikvClient;
+use pd_client::PdClient;
 use tempfile::Builder;
 use test_raftstore::*;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
@@ -28,6 +30,7 @@ use tidb_query_common::storage::{IntervalRange, Range};
 use tikv::config::BackupConfig;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
+use tikv::storage::concurrency_manager::ConcurrencyManager;
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv_util::collections::HashMap;
@@ -73,6 +76,8 @@ impl TestSuite {
         configure_for_lease_read(&mut cluster, Some(100), None);
         cluster.run();
 
+        let concurrency_manager =
+            ConcurrencyManager::new(block_on(cluster.pd_client.get_tso().compat()).unwrap());
         let mut endpoints = HashMap::default();
         for (id, engines) in &cluster.engines {
             // Create and run backup endpoints.
@@ -83,6 +88,7 @@ impl TestSuite {
                 sim.region_info_accessors[&id].clone(),
                 engines.kv.as_inner().clone(),
                 BackupConfig { num_threads: 4 },
+                concurrency_manager.clone(),
             );
             let mut worker = Worker::new(format!("backup-{}", id));
             worker.start(backup_endpoint).unwrap();

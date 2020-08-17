@@ -10,9 +10,11 @@ use crate::import::SSTImporter;
 use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
-use crate::storage::{config::Config as StorageConfig, Storage};
+use crate::storage::{
+    concurrency_manager::ConcurrencyManager, config::Config as StorageConfig, Storage,
+};
 use engine_rocks::RocksEngine;
-use engine_traits::{KvEngines, Peekable};
+use engine_traits::{Engines, Peekable};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
@@ -33,14 +35,14 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S, P: PdClient + 'static>(
+pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
-    pd_client: Arc<P>,
+    concurrency_manager: ConcurrencyManager,
     pipelined_pessimistic_lock: bool,
-) -> Result<Storage<RaftKv<S>, LockManager, P>>
+) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter<RocksEngine> + 'static,
 {
@@ -49,7 +51,7 @@ where
         cfg,
         read_pool,
         lock_mgr,
-        pd_client,
+        concurrency_manager,
         pipelined_pessimistic_lock,
     )?;
     Ok(store)
@@ -61,7 +63,7 @@ pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
-    system: RaftBatchSystem,
+    system: RaftBatchSystem<RocksEngine, RocksEngine>,
     has_started: bool,
 
     pd_client: Arc<C>,
@@ -74,7 +76,7 @@ where
 {
     /// Creates a new Node.
     pub fn new(
-        system: RaftBatchSystem,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
@@ -133,9 +135,9 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
         trans: T,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
@@ -205,7 +207,7 @@ where
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engines: &KvEngines<RocksEngine, RocksEngine>) -> Result<u64> {
+    fn check_store(&self, engines: &Engines<RocksEngine, RocksEngine>) -> Result<u64> {
         let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
@@ -250,7 +252,7 @@ where
         }
     }
 
-    fn bootstrap_store(&self, engines: &KvEngines<RocksEngine, RocksEngine>) -> Result<u64> {
+    fn bootstrap_store(&self, engines: &Engines<RocksEngine, RocksEngine>) -> Result<u64> {
         let store_id = self.alloc_id()?;
         debug!("alloc store id"; "store_id" => store_id);
 
@@ -263,7 +265,7 @@ where
     #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
         &self,
-        engines: &KvEngines<RocksEngine, RocksEngine>,
+        engines: &Engines<RocksEngine, RocksEngine>,
         store_id: u64,
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
@@ -287,7 +289,7 @@ where
 
     fn check_or_prepare_bootstrap_cluster(
         &self,
-        engines: &KvEngines<RocksEngine, RocksEngine>,
+        engines: &Engines<RocksEngine, RocksEngine>,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
         if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
@@ -303,7 +305,7 @@ where
 
     fn bootstrap_cluster(
         &mut self,
-        engines: &KvEngines<RocksEngine, RocksEngine>,
+        engines: &Engines<RocksEngine, RocksEngine>,
         first_region: metapb::Region,
     ) -> Result<()> {
         let region_id = first_region.get_id();
@@ -368,9 +370,9 @@ where
     fn start_store<T>(
         &mut self,
         store_id: u64,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
         trans: T,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
