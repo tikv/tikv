@@ -408,14 +408,14 @@ fn test_cdc_scan() {
             assert!(es.entries.len() == 2, "{:?}", es);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
-            assert_eq!(e.start_ts, 4, "{:?}", es);
+            assert_eq!(e.start_ts, 5, "{:?}", es);
             assert_eq!(e.commit_ts, 0, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert_eq!(e.value, v, "{:?}", es);
             let e = &es.entries[1];
             assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
-            assert_eq!(e.start_ts, 2, "{:?}", es);
-            assert_eq!(e.commit_ts, 3, "{:?}", es);
+            assert_eq!(e.start_ts, 3, "{:?}", es);
+            assert_eq!(e.commit_ts, 4, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert_eq!(e.value, v, "{:?}", es);
         }
@@ -435,13 +435,13 @@ fn test_cdc_scan() {
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
     }
 
-    // checkpoint_ts = 5;
+    // checkpoint_ts = 6;
     let checkpoint_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    // Commit = 6;
+    // Commit = 7;
     let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![k.clone()], start_ts, commit_ts);
     // Prewrite delete
-    // Start = 7;
+    // Start = 8;
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Del);
@@ -467,15 +467,15 @@ fn test_cdc_scan() {
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
             assert_eq!(e.get_op_type(), EventRowOpType::Delete, "{:?}", es);
-            assert_eq!(e.start_ts, 7, "{:?}", es);
+            assert_eq!(e.start_ts, 8, "{:?}", es);
             assert_eq!(e.commit_ts, 0, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert!(e.value.is_empty(), "{:?}", es);
             let e = &es.entries[1];
             assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
             assert_eq!(e.get_op_type(), EventRowOpType::Put, "{:?}", es);
-            assert_eq!(e.start_ts, 4, "{:?}", es);
-            assert_eq!(e.commit_ts, 6, "{:?}", es);
+            assert_eq!(e.start_ts, 5, "{:?}", es);
+            assert_eq!(e.commit_ts, 7, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert_eq!(e.value, v, "{:?}", es);
         }

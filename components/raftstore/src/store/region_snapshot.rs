@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    IterOptions, KvEngine, KvEngines, Peekable, ReadOptions, Result as EngineResult, Snapshot,
+    Engines, IterOptions, KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot,
 };
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
@@ -367,10 +367,10 @@ fn handle_check_key_in_region_error(e: crate::Error) -> Result<()> {
     }
 }
 
-pub fn new_temp_engine(path: &tempfile::TempDir) -> KvEngines<RocksEngine, RocksEngine> {
+pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
     let raft_path = path.path().join(std::path::Path::new("raft"));
     let shared_block_cache = false;
-    KvEngines::new(
+    Engines::new(
         engine_rocks::util::new_engine(
             path.path().to_str().unwrap(),
             None,
@@ -395,7 +395,7 @@ mod tests {
     use crate::Result;
 
     use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_traits::{CompactExt, KvEngines, MiscExt, Peekable, SyncMutable};
+    use engine_traits::{CompactExt, Engines, MiscExt, Peekable, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -406,7 +406,7 @@ mod tests {
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
     fn new_peer_storage(
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
         r: &Region,
     ) -> PeerStorage<RocksEngine, RocksEngine> {
         let (sched, _) = worker::dummy_scheduler();
@@ -414,7 +414,7 @@ mod tests {
     }
 
     fn load_default_dataset(
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
     ) -> (PeerStorage<RocksEngine, RocksEngine>, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
@@ -438,7 +438,7 @@ mod tests {
     }
 
     fn load_multiple_levels_dataset(
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
     ) -> (PeerStorage<RocksEngine, RocksEngine>, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
