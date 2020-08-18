@@ -11,7 +11,7 @@ use engine_rocks::util::get_cf_handle;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
 use engine_traits::{
-    CompactExt, KvEngine, KvEngines, MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT,
+    CompactExt, Engines, KvEngine, MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT,
     CF_WRITE,
 };
 use keys::data_key;
@@ -163,7 +163,7 @@ fn test_delete_files_in_range_for_titan() {
 
     let raft_path = path.path().join(Path::new("titan"));
     let shared_block_cache = false;
-    let engines = KvEngines::new(
+    let engines = Engines::new(
         RocksEngine::from_db(Arc::new(
             engine_rocks::raw_util::new_engine(
                 path.path().to_str().unwrap(),

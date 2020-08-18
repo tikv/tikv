@@ -26,7 +26,7 @@ use engine_rocks::encryption::get_env;
 use engine_rocks::raw::DB;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::{Iterable, KvEngines, Peekable};
+use engine_traits::{Engines, Iterable, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -83,7 +83,7 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
-pub fn must_region_cleared(engine: &KvEngines<RocksEngine, RocksEngine>, region: &metapb::Region) {
+pub fn must_region_cleared(engine: &Engines<RocksEngine, RocksEngine>, region: &metapb::Region) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
     let state: RegionLocalState = engine.kv.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
@@ -509,7 +509,7 @@ pub fn create_test_engine(
     router: Option<RaftRouter<RocksEngine, RocksEngine>>,
     cfg: &TiKvConfig,
 ) -> (
-    KvEngines<RocksEngine, RocksEngine>,
+    Engines<RocksEngine, RocksEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
 ) {
@@ -560,7 +560,7 @@ pub fn create_test_engine(
         engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
     );
 
-    let engines = KvEngines::new(
+    let engines = Engines::new(
         RocksEngine::from_db(engine),
         RocksEngine::from_db(raft_engine),
         cache.is_some(),
