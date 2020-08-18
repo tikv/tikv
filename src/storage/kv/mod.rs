@@ -17,7 +17,7 @@ use engine_traits::{IterOptions, KvEngine as LocalEngine, ReadOptions};
 use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
-use txn_types::{Key, TxnExtra, Value};
+use txn_types::{Key, TimeStamp, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -57,20 +57,38 @@ pub enum Modify {
     Put(CfName, Key, Value),
     // cf_name, start_key, end_key, notify_only
     DeleteRange(CfName, Key, Key, bool),
+
+    Prewrite {
+        key: Key,
+        value: Value,
+        lock: Value,
+        start_ts: TimeStamp,
+    },
+    Commit {
+        key: Key,
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+    },
 }
 
 impl Modify {
     pub fn size(&self) -> usize {
         let cf = match self {
-            Modify::Delete(cf, _) => cf,
-            Modify::Put(cf, ..) => cf,
+            Modify::Delete(cf, _) => Some(cf),
+            Modify::Put(cf, ..) => Some(cf),
             Modify::DeleteRange(..) => unreachable!(),
+            _ => None,
         };
-        let cf_size = if cf == &CF_DEFAULT { 0 } else { cf.len() };
+        let cf_size = match cf {
+            Some(cf) if cf != &CF_DEFAULT => cf.len(),
+            _ => 0,
+        };
 
         match self {
             Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
+            Modify::Prewrite { .. } => 0,
+            Modify::Commit { .. } => 0,
             Modify::DeleteRange(..) => unreachable!(),
         }
     }

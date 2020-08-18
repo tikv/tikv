@@ -264,6 +264,7 @@ pub fn write_modifies(kv_engine: &BaseRocksEngine, modifies: Vec<Modify>) -> Res
                     Ok(())
                 }
             }
+            _ => unreachable!(),
         };
         // TODO: turn the error into an engine error.
         if let Err(msg) = res {

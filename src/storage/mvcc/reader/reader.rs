@@ -703,6 +703,10 @@ mod tests {
                             wb.delete_range_cf(cf, &k1, &k2).unwrap();
                         }
                     }
+                    _ => {
+                        // TODO: handle prewrite/commit here
+                        unreachable!()
+                    }
                 }
             }
             db.c().write(&wb).unwrap();

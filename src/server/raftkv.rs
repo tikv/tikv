@@ -6,8 +6,8 @@ use engine_traits::CF_DEFAULT;
 use engine_traits::{IterOptions, Peekable, ReadOptions, Snapshot, TablePropertiesExt};
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
-    CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
-    RaftRequestHeader, Request, Response,
+    CmdType, CommitRequest, DeleteRangeRequest, DeleteRequest, PrewriteRequest, PutRequest,
+    RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
 };
 use kvproto::{errorpb, metapb};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -308,6 +308,7 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
                     let bytes = keys::data_end_key(key2.as_encoded());
                     *key2 = Key::from_encoded(bytes);
                 }
+                _ => unreachable!(),
             }
         }
         write_modifies(&self.engine, modifies)
@@ -350,6 +351,32 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
                     delete_range.set_notify_only(notify_only);
                     req.set_cmd_type(CmdType::DeleteRange);
                     req.set_delete_range(delete_range);
+                }
+                Modify::Prewrite {
+                    key,
+                    value,
+                    lock,
+                    start_ts,
+                } => {
+                    let mut prewrite = PrewriteRequest::default();
+                    prewrite.set_key(key.into_encoded());
+                    prewrite.set_value(value);
+                    prewrite.set_lock(lock);
+                    prewrite.set_start_version(start_ts.into_inner());
+                    req.set_cmd_type(CmdType::Prewrite);
+                    req.set_prewrite(prewrite);
+                }
+                Modify::Commit {
+                    key,
+                    start_ts,
+                    commit_ts,
+                } => {
+                    let mut commit = CommitRequest::default();
+                    commit.set_key(key.into_encoded());
+                    commit.set_start_version(start_ts.into_inner());
+                    commit.set_commit_version(commit_ts.into_inner());
+                    req.set_cmd_type(CmdType::Commit);
+                    req.set_commit(commit);
                 }
             }
             reqs.push(req);

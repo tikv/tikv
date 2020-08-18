@@ -3787,6 +3787,7 @@ pub fn new_read_index_request(
     request.mut_header().set_peer(peer);
     let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::ReadIndex);
+    request.mut_requests().push(cmd);
     request
 }
 

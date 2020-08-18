@@ -1658,13 +1658,18 @@ where
         });
         assert_eq!(lock.ts, start_version.into());
 
-        let write_value = txn_types::Write::new(
+        let mut write = txn_types::Write::new(
             txn_types::WriteType::from_lock_type(lock.lock_type).unwrap(),
             start_version.into(),
             lock.short_value,
-        )
-        .as_ref()
-        .to_bytes();
+        );
+        for ts in &lock.rollback_ts {
+            if *ts == commit_version.into() {
+                write = write.set_overlapped_rollback(true);
+                break;
+            }
+        }
+        let write_value = write.as_ref().to_bytes();
         let write_key = keys::data_key(
             txn_types::Key::from_encoded_slice(key)
                 .append_ts(commit_version.into())

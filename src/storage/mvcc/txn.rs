@@ -210,6 +210,27 @@ impl<S: Snapshot> MvccTxn<S> {
         self.write_size
     }
 
+    fn put_prewrite(&mut self, key: Key, value: Value, lock: &Lock) {
+        let write = Modify::Prewrite {
+            key,
+            value,
+            start_ts: lock.ts,
+            lock: lock.to_bytes(),
+        };
+        self.write_size += write.size();
+        self.writes.modifies.push(write);
+    }
+
+    fn put_commit(&mut self, key: Key, start_ts: TimeStamp, commit_ts: TimeStamp) {
+        let write = Modify::Commit {
+            key,
+            start_ts,
+            commit_ts,
+        };
+        self.write_size += write.size();
+        self.writes.modifies.push(write);
+    }
+
     fn put_lock(&mut self, key: Key, lock: &Lock) {
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
@@ -275,15 +296,16 @@ impl<S: Snapshot> MvccTxn<S> {
             min_commit_ts,
         );
 
-        if let Some(value) = value {
-            if is_short_value(&value) {
+        let value = value.and_then(|v| {
+            if is_short_value(&v) {
                 // If the value is short, embed it in Lock.
-                lock.short_value = Some(value);
+                lock.short_value = Some(v);
+                None
             } else {
                 // value is long
-                self.put_value(key.clone(), self.start_ts, value);
+                Some(v)
             }
-        }
+        });
 
         let mut async_commit_ts = TimeStamp::zero();
         if let Some(secondary_keys) = secondary_keys {
@@ -309,7 +331,7 @@ impl<S: Snapshot> MvccTxn<S> {
             self.guards.push(key_guard);
         }
 
-        self.put_lock(key, &lock);
+        self.put_prewrite(key, value.unwrap_or_default(), &lock);
         Ok(async_commit_ts)
     }
 
@@ -807,7 +829,7 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        let mut lock = match self.reader.load_lock(&key)? {
+        let lock = match self.reader.load_lock(&key)? {
             Some(mut lock) if lock.ts == self.start_ts => {
                 // A lock with larger min_commit_ts than current commit_ts can't be committed
                 if commit_ts < lock.min_commit_ts {
@@ -877,21 +899,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         };
-        let mut write = Write::new(
-            WriteType::from_lock_type(lock.lock_type).unwrap(),
-            self.start_ts,
-            lock.short_value.take(),
-        );
-
-        for ts in &lock.rollback_ts {
-            if *ts == commit_ts {
-                write = write.set_overlapped_rollback(true);
-                break;
-            }
-        }
-
-        self.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
-        Ok(self.unlock_key(key, lock.is_pessimistic_txn()))
+        let released = ReleasedLock::new(&key, lock.is_pessimistic_txn());
+        self.put_commit(key, lock.ts, commit_ts);
+        Ok(Some(released))
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<Option<ReleasedLock>> {
