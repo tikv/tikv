@@ -10,10 +10,11 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, KvEngines, Mutable};
+use engine_traits::{Engines, KvEngine, Mutable};
 use error_code::ErrorCodeExt;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
+use raft_engine::RaftEngine;
 
 use crate::coprocessor::CoprocessorHost;
 use crate::store::peer_storage::{
@@ -216,9 +217,9 @@ impl PendingDeleteRanges {
 struct SnapContext<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
-    engines: KvEngines<EK, ER>,
+    engines: Engines<EK, ER>,
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
@@ -230,7 +231,7 @@ where
 impl<EK, ER, R> SnapContext<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK>,
 {
     /// Generates the snapshot of the Region.
@@ -559,7 +560,7 @@ where
 pub struct Runner<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pool: ThreadPool<TaskCell>,
     ctx: SnapContext<EK, ER, R>,
@@ -571,11 +572,11 @@ where
 impl<EK, ER, R> Runner<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK>,
 {
     pub fn new(
-        engines: KvEngines<EK, ER>,
+        engines: Engines<EK, ER>,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
@@ -632,7 +633,7 @@ where
 impl<EK, ER, R> Runnable<Task<EK::Snapshot>> for Runner<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn run(&mut self, task: Task<EK::Snapshot>) {
@@ -701,7 +702,7 @@ pub enum Event {
 impl<EK, ER, R> RunnableWithTimer<Task<EK::Snapshot>, Event> for Runner<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
@@ -742,7 +743,7 @@ mod tests {
     use engine_traits::{
         CFHandleExt, CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
     };
-    use engine_traits::{KvEngine, KvEngines};
+    use engine_traits::{Engines, KvEngine};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
@@ -844,7 +845,7 @@ mod tests {
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let shared_block_cache = false;
-        let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
+        let engines = Engines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
         let (router, _) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
             engines,
@@ -922,7 +923,7 @@ mod tests {
         }
 
         let shared_block_cache = false;
-        let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
+        let engines = Engines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("snap-manager");

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{KvEngine, KvEngines, Snapshot, WriteOptions};
+use engine_traits::{Engines, KvEngine, Snapshot, WriteOptions};
 use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -29,6 +29,7 @@ use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
+use raft_engine::RaftEngine;
 use smallvec::SmallVec;
 use time::Timespec;
 use txn_types::TxnExtra;
@@ -38,6 +39,7 @@ use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
+use crate::store::util::is_learner;
 use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, GlobalReplicationState, PdTask, ReadResponse};
 use crate::{Error, Result};
@@ -320,7 +322,7 @@ impl<S: Snapshot> Drop for CmdEpochChecker<S> {
 pub struct Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     /// The ID of the Region which this Peer belongs to.
     region_id: u64,
@@ -434,13 +436,13 @@ where
 impl<EK, ER> Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn new(
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask<EK::Snapshot>>,
-        engines: KvEngines<EK, ER>,
+        engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
     ) -> Result<Peer<EK, ER>> {
@@ -727,7 +729,7 @@ where
 
         // Set Tombstone state explicitly
         let mut kv_wb = ctx.engines.kv.write_batch();
-        let mut raft_wb = ctx.engines.raft.write_batch();
+        let mut raft_wb = ctx.engines.raft.log_batch(1024);
         self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
         write_peer_state(
             &mut kv_wb,
@@ -739,7 +741,7 @@ where
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(ctx.cfg.sync_log);
         ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
-        ctx.engines.raft.write_opt(&raft_wb, &write_opts)?;
+        ctx.engines.raft.consume(&mut raft_wb, ctx.cfg.sync_log)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -1589,7 +1591,7 @@ where
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
-        if apply_snap_result.is_some() && self.peer.get_is_learner() {
+        if apply_snap_result.is_some() {
             // The peer may change from learner to voter after snapshot applied.
             let peer = self
                 .region()
@@ -2108,7 +2110,7 @@ where
         let peer = change_peer.get_peer();
 
         // Check the request itself is valid or not.
-        match (change_type, peer.get_is_learner()) {
+        match (change_type, is_learner(peer)) {
             (ConfChangeType::AddNode, true) | (ConfChangeType::AddLearnerNode, false) => {
                 warn!(
                     "invalid conf change request";
@@ -2897,7 +2899,7 @@ where
 impl<EK, ER> Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
@@ -3261,7 +3263,7 @@ pub trait RequestInspector {
 impl<EK, ER> RequestInspector for Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn has_applied_to_current_term(&mut self) -> bool {
         self.get_store().applied_index_term() == self.term()
@@ -3290,7 +3292,7 @@ where
 impl<EK, ER, T, C> ReadExecutor<EK> for PollContext<EK, ER, T, C>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn get_engine(&self) -> &EK {
         &self.engines.kv
@@ -3318,6 +3320,7 @@ fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
         let req = msg.get_admin_request();
         return match req.get_cmd_type() {
             AdminCmdType::ChangePeer
+            | AdminCmdType::ChangePeerV2
             | AdminCmdType::Split
             | AdminCmdType::BatchSplit
             | AdminCmdType::PrepareMerge
@@ -3343,6 +3346,7 @@ fn is_request_urgent(req: &RaftCmdRequest) -> bool {
         AdminCmdType::Split
         | AdminCmdType::BatchSplit
         | AdminCmdType::ChangePeer
+        | AdminCmdType::ChangePeerV2
         | AdminCmdType::ComputeHash
         | AdminCmdType::VerifyHash
         | AdminCmdType::PrepareMerge
@@ -3372,7 +3376,7 @@ pub trait AbstractPeer {
     fn pending_merge_state(&self) -> Option<&MergeState>;
 }
 
-impl<EK: KvEngine, ER: KvEngine> AbstractPeer for Peer<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for Peer<EK, ER> {
     fn meta_peer(&self) -> &metapb::Peer {
         &self.peer
     }
@@ -3430,6 +3434,7 @@ mod tests {
             AdminCmdType::Split,
             AdminCmdType::BatchSplit,
             AdminCmdType::ChangePeer,
+            AdminCmdType::ChangePeerV2,
             AdminCmdType::ComputeHash,
             AdminCmdType::VerifyHash,
             AdminCmdType::PrepareMerge,

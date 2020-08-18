@@ -21,7 +21,7 @@ use raft::eraftpb;
 
 use keys::{self, data_key, enc_end_key, enc_start_key};
 use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
-use raftstore::store::util::check_key_in_region;
+use raftstore::store::util::{check_key_in_region, is_learner};
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::time::UnixSecs;
@@ -114,7 +114,7 @@ impl Operator {
         match *self {
             Operator::AddPeer { ref peer, .. } => {
                 if let Either::Left(ref peer) = *peer {
-                    let conf_change_type = if peer.get_is_learner() {
+                    let conf_change_type = if is_learner(peer) {
                         eraftpb::ConfChangeType::AddLearnerNode
                     } else {
                         eraftpb::ConfChangeType::AddNode
@@ -489,7 +489,7 @@ impl Cluster {
                 cmp::Ordering::Equal => {
                     // For promote learner to voter.
                     let get_learners =
-                        |r: &Region| r.get_peers().iter().filter(|p| p.get_is_learner()).count();
+                        |r: &Region| r.get_peers().iter().filter(|p| is_learner(p)).count();
                     let region_learner_len = get_learners(&region);
                     let cur_region_learner_len = get_learners(&cur_region);
                     assert_eq!(cur_region_learner_len, region_learner_len + 1);

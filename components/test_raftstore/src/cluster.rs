@@ -20,7 +20,7 @@ use encryption::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CompactExt, Iterable, KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
 };
 use pd_client::PdClient;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
@@ -51,7 +51,7 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RocksEngine>,
@@ -126,10 +126,10 @@ pub struct Cluster<T: Simulator> {
     count: usize,
 
     pub paths: Vec<TempDir>,
-    pub dbs: Vec<KvEngines<RocksEngine, RocksEngine>>,
+    pub dbs: Vec<Engines<RocksEngine, RocksEngine>>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
-    pub engines: HashMap<u64, KvEngines<RocksEngine, RocksEngine>>,
+    pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
 
@@ -302,7 +302,7 @@ impl<T: Simulator> Cluster<T> {
         Arc::clone(&self.engines[&node_id].raft.as_inner())
     }
 
-    pub fn get_all_engines(&self, node_id: u64) -> KvEngines<RocksEngine, RocksEngine> {
+    pub fn get_all_engines(&self, node_id: u64) -> Engines<RocksEngine, RocksEngine> {
         self.engines[&node_id].clone()
     }
 
