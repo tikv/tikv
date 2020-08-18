@@ -122,6 +122,7 @@ pub trait ReadExecutor<E: KvEngine> {
                     resp
                 }
                 CmdType::Prewrite
+                | CmdType::Commit
                 | CmdType::Put
                 | CmdType::Delete
                 | CmdType::DeleteRange

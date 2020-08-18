@@ -3006,10 +3006,13 @@ pub trait RequestInspector {
         for r in req.get_requests() {
             match r.get_cmd_type() {
                 CmdType::Get | CmdType::Snap | CmdType::ReadIndex => has_read = true,
-                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSst => {
-                    has_write = true
-                }
-                CmdType::Prewrite | CmdType::Invalid => {
+                CmdType::Delete
+                | CmdType::Put
+                | CmdType::DeleteRange
+                | CmdType::IngestSst
+                | CmdType::Prewrite
+                | CmdType::Commit => has_write = true,
+                CmdType::Invalid => {
                     return Err(box_err!(
                         "invalid cmd type {:?}, message maybe corrupted",
                         r.get_cmd_type()

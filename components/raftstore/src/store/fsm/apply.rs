@@ -1337,7 +1337,9 @@ where
                     );
                     continue;
                 }
-                CmdType::Prewrite | CmdType::Invalid | CmdType::ReadIndex => {
+                CmdType::Prewrite => self.handle_prewrite(ctx.kv_wb_mut(), req),
+                CmdType::Commit => self.handle_commit(&ctx.engine.clone(), ctx.kv_wb_mut(), req),
+                CmdType::Invalid | CmdType::ReadIndex => {
                     Err(box_err!("invalid cmd type, message maybe corrupted"))
                 }
             }?;
@@ -1558,6 +1560,143 @@ where
 
         ssts.push(sst.clone());
         Ok(Response::default())
+    }
+
+    fn handle_prewrite<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
+        let (key, value, lock, start_version) = (
+            req.get_prewrite().get_key(),
+            req.get_prewrite().get_value(),
+            req.get_prewrite().get_lock(),
+            req.get_prewrite().get_start_version(),
+        );
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, &self.region)?;
+
+        let resp = Response::default();
+        let lock_key = keys::data_key(key);
+
+        self.metrics.size_diff_hint += lock_key.len() as i64;
+        self.metrics.size_diff_hint += lock.len() as i64;
+        self.metrics.lock_cf_written_bytes += lock_key.len() as u64;
+        self.metrics.lock_cf_written_bytes += lock.len() as u64;
+        wb.put_cf(CF_LOCK, &lock_key, lock).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to write ({}, {}) to cf {}: {:?}",
+                self.tag,
+                hex::encode_upper(&key),
+                escape(value),
+                CF_LOCK,
+                e
+            )
+        });
+
+        if !value.is_empty() {
+            let default_key = keys::data_key(
+                txn_types::Key::from_encoded_slice(key)
+                    .append_ts(start_version.into())
+                    .as_encoded()
+                    .as_slice(),
+            );
+            self.metrics.size_diff_hint += default_key.len() as i64;
+            self.metrics.size_diff_hint += value.len() as i64;
+            wb.put(&default_key, value).unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to write ({}, {}): {:?}",
+                    self.tag,
+                    hex::encode_upper(&key),
+                    escape(value),
+                    e
+                );
+            });
+        }
+        Ok(resp)
+    }
+
+    fn handle_commit<W: WriteBatch>(
+        &mut self,
+        engine: &EK,
+        wb: &mut W,
+        req: &Request,
+    ) -> Result<Response> {
+        let (key, start_version, commit_version) = (
+            req.get_commit().get_key(),
+            req.get_commit().get_start_version(),
+            req.get_commit().get_commit_version(),
+        );
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, &self.region)?;
+
+        let resp = Response::default();
+        let lock_key = keys::data_key(key);
+        let lock_value = engine
+            .get_value_cf(CF_LOCK, &lock_key)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to get {} from cf {}: {:?}",
+                    self.tag,
+                    hex::encode_upper(&key),
+                    CF_LOCK,
+                    e
+                )
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "{} failed to get {} from cf {}",
+                    self.tag,
+                    hex::encode_upper(&key),
+                    CF_LOCK,
+                )
+            });
+        let lock = txn_types::Lock::parse(&lock_value).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to parse lock ({}, {}): {:?}",
+                self.tag,
+                hex::encode_upper(&key),
+                escape(&lock_value),
+                e,
+            )
+        });
+        assert_eq!(lock.ts, start_version.into());
+
+        let write_value = txn_types::Write::new(
+            txn_types::WriteType::from_lock_type(lock.lock_type).unwrap(),
+            start_version.into(),
+            lock.short_value,
+        )
+        .as_ref()
+        .to_bytes();
+        let write_key = keys::data_key(
+            txn_types::Key::from_encoded_slice(key)
+                .append_ts(commit_version.into())
+                .as_encoded()
+                .as_slice(),
+        );
+
+        self.metrics.size_diff_hint -= lock_key.len() as i64;
+        self.metrics.lock_cf_written_bytes += lock_key.len() as u64;
+        wb.delete_cf(CF_LOCK, &lock_key).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to delete {} from cf {}: {:?}",
+                self.tag,
+                hex::encode_upper(&key),
+                CF_LOCK,
+                e
+            )
+        });
+        self.metrics.size_diff_hint += write_key.len() as i64;
+        self.metrics.size_diff_hint += write_value.len() as i64;
+        wb.put_cf(CF_WRITE, &write_key, write_value.as_slice())
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to write ({}, {}) to cf {}: {:?}",
+                    self.tag,
+                    hex::encode_upper(&write_key),
+                    escape(write_value.as_slice()),
+                    CF_WRITE,
+                    e
+                )
+            });
+        Ok(resp)
     }
 }
 
