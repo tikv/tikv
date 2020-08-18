@@ -272,6 +272,28 @@ pub fn least_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
 
 #[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
+pub fn interval_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
+    let target = match args[0] {
+        None => return Ok(Some(-1)),
+        Some(v) => v,
+    };
+
+    let mut left = 1;
+    let mut right = args.len();
+    while left < right {
+        let mid = left + (right - left) / 2;
+        let m = args[mid].unwrap_or(target);
+        if target < m {
+            right = mid
+        } else {
+            left = mid + 1
+        }
+    }
+    Ok(Some((left - 1) as i64))
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
 pub fn greatest_decimal(args: &[Option<&Decimal>]) -> Result<Option<Decimal>> {
     do_get_extremum(args, max)
 }
@@ -304,6 +326,29 @@ pub fn greatest_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
 #[inline]
 pub fn least_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
     do_get_extremum(args, min)
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn interval_real(args: &[Option<&Real>]) -> Result<Option<Int>> {
+    let target = match args[0] {
+        None => return Ok(Some(-1)),
+        Some(v) => v,
+    };
+
+    let mut left = 1;
+    let mut right = args.len();
+
+    while left < right {
+        let mid = left + (right - left) / 2;
+        let m = args[mid].unwrap_or(target);
+        if target < m {
+            right = mid
+        } else {
+            left = mid + 1
+        }
+    }
+    Ok(Some((left - 1) as i64))
 }
 
 #[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
@@ -1068,6 +1113,52 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
                 .evaluate(ScalarFuncSig::LeastInt)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_interval_int() {
+        let cases = vec![
+            (vec![Some(1), None], Some(1)),
+            (vec![Some(1), Some(-10)], Some(1)),
+            (vec![Some(1), Some(2)], Some(0)),
+            (vec![Some(1), Some(1), Some(2)], Some(1)),
+            (vec![Some(1), Some(0), Some(1), Some(2)], Some(2)),
+            (vec![Some(1), Some(0), Some(1), Some(2), Some(5)], Some(2)),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::IntervalInt)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_interval_real() {
+        let cases = vec![
+            (vec![Some(1f64), None], Some(1)),
+            (vec![Some(1f64), Some(-10f64)], Some(1)),
+            (vec![Some(1f64), Some(2f64)], Some(0)),
+            (vec![Some(1f64), Some(1f64), Some(2f64)], Some(1)),
+            (
+                vec![Some(1f64), Some(0f64), Some(1f64), Some(2f64)],
+                Some(2),
+            ),
+            (
+                vec![Some(1f64), Some(0f64), Some(1f64), Some(2f64), Some(5f64)],
+                Some(2),
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::IntervalReal)
                 .unwrap();
             assert_eq!(output, expected);
         }
