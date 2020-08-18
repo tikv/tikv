@@ -215,7 +215,7 @@ impl<S: Snapshot> Default for CmdEpochChecker<S> {
 }
 
 impl<S: Snapshot> CmdEpochChecker<S> {
-    pub fn maybe_update_term(&mut self, term: u64) {
+    fn maybe_update_term(&mut self, term: u64) {
         assert!(term >= self.term);
         if term > self.term {
             self.term = term;
@@ -253,6 +253,9 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             .is_none());
 
         if epoch_state.change_conf_ver || epoch_state.change_ver {
+            if let Some(cmd) = self.proposed_admin_cmd.back() {
+                assert!(cmd.index < index);
+            }
             self.proposed_admin_cmd
                 .push_back(ProposedAdminCmd::new(epoch_state, index));
         }
@@ -261,6 +264,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
     fn last_conflict_index(&self, check_ver: bool, check_conf_ver: bool) -> Option<u64> {
         self.proposed_admin_cmd
             .iter()
+            .rev()
             .find(|cmd| {
                 (check_ver && cmd.epoch_state.change_ver)
                     || (check_conf_ver && cmd.epoch_state.change_conf_ver)
@@ -3581,5 +3585,67 @@ mod tests {
             };
             assert!(inspector.inspect(&req).is_err());
         }
+    }
+
+    #[test]
+    fn test_cmd_epoch_checker() {
+        use engine_rocks::RocksSnapshot;
+        fn new_admin_request(cmd_type: AdminCmdType) -> RaftCmdRequest {
+            let mut request = RaftCmdRequest::default();
+            request.mut_admin_request().set_cmd_type(cmd_type);
+            request
+        }
+
+        let region = metapb::Region::default();
+        let normal_cmd = RaftCmdRequest::default();
+        let split_admin = new_admin_request(AdminCmdType::BatchSplit);
+        let prepare_merge_admin = new_admin_request(AdminCmdType::PrepareMerge);
+        let change_peer_admin = new_admin_request(AdminCmdType::ChangePeer);
+
+        let mut epoch_checker = CmdEpochChecker::<RocksSnapshot>::default();
+
+        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
+        assert_eq!(epoch_checker.term, 10);
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 5, 10);
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
+
+        // Both conflict with the split admin cmd
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
+            Some(5)
+        );
+
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&change_peer_admin, 10),
+            None
+        );
+        epoch_checker.post_propose(AdminCmdType::ChangePeer, 6, 10);
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
+
+        // Conflict with the split admin cmd
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
+        // Conflict with the change peer admin cmd
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
+            Some(6)
+        );
+
+        epoch_checker.advance_apply(4, 10, &region);
+        // Have no effect on `proposed_admin_cmd`
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
+
+        epoch_checker.advance_apply(5, 10, &region);
+        // Left one change peer admin cmd
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
+
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), None);
+
+        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), Some(6));
+        // Change term to 6
+        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 11), None);
+        assert_eq!(epoch_checker.term, 11);
+        // Should be empty
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 0);
     }
 }
