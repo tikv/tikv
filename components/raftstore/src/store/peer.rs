@@ -180,10 +180,7 @@ pub struct CheckTickResult {
     up_to_date: bool,
 }
 
-pub struct ProposedAdminCmd<S>
-where
-    S: Snapshot,
-{
+pub struct ProposedAdminCmd<S: Snapshot> {
     epoch_state: AdminCmdEpochState,
     index: u64,
     cbs: Vec<Callback<S>>,
@@ -199,10 +196,7 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
     }
 }
 
-struct CmdEpochChecker<S>
-where
-    S: Snapshot,
-{
+struct CmdEpochChecker<S: Snapshot> {
     // Although it's a deque, because of the characteristics of the settings from `ADMIN_CMD_EPOCH_MAP`,
     // the max size of admin cmd is 2, i.e. split/merge and change peer.
     proposed_admin_cmd: VecDeque<ProposedAdminCmd<S>>,
@@ -223,8 +217,8 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         assert!(term >= self.term);
         if term > self.term {
             self.term = term;
-            for state in self.proposed_admin_cmd.drain(..) {
-                for cb in state.cbs {
+            for cmd in self.proposed_admin_cmd.drain(..) {
+                for cb in cmd.cbs {
                     apply::notify_stale_req(term, cb);
                 }
             }
@@ -263,22 +257,21 @@ impl<S: Snapshot> CmdEpochChecker<S> {
     }
 
     fn last_conflict_index(&self, check_ver: bool, check_conf_ver: bool) -> Option<u64> {
-        for cmd in self.proposed_admin_cmd.iter().rev() {
-            if (check_ver && cmd.epoch_state.change_ver)
-                || (check_conf_ver && cmd.epoch_state.change_conf_ver)
-            {
-                return Some(cmd.index);
-            }
-        }
-        None
+        self.proposed_admin_cmd
+            .iter()
+            .find(|cmd| {
+                (check_ver && cmd.epoch_state.change_ver)
+                    || (check_conf_ver && cmd.epoch_state.change_conf_ver)
+            })
+            .map(|cmd| cmd.index)
     }
 
-    pub fn advance_apply(&mut self, index: u64, term: u64, region: metapb::Region) {
+    pub fn advance_apply(&mut self, index: u64, term: u64, region: &metapb::Region) {
         self.maybe_update_term(term);
         while !self.proposed_admin_cmd.is_empty() {
-            let state = self.proposed_admin_cmd.front_mut().unwrap();
-            if state.index <= index {
-                for cb in state.cbs.drain(..) {
+            let cmd = self.proposed_admin_cmd.front_mut().unwrap();
+            if cmd.index <= index {
+                for cb in cmd.cbs.drain(..) {
                     let mut resp = cmd_resp::new_error(Error::EpochNotMatch(
                         format!(
                             "current epoch of region {} is {:?}",
@@ -298,16 +291,19 @@ impl<S: Snapshot> CmdEpochChecker<S> {
     }
 
     pub fn attach_to_conflict_cmd(&mut self, index: u64, cb: Callback<S>) {
-        for state in self.proposed_admin_cmd.iter_mut().rev() {
-            if state.index == index {
-                state.cbs.push(cb);
-                return;
-            }
+        if let Some(cmd) = self
+            .proposed_admin_cmd
+            .iter_mut()
+            .rev()
+            .find(|cmd| cmd.index == index)
+        {
+            cmd.cbs.push(cb);
+        } else {
+            panic!(
+                "index {} can not found in proposed_admin_cmd, callback {:?}",
+                index, cb
+            );
         }
-        panic!(
-            "index {} can not found in proposed_admin_cmd, callback {:?}",
-            index, cb
-        );
     }
 }
 
@@ -1752,7 +1748,7 @@ where
             self.cmd_epoch_checker.advance_apply(
                 self.last_applying_idx,
                 self.term(),
-                self.region().to_owned(),
+                self.raft_group.store().region(),
             );
         } else {
             self.raft_group.advance_append(ready);
@@ -1878,7 +1874,7 @@ where
         self.cmd_epoch_checker.advance_apply(
             apply_state.get_applied_index(),
             self.term(),
-            self.region().to_owned(),
+            self.raft_group.store().region(),
         );
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
