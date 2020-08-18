@@ -3,7 +3,7 @@
 use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use kvproto::raft_cmdpb::RaftCmdRequest;
 use std::marker::PhantomData;
 use txn_types::TxnExtra;
 
@@ -356,19 +356,16 @@ where
         }
     }
 
-    pub fn post_apply(&self, region: &Region, resp: &mut RaftCmdResponse) {
-        if !resp.has_admin_response() {
-            let query = resp.mut_responses();
-            let mut vec_query = mem::take(query).into();
+    pub fn post_apply(&self, region: &Region, cmd: &mut Cmd) {
+        if !cmd.response.has_admin_response() {
             loop_ob!(
                 region,
                 &self.registry.query_observers,
                 post_apply_query,
-                &mut vec_query,
+                cmd,
             );
-            *query = vec_query.into();
         } else {
-            let admin = resp.mut_admin_response();
+            let admin = cmd.response.mut_admin_response();
             loop_ob!(
                 region,
                 &self.registry.admin_observers,
@@ -378,7 +375,7 @@ where
         }
     }
 
-    pub fn pre_apply_plain_kvs_from_snapshot(
+    pub fn post_apply_plain_kvs_from_snapshot(
         &self,
         region: &Region,
         cf: CfName,
@@ -387,17 +384,17 @@ where
         loop_ob!(
             region,
             &self.registry.apply_snapshot_observers,
-            pre_apply_plain_kvs,
+            apply_plain_kvs,
             cf,
             kv_pairs
         );
     }
 
-    pub fn pre_apply_sst_from_snapshot(&self, region: &Region, cf: CfName, path: &str) {
+    pub fn post_apply_sst_from_snapshot(&self, region: &Region, cf: CfName, path: &str) {
         loop_ob!(
             region,
             &self.registry.apply_snapshot_observers,
-            pre_apply_sst,
+            apply_sst,
             cf,
             path
         );
@@ -517,7 +514,7 @@ mod tests {
     use engine_panic::PanicEngine;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{
-        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
+        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
     };
 
     #[derive(Clone, Default)]
@@ -573,7 +570,7 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &mut Vec<Response>) {
+        fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &mut Cmd) {
             self.called.fetch_add(6, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -599,7 +596,7 @@ mod tests {
     }
 
     impl ApplySnapshotObserver for TestCoprocessor {
-        fn pre_apply_plain_kvs(
+        fn apply_plain_kvs(
             &self,
             ctx: &mut ObserverContext<'_>,
             _: CfName,
@@ -609,7 +606,7 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn pre_apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &str) {
+        fn apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &str) {
             self.called.fetch_add(10, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -668,7 +665,7 @@ mod tests {
         assert_all!(&[&ob.called], &[3]);
         let mut admin_resp = RaftCmdResponse::default();
         admin_resp.set_admin_response(AdminResponse::default());
-        host.post_apply(&region, &mut admin_resp);
+        host.post_apply(&region, &mut Cmd::new(0, admin_req, admin_resp));
         assert_all!(&[&ob.called], &[6]);
 
         let mut query_req = RaftCmdRequest::default();
@@ -677,9 +674,8 @@ mod tests {
         assert_all!(&[&ob.called], &[10]);
         host.pre_apply(&region, &query_req);
         assert_all!(&[&ob.called], &[15]);
-        let mut query_resp = admin_resp;
-        query_resp.clear_admin_response();
-        host.post_apply(&region, &mut query_resp);
+        let query_resp = RaftCmdResponse::default();
+        host.post_apply(&region, &mut Cmd::new(0, query_req, query_resp));
         assert_all!(&[&ob.called], &[21]);
 
         host.on_role_change(&region, StateRole::Leader);
@@ -688,9 +684,9 @@ mod tests {
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         assert_all!(&[&ob.called], &[36]);
 
-        host.pre_apply_plain_kvs_from_snapshot(&region, "default", &[]);
+        host.post_apply_plain_kvs_from_snapshot(&region, "default", &[]);
         assert_all!(&[&ob.called], &[45]);
-        host.pre_apply_sst_from_snapshot(&region, "default", "");
+        host.post_apply_sst_from_snapshot(&region, "default", "");
         assert_all!(&[&ob.called], &[55]);
         let observe_id = ObserveID::new();
         host.prepare_for_apply(observe_id, 0);
@@ -698,7 +694,7 @@ mod tests {
         host.on_apply_cmd(
             observe_id,
             0,
-            Cmd::new(0, RaftCmdRequest::default(), query_resp),
+            Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
         assert_all!(&[&ob.called], &[78]);
         host.on_flush_apply(Vec::default(), PanicEngine);
@@ -730,7 +726,7 @@ mod tests {
 
         let cases = vec![(0, admin_req, admin_resp), (3, query_req, query_resp)];
 
-        for (base_score, mut req, mut resp) in cases {
+        for (base_score, mut req, resp) in cases {
             set_all!(&[&ob1.return_err, &ob2.return_err], false);
             set_all!(&[&ob1.called, &ob2.called], 0);
             set_all!(&[&ob1.bypass, &ob2.bypass], true);
@@ -743,7 +739,7 @@ mod tests {
             host.pre_apply(&region, &req);
             assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 2 + 3]);
 
-            host.post_apply(&region, &mut resp);
+            host.post_apply(&region, &mut Cmd::new(0, req.clone(), resp.clone()));
             assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 3 + 6]);
 
             set_all!(&[&ob2.bypass], false);
