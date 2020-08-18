@@ -1525,7 +1525,7 @@ pub mod tests {
     use engine_rocks::raw::{DBOptions, Env, DB};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-    use engine_traits::KvEngines;
+    use engine_traits::Engines;
     use engine_traits::{Iterable, Peekable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
@@ -1597,7 +1597,7 @@ pub mod tests {
         kv_db_opt: Option<DBOptions>,
         kv_cf_opts: Option<Vec<CFOptions<'_>>>,
         regions: &[u64],
-    ) -> Result<KvEngines<RocksEngine, RocksEngine>> {
+    ) -> Result<Engines<RocksEngine, RocksEngine>> {
         let p = path.path();
         let kv = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
         let raft = open_test_db(
@@ -1626,7 +1626,7 @@ pub mod tests {
                 .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
         let shared_block_cache = false;
-        Ok(KvEngines {
+        Ok(Engines {
             kv: kv.c().clone(),
             raft: raft.c().clone(),
             shared_block_cache,
