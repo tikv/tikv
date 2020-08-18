@@ -242,7 +242,7 @@ where
     Resp: Send + 'static,
     F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
 {
-    async fn reconnect(&mut self) -> bool {
+    async fn reconnect_if_needed(&mut self) -> bool {
         debug!("reconnecting ..."; "remain" => self.reconnect_count);
 
         if self.request_sent < MAX_REQUEST_COUNT {
@@ -307,7 +307,7 @@ where
     pub fn execute(mut self) -> PdFuture<Resp> {
         Box::pin(async move {
             loop {
-                if self.reconnect().await {
+                if self.reconnect_if_needed().await {
                     self.send_and_receive().await;
                 }
                 if self.need_break() {
