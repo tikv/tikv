@@ -127,7 +127,8 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 slog_derive = "0.2"
 parking_lot = "0.10"
-prometheus = { version = "0.9", features = ["nightly", "push"] }
+prometheus = { version = "0.8", features = ["nightly", "push"] }
+prometheus-static-metric = "0.4.0"
 sst_importer = { path = "components/sst_importer" }
 sysinfo = "0.14"
 semver = "0.10"
@@ -161,11 +162,6 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 vlog = "0.1.4"
 walkdir = "2"
 minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", branch = "master" }
-
-
-[dependencies.prometheus-static-metric]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"

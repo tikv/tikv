@@ -210,7 +210,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "pd_client",
- "prometheus 0.9.0",
+ "prometheus 0.8.0",
  "raft",
  "raftstore",
  "rand 0.7.3",
@@ -473,7 +473,7 @@ dependencies = [
  "lazy_static",
  "panic_hook",
  "pd_client",
- "prometheus 0.9.0",
+ "prometheus 0.8.0",
  "raft",
  "raftstore",
  "resolved_ts",
@@ -593,7 +593,7 @@ dependencies = [
  "log 0.4.8",
  "nix 0.11.1",
  "pd_client",
- "prometheus 0.9.0",
+ "prometheus 0.8.0",
  "promptly",
  "protobuf",
  "raft",
@@ -1036,7 +1036,7 @@ dependencies = [
  "lazy_static",
  "matches",
  "openssl",
- "prometheus 0.9.0",
+ "prometheus 0.8.0",
  "protobuf",
  "rand 0.7.3",
  "rusoto_core",
@@ -1080,7 +1080,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "num_cpus",
- "prometheus 0.9.0",
+ "prometheus 0.8.0",
  "prometheus-static-metric",
  "protobuf",
  "raft",
@@ -1961,15 +1961,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "librocksdb_cloud_sys"
+version = "0.1.0"
+source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
+dependencies = [
+ "cc",
+ "cmake",
+]
+
+[[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#5d330edb73ff254350caad3898d4bb69fd82e69e"
+source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
 dependencies = [
  "bindgen",
  "bzip2-sys",
  "cc",
  "cmake",
  "libc",
+ "librocksdb_cloud_sys",
  "libtitan_sys",
  "libz-sys",
  "lz4-sys",
@@ -1982,7 +1992,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#5d330edb73ff254350caad3898d4bb69fd82e69e"
+source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2060,8 +2070,9 @@ dependencies = [
 
 [[package]]
 name = "lz4-sys"
-version = "1.8.3"
-source = "git+https://github.com/busyjay/lz4-rs.git?branch=adjust-build#5a8afe4010c67899fc7af876a58d67fd6269bf81"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dca79aa95d8b3226213ad454d328369853be3a1382d89532a854f4d69640acae"
 dependencies = [
  "cc",
  "libc",
@@ -2684,7 +2695,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log 0.4.8",
- "prometheus 0.9.0",
+ "prometheus 0.8.0",
  "quick-error",
  "security",
  "semver 0.10.0",
@@ -2938,7 +2949,9 @@ dependencies = [
  "cfg-if",
  "fnv",
  "lazy_static",
+ "libc",
  "protobuf",
+ "reqwest",
  "spin",
  "thiserror",
 ]
@@ -2962,11 +2975,14 @@ dependencies = [
 
 [[package]]
 name = "prometheus-static-metric"
-version = "0.3.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=fd122caa03de8e7e5e4fae9372583aebf19e39f6#fd122caa03de8e7e5e4fae9372583aebf19e39f6"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63cf9eb6aec7d2dade7fe7b6ba7e58a7a6563bad57ab056299a474da504b966d"
 dependencies = [
- "proc-macro-hack",
- "static-metric-proc-macros",
+ "lazy_static",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -3166,7 +3182,7 @@ dependencies = [
  "openssl",
  "panic_hook",
  "pd_client",
- "prometheus 0.9.0",
+ "prometheus 0.8.0",
  "prometheus-static-metric",
  "prost",
  "protobuf",
@@ -3491,7 +3507,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#5d330edb73ff254350caad3898d4bb69fd82e69e"
+source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4050,7 +4066,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
- "prometheus 0.9.0",
+ "prometheus 0.8.0",
  "quick-error",
  "serde",
  "serde_derive",
@@ -4072,18 +4088,6 @@ name = "standback"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e4b8c631c998468961a9ea159f064c5c8499b95b5e4a34b77849d45949d540"
-
-[[package]]
-name = "static-metric-proc-macros"
-version = "0.1.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=fd122caa03de8e7e5e4fae9372583aebf19e39f6#fd122caa03de8e7e5e4fae9372583aebf19e39f6"
-dependencies = [
- "lazy_static",
- "proc-macro-hack",
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "static_assertions"
@@ -4555,7 +4559,7 @@ dependencies = [
  "hex 0.3.2",
  "kvproto",
  "lazy_static",
- "prometheus 0.9.0",
+ "prometheus 0.8.0",
  "prometheus-static-metric",
  "tikv_util",
  "time 0.1.42",
@@ -4707,7 +4711,6 @@ dependencies = [
  "openssl",
  "panic_hook",
  "profiler",
- "prometheus-static-metric",
  "protobuf",
  "static_assertions",
  "tidb_query_codegen",
@@ -4781,7 +4784,7 @@ dependencies = [
  "pnet_datalink",
  "pprof",
  "procinfo",
- "prometheus 0.9.0",
+ "prometheus 0.8.0",
  "prometheus-static-metric",
  "prost",
  "protobuf",
@@ -4914,7 +4917,7 @@ dependencies = [
  "panic_hook",
  "procfs",
  "procinfo",
- "prometheus 0.9.0",
+ "prometheus 0.8.0",
  "protobuf",
  "quick-error",
  "rand 0.7.3",
