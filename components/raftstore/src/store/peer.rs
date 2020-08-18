@@ -39,6 +39,7 @@ use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
+use crate::store::util::is_learner;
 use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, GlobalReplicationState, PdTask, ReadResponse};
 use crate::{Error, Result};
@@ -1445,7 +1446,7 @@ where
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
-        if apply_snap_result.is_some() && self.peer.get_is_learner() {
+        if apply_snap_result.is_some() {
             // The peer may change from learner to voter after snapshot applied.
             let peer = self
                 .region()
@@ -1942,7 +1943,7 @@ where
         let peer = change_peer.get_peer();
 
         // Check the request itself is valid or not.
-        match (change_type, peer.get_is_learner()) {
+        match (change_type, is_learner(peer)) {
             (ConfChangeType::AddNode, true) | (ConfChangeType::AddLearnerNode, false) => {
                 warn!(
                     "invalid conf change request";
@@ -3107,6 +3108,7 @@ fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
         let req = msg.get_admin_request();
         return match req.get_cmd_type() {
             AdminCmdType::ChangePeer
+            | AdminCmdType::ChangePeerV2
             | AdminCmdType::Split
             | AdminCmdType::BatchSplit
             | AdminCmdType::PrepareMerge
@@ -3132,6 +3134,7 @@ fn is_request_urgent(req: &RaftCmdRequest) -> bool {
         AdminCmdType::Split
         | AdminCmdType::BatchSplit
         | AdminCmdType::ChangePeer
+        | AdminCmdType::ChangePeerV2
         | AdminCmdType::ComputeHash
         | AdminCmdType::VerifyHash
         | AdminCmdType::PrepareMerge
@@ -3219,6 +3222,7 @@ mod tests {
             AdminCmdType::Split,
             AdminCmdType::BatchSplit,
             AdminCmdType::ChangePeer,
+            AdminCmdType::ChangePeerV2,
             AdminCmdType::ComputeHash,
             AdminCmdType::VerifyHash,
             AdminCmdType::PrepareMerge,
