@@ -50,7 +50,7 @@ use crate::store::msg::Callback;
 use crate::store::peer::{ConsistencyState, Peer, StaleState};
 use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
-use crate::store::util::KeysInfoFormatter;
+use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
     CleanupSSTTask, CleanupTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask,
     SplitCheckTask,
@@ -557,7 +557,7 @@ where
                 self.fsm.group_state = GroupState::Chaos;
                 self.register_raft_base_tick();
 
-                if self.fsm.peer.peer.get_is_learner() {
+                if is_learner(&self.fsm.peer.peer) {
                     // FIXME: should use `bcast_check_stale_peer_message` instead.
                     // Sending a new enum type msg to a old tikv may cause panic during rolling update
                     // we should change the protobuf behavior and check if properly handled in all place
@@ -1928,7 +1928,7 @@ where
                         .raft
                         .assign_commit_groups(&[(peer.id, group_id.unwrap())]);
                 }
-                if self.fsm.peer.peer_id() == peer_id && self.fsm.peer.peer.get_is_learner() {
+                if self.fsm.peer.peer_id() == peer_id {
                     self.fsm.peer.peer = peer.clone();
                 }
 
@@ -2175,10 +2175,13 @@ where
                     .pending_votes
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
-                    let _ = self
+                    if let Err(e) = self
                         .ctx
                         .router
-                        .send(new_region_id, PeerMsg::RaftMessage(msg));
+                        .force_send(new_region_id, PeerMsg::RaftMessage(msg))
+                    {
+                        warn!("handle first requset vote failed"; "region_id" => region_id, "error" => ?e);
+                    }
                 }
             }
         }
@@ -2452,7 +2455,7 @@ where
                     );
                     self.rollback_merge();
                 }
-            } else if !self.fsm.peer.peer.get_is_learner() {
+            } else if !is_learner(&self.fsm.peer.peer) {
                 info!(
                     "want to rollback merge";
                     "region_id" => self.fsm.region_id(),
