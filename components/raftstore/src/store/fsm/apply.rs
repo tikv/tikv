@@ -1995,6 +1995,12 @@ where
         resp.mut_splits().set_regions(regions.clone().into());
         PEER_ADMIN_CMD_COUNTER.batch_split.success.inc();
 
+        fail_point!(
+            "apply_after_split_1_3",
+            self.id == 3 && self.region_id() == 1,
+            |_| { unreachable!() }
+        );
+
         Ok((
             resp,
             ApplyResult::Res(ExecResult::SplitRegion {
