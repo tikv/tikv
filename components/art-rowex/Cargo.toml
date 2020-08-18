@@ -1,0 +1,13 @@
+[package]
+edition = "2018"
+name = "art-rowex"
+version = "0.0.1"
+
+[dependencies]
+crossbeam-epoch = "0.8.2"
+
+[dev-dependencies]
+criterion = "0.3.2"
+crossbeam-skiplist = {git = "https://github.com/crossbeam-rs/crossbeam.git", rev = "81ab18efc7376f3277a6359fdc20d00b4bcf911c"}
+crossbeam-utils = "0.7.2"
+rand = "0.7.3"

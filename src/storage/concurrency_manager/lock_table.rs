@@ -2,6 +2,8 @@
 
 use super::key_handle::{KeyHandle, KeyHandleGuard};
 
+use art_rowex::Tree;
+use crossbeam_epoch::pin;
 use parking_lot::Mutex;
 use std::{
     collections::BTreeMap,
@@ -10,8 +12,14 @@ use std::{
 };
 use txn_types::{Key, Lock};
 
-#[derive(Clone, Default)]
-pub struct LockTable(pub Arc<Mutex<BTreeMap<Key, Weak<KeyHandle>>>>);
+#[derive(Clone)]
+pub struct LockTable(pub Arc<Tree<Key, Weak<KeyHandle>>>);
+
+impl Default for LockTable {
+    fn default() -> Self {
+        LockTable(Arc::new(Tree::new()))
+    }
+}
 
 impl LockTable {
     pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard {
@@ -67,20 +75,14 @@ impl LockTable {
     /// Inserts a key handle to the map if the key does not exists in the map.
     /// Returns whether the handle is successfully inserted into the map.
     pub fn insert_if_not_exist(&self, key: Key, handle: Weak<KeyHandle>) -> bool {
-        use std::collections::btree_map::Entry;
-
-        match self.0.lock().entry(key) {
-            Entry::Vacant(entry) => {
-                entry.insert(handle);
-                true
-            }
-            Entry::Occupied(_) => false,
-        }
+        self.0.insert(key, handle, false, &pin())
     }
 
     /// Gets the handle of the key.
     pub fn get<'m>(&'m self, key: &Key) -> Option<Arc<KeyHandle>> {
-        self.0.lock().get(key).and_then(|handle| handle.upgrade())
+        self.0
+            .lookup(&key, &pin())
+            .and_then(|handle| handle.upgrade())
     }
 
     /// Finds the first handle in the given range that `pred` returns `Some`.
@@ -97,17 +99,14 @@ impl LockTable {
         let upper_bound = end_key
             .map(|k| Bound::Excluded(k))
             .unwrap_or(Bound::Unbounded);
-        for (_, handle) in self.0.lock().range::<Key, _>((lower_bound, upper_bound)) {
-            if let Some(v) = handle.upgrade().and_then(&mut pred) {
-                return Some(v);
-            }
-        }
-        None
+        self.0.lookup_range((lower_bound, upper_bound), |_, v| {
+            v.upgrade().and_then(&mut pred)
+        })
     }
 
     /// Removes the key and its key handle from the map.
     pub fn remove(&self, key: &Key) {
-        self.0.lock().remove(key);
+        self.0.remove(key, &pin())
     }
 }
 

@@ -80,6 +80,7 @@ impl Drop for KeyHandleGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use art_rowex::Tree;
     use parking_lot::Mutex;
     use std::{
         collections::BTreeMap,
@@ -90,7 +91,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_key_mutex() {
-        let table = LockTable(Arc::new(Mutex::new(BTreeMap::new())));
+        let table = LockTable(Arc::new(Tree::new()));
         let key_handle = Arc::new(KeyHandle::new(Key::from_raw(b"k"), table.clone()));
         table.insert_if_not_exist(Key::from_raw(b"k"), Arc::downgrade(&key_handle));
 
@@ -117,7 +118,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ref_count() {
-        let table = LockTable(Arc::new(Mutex::new(BTreeMap::new())));
+        let table = LockTable(Arc::new(Tree::new()));
 
         let k = Key::from_raw(b"k");
 
