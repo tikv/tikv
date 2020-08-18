@@ -11,7 +11,7 @@ use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine_rocks::util::get_cf_handle;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
-    IterOptions, Iterable, Iterator as EngineIterator, KvEngines, Mutable, Peekable,
+    Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable,
     RangePropertiesExt, SeekKey, TableProperties, TablePropertiesCollection, TablePropertiesExt,
     WriteBatch, WriteOptions,
 };
@@ -121,13 +121,13 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 
 #[derive(Clone)]
 pub struct Debugger {
-    engines: KvEngines<RocksEngine, RocksEngine>,
+    engines: Engines<RocksEngine, RocksEngine>,
     cfg_controller: ConfigController,
 }
 
 impl Debugger {
     pub fn new(
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
         cfg_controller: ConfigController,
     ) -> Debugger {
         Debugger {
@@ -136,7 +136,7 @@ impl Debugger {
         }
     }
 
-    pub fn get_engine(&self) -> &KvEngines<RocksEngine, RocksEngine> {
+    pub fn get_engine(&self) -> &Engines<RocksEngine, RocksEngine> {
         &self.engines
     }
 
@@ -1519,7 +1519,7 @@ mod tests {
         );
 
         let shared_block_cache = false;
-        let engines = KvEngines::new(
+        let engines = Engines::new(
             RocksEngine::from_db(Arc::clone(&engine)),
             RocksEngine::from_db(engine),
             shared_block_cache,
