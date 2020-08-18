@@ -109,17 +109,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "art-rowex"
-version = "0.0.1"
-dependencies = [
- "criterion",
- "crossbeam-epoch 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "crossbeam-skiplist",
- "crossbeam-utils 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "rand 0.7.3",
-]
-
-[[package]]
 name = "async-speed-limit"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4974,7 +4963,6 @@ dependencies = [
 name = "tikv"
 version = "4.1.0-alpha"
 dependencies = [
- "art-rowex",
  "async-stream",
  "async-trait",
  "backtrace",
@@ -4988,7 +4976,7 @@ dependencies = [
  "crc32fast",
  "crc64fast",
  "crossbeam",
- "crossbeam-epoch 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-skiplist",
  "derive_more",
  "encryption",
  "engine_panic",

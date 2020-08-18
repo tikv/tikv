@@ -60,7 +60,6 @@ testing = []
 name = "tikv"
 
 [dependencies]
-art-rowex = {path = "components/art-rowex"}
 async-stream = "0.2"
 async-trait = "0.1"
 backtrace = "0.3"
@@ -74,7 +73,7 @@ configuration = {path = "components/configuration"}
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.7.2"
-crossbeam-epoch = "0.8"
+crossbeam-skiplist = {git = "https://github.com/crossbeam-rs/crossbeam.git", rev = "81ab18efc7376f3277a6359fdc20d00b4bcf911c"}
 derive_more = "0.99.3"
 encryption = {path = "components/encryption"}
 engine_panic = {path = "components/engine_panic", optional = true}
@@ -234,7 +233,6 @@ members = [
   "components/into_other",
   "components/encryption",
   "components/error_code",
-  "components/art-rowex",
 ]
 
 [profile.dev]
