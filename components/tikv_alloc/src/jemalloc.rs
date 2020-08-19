@@ -3,49 +3,16 @@
 use super::error::{ProfError, ProfResult};
 use crate::AllocStats;
 use libc::{self, c_char, c_void};
-<<<<<<< HEAD
-use std::{io, ptr, slice};
-=======
 use std::collections::HashMap;
 use std::{ptr, slice, sync::Mutex, thread};
 use tikv_jemalloc_ctl::{epoch, stats, Error};
 use tikv_jemalloc_sys::malloc_stats_print;
->>>>>>> e95e7c5... tikv_alloc: update jemalloc to 5.2.1 (#8324)
 
 pub type Allocator = tikv_jemallocator::Jemalloc;
 pub const fn allocator() -> Allocator {
     tikv_jemallocator::Jemalloc
 }
 
-<<<<<<< HEAD
-=======
-lazy_static! {
-    static ref THREAD_MEMORY_MAP: Mutex<HashMap<ThreadId, MemoryStatsAccessor>> =
-        Mutex::new(HashMap::new());
-}
-
-struct MemoryStatsAccessor {
-    // TODO: trace arena, allocated, deallocated. Original implement doesn't
-    // work actually.
-    thread_name: String,
-}
-
-pub fn add_thread_memory_accessor() {
-    let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
-    thread_memory_map.insert(
-        thread::current().id(),
-        MemoryStatsAccessor {
-            thread_name: thread::current().name().unwrap().to_string(),
-        },
-    );
-}
-
-pub fn remove_thread_memory_accessor() {
-    let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
-    thread_memory_map.remove(&thread::current().id());
-}
-
->>>>>>> e95e7c5... tikv_alloc: update jemalloc to 5.2.1 (#8324)
 pub use self::profiling::{activate_prof, deactivate_prof, dump_prof};
 
 pub fn dump_stats() -> String {
@@ -57,21 +24,7 @@ pub fn dump_stats() -> String {
             ptr::null(),
         )
     }
-<<<<<<< HEAD
     String::from_utf8_lossy(&buf).into_owned()
-=======
-    let mut memory_stats = format!(
-        "Memory stats summary: {}\n",
-        String::from_utf8_lossy(&buf).into_owned()
-    );
-    memory_stats.push_str("Memory stats by thread:\n");
-
-    let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
-    for (_, accessor) in thread_memory_map.iter() {
-        memory_stats.push_str(format!("Thread [{}]: \n", accessor.thread_name).as_str());
-    }
-    memory_stats
->>>>>>> e95e7c5... tikv_alloc: update jemalloc to 5.2.1 (#8324)
 }
 
 pub fn fetch_stats() -> Result<Option<AllocStats>, Error> {
