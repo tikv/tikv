@@ -50,6 +50,7 @@ fail = "0.3"
 openssl = "0.10"
 fs2 = "0.4"
 futures = "0.1"
+futures03 = { package = "futures", version = "0.3", features = ["compat"] }
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
 hex = "0.4"
