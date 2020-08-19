@@ -44,7 +44,7 @@ use crate::store::fsm::peer::{
 #[cfg(feature = "failpoints")]
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
-    create_apply_batch_system, ApplyBatchSystem, ApplyNotifier, ApplyRunner, Registration,
+    create_apply_batch_system, flush_tls_ctx, ApplyBatchSystem, ApplyNotifier, Registration,
 };
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
@@ -71,6 +71,7 @@ use sst_importer::SSTImporter;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use tikv_util::read_pool::{DefaultTicker, ReadPoolBuilder};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
@@ -1321,14 +1322,13 @@ impl RaftBatchSystem {
     fn create_apply_pool<W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static>(
         pool_size: usize,
     ) -> yatp::pool::ThreadPool<TaskCell> {
-        let runner = ApplyRunner::<RocksEngine, W>::new();
-        let mut pool_builder = yatp::Builder::new("yatp-apply-pool");
-        pool_builder
-            .max_thread_count(pool_size)
-            .build_with_queue_and_runner(
-                yatp::queue::QueueType::SingleLevel,
-                yatp::pool::CloneRunnerBuilder(runner),
-            )
+        let mut builder = ReadPoolBuilder::new(DefaultTicker::default());
+        builder
+            .name_prefix("apply")
+            .thread_count(pool_size, pool_size)
+            .before_pause(flush_tls_ctx::<RocksEngine, W>)
+            .before_stop(flush_tls_ctx::<RocksEngine, W>)
+            .build_yatp_pool()
     }
 }
 

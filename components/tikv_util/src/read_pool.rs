@@ -10,7 +10,7 @@ use yatp::pool::{CloneRunnerBuilder, Local, Runner};
 use yatp::queue::Extras;
 use yatp::queue::{multilevel, QueueType};
 use yatp::task::future::{Runner as FutureRunner, TaskCell};
-use yatp::Remote;
+use yatp::{Remote, ThreadPool};
 
 use prometheus::IntGauge;
 
@@ -347,19 +347,41 @@ impl<T: PoolTicker> ReadPoolBuilder<T> {
         self
     }
 
+    pub fn build_yatp_pool(&mut self) -> ThreadPool<TaskCell> {
+        let (builder, runner) = self.create_builder();
+        builder.build_with_queue_and_runner(
+            yatp::queue::QueueType::SingleLevel,
+            yatp::pool::CloneRunnerBuilder(runner),
+        )
+    }
+
     pub fn build(&mut self) -> ReadPool {
+        let (builder, read_pool_runner) = self.create_builder();
         let name = if let Some(name) = &self.name_prefix {
             name.as_str()
         } else {
             "yatp_pool"
         };
-        let mut builder = yatp::Builder::new(name);
+        let multilevel_builder =
+            multilevel::Builder::new(multilevel::Config::default().name(Some(name)));
+        let runner_builder =
+            multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
+        let pool = builder
+            .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);
+        ReadPool::Yatp {
+            pool,
+            running_tasks: metrics::UNIFIED_READ_POOL_RUNNING_TASKS.with_label_values(&[name]),
+            max_tasks: self.max_tasks,
+        }
+    }
+
+    fn create_builder(&mut self) -> (yatp::Builder, ReadPoolRunner<T>) {
+        let mut builder = yatp::Builder::new(self.name_prefix.clone().unwrap_or("".to_string()));
         builder
             .stack_size(self.stack_size)
             .min_thread_count(self.min_thread_count)
             .max_thread_count(self.max_thread_count);
-        let multilevel_builder =
-            multilevel::Builder::new(multilevel::Config::default().name(Some(name)));
+
         let after_start = self.after_start.take();
         let before_stop = self.before_stop.take();
         let before_pause = self.before_pause.take();
@@ -370,14 +392,6 @@ impl<T: PoolTicker> ReadPoolBuilder<T> {
             before_stop,
             before_pause,
         );
-        let runner_builder =
-            multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
-        let pool = builder
-            .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);
-        ReadPool::Yatp {
-            pool,
-            running_tasks: metrics::UNIFIED_READ_POOL_RUNNING_TASKS.with_label_values(&[name]),
-            max_tasks: self.max_tasks,
-        }
+        (builder, read_pool_runner)
     }
 }

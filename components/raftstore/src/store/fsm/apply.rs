@@ -3,7 +3,6 @@
 use std::cmp::Ord;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
-use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
@@ -2929,6 +2928,7 @@ impl<E: KvEngine> Clone for ApplyContextCore<E> {
 
 use std::cell::UnsafeCell;
 use std::ptr;
+use tikv_util::read_pool::{DefaultTicker, ReadPoolBuilder};
 
 thread_local! {
     // A pointer to thread local ApplyContext. Use raw pointer and `UnsafeCell` to reduce runtime check.
@@ -2991,77 +2991,6 @@ where
             }
         }
     })
-}
-
-pub struct ApplyRunner<E, W>
-where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
-{
-    inner: yatp::task::future::Runner,
-    _phantom1: PhantomData<E>,
-    _phantom2: PhantomData<W>,
-}
-impl<E, W> ApplyRunner<E, W>
-where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
-{
-    pub fn new() -> Self {
-        Self {
-            inner: yatp::task::future::Runner::default(),
-            _phantom1: PhantomData,
-            _phantom2: PhantomData,
-        }
-    }
-}
-
-impl<E, W> Clone for ApplyRunner<E, W>
-where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
-{
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            _phantom1: PhantomData,
-            _phantom2: PhantomData,
-        }
-    }
-}
-
-impl<E, W> yatp::pool::Runner for ApplyRunner<E, W>
-where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
-{
-    type TaskCell = yatp::task::future::TaskCell;
-
-    fn start(&mut self, local: &mut yatp::pool::Local<Self::TaskCell>) {
-        self.inner.start(local);
-    }
-
-    fn handle(
-        &mut self,
-        local: &mut yatp::pool::Local<Self::TaskCell>,
-        task_cell: Self::TaskCell,
-    ) -> bool {
-        self.inner.handle(local, task_cell)
-    }
-
-    fn pause(&mut self, local: &mut yatp::pool::Local<Self::TaskCell>) -> bool {
-        flush_tls_ctx::<E, W>();
-        self.inner.pause(local)
-    }
-
-    fn resume(&mut self, local: &mut yatp::pool::Local<Self::TaskCell>) {
-        self.inner.resume(local)
-    }
-
-    fn end(&mut self, local: &mut yatp::pool::Local<Self::TaskCell>) {
-        flush_tls_ctx::<E, W>();
-        self.inner.end(local);
-    }
 }
 
 async fn handle_normal<E, W>(
@@ -3245,14 +3174,10 @@ pub fn create_apply_batch_system_and_pool<
     Arc<dyn ApplyBatchSystem<RocksEngine>>,
     yatp::pool::ThreadPool<TaskCell>,
 ) {
-    let runner = ApplyRunner::<RocksEngine, W>::new();
-    let mut pool_builder = yatp::Builder::new("yatp-apply-pool");
-    let pool = pool_builder
-        .max_thread_count(2)
-        .build_with_queue_and_runner(
-            yatp::queue::QueueType::SingleLevel,
-            yatp::pool::CloneRunnerBuilder(runner),
-        );
+    let pool = ReadPoolBuilder::new(DefaultTicker::default())
+        .before_pause(flush_tls_ctx::<RocksEngine, W>)
+        .before_stop(flush_tls_ctx::<RocksEngine, W>)
+        .build_yatp_pool();
     let system = create_apply_batch_system::<W>(
         store_id,
         tag,
