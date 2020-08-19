@@ -3,8 +3,7 @@
 use super::error::{ProfError, ProfResult};
 use crate::AllocStats;
 use libc::{self, c_char, c_void};
-use std::collections::HashMap;
-use std::{ptr, slice, sync::Mutex, thread};
+use std::{ptr, slice};
 use tikv_jemalloc_ctl::{epoch, stats, Error};
 use tikv_jemalloc_sys::malloc_stats_print;
 
