@@ -271,17 +271,6 @@ impl BackupRange {
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
     ) -> Result<(Vec<File>, Statistics)> {
-<<<<<<< HEAD
-        let mut writer =
-            match BackupWriter::new(db, &file_name, storage.limiter.clone(), compression_type) {
-                Ok(w) => w,
-                Err(e) => {
-                    error!("backup writer failed"; "error" => ?e);
-                    return Err(e);
-                }
-            };
-        let stat = match self.backup(&mut writer, engine, backup_ts, start_ts) {
-=======
         let mut writer = match BackupWriter::new(
             db,
             &file_name,
@@ -295,14 +284,7 @@ impl BackupRange {
                 return Err(e);
             }
         };
-        let stat = match self.backup(
-            &mut writer,
-            engine,
-            concurrency_manager,
-            backup_ts,
-            start_ts,
-        ) {
->>>>>>> 7858ffd... br: support set compression level when write sst files (#8400)
+        let stat = match self.backup(&mut writer, engine, backup_ts, start_ts) {
             Ok(s) => s,
             Err(e) => return Err(e),
         };
@@ -659,12 +641,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     tikv_util::file::sha256(&input).ok().map(|b| hex::encode(b))
                 });
                 let name = backup_file_name(store_id, &brange.region, key);
-<<<<<<< HEAD
-                let ct = to_sst_compression_type(request.compress_type);
-=======
                 let ct = to_sst_compression_type(request.compression_type);
-
->>>>>>> 7858ffd... br: support set compression level when write sst files (#8400)
                 let (res, start_key, end_key) = if is_raw_kv {
                     (
                         brange.backup_raw_kv_to_file(

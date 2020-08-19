@@ -352,21 +352,13 @@ mod tests {
 
         // Test empty file.
         let mut writer =
-<<<<<<< HEAD
-            BackupWriter::new(db.clone(), "foo", Limiter::new(INFINITY), None).unwrap();
-=======
-            BackupWriter::new(db.get_sync_db(), "foo", Limiter::new(INFINITY), None, 0).unwrap();
->>>>>>> 7858ffd... br: support set compression level when write sst files (#8400)
+            BackupWriter::new(db.clone(), "foo", Limiter::new(INFINITY), None, 0).unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
         let mut writer =
-<<<<<<< HEAD
-            BackupWriter::new(db.clone(), "foo1", Limiter::new(INFINITY), None).unwrap();
-=======
-            BackupWriter::new(db.get_sync_db(), "foo1", Limiter::new(INFINITY), None, 0).unwrap();
->>>>>>> 7858ffd... br: support set compression level when write sst files (#8400)
+            BackupWriter::new(db.clone(), "foo1", Limiter::new(INFINITY), None, 0).unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {
@@ -392,12 +384,7 @@ mod tests {
         );
 
         // Test write and default.
-<<<<<<< HEAD
-        let mut writer = BackupWriter::new(db, "foo2", Limiter::new(INFINITY), None).unwrap();
-=======
-        let mut writer =
-            BackupWriter::new(db.get_sync_db(), "foo2", Limiter::new(INFINITY), None, 0).unwrap();
->>>>>>> 7858ffd... br: support set compression level when write sst files (#8400)
+        let mut writer = BackupWriter::new(db, "foo2", Limiter::new(INFINITY), None, 0).unwrap();
         writer
             .write(
                 vec![
