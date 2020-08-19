@@ -2425,6 +2425,12 @@ pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     let tmp_cfg_path = store_path.join(TMP_CONFIG_FILE);
 
+    if let Some(last_cfg) = get_last_config(&config.storage.data_dir) {
+        if serde_json::to_string(&config).unwrap() == serde_json::to_string(&last_cfg).unwrap() {
+            return Ok(());
+        }
+    }
+
     // Create parent directory if missing.
     if let Err(e) = fs::create_dir_all(&store_path) {
         return Err(format!(
