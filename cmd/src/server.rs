@@ -371,14 +371,12 @@ impl TiKVServer {
     }
 
     fn init_engines(&mut self) {
-        let env = match get_env(
+        let env = get_env(
             self.encryption_key_manager.clone(),
             Some(Arc::new(self.config.rocksdb.s3.clone())),
             None, /*base_env*/
-        ) {
-            Ok(env) => env,
-            Err(err) => panic!(err),
-        };
+        )
+        .unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
