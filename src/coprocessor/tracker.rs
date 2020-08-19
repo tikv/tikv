@@ -5,6 +5,7 @@ use kvproto::kvrpcpb::ScanDetailV2;
 
 use crate::storage::kv::PerfStatisticsDelta;
 
+use engine_rocks::{set_perf_level, PerfLevel};
 use tikv_util::time::{self, Duration, Instant};
 
 use super::metrics::*;
@@ -120,6 +121,7 @@ impl Tracker {
             self.current_stage == TrackerState::AllItemsBegan
                 || self.current_stage == TrackerState::ItemFinished
         );
+        set_perf_level(PerfLevel::EnableTime);
         self.item_begin_at = Instant::now_coarse();
         self.current_stage = TrackerState::ItemBegan;
     }
@@ -282,34 +284,192 @@ impl Tracker {
         // RocksDB perf stats
         COPR_ROCKSDB_PERF_COUNTER_STATIC
             .get(self.req_ctx.tag)
-            .internal_key_skipped_count
-            .inc_by(self.total_perf_stats.0.internal_key_skipped_count as i64);
-
-        COPR_ROCKSDB_PERF_COUNTER_STATIC
-            .get(self.req_ctx.tag)
-            .internal_delete_skipped_count
-            .inc_by(self.total_perf_stats.0.internal_delete_skipped_count as i64);
-
+            .user_key_comparison_count
+            .inc_by(self.total_perf_stats.0.user_key_comparison_count as i64);
         COPR_ROCKSDB_PERF_COUNTER_STATIC
             .get(self.req_ctx.tag)
             .block_cache_hit_count
             .inc_by(self.total_perf_stats.0.block_cache_hit_count as i64);
-
         COPR_ROCKSDB_PERF_COUNTER_STATIC
             .get(self.req_ctx.tag)
             .block_read_count
             .inc_by(self.total_perf_stats.0.block_read_count as i64);
-
         COPR_ROCKSDB_PERF_COUNTER_STATIC
             .get(self.req_ctx.tag)
             .block_read_byte
             .inc_by(self.total_perf_stats.0.block_read_byte as i64);
-
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .block_read_time
+            .inc_by(self.total_perf_stats.0.block_read_time as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .block_cache_index_hit_count
+            .inc_by(self.total_perf_stats.0.block_cache_index_hit_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .index_block_read_count
+            .inc_by(self.total_perf_stats.0.index_block_read_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .block_cache_filter_hit_count
+            .inc_by(self.total_perf_stats.0.block_cache_filter_hit_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .filter_block_read_count
+            .inc_by(self.total_perf_stats.0.filter_block_read_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .block_checksum_time
+            .inc_by(self.total_perf_stats.0.block_checksum_time as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .block_decompress_time
+            .inc_by(self.total_perf_stats.0.block_decompress_time as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .get_read_bytes
+            .inc_by(self.total_perf_stats.0.get_read_bytes as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .iter_read_bytes
+            .inc_by(self.total_perf_stats.0.iter_read_bytes as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .internal_key_skipped_count
+            .inc_by(self.total_perf_stats.0.internal_key_skipped_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .internal_delete_skipped_count
+            .inc_by(self.total_perf_stats.0.internal_delete_skipped_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .internal_recent_skipped_count
+            .inc_by(self.total_perf_stats.0.internal_recent_skipped_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .get_snapshot_time
+            .inc_by(self.total_perf_stats.0.get_snapshot_time as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .get_from_memtable_time
+            .inc_by(self.total_perf_stats.0.get_from_memtable_time as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .get_from_memtable_count
+            .inc_by(self.total_perf_stats.0.get_from_memtable_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .get_post_process_time
+            .inc_by(self.total_perf_stats.0.get_post_process_time as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .get_from_output_files_time
+            .inc_by(self.total_perf_stats.0.get_from_output_files_time as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .seek_on_memtable_time
+            .inc_by(self.total_perf_stats.0.seek_on_memtable_time as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .seek_on_memtable_count
+            .inc_by(self.total_perf_stats.0.seek_on_memtable_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .next_on_memtable_count
+            .inc_by(self.total_perf_stats.0.next_on_memtable_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .prev_on_memtable_count
+            .inc_by(self.total_perf_stats.0.prev_on_memtable_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .seek_child_seek_time
+            .inc_by(self.total_perf_stats.0.seek_child_seek_time as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .seek_child_seek_count
+            .inc_by(self.total_perf_stats.0.seek_child_seek_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .seek_min_heap_time
+            .inc_by(self.total_perf_stats.0.seek_min_heap_time as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .seek_max_heap_time
+            .inc_by(self.total_perf_stats.0.seek_max_heap_time as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .seek_internal_seek_time
+            .inc_by(self.total_perf_stats.0.seek_internal_seek_time as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .db_mutex_lock_nanos
+            .inc_by(self.total_perf_stats.0.db_mutex_lock_nanos as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .db_condition_wait_nanos
+            .inc_by(self.total_perf_stats.0.db_condition_wait_nanos as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .read_index_block_nanos
+            .inc_by(self.total_perf_stats.0.read_index_block_nanos as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .read_filter_block_nanos
+            .inc_by(self.total_perf_stats.0.read_filter_block_nanos as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .new_table_block_iter_nanos
+            .inc_by(self.total_perf_stats.0.new_table_block_iter_nanos as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .new_table_iterator_nanos
+            .inc_by(self.total_perf_stats.0.new_table_iterator_nanos as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .block_seek_nanos
+            .inc_by(self.total_perf_stats.0.block_seek_nanos as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .find_table_nanos
+            .inc_by(self.total_perf_stats.0.find_table_nanos as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .bloom_memtable_hit_count
+            .inc_by(self.total_perf_stats.0.bloom_memtable_hit_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .bloom_memtable_miss_count
+            .inc_by(self.total_perf_stats.0.bloom_memtable_miss_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .bloom_sst_hit_count
+            .inc_by(self.total_perf_stats.0.bloom_sst_hit_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .bloom_sst_miss_count
+            .inc_by(self.total_perf_stats.0.bloom_sst_miss_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .get_cpu_nanos
+            .inc_by(self.total_perf_stats.0.get_cpu_nanos as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .iter_next_cpu_nanos
+            .inc_by(self.total_perf_stats.0.iter_next_cpu_nanos as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .iter_prev_cpu_nanos
+            .inc_by(self.total_perf_stats.0.iter_prev_cpu_nanos as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .iter_seek_cpu_nanos
+            .inc_by(self.total_perf_stats.0.iter_seek_cpu_nanos as i64);
         COPR_ROCKSDB_PERF_COUNTER_STATIC
             .get(self.req_ctx.tag)
             .encrypt_data_nanos
             .inc_by(self.total_perf_stats.0.encrypt_data_nanos as i64);
-
         COPR_ROCKSDB_PERF_COUNTER_STATIC
             .get(self.req_ctx.tag)
             .decrypt_data_nanos
