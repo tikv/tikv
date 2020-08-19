@@ -658,6 +658,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "concurrency_manager"
+version = "0.0.1"
+dependencies = [
+ "parking_lot 0.10.0",
+ "tokio 0.2.13",
+ "txn_types",
+]
+
+[[package]]
 name = "configuration"
 version = "0.1.0"
 dependencies = [
@@ -4923,6 +4932,7 @@ dependencies = [
  "cache-size",
  "chrono",
  "codec",
+ "concurrency_manager",
  "configuration",
  "crc32fast",
  "crc64fast",
