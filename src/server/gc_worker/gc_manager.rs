@@ -274,7 +274,9 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         let res: Result<_> = ThreadBuilder::new()
             .name(thd_name!("gc-manager"))
             .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
                 self.run();
+                tikv_alloc::remove_thread_memory_accessor();
             })
             .map_err(|e| box_err!("failed to start gc manager: {:?}", e));
         res.map(|join_handle| GcManagerHandle {
@@ -544,7 +546,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         ) {
             // Ignore the error and continue, since it's useless to retry this.
             // TODO: Find a better way to handle errors. Maybe we should retry.
-            error!("failed gc"; "start_key" => &hex_start, "end_key" => &hex_end, "err" => ?e);
+            warn!("failed gc"; "start_key" => &hex_start, "end_key" => &hex_end, "err" => ?e);
         }
 
         *processed_regions += 1;

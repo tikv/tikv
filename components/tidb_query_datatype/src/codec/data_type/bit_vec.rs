@@ -75,6 +75,51 @@ impl BitVec {
     }
 }
 
+pub struct BitAndIterator<'a> {
+    vecs: &'a [&'a BitVec],
+    or: u8,
+    cnt: usize,
+    output_rows: usize,
+}
+
+impl<'a> BitAndIterator<'a> {
+    pub fn new(vecs: &'a [&'a BitVec], output_rows: usize) -> Self {
+        for i in vecs {
+            if i.len() != output_rows {
+                panic!("column length doesn't match");
+            }
+        }
+        Self {
+            vecs,
+            or: 0,
+            cnt: 0,
+            output_rows,
+        }
+    }
+}
+
+impl<'a> Iterator for BitAndIterator<'a> {
+    type Item = bool;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cnt == self.output_rows {
+            return None;
+        }
+        if self.cnt % 8 == 0 {
+            let mut result: u8 = 0xff;
+            let idx = self.cnt / 8;
+            for i in self.vecs {
+                result &= i.data[idx];
+            }
+            self.or = result;
+        }
+        self.cnt += 1;
+        let val = self.or & 0x1 == 1;
+        self.or >>= 1;
+        Some(val)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -227,5 +272,36 @@ mod test {
         assert_eq!(x.len(), 4);
         x.truncate(0);
         assert_eq!(x.len(), 0);
+    }
+
+    #[test]
+    fn test_bit_and_iterator_empty() {
+        let mut cnt = 0;
+        for i in BitAndIterator::new(&[], 2333) {
+            assert!(i);
+            cnt += 1;
+        }
+        assert_eq!(cnt, 2333);
+    }
+
+    #[test]
+    fn test_bit_and_iterator() {
+        let mut cnt = 0;
+        let mut vec1 = BitVec::with_capacity(0);
+        let mut vec2 = BitVec::with_capacity(0);
+        let mut vec3 = BitVec::with_capacity(0);
+        let mut vec5 = BitVec::with_capacity(0);
+        let size = 2333;
+        for i in 0..size {
+            vec1.push(true);
+            vec2.push(i % 2 == 0);
+            vec3.push(i % 3 == 0);
+            vec5.push(i % 5 == 0);
+        }
+        for (idx, i) in BitAndIterator::new(&[&vec1, &vec2, &vec3, &vec5], size).enumerate() {
+            assert_eq!(i, idx % 30 == 0);
+            cnt += 1;
+        }
+        assert_eq!(cnt, size);
     }
 }

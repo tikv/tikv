@@ -10,7 +10,6 @@ use std::{cmp, io};
 use futures::Future;
 use tokio_core::reactor::Handle;
 
-use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -19,6 +18,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
+use raft_engine::RaftEngine;
 
 use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::cmd_resp::new_error;
@@ -332,6 +332,7 @@ where
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
             .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
                     if timer_cnt % thread_info_interval == 0 {
@@ -382,6 +383,7 @@ where
                     timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval);
                     auto_split_controller.refresh_cfg();
                 }
+                tikv_alloc::remove_thread_memory_accessor();
             })?;
 
         self.handle = Some(h);
@@ -403,14 +405,15 @@ where
     }
 }
 
-pub struct Runner<EK, T>
+pub struct Runner<EK, ER, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     T: PdClient,
 {
     store_id: u64,
     pd_client: Arc<T>,
-    router: RaftRouter<EK, RocksEngine>,
+    router: RaftRouter<EK, ER>,
     db: EK,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -425,9 +428,10 @@ where
     stats_monitor: StatsMonitor<EK>,
 }
 
-impl<EK, T> Runner<EK, T>
+impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     T: PdClient,
 {
     const INTERVAL_DIVISOR: u32 = 2;
@@ -435,12 +439,12 @@ where
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        router: RaftRouter<EK, RocksEngine>,
+        router: RaftRouter<EK, ER>,
         db: EK,
         scheduler: Scheduler<Task<EK>>,
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
-    ) -> Runner<EK, T> {
+    ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start(auto_split_controller) {
@@ -923,9 +927,10 @@ where
     }
 }
 
-impl<EK, T> Runnable<Task<EK>> for Runner<EK, T>
+impl<EK, ER, T> Runnable<Task<EK>> for Runner<EK, ER, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     T: PdClient,
 {
     fn run(&mut self, task: Task<EK>, handle: &Handle) {
@@ -1132,8 +1137,8 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     req
 }
 
-fn send_admin_request<EK>(
-    router: &RaftRouter<EK, RocksEngine>,
+fn send_admin_request<EK, ER>(
+    router: &RaftRouter<EK, ER>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
@@ -1141,6 +1146,7 @@ fn send_admin_request<EK>(
     callback: Callback<EK::Snapshot>,
 ) where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     let cmd_type = request.get_cmd_type();
 
@@ -1160,13 +1166,14 @@ fn send_admin_request<EK>(
 }
 
 /// Sends a raft message to destroy the specified stale Peer
-fn send_destroy_peer_message<EK>(
-    router: &RaftRouter<EK, RocksEngine>,
+fn send_destroy_peer_message<EK, ER>(
+    router: &RaftRouter<EK, ER>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,
 ) where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     let mut message = RaftMessage::default();
     message.set_region_id(local_region.get_id());

@@ -110,6 +110,10 @@ impl<'a> ChunkRef<'a, JsonRef<'a>> for &'a ChunkedVecJson {
         self.get(idx)
     }
 
+    fn get_bit_vec(self) -> &'a BitVec {
+        &self.bitmap
+    }
+
     fn phantom_data(self) -> Option<JsonRef<'a>> {
         None
     }

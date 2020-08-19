@@ -17,17 +17,17 @@ use super::metrics::*;
 pub enum Task<S> {
     ComputeHash {
         index: u64,
-        safe_point: u64,
+        context: Vec<u8>,
         region: Region,
         snap: S,
     },
 }
 
 impl<S: Snapshot> Task<S> {
-    pub fn compute_hash(region: Region, index: u64, safe_point: u64, snap: S) -> Task<S> {
+    pub fn compute_hash(region: Region, index: u64, context: Vec<u8>, snap: S) -> Task<S> {
         Task::ComputeHash {
             index,
-            safe_point,
+            context,
             region,
             snap,
         }
@@ -58,7 +58,7 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash(&mut self, region: Region, index: u64, safe_point: u64, snap: EK::Snapshot) {
+    fn compute_hash(&mut self, region: Region, index: u64, context: Vec<u8>, snap: EK::Snapshot) {
         info!("computing hash"; "region_id" => region.get_id(), "index" => index);
         REGION_HASH_COUNTER.compute.all.inc();
 
@@ -66,7 +66,7 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
         let sum = match self
             .coprocessor_host
             .get_consistency_checker_host()
-            .compute_hash(&region, safe_point, snap)
+            .compute_hash(&region, &context, snap)
         {
             Ok(hash) => hash,
             Err(e) => {
@@ -81,7 +81,7 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
         checksum.write_u32::<BigEndian>(sum).unwrap();
         let msg = CasualMessage::ComputeHashResult {
             index,
-            safe_point,
+            context,
             hash: checksum,
         };
         if let Err(e) = self.router.send(region.get_id(), msg) {
@@ -103,10 +103,10 @@ where
         match task {
             Task::ComputeHash {
                 index,
-                safe_point,
+                context,
                 region,
                 snap,
-            } => self.compute_hash(region, index, safe_point, snap),
+            } => self.compute_hash(region, index, context, snap),
         }
     }
 }
@@ -155,7 +155,7 @@ mod tests {
         let sum = digest.finalize();
         runner.run(Task::<RocksSnapshot>::ComputeHash {
             index: 10,
-            safe_point: 0,
+            context: vec![],
             region: region.clone(),
             snap: db.snapshot(),
         });
@@ -169,12 +169,12 @@ mod tests {
                 CasualMessage::ComputeHashResult {
                     index,
                     hash,
-                    safe_point,
+                    context,
                 },
             ) => {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(index, 10);
-                assert_eq!(safe_point, 0);
+                assert_eq!(context, Vec::<u8>::default());
                 assert_eq!(hash, checksum_bytes);
             }
             e => panic!("unexpected {:?}", e),

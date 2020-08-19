@@ -10,19 +10,20 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::vec::Drain;
 use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use error_code::ErrorCodeExt;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
+use kvproto::metapb::{Peer as PeerMeta, PeerRole, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
     RaftCmdRequest, RaftCmdResponse, Request, Response,
@@ -31,40 +32,33 @@ use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
+use raft_engine::RaftEngine;
+use sst_importer::SSTImporter;
+use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
+use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
+use tikv_util::time::{duration_to_sec, Instant};
+use tikv_util::worker::Scheduler;
+use tikv_util::{escape, Either, MustConsumeVec};
+use time::Timespec;
+use txn_types::TxnExtra;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
 use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
-use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{
     self, write_initial_apply_state, write_peer_state, ENTRY_MEM_SIZE,
 };
-use crate::store::util::{check_region_epoch, compare_region_epoch};
-use crate::store::util::{KeysInfoFormatter, PerfContextStatistics};
-
-use crate::observe_perf_context_type;
-use crate::report_perf_context;
-
-use crate::store::{cmd_resp, util, Config, RegionSnapshot};
-use crate::{Error, Result};
-use sst_importer::SSTImporter;
-use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::escape;
-use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, Instant};
-use tikv_util::worker::Scheduler;
-use tikv_util::Either;
-use tikv_util::MustConsumeVec;
-use txn_types::TxnExtra;
+use crate::store::util::{
+    check_region_epoch, compare_region_epoch, is_learner, KeysInfoFormatter, PerfContextStatistics,
+};
+use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
+use crate::{observe_perf_context_type, report_perf_context, Error, Result};
 
 use super::metrics::*;
-
-use super::super::RegionTask;
-use std::vec::Drain;
-use time::Timespec;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const WRITE_BATCH_LIMIT: usize = 16;
@@ -212,6 +206,7 @@ pub enum ExecResult<S> {
     SplitRegion {
         regions: Vec<Region>,
         derived: Region,
+        new_split_regions: HashMap<u64, NewSplitPeer>,
     },
     PrepareMerge {
         region: Region,
@@ -228,12 +223,12 @@ pub enum ExecResult<S> {
     ComputeHash {
         region: Region,
         index: u64,
-        safe_point: u64,
+        context: Vec<u8>,
         snap: S,
     },
     VerifyHash {
         index: u64,
-        safe_point: u64,
+        context: Vec<u8>,
         hash: Vec<u8>,
     },
     DeleteRange {
@@ -272,49 +267,51 @@ impl ExecContext {
     }
 }
 
-struct ApplyCallback<E>
+struct ApplyCallback<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     region: Region,
-    cbs: Vec<(Option<Callback<E::Snapshot>>, RaftCmdResponse)>,
+    cbs: Vec<(Option<Callback<EK::Snapshot>>, Cmd)>,
 }
 
-impl<E> ApplyCallback<E>
+impl<EK> ApplyCallback<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     fn new(region: Region) -> Self {
         let cbs = vec![];
         ApplyCallback { region, cbs }
     }
 
-    fn invoke_all(self, host: &CoprocessorHost<E>) {
-        for (cb, mut resp) in self.cbs {
-            host.post_apply(&self.region, &mut resp);
+    fn invoke_all(self, host: &CoprocessorHost<EK>) {
+        for (cb, mut cmd) in self.cbs {
+            host.post_apply(&self.region, &mut cmd);
             if let Some(cb) = cb {
-                cb.invoke_with_response(resp)
+                cb.invoke_with_response(cmd.response)
             };
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<E::Snapshot>>, resp: RaftCmdResponse) {
-        self.cbs.push((cb, resp));
+    fn push(&mut self, cb: Option<Callback<EK::Snapshot>>, cmd: Cmd) {
+        self.cbs.push((cb, cmd));
     }
 }
 
-pub enum Notifier<EK>
+pub enum Notifier<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
-    Router(RaftRouter<EK, RocksEngine>),
+    Router(RaftRouter<EK, ER>),
     #[cfg(test)]
-    Sender(Sender<PeerMsg<EK, RocksEngine>>),
+    Sender(Sender<PeerMsg<EK>>),
 }
 
-impl<EK> Clone for Notifier<EK>
+impl<EK, ER> Clone for Notifier<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     fn clone(&self) -> Self {
         match self {
@@ -325,11 +322,12 @@ where
     }
 }
 
-impl<EK> Notifier<EK>
+impl<EK, ER> Notifier<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
-    fn notify(&self, region_id: u64, msg: PeerMsg<EK, RocksEngine>) {
+    fn notify(&self, region_id: u64, msg: PeerMsg<EK>) {
         match *self {
             Notifier::Router(ref r) => {
                 r.force_send(region_id, msg).unwrap();
@@ -340,21 +338,22 @@ where
     }
 }
 
-struct ApplyContext<E, W>
+struct ApplyContext<EK, ER, W>
 where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
+    EK: KvEngine,
+    ER: RaftEngine,
+    W: WriteBatch + WriteBatchVecExt<EK>,
 {
     tag: String,
     timer: Option<Instant>,
-    host: CoprocessorHost<E>,
+    host: CoprocessorHost<EK>,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
-    router: ApplyRouter<RocksEngine>,
-    notifier: Notifier<E>,
-    engine: E,
-    cbs: MustConsumeVec<ApplyCallback<E>>,
-    apply_res: Vec<ApplyRes<E::Snapshot>>,
+    region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    router: ApplyRouter<EK>,
+    notifier: Notifier<EK, ER>,
+    engine: EK,
+    cbs: MustConsumeVec<ApplyCallback<EK>>,
+    apply_res: Vec<ApplyRes<EK::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
     kv_wb: Option<W>,
@@ -375,26 +374,34 @@ where
 
     yield_duration: Duration,
 
+    store_id: u64,
+    /// region_id -> (peer_id, is_splitting)
+    /// Used for handling race between splitting and creating new peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     // TxnExtra collected from applied cmds.
     txn_extras: MustConsumeVec<TxnExtra>,
 }
 
-impl<E, W> ApplyContext<E, W>
+impl<EK, ER, W> ApplyContext<EK, ER, W>
 where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
+    EK: KvEngine,
+    ER: RaftEngine,
+    W: WriteBatch + WriteBatchVecExt<EK>,
 {
     pub fn new(
         tag: String,
-        host: CoprocessorHost<E>,
+        host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
-        region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
-        engine: E,
-        router: ApplyRouter<RocksEngine>,
-        notifier: Notifier<E>,
+        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        engine: EK,
+        router: ApplyRouter<EK>,
+        notifier: Notifier<EK, ER>,
         cfg: &Config,
-    ) -> ApplyContext<E, W> {
-        ApplyContext::<E, W> {
+        store_id: u64,
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    ) -> ApplyContext<EK, ER, W> {
+        ApplyContext {
             tag,
             timer: None,
             host,
@@ -416,6 +423,8 @@ where
             use_delete_range: cfg.use_delete_range,
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
             yield_duration: cfg.apply_yield_duration.0,
+            store_id,
+            pending_create_peers,
             txn_extras: MustConsumeVec::new("extra data from txn"),
         }
     }
@@ -425,7 +434,7 @@ where
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
-    pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<E>) {
+    pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.prepare_write_batch();
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
@@ -459,7 +468,7 @@ where
     /// write the changes into rocksdb.
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
-    pub fn commit(&mut self, delegate: &mut ApplyDelegate<E>) {
+    pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
         if self.last_applied_index < delegate.apply_state.get_applied_index() {
             delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
         }
@@ -468,7 +477,7 @@ where
         self.commit_opt(delegate, true);
     }
 
-    fn commit_opt(&mut self, delegate: &mut ApplyDelegate<E>, persistent: bool) {
+    fn commit_opt(&mut self, delegate: &mut ApplyDelegate<EK>, persistent: bool) {
         delegate.update_metrics(self);
         if persistent {
             self.write_to_db();
@@ -521,8 +530,8 @@ where
     /// Finishes `Apply`s for the delegate.
     pub fn finish_for(
         &mut self,
-        delegate: &mut ApplyDelegate<E>,
-        results: VecDeque<ExecResult<E::Snapshot>>,
+        delegate: &mut ApplyDelegate<EK>,
+        results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
         if !delegate.pending_remove {
             delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
@@ -697,9 +706,9 @@ struct WaitSourceMergeState {
     logs_up_to_date: Arc<AtomicU64>,
 }
 
-struct YieldState<E>
+struct YieldState<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     /// All of the entries that need to continue to be applied after
     /// the source peer has applied its logs.
@@ -707,12 +716,12 @@ where
     /// All of messages that need to continue to be handled after
     /// the source peer has applied its logs and pending entries
     /// are all handled.
-    pending_msgs: Vec<Msg<E>>,
+    pending_msgs: Vec<Msg<EK>>,
 }
 
-impl<E> Debug for YieldState<E>
+impl<EK> Debug for YieldState<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("YieldState")
@@ -730,6 +739,14 @@ impl Debug for WaitSourceMergeState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct NewSplitPeer {
+    pub peer_id: u64,
+    // `None` => success,
+    // `Some(s)` => fail due to `s`.
+    pub result: Option<String>,
+}
+
 /// The apply delegate of a Region which is responsible for handling committed
 /// raft log entries of a Region.
 ///
@@ -744,9 +761,9 @@ impl Debug for WaitSourceMergeState {
 /// located at this store, and it will get the corresponding apply delegate to
 /// handle the apply task to make the code logic more clear.
 #[derive(Debug)]
-pub struct ApplyDelegate<E>
+pub struct ApplyDelegate<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     /// The ID of the peer.
     id: u64,
@@ -767,7 +784,7 @@ where
     pending_remove: bool,
 
     /// The commands waiting to be committed and applied
-    pending_cmds: PendingCmdQueue<E::Snapshot>,
+    pending_cmds: PendingCmdQueue<EK::Snapshot>,
     /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
@@ -775,7 +792,7 @@ where
     is_merging: bool,
     /// Records the epoch version after the last merge.
     last_merge_version: u64,
-    yield_state: Option<YieldState<E>>,
+    yield_state: Option<YieldState<EK>>,
     /// A temporary state that keeps track of the progress of the source peer state when
     /// CommitMerge is unable to be executed.
     wait_merge_state: Option<WaitSourceMergeState>,
@@ -800,11 +817,11 @@ where
     metrics: ApplyMetrics,
 }
 
-impl<E> ApplyDelegate<E>
+impl<EK> ApplyDelegate<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    fn from_registration(reg: Registration) -> ApplyDelegate<E> {
+    fn from_registration(reg: Registration) -> ApplyDelegate<EK> {
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
@@ -837,9 +854,9 @@ where
     }
 
     /// Handles all the committed_entries, namely, applies the committed entries.
-    fn handle_raft_committed_entries<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn handle_raft_committed_entries<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
+        apply_ctx: &mut ApplyContext<EK, ER, W>,
         mut committed_entries_drainer: Drain<Entry>,
     ) {
         if committed_entries_drainer.len() == 0 {
@@ -904,15 +921,15 @@ where
         }
     }
 
-    fn update_metrics<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn update_metrics<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        apply_ctx: &ApplyContext<E, W>,
+        apply_ctx: &ApplyContext<EK, ER, W>,
     ) {
         self.metrics.written_bytes += apply_ctx.delta_bytes();
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state<W: WriteBatch + WriteBatchVecExt<E>>(&self, wb: &mut W) {
+    fn write_apply_state<W: WriteBatch + WriteBatchVecExt<EK>>(&self, wb: &mut W) {
         wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
@@ -926,11 +943,11 @@ where
         });
     }
 
-    fn handle_raft_entry_normal<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn handle_raft_entry_normal<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
+        apply_ctx: &mut ApplyContext<EK, ER, W>,
         entry: &Entry,
-    ) -> ApplyResult<E::Snapshot> {
+    ) -> ApplyResult<EK::Snapshot> {
         fail_point!("yield_apply_1000", self.region_id() == 1000, |_| {
             ApplyResult::Yield
         });
@@ -964,20 +981,23 @@ where
         //    it will also propose an empty entry. But that entry will not contain
         //    any associated callback. So no need to clear callback.
         while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
-            apply_ctx
-                .cbs
-                .last_mut()
-                .unwrap()
-                .push(cmd.cb.take(), cmd_resp::err_resp(Error::StaleCommand, term));
+            apply_ctx.cbs.last_mut().unwrap().push(
+                cmd.cb.take(),
+                Cmd::new(
+                    cmd.index,
+                    RaftCmdRequest::default(),
+                    cmd_resp::err_resp(Error::StaleCommand, term),
+                ),
+            );
         }
         ApplyResult::None
     }
 
-    fn handle_raft_entry_conf_change<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn handle_raft_entry_conf_change<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
+        apply_ctx: &mut ApplyContext<EK, ER, W>,
         entry: &Entry,
-    ) -> ApplyResult<E::Snapshot> {
+    ) -> ApplyResult<EK::Snapshot> {
         // Although conf change can't yield in normal case, it is convenient to
         // simulate yield before applying a conf change log.
         fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
@@ -1012,7 +1032,7 @@ where
         index: u64,
         term: u64,
         is_conf_change: bool,
-    ) -> (Option<Callback<E::Snapshot>>, TxnExtra) {
+    ) -> (Option<Callback<EK::Snapshot>>, TxnExtra) {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
@@ -1049,13 +1069,13 @@ where
         (None, TxnExtra::default())
     }
 
-    fn process_raft_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn process_raft_cmd<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
+        apply_ctx: &mut ApplyContext<EK, ER, W>,
         index: u64,
         term: u64,
         cmd: RaftCmdRequest,
-    ) -> ApplyResult<E::Snapshot> {
+    ) -> ApplyResult<EK::Snapshot> {
         if index == 0 {
             panic!(
                 "{} processing raft command needs a none zero index",
@@ -1083,16 +1103,16 @@ where
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
+        let cmd = Cmd::new(index, cmd, resp);
         let (cmd_cb, txn_extra) = self.find_pending(index, term, is_conf_change);
         if let Some(observe_cmd) = self.observe_cmd.as_ref() {
-            let cmd = Cmd::new(index, cmd, resp.clone());
             apply_ctx.txn_extras.push(txn_extra);
             apply_ctx
                 .host
-                .on_apply_cmd(observe_cmd.id, self.region_id(), cmd);
+                .on_apply_cmd(observe_cmd.id, self.region_id(), cmd.clone());
         }
 
-        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
+        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, cmd);
 
         exec_result
     }
@@ -1105,13 +1125,13 @@ where
     ///   2. it encounters an error that may not occur on all stores, in this case
     /// we should try to apply the entry again or panic. Considering that this
     /// usually due to disk operation fail, which is rare, so just panic is ok.
-    fn apply_raft_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn apply_raft_cmd<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
         index: u64,
         term: u64,
         req: &RaftCmdRequest,
-    ) -> (RaftCmdResponse, ApplyResult<E::Snapshot>) {
+    ) -> (RaftCmdResponse, ApplyResult<EK::Snapshot>) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
@@ -1136,7 +1156,8 @@ where
                         "execute raft command";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "err" => ?e
+                        "err" => ?e,
+                        "error_code" => %e.error_code(),
                     ),
                 }
                 (cmd_resp::new_error(e), ApplyResult::None)
@@ -1185,7 +1206,10 @@ where
         (resp, exec_result)
     }
 
-    fn destroy<W: WriteBatch + WriteBatchVecExt<E>>(&mut self, apply_ctx: &mut ApplyContext<E, W>) {
+    fn destroy<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+        &mut self,
+        apply_ctx: &mut ApplyContext<EK, ER, W>,
+    ) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
         for cmd in self.pending_cmds.normals.drain(..) {
@@ -1211,16 +1235,16 @@ where
     }
 }
 
-impl<E> ApplyDelegate<E>
+impl<EK> ApplyDelegate<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     // Only errors that will also occur on all other stores should be returned.
-    fn exec_raft_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn exec_raft_cmd<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<E::Snapshot>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
@@ -1232,11 +1256,11 @@ where
         }
     }
 
-    fn exec_admin_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn exec_admin_cmd<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<E::Snapshot>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
@@ -1252,6 +1276,7 @@ where
 
         let (mut response, exec_result) = match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
+            AdminCmdType::ChangePeerV2 => panic!("unsupported admin command type"),
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
@@ -1275,11 +1300,11 @@ where
         Ok((resp, exec_result))
     }
 
-    fn exec_write_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn exec_write_cmd<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<E::Snapshot>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!(
             "on_apply_write_cmd",
             cfg!(release) || self.id() == 3,
@@ -1348,9 +1373,9 @@ where
 }
 
 // Write commands related.
-impl<E> ApplyDelegate<E>
+impl<EK> ApplyDelegate<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     fn handle_put<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
@@ -1437,7 +1462,7 @@ where
 
     fn handle_delete_range(
         &mut self,
-        engine: &E,
+        engine: &EK,
         req: &Request,
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
@@ -1509,7 +1534,7 @@ where
     fn handle_ingest_sst(
         &mut self,
         importer: &Arc<SSTImporter>,
-        engine: &E,
+        engine: &EK,
         req: &Request,
         ssts: &mut Vec<SstMeta>,
     ) -> Result<Response> {
@@ -1522,7 +1547,8 @@ where
                  "peer_id" => self.id(),
                  "sst" => ?sst,
                  "region" => ?&self.region,
-                 "err" => ?e
+                 "err" => ?e,
+                "error_code" => %e.error_code(),
             );
             // This file is not valid, we can delete it here.
             let _ = importer.delete(sst);
@@ -1541,15 +1567,15 @@ where
 }
 
 // Admin commands related.
-impl<E> ApplyDelegate<E>
+impl<EK> ApplyDelegate<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    fn exec_change_peer<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn exec_change_peer<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
         request: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
         let store_id = peer.get_store_id();
@@ -1601,7 +1627,7 @@ where
                 let mut exists = false;
                 if let Some(p) = util::find_peer_mut(&mut region, store_id) {
                     exists = true;
-                    if !p.get_is_learner() || p.get_id() != peer.get_id() {
+                    if !is_learner(p) || p.get_id() != peer.get_id() {
                         error!(
                             "can't add duplicated peer";
                             "region_id" => self.region_id(),
@@ -1615,7 +1641,7 @@ where
                             self.region
                         ));
                     } else {
-                        p.set_is_learner(false);
+                        p.set_role(PeerRole::Voter);
                     }
                 }
                 if !exists {
@@ -1744,11 +1770,11 @@ where
         ))
     }
 
-    fn exec_split<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn exec_split<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         info!(
             "split is deprecated, redirect to use batch split";
             "region_id" => self.region_id(),
@@ -1766,11 +1792,11 @@ where
         self.exec_batch_split(ctx, &admin_req)
     }
 
-    fn exec_batch_split<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn exec_batch_split<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!(
             "apply_before_split_1_3",
             self.id == 3 && self.region_id() == 1,
@@ -1832,10 +1858,10 @@ where
             derived.set_end_key(keys.front().unwrap().to_vec());
             regions.push(derived.clone());
         }
-        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+
+        let mut new_split_regions: HashMap<u64, NewSplitPeer> = HashMap::default();
         for req in split_reqs.get_requests() {
             let mut new_region = Region::default();
-            // TODO: check new region id validation.
             new_region.set_id(req.get_new_region_id());
             new_region.set_region_epoch(derived.get_region_epoch().to_owned());
             new_region.set_start_key(keys.pop_front().unwrap());
@@ -1848,7 +1874,96 @@ where
             {
                 peer.set_id(*peer_id);
             }
-            write_peer_state(kv_wb_mut, &new_region, PeerState::Normal, None)
+            new_split_regions.insert(
+                new_region.get_id(),
+                NewSplitPeer {
+                    peer_id: util::find_peer(&new_region, ctx.store_id).unwrap().get_id(),
+                    result: None,
+                },
+            );
+            regions.push(new_region);
+        }
+
+        if right_derive {
+            derived.set_start_key(keys.pop_front().unwrap());
+            regions.push(derived.clone());
+        }
+
+        let mut replace_regions = HashSet::default();
+        {
+            let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
+            for (region_id, new_split_peer) in new_split_regions.iter_mut() {
+                match pending_create_peers.entry(*region_id) {
+                    HashMapEntry::Occupied(mut v) => {
+                        if *v.get() != (new_split_peer.peer_id, false) {
+                            new_split_peer.result =
+                                Some(format!("status {:?} is not expected", v.get()));
+                        } else {
+                            replace_regions.insert(*region_id);
+                            v.insert((new_split_peer.peer_id, true));
+                        }
+                    }
+                    HashMapEntry::Vacant(v) => {
+                        v.insert((new_split_peer.peer_id, true));
+                    }
+                }
+            }
+        }
+
+        // region_id -> peer_id
+        let mut already_exist_regions = Vec::new();
+        for (region_id, new_split_peer) in new_split_regions.iter_mut() {
+            let region_state_key = keys::region_state_key(*region_id);
+            match ctx
+                .engine
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+            {
+                Ok(None) => (),
+                Ok(Some(state)) => {
+                    if replace_regions.get(region_id).is_some() {
+                        // This peer must be the first one on local store. So if this peer is created on the other side,
+                        // it means no `RegionLocalState` in kv engine.
+                        panic!("{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
+                            self.tag, region_id, new_split_peer.peer_id, state);
+                    }
+                    already_exist_regions.push((*region_id, new_split_peer.peer_id));
+                    new_split_peer.result = Some(format!("state {:?} exist in kv engine", state));
+                }
+                e => panic!(
+                    "{} failed to get regions state of {}: {:?}",
+                    self.tag, region_id, e
+                ),
+            }
+        }
+
+        if !already_exist_regions.is_empty() {
+            let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
+            for (region_id, peer_id) in &already_exist_regions {
+                assert_eq!(
+                    pending_create_peers.remove(region_id),
+                    Some((*peer_id, true))
+                );
+            }
+        }
+
+        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+        for new_region in &regions {
+            if new_region.get_id() == derived.get_id() {
+                continue;
+            }
+            let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
+            if let Some(ref r) = new_split_peer.result {
+                warn!(
+                    "new region from splitting already exists";
+                    "new_region_id" => new_region.get_id(),
+                    "new_peer_id" => new_split_peer.peer_id,
+                    "reason" => r,
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.id(),
+                );
+                continue;
+            }
+            write_peer_state(kv_wb_mut, new_region, PeerState::Normal, None)
                 .and_then(|_| write_initial_apply_state(kv_wb_mut, new_region.get_id()))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -1856,11 +1971,6 @@ where
                         self.tag, new_region, e
                     )
                 });
-            regions.push(new_region);
-        }
-        if right_derive {
-            derived.set_start_key(keys.pop_front().unwrap());
-            regions.push(derived.clone());
         }
         write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
@@ -1869,17 +1979,27 @@ where
         resp.mut_splits().set_regions(regions.clone().into());
         PEER_ADMIN_CMD_COUNTER.batch_split.success.inc();
 
+        fail_point!(
+            "apply_after_split_1_3",
+            self.id == 3 && self.region_id() == 1,
+            |_| { unreachable!() }
+        );
+
         Ok((
             resp,
-            ApplyResult::Res(ExecResult::SplitRegion { regions, derived }),
+            ApplyResult::Res(ExecResult::SplitRegion {
+                regions,
+                derived,
+                new_split_regions,
+            }),
         ))
     }
 
-    fn exec_prepare_merge<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn exec_prepare_merge<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!("apply_before_prepare_merge");
 
         PEER_ADMIN_CMD_COUNTER.prepare_merge.all.inc();
@@ -1946,11 +2066,11 @@ where
     // 7.   resume `exec_commit_merge` in target apply fsm
     // 8.   `on_ready_commit_merge` in target peer fsm and send `MergeResult` to source peer fsm
     // 9.   `on_merge_result` in source peer fsm (destroy itself)
-    fn exec_commit_merge<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn exec_commit_merge<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         {
             let apply_before_commit_merge = || {
                 fail_point!(
@@ -2078,11 +2198,11 @@ where
         ))
     }
 
-    fn exec_rollback_merge<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn exec_rollback_merge<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
         let region_state_key = keys::region_state_key(self.region_id());
         let state: RegionLocalState = match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
@@ -2120,11 +2240,11 @@ where
         ))
     }
 
-    fn exec_compact_log<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn exec_compact_log<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
 
         let compact_index = req.get_compact_log().get_compact_index();
@@ -2180,18 +2300,18 @@ where
         ))
     }
 
-    fn exec_compute_hash<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn exec_compute_hash<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &self,
-        ctx: &ApplyContext<E, W>,
+        ctx: &ApplyContext<EK, ER, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         let resp = AdminResponse::default();
         Ok((
             resp,
             ApplyResult::Res(ExecResult::ComputeHash {
                 region: self.region.clone(),
                 index: ctx.exec_ctx.as_ref().unwrap().index,
-                safe_point: req.get_compute_hash().get_safe_point(),
+                context: req.get_compute_hash().get_context().to_vec(),
                 // This snapshot may be held for a long time, which may cause too many
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
@@ -2201,21 +2321,21 @@ where
         ))
     }
 
-    fn exec_verify_hash<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn exec_verify_hash<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &self,
-        _: &ApplyContext<E, W>,
+        _: &ApplyContext<EK, ER, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
-        let safe_point = verify_req.get_safe_point();
+        let context = verify_req.get_context().to_vec();
         let hash = verify_req.get_hash().to_vec();
         let resp = AdminResponse::default();
         Ok((
             resp,
             ApplyResult::Res(ExecResult::VerifyHash {
                 index,
-                safe_point,
+                context,
                 hash,
             }),
         ))
@@ -2372,7 +2492,7 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub fn new(peer: &Peer<impl KvEngine, impl KvEngine>) -> Registration {
+    pub fn new<EK: KvEngine, ER: RaftEngine>(peer: &Peer<EK, ER>) -> Registration {
         Registration {
             id: peer.peer_id(),
             term: peer.term(),
@@ -2444,15 +2564,15 @@ impl GenSnapTask {
         self.commit_index
     }
 
-    pub fn generate_and_schedule_snapshot<E>(
+    pub fn generate_and_schedule_snapshot<EK>(
         self,
-        kv_snap: E::Snapshot,
+        kv_snap: EK::Snapshot,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        region_sched: &Scheduler<RegionTask<E::Snapshot>>,
+        region_sched: &Scheduler<RegionTask<EK::Snapshot>>,
     ) -> Result<()>
     where
-        E: KvEngine,
+        EK: KvEngine,
     {
         let snapshot = RegionTask::Gen {
             region_id: self.region_id,
@@ -2513,13 +2633,13 @@ pub enum ChangeCmd {
     },
 }
 
-pub enum Msg<E>
+pub enum Msg<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     Apply {
         start: Instant,
-        apply: Apply<E::Snapshot>,
+        apply: Apply<EK::Snapshot>,
     },
     Registration(Registration),
     LogsUpToDate(CatchUpLogs),
@@ -2529,29 +2649,29 @@ where
     Change {
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<E::Snapshot>,
+        cb: Callback<EK::Snapshot>,
     },
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
-    Validate(u64, Box<dyn FnOnce((&ApplyDelegate<E>, bool)) + Send>),
+    Validate(u64, Box<dyn FnOnce((*const u8, bool)) + Send>),
 }
 
-impl<E> Msg<E>
+impl<EK> Msg<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    pub fn apply(apply: Apply<E::Snapshot>) -> Msg<E> {
+    pub fn apply(apply: Apply<EK::Snapshot>) -> Msg<EK> {
         Msg::Apply {
             start: Instant::now(),
             apply,
         }
     }
 
-    pub fn register(peer: &Peer<E, impl KvEngine>) -> Msg<E> {
+    pub fn register<ER: RaftEngine>(peer: &Peer<EK, ER>) -> Msg<EK> {
         Msg::Registration(Registration::new(peer))
     }
 
-    pub fn destroy(region_id: u64, async_remove: bool, merge_from_snapshot: bool) -> Msg<E> {
+    pub fn destroy(region_id: u64, async_remove: bool, merge_from_snapshot: bool) -> Msg<EK> {
         Msg::Destroy(Destroy {
             region_id,
             async_remove,
@@ -2560,9 +2680,9 @@ where
     }
 }
 
-impl<E> Debug for Msg<E>
+impl<EK> Debug for Msg<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -2630,27 +2750,27 @@ where
     },
 }
 
-pub struct ApplyFsm<E>
+pub struct ApplyFsm<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    delegate: ApplyDelegate<E>,
-    receiver: Receiver<Msg<E>>,
-    mailbox: Option<BasicMailbox<ApplyFsm<E>>>,
+    delegate: ApplyDelegate<EK>,
+    receiver: Receiver<Msg<EK>>,
+    mailbox: Option<BasicMailbox<ApplyFsm<EK>>>,
 }
 
-impl<E> ApplyFsm<E>
+impl<EK> ApplyFsm<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    fn from_peer(
-        peer: &Peer<RocksEngine, RocksEngine>,
-    ) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
+    fn from_peer<ER: RaftEngine>(
+        peer: &Peer<EK, ER>,
+    ) -> (LooseBoundedSender<Msg<EK>>, Box<ApplyFsm<EK>>) {
         let reg = Registration::new(peer);
         ApplyFsm::from_registration(reg)
     }
 
-    fn from_registration(reg: Registration) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
+    fn from_registration(reg: Registration) -> (LooseBoundedSender<Msg<EK>>, Box<ApplyFsm<EK>>) {
         let (tx, rx) = loose_bounded(usize::MAX);
         let delegate = ApplyDelegate::from_registration(reg);
         (
@@ -2678,10 +2798,10 @@ where
     }
 
     /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
-    fn handle_apply<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn handle_apply<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
-        mut apply: Apply<E::Snapshot>,
+        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        mut apply: Apply<EK::Snapshot>,
     ) {
         if apply_ctx.timer.is_none() {
             apply_ctx.timer = Some(Instant::now_coarse());
@@ -2729,12 +2849,12 @@ where
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn append_proposal(&mut self, props_drainer: Drain<Proposal<E::Snapshot>>) {
+    fn append_proposal(&mut self, props_drainer: Drain<Proposal<EK::Snapshot>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = props_drainer.len();
         if self.delegate.stopped {
             for p in props_drainer {
-                let cmd = PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb, p.txn_extra);
+                let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb, p.txn_extra);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
@@ -2758,7 +2878,10 @@ where
         APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
-    fn destroy<W: WriteBatch + WriteBatchVecExt<E>>(&mut self, ctx: &mut ApplyContext<E, W>) {
+    fn destroy<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+        &mut self,
+        ctx: &mut ApplyContext<EK, ER, W>,
+    ) {
         let region_id = self.delegate.region_id();
         if ctx.apply_res.iter().any(|res| res.region_id == region_id) {
             // Flush before destroying to avoid reordering messages.
@@ -2778,9 +2901,9 @@ where
     }
 
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
-    fn handle_destroy<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn handle_destroy<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
         d: Destroy,
     ) {
         assert_eq!(d.region_id, self.delegate.region_id());
@@ -2804,9 +2927,9 @@ where
         }
     }
 
-    fn resume_pending<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn resume_pending<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
     ) {
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
@@ -2839,9 +2962,9 @@ where
         }
     }
 
-    fn logs_up_to_date_for_merge<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn logs_up_to_date_for_merge<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, ER, W>,
         catch_up_logs: CatchUpLogs,
     ) {
         fail_point!("after_handle_catch_up_logs_for_merge");
@@ -2876,9 +2999,9 @@ where
     }
 
     #[allow(unused_mut)]
-    fn handle_snapshot<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn handle_snapshot<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
+        apply_ctx: &mut ApplyContext<EK, ER, W>,
         snap_task: GenSnapTask,
     ) {
         if self.delegate.pending_remove || self.delegate.stopped {
@@ -2910,7 +3033,7 @@ where
             self.delegate.last_sync_apply_index = applied_index;
         }
 
-        if let Err(e) = snap_task.generate_and_schedule_snapshot::<E>(
+        if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
             apply_ctx.engine.snapshot(),
             self.delegate.applied_index_term,
             self.delegate.apply_state.clone(),
@@ -2933,12 +3056,12 @@ where
         );
     }
 
-    fn handle_change<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn handle_change<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
+        apply_ctx: &mut ApplyContext<EK, ER, W>,
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<E::Snapshot>,
+        cb: Callback<EK::Snapshot>,
     ) {
         let (observe_id, region_id, enabled) = match cmd {
             ChangeCmd::RegisterObserver {
@@ -3012,10 +3135,10 @@ where
         cb.invoke_read(resp);
     }
 
-    fn handle_tasks<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn handle_tasks<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
-        msgs: &mut Vec<Msg<E>>,
+        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        msgs: &mut Vec<Msg<EK>>,
     ) {
         let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
@@ -3042,7 +3165,10 @@ where
                     cb,
                 }) => self.handle_change(apply_ctx, cmd, region_epoch, cb),
                 #[cfg(any(test, feature = "testexport"))]
-                Some(Msg::Validate(_, f)) => f((&self.delegate, apply_ctx.enable_sync_log)),
+                Some(Msg::Validate(_, f)) => {
+                    let delegate: *const u8 = unsafe { std::mem::transmute(&self.delegate) };
+                    f((delegate, apply_ctx.enable_sync_log))
+                }
                 None => break,
             }
         }
@@ -3053,11 +3179,11 @@ where
     }
 }
 
-impl<E> Fsm for ApplyFsm<E>
+impl<EK> Fsm for ApplyFsm<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    type Message = Msg<E>;
+    type Message = Msg<EK>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -3081,9 +3207,9 @@ where
     }
 }
 
-impl<E> Drop for ApplyFsm<E>
+impl<EK> Drop for ApplyFsm<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     fn drop(&mut self) {
         self.delegate.clear_all_commands_as_stale();
@@ -3103,21 +3229,23 @@ impl Fsm for ControlFsm {
     }
 }
 
-pub struct ApplyPoller<E, W>
+pub struct ApplyPoller<EK, ER, W>
 where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
+    EK: KvEngine,
+    ER: RaftEngine,
+    W: WriteBatch + WriteBatchVecExt<EK>,
 {
-    msg_buf: Vec<Msg<E>>,
-    apply_ctx: ApplyContext<E, W>,
+    msg_buf: Vec<Msg<EK>>,
+    apply_ctx: ApplyContext<EK, ER, W>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }
 
-impl<E, W> PollHandler<ApplyFsm<E>, ControlFsm> for ApplyPoller<E, W>
+impl<EK, ER, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, ER, W>
 where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
+    EK: KvEngine,
+    ER: RaftEngine,
+    W: WriteBatch + WriteBatchVecExt<EK>,
 {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -3142,7 +3270,7 @@ where
         unimplemented!()
     }
 
-    fn handle_normal(&mut self, normal: &mut ApplyFsm<E>) -> Option<usize> {
+    fn handle_normal(&mut self, normal: &mut ApplyFsm<EK>) -> Option<usize> {
         let mut expected_msg_count = None;
         normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
@@ -3191,7 +3319,7 @@ where
         expected_msg_count
     }
 
-    fn end(&mut self, fsms: &mut [Box<ApplyFsm<E>>]) {
+    fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
         let is_synced = self.apply_ctx.flush();
         if is_synced {
             for fsm in fsms {
@@ -3201,25 +3329,30 @@ where
     }
 }
 
-pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
+pub struct Builder<EK: KvEngine, ER: RaftEngine, W: WriteBatch + WriteBatchVecExt<EK>> {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
-    coprocessor_host: CoprocessorHost<RocksEngine>,
+    coprocessor_host: CoprocessorHost<EK>,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
-    engine: RocksEngine,
-    sender: Notifier<RocksEngine>,
-    router: ApplyRouter<RocksEngine>,
+    region_scheduler: Scheduler<RegionTask<<EK as KvEngine>::Snapshot>>,
+    engine: EK,
+    sender: Notifier<EK, ER>,
+    router: ApplyRouter<EK>,
     _phantom: PhantomData<W>,
+    store_id: u64,
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
-impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
+impl<EK: KvEngine, ER: RaftEngine, W> Builder<EK, ER, W>
+where
+    W: WriteBatch + WriteBatchVecExt<EK>,
+{
     pub fn new<T, C>(
-        builder: &RaftPollerBuilder<T, C>,
-        sender: Notifier<RocksEngine>,
-        router: ApplyRouter<RocksEngine>,
-    ) -> Builder<W> {
-        Builder::<W> {
+        builder: &RaftPollerBuilder<EK, ER, T, C>,
+        sender: Notifier<EK, ER>,
+        router: ApplyRouter<EK>,
+    ) -> Builder<EK, ER, W> {
+        Builder {
             tag: format!("[store {}]", builder.store.get_id()),
             cfg: builder.cfg.clone(),
             coprocessor_host: builder.coprocessor_host.clone(),
@@ -3229,18 +3362,23 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
             _phantom: PhantomData,
             sender,
             router,
+            store_id: builder.store.get_id(),
+            pending_create_peers: builder.pending_create_peers.clone(),
         }
     }
 }
 
-impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
-    HandlerBuilder<ApplyFsm<RocksEngine>, ControlFsm> for Builder<W>
+impl<EK, ER, W> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK, ER, W>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+    W: WriteBatch + WriteBatchVecExt<EK>,
 {
-    type Handler = ApplyPoller<RocksEngine, W>;
+    type Handler = ApplyPoller<EK, ER, W>;
 
-    fn build(&mut self) -> ApplyPoller<RocksEngine, W> {
+    fn build(&mut self) -> ApplyPoller<EK, ER, W> {
         let cfg = self.cfg.value();
-        ApplyPoller::<RocksEngine, W> {
+        ApplyPoller {
             msg_buf: Vec::with_capacity(cfg.messages_per_tick),
             apply_ctx: ApplyContext::new(
                 self.tag.clone(),
@@ -3251,6 +3389,8 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
                 self.router.clone(),
                 self.sender.clone(),
                 &cfg,
+                self.store_id,
+                self.pending_create_peers.clone(),
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
@@ -3259,38 +3399,38 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
 }
 
 #[derive(Clone)]
-pub struct ApplyRouter<E>
+pub struct ApplyRouter<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    pub router: BatchRouter<ApplyFsm<E>, ControlFsm>,
+    pub router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
 }
 
-impl<E> Deref for ApplyRouter<E>
+impl<EK> Deref for ApplyRouter<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    type Target = BatchRouter<ApplyFsm<E>, ControlFsm>;
+    type Target = BatchRouter<ApplyFsm<EK>, ControlFsm>;
 
-    fn deref(&self) -> &BatchRouter<ApplyFsm<E>, ControlFsm> {
+    fn deref(&self) -> &BatchRouter<ApplyFsm<EK>, ControlFsm> {
         &self.router
     }
 }
 
-impl<E> DerefMut for ApplyRouter<E>
+impl<EK> DerefMut for ApplyRouter<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<E>, ControlFsm> {
+    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<EK>, ControlFsm> {
         &mut self.router
     }
 }
 
-impl<E> ApplyRouter<E>
+impl<EK> ApplyRouter<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    pub fn schedule_task(&self, region_id: u64, msg: Msg<E>) {
+    pub fn schedule_task(&self, region_id: u64, msg: Msg<EK>) {
         let reg = match self.try_send(region_id, msg) {
             Either::Left(Ok(())) => return,
             Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
@@ -3302,7 +3442,7 @@ where
                     );
                     for p in apply.cbs.drain(..) {
                         let cmd =
-                            PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb, p.txn_extra);
+                            PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb, p.txn_extra);
                         notify_region_removed(apply.region_id, apply.peer_id, cmd);
                     }
                     return;
@@ -3365,29 +3505,26 @@ where
     }
 }
 
-pub struct ApplyBatchSystem {
-    system: BatchSystem<ApplyFsm<RocksEngine>, ControlFsm>,
+pub struct ApplyBatchSystem<EK: KvEngine> {
+    system: BatchSystem<ApplyFsm<EK>, ControlFsm>,
 }
 
-impl Deref for ApplyBatchSystem {
-    type Target = BatchSystem<ApplyFsm<RocksEngine>, ControlFsm>;
+impl<EK: KvEngine> Deref for ApplyBatchSystem<EK> {
+    type Target = BatchSystem<ApplyFsm<EK>, ControlFsm>;
 
-    fn deref(&self) -> &BatchSystem<ApplyFsm<RocksEngine>, ControlFsm> {
+    fn deref(&self) -> &BatchSystem<ApplyFsm<EK>, ControlFsm> {
         &self.system
     }
 }
 
-impl DerefMut for ApplyBatchSystem {
-    fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm<RocksEngine>, ControlFsm> {
+impl<EK: KvEngine> DerefMut for ApplyBatchSystem<EK> {
+    fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm<EK>, ControlFsm> {
         &mut self.system
     }
 }
 
-impl ApplyBatchSystem {
-    pub fn schedule_all<'a>(
-        &self,
-        peers: impl Iterator<Item = &'a Peer<RocksEngine, RocksEngine>>,
-    ) {
+impl<EK: KvEngine> ApplyBatchSystem<EK> {
+    pub fn schedule_all<'a, ER: RaftEngine>(&self, peers: impl Iterator<Item = &'a Peer<EK, ER>>) {
         let mut mailboxes = Vec::with_capacity(peers.size_hint().0);
         for peer in peers {
             let (tx, fsm) = ApplyFsm::from_peer(peer);
@@ -3397,7 +3534,9 @@ impl ApplyBatchSystem {
     }
 }
 
-pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter<RocksEngine>, ApplyBatchSystem) {
+pub fn create_apply_batch_system<EK: KvEngine>(
+    cfg: &Config,
+) -> (ApplyRouter<EK>, ApplyBatchSystem<EK>) {
     let (tx, _) = loose_bounded(usize::MAX);
     let (router, system) =
         batch_system::create_system(&cfg.apply_batch_system, tx, Box::new(ControlFsm));
@@ -3514,7 +3653,8 @@ mod tests {
             region_id,
             Msg::Validate(
                 region_id,
-                Box::new(move |(delegate, _): (&ApplyDelegate<RocksEngine>, _)| {
+                Box::new(move |(delegate, _): (*const u8, _)| {
+                    let delegate = unsafe { &*(delegate as *const ApplyDelegate<RocksEngine>) };
                     validate(delegate);
                     validate_tx.send(()).unwrap();
                 }),
@@ -3551,7 +3691,7 @@ mod tests {
     }
 
     fn fetch_apply_res(
-        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine, RocksEngine>>,
+        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>,
     ) -> ApplyRes<RocksSnapshot> {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
@@ -3603,22 +3743,25 @@ mod tests {
     #[test]
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
-        let sender = Notifier::Sender(tx);
+        let sender: Notifier<RocksEngine, RocksEngine> = Notifier::Sender(tx);
         let (_tmp, engine) = create_tmp_engine("apply-basic");
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
-        let builder = super::Builder::<RocksWriteBatch> {
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<_, _, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
             coprocessor_host: CoprocessorHost::<RocksEngine>::default(),
             importer,
             region_scheduler,
             sender,
-            _phantom: PhantomData,
             engine,
             router: router.clone(),
+            _phantom: Default::default(),
+            store_id: 1,
+            pending_create_peers,
         };
         system.spawn("test-basic".to_owned(), builder);
 
@@ -3925,7 +4068,7 @@ mod tests {
             self.pre_query_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {
+        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Cmd) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -3968,19 +4111,22 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
-        let sender = Notifier::Sender(tx);
+        let sender: Notifier<RocksEngine, RocksEngine> = Notifier::Sender(tx);
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
-        let builder = super::Builder::<RocksWriteBatch> {
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<_, _, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
             sender,
             region_scheduler,
-            _phantom: PhantomData,
             coprocessor_host: host,
             importer: importer.clone(),
             engine: engine.clone(),
             router: router.clone(),
+            _phantom: Default::default(),
+            store_id: 1,
+            pending_create_peers,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -4323,11 +4469,11 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
-        let sender = Notifier::Sender(tx);
+        let sender = Notifier::<_, RocksEngine>::Sender(tx);
         let cfg = Config::default();
         let (router, mut system) = create_apply_batch_system(&cfg);
-        let _phantom = engine.write_batch();
-        let builder = super::Builder::<RocksWriteBatch> {
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<_, _, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg: Arc::new(VersionTrack::new(cfg)),
             sender,
@@ -4335,8 +4481,10 @@ mod tests {
             coprocessor_host: host,
             importer,
             engine,
-            _phantom: PhantomData,
             router: router.clone(),
+            _phantom: Default::default(),
+            store_id: 1,
+            pending_create_peers,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -4613,7 +4761,7 @@ mod tests {
         let peers = vec![new_peer(2, 3), new_peer(4, 5), new_learner_peer(6, 7)];
         reg.region.set_peers(peers.clone().into());
         let (tx, _rx) = mpsc::channel();
-        let sender = Notifier::Sender(tx);
+        let sender: Notifier<RocksEngine, RocksEngine> = Notifier::Sender(tx);
         let mut host = CoprocessorHost::<RocksEngine>::default();
         let mut obs = ApplyObserver::default();
         let (sink, cmdbatch_rx) = mpsc::channel();
@@ -4623,16 +4771,19 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
-        let builder = super::Builder::<RocksWriteBatch> {
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<_, _, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
             sender,
             importer,
             region_scheduler,
-            _phantom: PhantomData,
             coprocessor_host: host,
             engine: engine.clone(),
             router: router.clone(),
+            _phantom: Default::default(),
+            store_id: 2,
+            pending_create_peers,
         };
         system.spawn("test-split".to_owned(), builder);
 

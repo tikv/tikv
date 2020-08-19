@@ -145,6 +145,22 @@ impl PessimisticLockRes {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub enum SecondaryLocksStatus {
+    Locked(Vec<kvrpcpb::LockInfo>),
+    Committed(TimeStamp),
+    RolledBack,
+}
+
+impl SecondaryLocksStatus {
+    pub fn push(&mut self, lock: kvrpcpb::LockInfo) {
+        match self {
+            SecondaryLocksStatus::Locked(v) => v.push(lock),
+            _ => panic!("unexpected SecondaryLocksStatus"),
+        }
+    }
+}
+
 macro_rules! storage_callback {
     ($($variant: ident ( $cb_ty: ty ) $result_variant: pat => $result: expr,)*) => {
         pub enum StorageCallback {
@@ -181,6 +197,7 @@ storage_callback! {
     TxnStatus(TxnStatus) ProcessResult::TxnStatus { txn_status } => txn_status,
     Prewrite(PrewriteResult) ProcessResult::PrewriteResult { result } => result,
     PessimisticLock(Result<PessimisticLockRes>) ProcessResult::PessimisticLockRes { res } => res,
+    SecondaryLocksStatus(SecondaryLocksStatus) ProcessResult::SecondaryLocksStatus { status } => status,
 }
 
 pub trait StorageCallbackType: Sized {

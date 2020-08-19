@@ -35,19 +35,19 @@ impl<E: KvEngine> ConsistencyCheckHost<E> {
         self.checker = Arc::new(checker) as Arc<dyn ConsistencyChecker<Snap = E::Snapshot>>;
     }
 
-    pub fn gen_safe_point(&self) -> u64 {
-        self.checker.gen_safe_point()
+    pub fn gen_context(&self) -> Vec<u8> {
+        self.checker.gen_context()
     }
 
-    pub fn compute_hash(&self, region: &Region, safe_point: u64, snap: E::Snapshot) -> Result<u32> {
-        self.checker.compute_hash(region, safe_point, snap)
+    pub fn compute_hash(&self, region: &Region, context: &[u8], snap: E::Snapshot) -> Result<u32> {
+        self.checker.compute_hash(region, context, snap)
     }
 }
 
 pub trait ConsistencyChecker: Sync + Send {
     type Snap: engine_traits::Snapshot;
-    fn gen_safe_point(&self) -> u64;
-    fn compute_hash(&self, region: &Region, safe_point: u64, snap: Self::Snap) -> Result<u32>;
+    fn gen_context(&self) -> Vec<u8>;
+    fn compute_hash(&self, region: &Region, context: &[u8], snap: Self::Snap) -> Result<u32>;
 }
 
 pub struct RawConsistencyChecker<E: KvEngine>(PhantomData<E>);
@@ -61,14 +61,14 @@ impl<E: KvEngine> Default for RawConsistencyChecker<E> {
 impl<E: KvEngine> ConsistencyChecker for RawConsistencyChecker<E> {
     type Snap = E::Snapshot;
 
-    fn gen_safe_point(&self) -> u64 {
-        0
+    fn gen_context(&self) -> Vec<u8> {
+        vec![]
     }
 
     fn compute_hash(
         &self,
         region: &kvproto::metapb::Region,
-        _safe_point: u64,
+        _context: &[u8],
         snap: Self::Snap,
     ) -> Result<u32> {
         compute_hash_on_raw(region, snap)

@@ -183,6 +183,7 @@ fn test_cdc_basic() {
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Entries(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
+        _ => panic!("unknown event"),
     }
 
     suite.stop();
@@ -407,20 +408,21 @@ fn test_cdc_scan() {
             assert!(es.entries.len() == 2, "{:?}", es);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
-            assert_eq!(e.start_ts, 4, "{:?}", es);
+            assert_eq!(e.start_ts, 5, "{:?}", es);
             assert_eq!(e.commit_ts, 0, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert_eq!(e.value, v, "{:?}", es);
             let e = &es.entries[1];
             assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
-            assert_eq!(e.start_ts, 2, "{:?}", es);
-            assert_eq!(e.commit_ts, 3, "{:?}", es);
+            assert_eq!(e.start_ts, 3, "{:?}", es);
+            assert_eq!(e.commit_ts, 4, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert_eq!(e.value, v, "{:?}", es);
         }
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
+        _ => panic!("unknown event"),
     }
     match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
@@ -432,15 +434,16 @@ fn test_cdc_scan() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
+        _ => panic!("unknown event"),
     }
 
-    // checkpoint_ts = 5;
+    // checkpoint_ts = 6;
     let checkpoint_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    // Commit = 6;
+    // Commit = 7;
     let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     suite.must_kv_commit(1, vec![k.clone()], start_ts, commit_ts);
     // Prewrite delete
-    // Start = 7;
+    // Start = 8;
     let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Del);
@@ -466,21 +469,22 @@ fn test_cdc_scan() {
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
             assert_eq!(e.get_op_type(), EventRowOpType::Delete, "{:?}", es);
-            assert_eq!(e.start_ts, 7, "{:?}", es);
+            assert_eq!(e.start_ts, 8, "{:?}", es);
             assert_eq!(e.commit_ts, 0, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert!(e.value.is_empty(), "{:?}", es);
             let e = &es.entries[1];
             assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
             assert_eq!(e.get_op_type(), EventRowOpType::Put, "{:?}", es);
-            assert_eq!(e.start_ts, 4, "{:?}", es);
-            assert_eq!(e.commit_ts, 6, "{:?}", es);
+            assert_eq!(e.start_ts, 5, "{:?}", es);
+            assert_eq!(e.commit_ts, 7, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert_eq!(e.value, v, "{:?}", es);
         }
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
+        _ => panic!("unknown event"),
     }
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
@@ -493,6 +497,7 @@ fn test_cdc_scan() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
+        _ => panic!("unknown event"),
     }
 
     event_feed_wrap.as_ref().replace(None);
@@ -690,6 +695,7 @@ fn test_cdc_batch_size_limit() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
+        _ => panic!("unknown event"),
     }
     match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(es) => {
@@ -701,6 +707,7 @@ fn test_cdc_batch_size_limit() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
+        _ => panic!("unknown event"),
     }
     match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
@@ -717,6 +724,7 @@ fn test_cdc_batch_size_limit() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
+        _ => panic!("unknown event"),
     }
 
     // Prewrite
@@ -748,6 +756,7 @@ fn test_cdc_batch_size_limit() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
+        _ => panic!("unknown event"),
     }
 
     event_feed_wrap.as_ref().replace(None);
@@ -833,6 +842,7 @@ fn test_old_value_basic() {
                 Event_oneof_event::Error(e) => panic!("{:?}", e),
                 Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
                 Event_oneof_event::Admin(e) => panic!("{:?}", e),
+                _ => panic!("unknown event"),
             }
         }
         if event_count >= 3 {
@@ -871,6 +881,7 @@ fn test_old_value_basic() {
                 Event_oneof_event::Error(e) => panic!("{:?}", e),
                 Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
                 Event_oneof_event::Admin(e) => panic!("{:?}", e),
+                _ => panic!("unknown event"),
             }
         }
         if event_count >= 3 {

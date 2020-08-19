@@ -1,8 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
-use crate::storage::TxnStatus;
 use txn_types::{Key, TimeStamp};
+
+use crate::storage::kv::WriteData;
+use crate::storage::lock_manager::LockManager;
+use crate::storage::mvcc::MvccTxn;
+use crate::storage::txn::commands::{
+    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+};
+use crate::storage::txn::Result;
+use crate::storage::{ProcessResult, Snapshot, TxnStatus};
 
 command! {
     /// Check the status of a transaction. This is usually invoked by a transaction that meets
@@ -37,4 +44,40 @@ impl CommandExt for CheckTxnStatus {
     ts!(lock_ts);
     write_bytes!(primary_key);
     gen_lock!(primary_key);
+}
+
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        let mut txn = MvccTxn::new(
+            snapshot,
+            self.lock_ts,
+            !self.ctx.get_not_fill_cache(),
+            context.concurrency_manager,
+        );
+
+        let mut released_locks = ReleasedLocks::new(self.lock_ts, TimeStamp::zero());
+        let (txn_status, released) = txn.check_txn_status(
+            self.primary_key,
+            self.caller_start_ts,
+            self.current_ts,
+            self.rollback_if_not_exist,
+        )?;
+        released_locks.push(released);
+        // The lock is released here only when the `check_txn_status` returns `TtlExpire`.
+        if let TxnStatus::TtlExpire = txn_status {
+            released_locks.wake_up(context.lock_mgr);
+        }
+
+        context.statistics.add(&txn.take_statistics());
+        let pr = ProcessResult::TxnStatus { txn_status };
+        let write_data = WriteData::from_modifies(txn.into_modifies());
+        Ok(WriteResult {
+            ctx: self.ctx,
+            to_be_write: write_data,
+            rows: 1,
+            pr,
+            lock_info: None,
+            lock_guards: vec![],
+        })
+    }
 }
