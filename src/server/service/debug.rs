@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use engine_rocks::RocksEngine;
-use engine_traits::{KvEngines, MiscExt};
+use engine_traits::{Engines, MiscExt};
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::CpuPool;
 use grpcio::{Error as GrpcError, WriteFlags};
@@ -52,9 +52,9 @@ pub struct Service<T: RaftStoreRouter<RocksEngine>> {
 }
 
 impl<T: RaftStoreRouter<RocksEngine>> Service<T> {
-    /// Constructs a new `Service` with `KvEngines`, a `RaftStoreRouter` and a `GcWorker`.
+    /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
     pub fn new(
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
         pool: CpuPool,
         raft_router: T,
         cfg_controller: ConfigController,

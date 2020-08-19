@@ -209,6 +209,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "pd_client",
  "prometheus",
  "raft",
  "raftstore",
@@ -460,6 +461,7 @@ dependencies = [
  "fail",
  "failure",
  "futures 0.1.29",
+ "futures 0.3.4",
  "grpcio",
  "hex 0.4.2",
  "kvproto",
@@ -1063,6 +1065,9 @@ dependencies = [
  "num_cpus",
  "prometheus",
  "prometheus-static-metric",
+ "protobuf",
+ "raft",
+ "raft-engine",
  "rand",
  "rocksdb",
  "serde",
@@ -1085,6 +1090,7 @@ dependencies = [
  "hex 0.4.2",
  "protobuf",
  "quick-error",
+ "raft-engine",
  "slog",
  "slog-global",
  "tikv_alloc",
@@ -1102,6 +1108,27 @@ dependencies = [
  "log",
  "regex",
  "termcolor",
+]
+
+[[package]]
+name = "errno"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6eab5ee3df98a279d9b316b1af6ac95422127b1290317e6d18c1743c99418b01"
+dependencies = [
+ "errno-dragonfly",
+ "libc",
+ "winapi 0.3.8",
+]
+
+[[package]]
+name = "errno-dragonfly"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14ca354e36190500e1e1fb267c647932382b54053c50b14970856c0b00a35067"
+dependencies = [
+ "gcc",
+ "libc",
 ]
 
 [[package]]
@@ -1437,6 +1464,12 @@ checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
 dependencies = [
  "byteorder",
 ]
+
+[[package]]
+name = "gcc"
+version = "0.3.55"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f5f3913fa0bfe7ee1fd8248b6b9f42a5af4b9d65ec2dd2c3c26132b950ecfc2"
 
 [[package]]
 name = "generic-array"
@@ -1832,7 +1865,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#3132349c113335cb670de2c81a74fc565b49f813"
+source = "git+https://github.com/pingcap/kvproto.git#6157337686b1654f0bfb55920faf95b3d3e34d87"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -1905,15 +1938,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "librocksdb_cloud_sys"
+version = "0.1.0"
+source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
+dependencies = [
+ "cc",
+ "cmake",
+]
+
+[[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#5d330edb73ff254350caad3898d4bb69fd82e69e"
+source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
 dependencies = [
  "bindgen",
  "bzip2-sys",
  "cc",
  "cmake",
  "libc",
+ "librocksdb_cloud_sys",
  "libtitan_sys",
  "libz-sys",
  "lz4-sys",
@@ -1926,7 +1969,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#5d330edb73ff254350caad3898d4bb69fd82e69e"
+source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1995,8 +2038,9 @@ dependencies = [
 
 [[package]]
 name = "lz4-sys"
-version = "1.8.3"
-source = "git+https://github.com/busyjay/lz4-rs.git?branch=adjust-build#5a8afe4010c67899fc7af876a58d67fd6269bf81"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dca79aa95d8b3226213ad454d328369853be3a1382d89532a854f4d69640acae"
 dependencies = [
  "cc",
  "libc",
@@ -2564,7 +2608,6 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "error_code",
- "futures 0.1.29",
  "futures 0.3.4",
  "grpcio",
  "hex 0.4.2",
@@ -2975,6 +3018,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "raft-engine"
+version = "0.1.0"
+source = "git+https://github.com/tikv/raft-engine#8d45f51381ebf9941f9857474602cab2a5e9a0a2"
+dependencies = [
+ "byteorder",
+ "crc32fast",
+ "errno",
+ "fxhash",
+ "kvproto",
+ "lazy_static",
+ "libc",
+ "log",
+ "lz4-sys",
+ "prometheus",
+ "protobuf",
+ "quick-error",
+ "raft",
+ "serde",
+ "serde_derive",
+ "tempfile",
+]
+
+[[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
 source = "git+https://github.com/pingcap/raft-rs#2d721a6b054480839fb2212eb77c6465fdae8991"
@@ -3003,6 +3069,7 @@ dependencies = [
  "fail",
  "fs2",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-executor",
  "futures-util",
  "hex 0.4.2",
@@ -3021,6 +3088,7 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
+ "raft-engine",
  "rand",
  "serde",
  "serde_derive",
@@ -3292,7 +3360,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#5d330edb73ff254350caad3898d4bb69fd82e69e"
+source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4160,6 +4228,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-cpupool",
  "grpcio",
  "hex 0.4.2",
@@ -4246,7 +4315,6 @@ dependencies = [
  "fail",
  "futures 0.1.29",
  "futures 0.3.4",
- "futures-cpupool",
  "grpcio",
  "hex 0.4.2",
  "hyper",
@@ -4502,7 +4570,6 @@ dependencies = [
  "openssl",
  "panic_hook",
  "profiler",
- "prometheus-static-metric",
  "protobuf",
  "static_assertions",
  "tidb_query_codegen",

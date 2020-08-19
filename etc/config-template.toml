@@ -154,6 +154,11 @@
 ## Max time to handle Coprocessor requests before timeout.
 # end-point-request-max-handle-duration = "60s"
 
+## Whether to check memory locks before handling coprocessor requests.
+## This option must be enabled if async commit is enable.
+## DO NOT use it in production. This option may be removed in the future.
+# end-point-check-memory-locks = false
+
 ## Max bytes that snapshot can be written to disk in one second.
 ## It should be set based on your disk performance.
 # snap-max-write-bytes-per-sec = "100MB"
@@ -190,6 +195,10 @@
 
 ## When the pending write bytes exceeds this threshold, the "scheduler too busy" error is displayed.
 # scheduler-pending-write-threshold = "100MB"
+
+## Whether to enable the async commit feature.
+## DO NOT use it in production. This option may be removed in the future.
+# enable-async-commit = false
 
 [storage.block-cache]
 ## Whether to create a shared block cache for all RocksDB column families.

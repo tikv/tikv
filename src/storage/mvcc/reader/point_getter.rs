@@ -4,6 +4,7 @@ use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
+use std::borrow::Cow;
 use txn_types::{Key, Lock, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
 /// `PointGetter` factory.
@@ -202,7 +203,9 @@ impl<S: Snapshot> PointGetter<S> {
             if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                 self.met_newer_ts_data = NewerTsCheckState::Met;
             }
-            if let Err(e) = lock.check_ts_conflict(user_key, self.ts, &self.bypass_locks) {
+            if let Err(e) =
+                Lock::check_ts_conflict(Cow::Owned(lock), user_key, self.ts, &self.bypass_locks)
+            {
                 self.statistics.lock.processed_keys += 1;
                 Err(e.into())
             } else {
