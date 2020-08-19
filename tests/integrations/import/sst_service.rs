@@ -5,6 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use futures::{stream, Future, Stream};
+use futures03::executor::block_on;
 use tempfile::Builder;
 use uuid::Uuid;
 
@@ -257,8 +258,8 @@ fn test_cleanup_sst() {
 
     // The uploaded SST should be deleted if the region merged.
     cluster.pd_client.must_merge(left.get_id(), right.get_id());
-    let res = cluster.pd_client.get_region_by_id(left.get_id());
-    assert!(res.wait().unwrap().is_none());
+    let res = block_on(cluster.pd_client.get_region_by_id(left.get_id()));
+    assert!(res.unwrap().is_none());
 
     check_sst_deleted(&import, &meta, &data);
 }
