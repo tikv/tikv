@@ -6,9 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::channel::{mpsc, oneshot};
-use futures::compat::Sink01CompatExt;
-use futures::compat::Stream01CompatExt;
-use futures::compat::{Compat, Future01CompatExt};
+use futures::compat::{Compat, Future01CompatExt, Sink01CompatExt, Stream01CompatExt};
 use futures::executor::block_on;
 use futures::future::{self, FutureExt};
 use futures::sink::SinkExt;
@@ -674,11 +672,8 @@ impl PdClient for RpcClient {
             let mut req_sink = req_sink.sink_compat();
             let (keep_req_tx, mut keep_req_rx) = oneshot::channel();
             let send_once = async move {
-                req_sink
-                    .send((req, WriteFlags::default()))
-                    .await
-                    .expect("fail to send tso msg");
-                let _ = keep_req_tx.send(req_sink);
+                let s = req_sink.send((req, WriteFlags::default())).await;
+                let _ = keep_req_tx.send(s);
             };
             cli.client_stub
                 .spawn(Compat::new(send_once.unit_error().boxed()));

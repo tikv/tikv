@@ -7,8 +7,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
-use futures::compat::Future01CompatExt;
-use futures::compat::Stream01CompatExt;
+use futures::compat::{Compat01As03, Future01CompatExt, Stream01CompatExt};
 use futures::executor::block_on;
 use futures::future;
 use futures::future::TryFutureExt;
@@ -52,7 +51,7 @@ pub struct Inner {
 }
 
 pub struct HeartbeatReceiver {
-    receiver: Option<ClientDuplexReceiver<RegionHeartbeatResponse>>,
+    receiver: Option<Compat01As03<ClientDuplexReceiver<RegionHeartbeatResponse>>>,
     inner: Arc<RwLock<Inner>>,
 }
 
@@ -62,7 +61,7 @@ impl Stream for HeartbeatReceiver {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
             if let Some(ref mut receiver) = self.receiver {
-                match Pin::new(&mut receiver.compat()).poll_next(cx) {
+                match Pin::new(receiver).poll_next(cx) {
                     Poll::Ready(Some(Ok(item))) => return Poll::Ready(Some(Ok(item))),
                     Poll::Pending => return Poll::Pending,
                     // If it's None or there's error, we need to update receiver.
@@ -80,7 +79,7 @@ impl Stream for HeartbeatReceiver {
             if receiver.is_some() {
                 debug!("heartbeat receiver is refreshed");
                 drop(inner);
-                self.receiver = receiver;
+                self.receiver = receiver.map(Stream01CompatExt::compat);
             } else {
                 inner.hb_receiver = Either::Right(Some(cx.waker().clone()));
                 return Poll::Pending;
