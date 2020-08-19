@@ -2869,7 +2869,6 @@ dependencies = [
  "fnv",
  "lazy_static",
  "libc",
- "procfs",
  "protobuf",
  "reqwest",
  "spin",
@@ -3021,7 +3020,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine#c3cbed6e08073c9253ce1753944b9d2782472945"
+source = "git+https://github.com/tikv/raft-engine#8d45f51381ebf9941f9857474602cab2a5e9a0a2"
 dependencies = [
  "byteorder",
  "crc32fast",
