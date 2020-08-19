@@ -672,8 +672,8 @@ impl PdClient for RpcClient {
             let mut req_sink = req_sink.sink_compat();
             let (keep_req_tx, mut keep_req_rx) = oneshot::channel();
             let send_once = async move {
-                let s = req_sink.send((req, WriteFlags::default())).await;
-                let _ = keep_req_tx.send(s);
+                let _ = req_sink.send((req, WriteFlags::default())).await;
+                let _ = keep_req_tx.send(req_sink);
             };
             cli.client_stub
                 .spawn(Compat::new(send_once.unit_error().boxed()));
