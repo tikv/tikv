@@ -18,6 +18,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
+use raft_engine::RaftEngine;
 
 use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::cmd_resp::new_error;
@@ -407,7 +408,7 @@ where
 pub struct Runner<EK, ER, T>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     T: PdClient,
 {
     store_id: u64,
@@ -430,7 +431,7 @@ where
 impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     T: PdClient,
 {
     const INTERVAL_DIVISOR: u32 = 2;
@@ -929,7 +930,7 @@ where
 impl<EK, ER, T> Runnable<Task<EK>> for Runner<EK, ER, T>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     T: PdClient,
 {
     fn run(&mut self, task: Task<EK>, handle: &Handle) {
@@ -1145,7 +1146,7 @@ fn send_admin_request<EK, ER>(
     callback: Callback<EK::Snapshot>,
 ) where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     let cmd_type = request.get_cmd_type();
 
@@ -1172,7 +1173,7 @@ fn send_destroy_peer_message<EK, ER>(
     pd_region: metapb::Region,
 ) where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     let mut message = RaftMessage::default();
     message.set_region_id(local_region.get_id());

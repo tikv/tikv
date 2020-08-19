@@ -183,7 +183,7 @@ fn test_cdc_basic() {
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Entries(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::LongTxn(_) => (),
+        _ => panic!("unknown event"),
     }
 
     suite.stop();
@@ -422,7 +422,7 @@ fn test_cdc_scan() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::LongTxn(_) => (),
+        _ => panic!("unknown event"),
     }
     match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
@@ -434,7 +434,7 @@ fn test_cdc_scan() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::LongTxn(_) => (),
+        _ => panic!("unknown event"),
     }
 
     // checkpoint_ts = 6;
@@ -484,7 +484,7 @@ fn test_cdc_scan() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::LongTxn(_) => (),
+        _ => panic!("unknown event"),
     }
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
@@ -497,7 +497,7 @@ fn test_cdc_scan() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::LongTxn(_) => (),
+        _ => panic!("unknown event"),
     }
 
     event_feed_wrap.as_ref().replace(None);
@@ -740,7 +740,7 @@ fn test_cdc_batch_size_limit() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::LongTxn(_) => (),
+        _ => panic!("unknown event"),
     }
     match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(es) => {
@@ -752,7 +752,7 @@ fn test_cdc_batch_size_limit() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::LongTxn(_) => (),
+        _ => panic!("unknown event"),
     }
     match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
@@ -769,7 +769,7 @@ fn test_cdc_batch_size_limit() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::LongTxn(_) => (),
+        _ => panic!("unknown event"),
     }
 
     // Prewrite
@@ -801,7 +801,7 @@ fn test_cdc_batch_size_limit() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::LongTxn(_) => (),
+        _ => panic!("unknown event"),
     }
 
     event_feed_wrap.as_ref().replace(None);
@@ -887,7 +887,7 @@ fn test_old_value_basic() {
                 Event_oneof_event::Error(e) => panic!("{:?}", e),
                 Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
                 Event_oneof_event::Admin(e) => panic!("{:?}", e),
-                Event_oneof_event::LongTxn(_) => (),
+                _ => panic!("unknown event"),
             }
         }
         if event_count >= 3 {
@@ -926,7 +926,7 @@ fn test_old_value_basic() {
                 Event_oneof_event::Error(e) => panic!("{:?}", e),
                 Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
                 Event_oneof_event::Admin(e) => panic!("{:?}", e),
-                Event_oneof_event::LongTxn(_) => (),
+                _ => panic!("unknown event"),
             }
         }
         if event_count >= 3 {
