@@ -144,7 +144,7 @@ impl LeaderClient {
         inner.on_reconnect = Some(f);
     }
 
-    pub fn request<Req, Resp, F>(&self, req: Req, func: F, retry: usize) -> Request<Req, Resp, F>
+    pub fn request<Req, Resp, F>(&self, req: Req, func: F, retry: usize) -> Request<Req, F>
     where
         Req: Clone + 'static,
         F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
@@ -157,7 +157,6 @@ impl LeaderClient {
                 inner: Arc::clone(&self.inner),
             },
             req,
-            resp: None,
             func,
         }
     }
@@ -222,23 +221,19 @@ impl LeaderClient {
 pub const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
 
 /// The context of sending requets.
-pub struct Request<Req, Resp, F> {
+pub struct Request<Req, F> {
     reconnect_count: usize,
     request_sent: usize,
-
     client: LeaderClient,
-
     req: Req,
-    resp: Option<Result<Resp>>,
     func: F,
 }
 
 const MAX_REQUEST_COUNT: usize = 3;
 
-impl<Req, Resp, F> Request<Req, Resp, F>
+impl<Req, Resp, F> Request<Req, F>
 where
     Req: Clone + Send + 'static,
-    Resp: Send + 'static,
     F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
 {
     async fn reconnect_if_needed(&mut self) -> bool {
@@ -270,18 +265,12 @@ where
         }
     }
 
-    async fn send_and_receive(&mut self) {
+    async fn send_and_receive(&mut self) -> Result<Resp> {
         self.request_sent += 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
 
-        let req = (self.func)(&self.client.inner, r);
-        self.resp = Some(req.await);
-    }
-
-    fn need_break(&mut self) -> bool {
-        self.reconnect_count == 0
-            || (self.resp.is_some() && Self::should_not_retry(self.resp.as_ref().unwrap()))
+        (self.func)(&self.client.inner, r).await
     }
 
     fn should_not_retry(resp: &Result<Resp>) -> bool {
@@ -296,24 +285,19 @@ where
         }
     }
 
-    fn post_loop(self) -> Result<Resp> {
-        self.resp
-            .unwrap_or_else(|| Err(box_err!("response is empty")))
-    }
-
     /// Returns a Future, it is resolves once a future returned by the closure
     /// is resolved successfully, otherwise it repeats `retry` times.
     pub fn execute(mut self) -> PdFuture<Resp> {
         Box::pin(async move {
-            loop {
+            while self.reconnect_count != 0 {
                 if self.reconnect_if_needed().await {
-                    self.send_and_receive().await;
-                }
-                if self.need_break() {
-                    break;
+                    let resp = self.send_and_receive().await;
+                    if Self::should_not_retry(&resp) {
+                        return resp;
+                    }
                 }
             }
-            self.post_loop()
+            Err(box_err!("request retry exceeds limit"))
         })
     }
 }
