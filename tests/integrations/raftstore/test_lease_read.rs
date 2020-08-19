@@ -292,6 +292,7 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let _ = keys.iter().map(|key| {
         cluster.must_put(*key, b"v1");
     });
+
     let region = pd_client.get_region(keys[0]).unwrap();
     cluster.must_split(&region, split_key1);
     let region = pd_client.get_region(keys[1]).unwrap();
@@ -305,8 +306,10 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         if peer.get_store_id() != 1 {
             for p in r.get_peers() {
                 if p.get_store_id() == 1 {
-                    peers.push(p.clone());
                     cluster.must_transfer_leader(r.get_id(), p.clone());
+                    let peer = cluster.leader_of_region(r.get_id()).unwrap();
+                    assert_eq!(peer.get_store_id(), 1);
+                    peers.push(peer);
                     break;
                 }
             }
@@ -315,7 +318,7 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         }
     }
     // Sleep to make sure lease expired
-    thread::sleep(election_timeout * 2);
+    thread::sleep(election_timeout + Duration::from_millis(200));
 
     // Send request to region 0 and 1 to renew their lease.
     cluster.must_put(b"k11", b"v2");
@@ -351,6 +354,9 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         snaps[0].get_snapshot(),
         snaps[2].get_snapshot()
     ));
+
+    // make sure that region 2 could renew lease.
+    cluster.must_put(b"k55", b"v2");
     let responses = batch_read_on_peer(cluster, &requests);
     let snaps2: Vec<RegionSnapshot<RocksSnapshot>> = responses
         .into_iter()

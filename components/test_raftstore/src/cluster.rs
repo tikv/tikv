@@ -20,11 +20,11 @@ use encryption::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CompactExt, Iterable, KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
 };
 use pd_client::PdClient;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
-use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
+use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
 use raftstore::{Error, Result};
@@ -51,11 +51,11 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -126,10 +126,10 @@ pub struct Cluster<T: Simulator> {
     count: usize,
 
     pub paths: Vec<TempDir>,
-    pub dbs: Vec<KvEngines<RocksEngine, RocksEngine>>,
+    pub dbs: Vec<Engines<RocksEngine, RocksEngine>>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
-    pub engines: HashMap<u64, KvEngines<RocksEngine, RocksEngine>>,
+    pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
 
@@ -302,7 +302,7 @@ impl<T: Simulator> Cluster<T> {
         Arc::clone(&self.engines[&node_id].raft.as_inner())
     }
 
-    pub fn get_all_engines(&self, node_id: u64) -> KvEngines<RocksEngine, RocksEngine> {
+    pub fn get_all_engines(&self, node_id: u64) -> Engines<RocksEngine, RocksEngine> {
         self.engines[&node_id].clone()
     }
 
@@ -1362,14 +1362,12 @@ impl<T: Simulator> Cluster<T> {
         CasualRouter::send(
             &router,
             region_id,
-            CasualMessage::AccessPeer(Box::new(
-                move |peer: &mut PeerFsm<RocksEngine, RocksEngine>| {
-                    let idx = peer.peer.raft_group.store().committed_index();
-                    peer.peer.raft_group.request_snapshot(idx).unwrap();
-                    debug!("{} request snapshot at {}", idx, peer.peer.tag);
-                    request_tx.send(idx).unwrap();
-                },
-            )),
+            CasualMessage::AccessPeer(Box::new(move |peer: &mut dyn AbstractPeer| {
+                let idx = peer.raft_committed_index();
+                peer.raft_request_snapshot(idx);
+                debug!("{} request snapshot at {:?}", idx, peer.meta_peer());
+                request_tx.send(idx).unwrap();
+            })),
         )
         .unwrap();
         request_rx.recv_timeout(Duration::from_secs(5)).unwrap()

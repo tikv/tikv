@@ -6,11 +6,12 @@ use super::peer_storage::{
 use super::util::new_peer;
 use crate::Result;
 use engine_rocks::RocksEngine;
-use engine_traits::{Iterable, KvEngines, Mutable, SyncMutable, WriteBatchExt};
+use engine_traits::{Engines, Iterable, Mutable, SyncMutable, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
+use raft_engine::RaftEngine;
 
 use kvproto::metapb;
-use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
+use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent};
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::default();
@@ -41,7 +42,7 @@ fn is_range_empty(
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
 pub fn bootstrap_store(
-    engines: &KvEngines<RocksEngine, RocksEngine>,
+    engines: &Engines<RocksEngine, RocksEngine>,
     cluster_id: u64,
     store_id: u64,
 ) -> Result<()> {
@@ -69,7 +70,7 @@ pub fn bootstrap_store(
 ///
 /// Write the first region meta and prepare state.
 pub fn prepare_bootstrap_cluster(
-    engines: &KvEngines<RocksEngine, RocksEngine>,
+    engines: &Engines<RocksEngine, RocksEngine>,
     region: &metapb::Region,
 ) -> Result<()> {
     let mut state = RegionLocalState::default();
@@ -82,20 +83,22 @@ pub fn prepare_bootstrap_cluster(
     engines.kv.write(&wb)?;
     engines.sync_kv()?;
 
-    let mut raft_wb = engines.raft.write_batch();
+    let mut raft_wb = engines.raft.log_batch(1024);
     write_initial_raft_state(&mut raft_wb, region.get_id())?;
-    engines.raft.write(&raft_wb)?;
-    engines.sync_raft()?;
+    box_try!(engines.raft.consume(&mut raft_wb, true));
     Ok(())
 }
 
 // Clear first region meta and prepare key.
 pub fn clear_prepare_bootstrap_cluster(
-    engines: &KvEngines<RocksEngine, RocksEngine>,
+    engines: &Engines<RocksEngine, RocksEngine>,
     region_id: u64,
 ) -> Result<()> {
-    box_try!(engines.raft.delete(&keys::raft_state_key(region_id)));
-    engines.sync_raft()?;
+    let mut wb = engines.raft.log_batch(1024);
+    box_try!(engines
+        .raft
+        .clean(region_id, &RaftLocalState::default(), &mut wb));
+    box_try!(engines.raft.consume(&mut wb, true));
 
     let mut wb = engines.kv.write_batch();
     box_try!(wb.delete(keys::PREPARE_BOOTSTRAP_KEY));
@@ -108,7 +111,7 @@ pub fn clear_prepare_bootstrap_cluster(
 }
 
 // Clear prepare key
-pub fn clear_prepare_bootstrap_key(engines: &KvEngines<RocksEngine, RocksEngine>) -> Result<()> {
+pub fn clear_prepare_bootstrap_key(engines: &Engines<RocksEngine, RocksEngine>) -> Result<()> {
     box_try!(engines.kv.delete(keys::PREPARE_BOOTSTRAP_KEY));
     engines.sync_kv()?;
     Ok(())
@@ -119,7 +122,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use engine_traits::KvEngines;
+    use engine_traits::Engines;
     use engine_traits::{Peekable, CF_DEFAULT};
 
     #[test]
@@ -137,7 +140,7 @@ mod tests {
             engine_rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                 .unwrap();
         let shared_block_cache = false;
-        let engines = KvEngines::new(kv_engine.clone(), raft_engine.clone(), shared_block_cache);
+        let engines = Engines::new(kv_engine.clone(), raft_engine.clone(), shared_block_cache);
         let region = initial_region(1, 1, 1);
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());

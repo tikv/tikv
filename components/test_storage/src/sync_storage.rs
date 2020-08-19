@@ -3,7 +3,6 @@
 use futures::Future;
 
 use kvproto::kvrpcpb::{Context, GetRequest, LockInfo};
-use pd_client::DummyPdClient;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
@@ -81,7 +80,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine> {
     gc_worker: GcWorker<E>,
-    store: Storage<E, DummyLockManager, DummyPdClient>,
+    store: Storage<E, DummyLockManager>,
 }
 
 impl<E: Engine> SyncTestStorage<E> {
@@ -92,7 +91,7 @@ impl<E: Engine> SyncTestStorage<E> {
         self.gc_worker.start_auto_gc(cfg).unwrap();
     }
 
-    pub fn get_storage(&self) -> Storage<E, DummyLockManager, DummyPdClient> {
+    pub fn get_storage(&self) -> Storage<E, DummyLockManager> {
         self.store.clone()
     }
 
@@ -162,6 +161,7 @@ impl<E: Engine> SyncTestStorage<E> {
                 start_key,
                 end_key,
                 limit,
+                0,
                 start_ts.into(),
                 key_only,
                 false,
@@ -184,6 +184,7 @@ impl<E: Engine> SyncTestStorage<E> {
                 start_key,
                 end_key,
                 limit,
+                0,
                 start_ts.into(),
                 key_only,
                 true,

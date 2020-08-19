@@ -11,7 +11,6 @@ use grpcio::{
     ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
 };
 use kvproto::tikvpb::*;
-use pd_client::PdClient;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
@@ -57,7 +56,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     trans: ServerTransport<T, S>,
     raft_router: T,
     // For sending/receiving snapshots.
-    snap_mgr: SnapManager<RocksEngine>,
+    snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
@@ -73,11 +72,11 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
     pub fn new<E: Engine, L: LockManager>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
-        storage: Storage<E, L, impl PdClient + 'static>,
+        storage: Storage<E, L>,
         cop: Endpoint<E>,
         raft_router: T,
         resolver: S,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         gc_worker: GcWorker<E>,
         yatp_read_pool: Option<ReadPool>,
     ) -> Result<Self> {
@@ -352,11 +351,7 @@ mod tests {
             Ok(())
         }
 
-        fn casual_send(
-            &self,
-            _: u64,
-            _: CasualMessage<RocksEngine, RocksEngine>,
-        ) -> RaftStoreResult<()> {
+        fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
@@ -414,7 +409,11 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             storage.get_engine(),
         ));
-        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool.handle());
+        let cop = coprocessor::Endpoint::new(
+            &cfg,
+            cop_read_pool.handle(),
+            storage.get_concurrency_manager(),
+        );
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
@@ -427,7 +426,7 @@ mod tests {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
             },
-            SnapManager::new("", None),
+            SnapManager::new(""),
             gc_worker,
             None,
         )
