@@ -75,9 +75,18 @@ fn test_enter_joint_state() {
     // normal confchange request will not enter joint state
     pd_client.must_add_peer(region_id, new_peer(2, 2));
     assert!(!pd_client.is_in_joint(region_id));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    assert!(!pd_client.is_in_joint(region_id));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
     // confchange_v2 request with one conchange request will not enter joint state
+    pd_client.must_joint_confchange(
+        region_id,
+        vec![(ConfChangeType::RemoveNode, new_peer(3, 3))],
+    );
+    assert!(!pd_client.is_in_joint(region_id));
+    must_get_none(&cluster.get_engine(3), b"k1");
     pd_client.must_joint_confchange(region_id, vec![(ConfChangeType::AddNode, new_peer(3, 3))]);
     assert!(!pd_client.is_in_joint(region_id));
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
@@ -193,7 +202,7 @@ fn test_invalid_confchange_request() {
     cluster.must_put(b"k1", b"v1");
 
     pd_client.must_add_peer(region_id, new_peer(2, 2));
-    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    pd_client.must_add_peer(region_id, new_learner_peer(3, 3));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
@@ -202,7 +211,7 @@ fn test_invalid_confchange_request() {
         &mut cluster,
         region_id,
         vec![
-            change_peer(ConfChangeType::RemoveNode, new_learner_peer(3, 3)),
+            change_peer(ConfChangeType::RemoveNode, new_peer(2, 2)),
             change_peer(ConfChangeType::AddLearnerNode, new_learner_peer(4, 4)),
         ],
     )
@@ -214,12 +223,24 @@ fn test_invalid_confchange_request() {
         &mut cluster,
         region_id,
         vec![
-            change_peer(ConfChangeType::AddLearnerNode, new_learner_peer(3, 3)),
-            change_peer(ConfChangeType::RemoveNode, new_learner_peer(3, 3)),
+            change_peer(ConfChangeType::AddLearnerNode, new_learner_peer(2, 2)),
+            change_peer(ConfChangeType::RemoveNode, new_learner_peer(2, 2)),
         ],
     )
     .unwrap();
-    must_contains_error(&resp, "duplicated command for the same peer");
+    must_contains_error(&resp, "multiple commands for the same peer");
+
+    // Can not have multiple changes that only effect learner
+    let resp = call_conf_change_v2(
+        &mut cluster,
+        region_id,
+        vec![
+            change_peer(ConfChangeType::RemoveNode, new_learner_peer(3, 3)),
+            change_peer(ConfChangeType::AddLearnerNode, new_learner_peer(4, 4)),
+        ],
+    )
+    .unwrap();
+    must_contains_error(&resp, "multiple changes that only effect learner");
 
     // Can not leave a non-joint config
     let resp = leave_joint(&mut cluster, region_id).unwrap();

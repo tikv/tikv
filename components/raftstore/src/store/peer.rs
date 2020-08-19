@@ -1941,34 +1941,35 @@ where
 
         // Check whether this request is valid
         let mut check_dup = HashSet::default();
+        let mut only_learner_change = true;
         for cp in change_peers.iter() {
             let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
 
             match (change_type, peer.get_role()) {
+                (ConfChangeType::RemoveNode, PeerRole::Voter) if kind != ConfChangeKind::Simple => {
+                    return Err(box_err!(
+                        "{} invalid conf change request: {:?}, can not remove voter directly",
+                        self.tag,
+                        cp
+                    ));
+                }
                 (ConfChangeType::RemoveNode, _)
                 | (ConfChangeType::AddNode, PeerRole::Voter)
                 | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {}
                 _ => {
-                    warn!(
-                        "invalid conf change request";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "request" => ?cp,
-                    );
-                    return Err(box_err!("{} invalid conf change request", self.tag));
+                    return Err(box_err!(
+                        "{} invalid conf change request: {:?}",
+                        self.tag,
+                        cp
+                    ));
                 }
             }
 
             if !check_dup.insert(peer.get_id()) {
-                warn!(
-                    "invalid conf change request, have duplicated command for the same peer";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                    "request" => ?cp,
-                );
                 return Err(box_err!(
-                    "{} invalid conf change request, have duplicated command for the same peer",
-                    self.tag
+                    "{} invalid conf change request, have multiple commands for the same peer {}",
+                    self.tag,
+                    peer.get_id()
                 ));
             }
 
@@ -1976,16 +1977,32 @@ where
                 && !ctx.cfg.allow_remove_leader
                 && peer.get_id() == self.peer_id()
             {
-                warn!(
-                    "rejects remove leader request";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
                 return Err(box_err!("{} ignore remove leader", self.tag));
+            }
+
+            if peer.get_role() != PeerRole::Learner {
+                only_learner_change = false;
             }
         }
 
-        if self.raft_group.raft.prs().conf().voters().ids().len() == 1 {
+        let current_voter = self.raft_group.raft.prs().conf().voters().ids();
+        let change_voter = || {
+            let peer_ids: HashSet<_> = change_peers.iter().map(|p| p.get_peer().get_id()).collect();
+            peer_ids
+                .intersection(&current_voter.iter().collect())
+                .count()
+                != 0
+        };
+        // Multiple changes that only effect learner will not product `IncommingVoter` or `DemotingVoter`
+        // after apply, but raftstore layer and PD rely on these roles to detect joint state
+        if kind != ConfChangeKind::Simple && only_learner_change && !change_voter() {
+            return Err(box_err!(
+                "{} invalid conf change request, multiple changes that only effect learner",
+                self.tag
+            ));
+        }
+
+        if current_voter.len() == 1 {
             // It's always safe if there is only one node in the cluster.
             return Ok(());
         }
@@ -1999,18 +2016,11 @@ where
             .with_label_values(&["conf_change", "reject_unsafe"])
             .inc();
 
-        info!(
-            "rejects unsafe conf change request";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-            "request" => ?change_peers,
-            "truncated_index" => self.get_store().truncated_index(),
-            "promoted_commit_index" => promoted_commit_index,
-        );
         // Waking it up to replicate logs to candidate.
         self.should_wake_up = true;
         Err(box_err!(
-            "unsafe to perform conf change {:?}, truncated index {}, promoted commit index {}",
+            "{} unsafe to perform conf change {:?}, truncated index {}, promoted commit index {}",
+            self.tag,
             change_peers,
             self.get_store().truncated_index(),
             promoted_commit_index
