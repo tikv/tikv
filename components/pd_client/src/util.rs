@@ -39,7 +39,7 @@ pub struct Inner {
         Option<ClientDuplexSender<RegionHeartbeatRequest>>,
         UnboundedSender<RegionHeartbeatRequest>,
     >,
-    pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Option<Waker>>,
+    pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Waker>,
     pub client_stub: PdClientStub,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
@@ -81,7 +81,7 @@ impl Stream for HeartbeatReceiver {
                 drop(inner);
                 self.receiver = receiver.map(Stream01CompatExt::compat);
             } else {
-                inner.hb_receiver = Either::Right(Some(cx.waker().clone()));
+                inner.hb_receiver = Either::Right(cx.waker().clone());
                 return Poll::Pending;
             }
         }
@@ -200,12 +200,8 @@ impl LeaderClient {
                 r.cancel();
             }
             inner.hb_sender = Either::Left(Some(tx));
-            if let Either::Right(ref mut task) = inner.hb_receiver {
-                if let Some(t) = task.take() {
-                    t.wake();
-                }
-            }
-            inner.hb_receiver = Either::Left(Some(rx));
+            let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(rx)));
+            let _ = prev_receiver.right().map(|t| t.wake());
             inner.client_stub = client;
             inner.members = members;
             inner.last_update = Instant::now();
