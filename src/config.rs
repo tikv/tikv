@@ -2788,7 +2788,10 @@ mod tests {
         last_cfg.write_to_file(&last_cfg_path).unwrap();
         assert!(persist_config(&tikv_cfg).is_ok());
         let last_cfg_metadata = last_cfg_path.metadata().unwrap();
-        assert_eq!(last_cfg_metadata.created().unwrap(), last_cfg_metadata.modified().unwrap());
+        assert_eq!(
+            last_cfg_metadata.created().unwrap(),
+            last_cfg_metadata.modified().unwrap()
+        );
     }
 
     #[test]
