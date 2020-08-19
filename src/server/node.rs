@@ -27,8 +27,6 @@ use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::FutureWorker;
 use tikv_util::worker::Worker;
-use yatp::task::future::TaskCell;
-use yatp::Remote;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -146,7 +144,6 @@ where
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
-        remote: Option<Remote<TaskCell>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -188,7 +185,6 @@ where
             importer,
             split_check_worker,
             auto_split_controller,
-            remote,
         )?;
 
         Ok(())
@@ -379,7 +375,6 @@ where
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
-        remote: Option<Remote<TaskCell>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -407,7 +402,6 @@ where
             split_check_worker,
             auto_split_controller,
             self.state.clone(),
-            remote,
         )?;
         Ok(())
     }

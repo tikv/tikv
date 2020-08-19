@@ -2,11 +2,8 @@
 
 use crate::storage::kv::{FlowStatsReporter, Statistics};
 use crate::storage::metrics::*;
-use engine_traits::{KvEngine, WriteBatch, WriteBatchVecExt};
 use prometheus::local::*;
-use raftstore::store::fsm::flush_tls_ctx;
 use std::cell::RefCell;
-use std::marker::PhantomData;
 use std::time::Duration;
 use tikv_util::collections::HashMap;
 use tikv_util::read_pool::PoolTicker;
@@ -75,60 +72,46 @@ pub fn get_unified_read_pool_name() -> String {
     "unified-read-pool".to_string()
 }
 
-pub struct ReporterTicker<R, E, W>
+pub struct ReporterTicker<R>
 where
     R: FlowStatsReporter,
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E> + 'static,
 {
     reporter: R,
     last_tick_time: Instant,
     tick_count: usize,
-    _phantom1: PhantomData<E>,
-    _phantom2: PhantomData<W>,
 }
 
-impl<R, E, W> Clone for ReporterTicker<R, E, W>
+impl<R> Clone for ReporterTicker<R>
 where
     R: FlowStatsReporter,
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E> + 'static,
 {
     fn clone(&self) -> Self {
         Self {
             reporter: self.reporter.clone(),
             last_tick_time: self.last_tick_time,
             tick_count: 0,
-            _phantom1: PhantomData,
-            _phantom2: PhantomData,
         }
     }
 }
 
-impl<R, E, W> PoolTicker for ReporterTicker<R, E, W>
+impl<R> PoolTicker for ReporterTicker<R>
 where
     R: FlowStatsReporter,
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E> + 'static,
 {
     fn on_tick(&mut self) {
         self.flush_metrics_on_tick();
     }
 }
 
-impl<R, E, W> ReporterTicker<R, E, W>
+impl<R> ReporterTicker<R>
 where
     R: FlowStatsReporter,
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
 {
     pub fn new(reporter: R) -> Self {
         Self {
             reporter,
             last_tick_time: Instant::now(),
             tick_count: 0,
-            _phantom1: PhantomData,
-            _phantom2: PhantomData,
         }
     }
 
@@ -144,7 +127,6 @@ where
         if self.last_tick_time.elapsed() < TICK_INTERVAL {
             return;
         }
-        flush_tls_ctx::<E, W>();
         self.last_tick_time = Instant::now();
         crate::storage::metrics::tls_flush(&self.reporter);
         crate::coprocessor::metrics::tls_flush(&self.reporter);

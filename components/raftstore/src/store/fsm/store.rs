@@ -31,7 +31,6 @@ use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 use yatp::task::future::TaskCell;
-use yatp::Remote;
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
@@ -1106,7 +1105,6 @@ impl RaftBatchSystem {
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
-        remote: Option<Remote<TaskCell>>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1161,7 +1159,6 @@ impl RaftBatchSystem {
                 region_peers,
                 builder,
                 auto_split_controller,
-                remote,
             )?;
         } else {
             self.start_system::<T, C, RocksWriteBatch>(
@@ -1169,7 +1166,6 @@ impl RaftBatchSystem {
                 region_peers,
                 builder,
                 auto_split_controller,
-                remote,
             )?;
         }
         Ok(())
@@ -1185,22 +1181,17 @@ impl RaftBatchSystem {
         region_peers: Vec<SenderFsmPair<RocksEngine, RocksEngine>>,
         mut builder: RaftPollerBuilder<T, C>,
         auto_split_controller: AutoSplitController,
-        remote: Option<Remote<TaskCell>>,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
-
         let engines = builder.engines.clone();
         let snap_mgr = builder.snap_mgr.clone();
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
         let pd_client = builder.pd_client.clone();
         let importer = builder.importer.clone();
-        let remote = remote.unwrap_or_else(|| {
-            let pool = Self::create_apply_pool::<W>(cfg.apply_batch_system.pool_size);
-            let remote = pool.remote().clone();
-            self.pool = Some(pool);
-            remote
-        });
+        let pool = Self::create_apply_pool::<W>(cfg.apply_batch_system.pool_size);
+        let remote = pool.remote().clone();
+        self.pool = Some(pool);
         let apply_system = create_apply_batch_system::<W>(
             builder.store.get_id(),
             format!("[store {}]", builder.store.get_id()),

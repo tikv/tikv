@@ -121,7 +121,7 @@ fn test_serde_custom_tikv_config() {
             max_tasks_per_worker_low: 3000,
             stack_size: ReadableSize::mb(12),
         },
-        scheduler: StorageReadPoolConfig {
+        scheduler: CoprReadPoolConfig {
             use_unified_pool: Some(false),
             high_concurrency: 2,
             normal_concurrency: 4,

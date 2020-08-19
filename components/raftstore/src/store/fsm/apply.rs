@@ -3081,11 +3081,12 @@ async fn handle_normal<E, W>(
             Err(e) => match e {
                 TryRecvError::Empty => {
                     let mut ctx = apply_ctx.take().unwrap();
-                    if fsm.uncommit_data {
+                    let msg = if fsm.uncommit_data {
                         let (callback, f) = paired_std_future_callback();
                         ctx.flush_notifier.push(callback);
                         set_tls_ctx(ctx);
-                        if let Err(e) = f.await {
+                        let (ret, msg) = tokio::join!(f, receiver.recv());
+                        if let Err(e) = ret {
                             error!(
                             "execute raft command";
                             "region_id" => fsm.region_id(),
@@ -3094,11 +3095,12 @@ async fn handle_normal<E, W>(
                             return;
                         }
                         fsm.uncommit_data = false;
-                        fsm.handle_start = Instant::now_coarse();
+                        msg
                     } else {
                         set_tls_ctx(ctx);
-                    }
-                    if let Some(msg) = receiver.recv().await {
+                        receiver.recv().await
+                    };
+                    if let Some(msg) = msg {
                         fsm.handle_start = Instant::now_coarse();
                         apply_ctx = take_tls_ctx().or_else(|| {
                             Some(ApplyContext::<E, W>::new(core.lock().unwrap().clone()))

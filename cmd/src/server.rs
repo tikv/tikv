@@ -10,8 +10,8 @@
 
 use crate::{setup::*, signal_handler};
 use encryption::DataKeyManager;
-use engine_rocks::{encryption::get_env, RocksEngine, RocksWriteBatch, RocksWriteBatchVec};
-use engine_traits::{KvEngines, MetricsFlusher, WriteBatch, WriteBatchExt, WriteBatchVecExt};
+use engine_rocks::{encryption::get_env, RocksEngine};
+use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
 use kvproto::{
@@ -26,7 +26,7 @@ use raftstore::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-        new_compaction_listener, AutoSplitController, GlobalReplicationState, LocalReader, PdTask,
+        new_compaction_listener, AutoSplitController, GlobalReplicationState, LocalReader,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
     },
 };
@@ -67,7 +67,6 @@ use tikv_util::{
     time::Monitor,
     worker::{FutureWorker, Worker},
 };
-type PdReporter = tikv_util::worker::FutureScheduler<PdTask<RocksEngine>>;
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -451,17 +450,28 @@ impl TiKVServer {
         let pd_sender = pd_worker.scheduler();
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
-            if engines.engines.kv.support_write_batch_vec() {
-                Some(self.create_unified_pool::<RocksWriteBatchVec>(pd_sender.clone()))
-            } else {
-                Some(self.create_unified_pool::<RocksWriteBatch>(pd_sender.clone()))
-            }
+            let cfg = &self.config.readpool.unified;
+            let raftkv = Arc::new(Mutex::new(self.engines.as_ref().unwrap().engine.clone()));
+            let pool = ReadPoolBuilder::new(ReporterTicker::new(pd_sender.clone()))
+                .name_prefix(get_unified_read_pool_name())
+                .thread_count(cfg.min_thread_count, cfg.max_thread_count)
+                .stack_size(cfg.stack_size.0 as usize)
+                .max_tasks(
+                    cfg.max_tasks_per_worker
+                        .saturating_mul(cfg.max_thread_count),
+                )
+                .after_start(move || {
+                    let engine = raftkv.lock().unwrap().clone();
+                    set_tls_engine(engine);
+                })
+                .before_stop(|| unsafe {
+                    destroy_tls_engine::<RaftKv<ServerRaftStoreRouter<RocksEngine>>>();
+                })
+                .build();
+            Some(pool)
         } else {
             None
         };
-        let remote = unified_read_pool
-            .as_ref()
-            .map_or(None, |pool| pool.remote());
 
         let storage_read_pool_handle = if self.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
@@ -476,7 +486,7 @@ impl TiKVServer {
         let sched_read_pool_handle = if self.config.readpool.scheduler.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
-            let storage_read_pools = ReadPool::from(storage::build_read_pool(
+            let storage_read_pools = ReadPool::from(coprocessor::readpool_impl::build_read_pool(
                 &self.config.readpool.scheduler,
                 pd_sender.clone(),
                 engines.engine.clone(),
@@ -600,7 +610,6 @@ impl TiKVServer {
             importer.clone(),
             split_check_worker,
             auto_split_controller,
-            remote,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -828,34 +837,6 @@ impl TiKVServer {
                 self.to_stop.push(status_server);
             }
         }
-    }
-
-    fn create_unified_pool<W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static>(
-        &self,
-        reporter: PdReporter,
-    ) -> ReadPool {
-        let mut unified_pool_builder =
-            ReadPoolBuilder::new(ReporterTicker::<PdReporter, RocksEngine, W>::new(reporter));
-        let cfg = &self.config.readpool.unified;
-        let raftkv = Arc::new(Mutex::new(self.engines.as_ref().unwrap().engine.clone()));
-        unified_pool_builder
-            .name_prefix(get_unified_read_pool_name())
-            .thread_count(cfg.min_thread_count, cfg.max_thread_count)
-            .stack_size(cfg.stack_size.0 as usize)
-            .max_tasks(
-                cfg.max_tasks_per_worker
-                    .saturating_mul(cfg.max_thread_count),
-            )
-            .after_start(move || {
-                let engine = raftkv.lock().unwrap().clone();
-                set_tls_engine(engine);
-            })
-            .before_stop(|| unsafe {
-                fsm::flush_tls_ctx::<RocksEngine, W>();
-                destroy_tls_engine::<RaftKv<ServerRaftStoreRouter<RocksEngine>>>();
-            })
-            .before_pause(fsm::flush_tls_ctx::<RocksEngine, W>)
-            .build()
     }
 
     fn stop(self) {

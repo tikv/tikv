@@ -111,7 +111,6 @@ fn start_raftstore(
             Worker::new("split"),
             AutoSplitController::default(),
             Arc::default(),
-            None,
         )
         .unwrap();
     (cfg_controller, raft_router, system)
@@ -171,7 +170,6 @@ fn test_update_apply_store_config() {
     let region_id = 1;
     let mut reg = Registration::default();
     reg.region.set_id(region_id);
-    let mut apply_router = system.apply_system().register_router(reg);
 
     validate_store(&raft_router, move |cfg: &Config| {
         assert_eq!(cfg.sync_log, true);
