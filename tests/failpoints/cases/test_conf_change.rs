@@ -5,7 +5,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use futures::Future;
+use futures03::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
@@ -53,7 +53,7 @@ fn test_destroy_local_reader() {
     // Make sure region 1 is removed from store 1.
     cluster.must_region_not_exist(r1, 1);
 
-    let region = pd_client.get_region_by_id(r1).wait().unwrap().unwrap();
+    let region = block_on(pd_client.get_region_by_id(r1)).unwrap().unwrap();
 
     // Local reader panics if it finds a delegate.
     let reader_has_delegate = "localreader_on_find_delegate";
@@ -108,10 +108,7 @@ fn test_write_after_destroy() {
     admin_req.mut_header().set_peer(new_peer(1, 1));
     let (cb1, rx1) = make_cb(&admin_req);
     let engines_3 = cluster.get_all_engines(3);
-    let region = cluster
-        .pd_client
-        .get_region_by_id(r1)
-        .wait()
+    let region = block_on(cluster.pd_client.get_region_by_id(r1))
         .unwrap()
         .unwrap();
     let reqs = vec![new_put_cmd(b"k5", b"v5")];

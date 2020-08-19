@@ -20,9 +20,7 @@ use std::{process, str, u64};
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
 use futures03::{
-    compat::{Future01CompatExt, Stream01CompatExt},
-    executor::block_on,
-    future, stream, Stream, StreamExt, TryStreamExt,
+    compat::Stream01CompatExt, executor::block_on, future, stream, Stream, StreamExt, TryStreamExt,
 };
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
@@ -476,7 +474,7 @@ trait DebugExecutor {
         let regions = region_ids
             .into_iter()
             .map(|region_id| {
-                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id).compat())
+                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id))
                     .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
                 {
                     return region;
@@ -517,7 +515,7 @@ trait DebugExecutor {
         let regions = region_ids
             .into_iter()
             .map(|region_id| {
-                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id).compat())
+                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id))
                     .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
                 {
                     return region;
@@ -912,7 +910,7 @@ impl DebugExecutor for Debugger {
         let rpc_client =
             RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
-        let mut region = match block_on(rpc_client.get_region_by_id(region_id).compat()) {
+        let mut region = match block_on(rpc_client.get_region_by_id(region_id)) {
             Ok(Some(region)) => region,
             Ok(None) => {
                 ve1!("no such region {} on PD", region_id);
@@ -2288,7 +2286,7 @@ fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
 }
 
 fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64, key: Vec<u8>) {
-    let region = block_on(pd_client.get_region_by_id(region_id).compat())
+    let region = block_on(pd_client.get_region_by_id(region_id))
         .expect("get_region_by_id should success")
         .expect("must have the region");
 
