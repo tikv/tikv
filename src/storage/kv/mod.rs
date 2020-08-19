@@ -74,22 +74,42 @@ pub enum Modify {
 impl Modify {
     pub fn size(&self) -> usize {
         let cf = match self {
-            Modify::Delete(cf, _) => Some(cf),
-            Modify::Put(cf, ..) => Some(cf),
-            Modify::DeleteRange(..) => unreachable!(),
-            _ => None,
+            Modify::Delete(cf, _) => cf,
+            Modify::Put(cf, ..) => cf,
+            Modify::DeleteRange(..) => return 0,
+            Modify::Prewrite { .. } | Modify::Commit { .. } => &CF_DEFAULT,
         };
-        let cf_size = match cf {
-            Some(cf) if cf != &CF_DEFAULT => cf.len(),
-            _ => 0,
-        };
+        let cf_size = if cf == &CF_DEFAULT { 0 } else { cf.len() };
 
         match self {
             Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
-            Modify::Prewrite { .. } => 0,
-            Modify::Commit { .. } => 0,
+            Modify::Prewrite {
+                key, value, lock, ..
+            } => {
+                key.as_encoded().len() + value.len() + lock.len() + std::mem::size_of::<TimeStamp>()
+            }
+            Modify::Commit { key, .. } => {
+                key.as_encoded().len() + std::mem::size_of::<TimeStamp>() * 2
+            }
             Modify::DeleteRange(..) => unreachable!(),
+        }
+    }
+
+    pub fn cf_size(&self) -> (CfName, usize) {
+        let cf = match self {
+            Modify::Delete(cf, _) => cf,
+            Modify::Put(cf, ..) => cf,
+            Modify::DeleteRange(..) => return (CF_DEFAULT, 0),
+            Modify::Prewrite { .. } | Modify::Commit { .. } => &CF_DEFAULT,
+        };
+        let cf_size = if cf == &CF_DEFAULT { 0 } else { cf.len() };
+
+        match self {
+            Modify::Delete(_, k) => (cf, cf_size + k.as_encoded().len()),
+            Modify::Put(_, k, v) => (cf, cf_size + k.as_encoded().len() + v.len()),
+            Modify::DeleteRange(..) => unreachable!(),
+            _ => (cf, self.size()),
         }
     }
 }

@@ -32,6 +32,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
+use protobuf::Message as _;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
@@ -142,9 +143,13 @@ macro_rules! handle_request {
                 return;
             }
             let begin_instant = Instant::now_coarse();
+            let req_size = req.compute_size();
             let future = $future_name(&self.storage, req)
                 .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(move |_| GRPC_MSG_HISTOGRAM_STATIC.$fn_name.observe(duration_to_sec(begin_instant.elapsed())))
+                .map(move |_| {
+                    GRPC_MSG_DURATION_HISTOGRAM_STATIC.$fn_name.observe(duration_to_sec(begin_instant.elapsed()));
+                    GRPC_MSG_SIZE_HISTOGRAM_STATIC.$fn_name.observe(req_size as f64);
+                })
                 .map_err(move |e| {
                     debug!("kv rpc failed";
                         "request" => stringify!($fn_name),
@@ -303,7 +308,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let future = future_cop(&self.cop, Some(ctx.peer()), req)
             .and_then(|resp| sink.success(resp).map_err(Error::from))
             .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
+                GRPC_MSG_DURATION_HISTOGRAM_STATIC
                     .coprocessor
                     .observe(duration_to_sec(begin_instant.elapsed()))
             })
@@ -341,7 +346,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 sink.success(resp).map_err(Error::from)
             })
             .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
+                GRPC_MSG_DURATION_HISTOGRAM_STATIC
                     .register_lock_observer
                     .observe(duration_to_sec(begin_instant.elapsed()))
             })
@@ -385,7 +390,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 sink.success(resp).map_err(Error::from)
             })
             .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
+                GRPC_MSG_DURATION_HISTOGRAM_STATIC
                     .check_lock_observer
                     .observe(duration_to_sec(begin_instant.elapsed()))
             })
@@ -423,7 +428,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 sink.success(resp).map_err(Error::from)
             })
             .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
+                GRPC_MSG_DURATION_HISTOGRAM_STATIC
                     .remove_lock_observer
                     .observe(duration_to_sec(begin_instant.elapsed()))
             })
@@ -468,7 +473,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 sink.success(resp).map_err(Error::from)
             })
             .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
+                GRPC_MSG_DURATION_HISTOGRAM_STATIC
                     .physical_scan_lock
                     .observe(duration_to_sec(begin_instant.elapsed()))
             })
@@ -517,7 +522,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 sink.success(resp).map_err(Error::from)
             })
             .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
+                GRPC_MSG_DURATION_HISTOGRAM_STATIC
                     .unsafe_destroy_range
                     .observe(duration_to_sec(begin_instant.elapsed()))
             })
@@ -555,7 +560,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let future = sink
             .send_all(stream)
             .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
+                GRPC_MSG_DURATION_HISTOGRAM_STATIC
                     .coprocessor_stream
                     .observe(duration_to_sec(begin_instant.elapsed()))
             })
@@ -729,7 +734,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
+                GRPC_MSG_DURATION_HISTOGRAM_STATIC
                     .split_region
                     .observe(duration_to_sec(begin_instant.elapsed()))
             })
@@ -806,7 +811,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
+                GRPC_MSG_DURATION_HISTOGRAM_STATIC
                     .read_index
                     .observe(begin_instant.elapsed_secs())
             })
@@ -962,7 +967,7 @@ fn response_batch_commands_request<F>(
             error!("KvService response batch commands fail");
             return Err(());
         }
-        GRPC_MSG_HISTOGRAM_STATIC
+        GRPC_MSG_DURATION_HISTOGRAM_STATIC
             .get(label_enum)
             .observe(begin_instant.elapsed_secs());
         Ok(())
@@ -1056,6 +1061,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 },
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
                     let begin_instant = Instant::now();
+                    GRPC_MSG_SIZE_HISTOGRAM_STATIC.$metric_name.observe(req.compute_size() as f64);
                     let resp = $future_fn($($arg,)* req)
                         .map(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());

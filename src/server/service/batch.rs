@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::server::metrics::GRPC_MSG_HISTOGRAM_STATIC;
+use crate::server::metrics::GRPC_MSG_DURATION_HISTOGRAM_STATIC;
 use crate::server::service::kv::{batch_commands_response, poll_future_notify};
 use crate::storage::{
     errors::{extract_key_error, extract_region_error},
@@ -127,7 +127,7 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
                 }
             }
         }
-        GRPC_MSG_HISTOGRAM_STATIC
+        GRPC_MSG_DURATION_HISTOGRAM_STATIC
             .kv_batch_get_command
             .observe(begin_instant.elapsed_secs());
         Ok(())
@@ -182,7 +182,7 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
                 }
             }
         }
-        GRPC_MSG_HISTOGRAM_STATIC
+        GRPC_MSG_DURATION_HISTOGRAM_STATIC
             .raw_batch_get_command
             .observe(duration_to_sec(begin_instant.elapsed()));
         Ok(())

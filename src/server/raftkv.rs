@@ -323,6 +323,10 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         let mut reqs = Vec::with_capacity(batch.modifies.len());
         for m in batch.modifies {
             let mut req = Request::default();
+            let (cf, size) = m.cf_size();
+            ASYNC_WRITE_SIZE_VEC
+                .with_label_values(&[cf])
+                .inc_by(size as i64);
             match m {
                 Modify::Delete(cf, k) => {
                     let mut delete = DeleteRequest::default();
