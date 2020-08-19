@@ -18,6 +18,7 @@ use kvproto::tikvpb::TikvClient;
 use tempfile::{Builder, TempDir};
 
 use super::*;
+use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
@@ -47,7 +48,6 @@ use tikv::server::{
     ServerTransport,
 };
 use tikv::storage;
-use tikv::storage::concurrency_manager::ConcurrencyManager;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;

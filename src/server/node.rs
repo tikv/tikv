@@ -10,9 +10,8 @@ use crate::import::SSTImporter;
 use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
-use crate::storage::{
-    concurrency_manager::ConcurrencyManager, config::Config as StorageConfig, Storage,
-};
+use crate::storage::{config::Config as StorageConfig, Storage};
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, Peekable};
 use kvproto::metapb;

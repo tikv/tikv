@@ -194,6 +194,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "concurrency_manager",
  "configuration",
  "crc64fast",
  "engine_rocks",
@@ -584,6 +585,7 @@ dependencies = [
  "cdc",
  "chrono",
  "clap",
+ "concurrency_manager",
  "encryption",
  "engine_rocks",
  "engine_traits",
@@ -4531,6 +4533,7 @@ dependencies = [
 name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
+ "concurrency_manager",
  "futures 0.1.29",
  "kvproto",
  "protobuf",
@@ -4559,6 +4562,7 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
+ "concurrency_manager",
  "encryption",
  "engine_rocks",
  "engine_traits",

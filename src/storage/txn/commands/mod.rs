@@ -60,10 +60,8 @@ use crate::storage::types::{
     MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
     TxnStatus,
 };
-use crate::storage::{
-    concurrency_manager::{ConcurrencyManager, KeyHandleGuard},
-    metrics, Result as StorageResult, Snapshot, Statistics,
-};
+use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
+use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use tikv_util::collections::HashMap;
 
 /// Store Transaction scheduler commands.
