@@ -28,6 +28,7 @@ use kvproto::pdpb::{
 use security::SecurityManager;
 use tikv_util::collections::HashSet;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::EitherExt;
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
 
