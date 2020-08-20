@@ -8,7 +8,7 @@ use engine_rocks::{
 };
 use engine_traits::{
     CompactExt, CompactionJobInfo, Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable,
-    WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
+    WriteBatch, WriteBatchExt, WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -30,7 +30,6 @@ use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
-use yatp::task::future::TaskCell;
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
@@ -43,9 +42,7 @@ use crate::store::fsm::peer::{
 };
 #[cfg(feature = "failpoints")]
 use crate::store::fsm::ApplyTaskRes;
-use crate::store::fsm::{
-    create_apply_batch_system, flush_tls_ctx, ApplyBatchSystem, ApplyNotifier, Registration,
-};
+use crate::store::fsm::{create_apply_batch_system, ApplyBatchSystem, ApplyNotifier, Registration};
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
@@ -71,7 +68,6 @@ use sst_importer::SSTImporter;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::read_pool::{DefaultTicker, ReadPoolBuilder};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
@@ -264,7 +260,7 @@ where
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub router: RaftRouter<EK, ER>,
-    pub apply_batch_system: Arc<dyn ApplyBatchSystem<EK>>,
+    pub apply_batch_system: Box<dyn ApplyBatchSystem<EK>>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     /// region_id -> (peer_id, is_splitting)
@@ -831,7 +827,7 @@ pub struct RaftPollerBuilder<T, C> {
     pub engines: KvEngines<RocksEngine, RocksEngine>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
-    batch_system: Option<Arc<dyn ApplyBatchSystem<RocksEngine>>>,
+    apply_system: Box<dyn ApplyBatchSystem<RocksEngine>>,
 }
 
 impl<T, C> RaftPollerBuilder<T, C> {
@@ -1045,7 +1041,7 @@ where
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             node_start_time: Some(Instant::now()),
-            apply_batch_system: self.batch_system.as_ref().unwrap().clone(),
+            apply_batch_system: self.apply_system.clone_box(),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
@@ -1077,17 +1073,12 @@ pub struct RaftBatchSystem {
     system: BatchSystem<PeerFsm<RocksEngine, RocksEngine>, StoreFsm>,
     router: RaftRouter<RocksEngine, RocksEngine>,
     workers: Option<Workers>,
-    pool: Option<yatp::ThreadPool<TaskCell>>,
-    apply_system: Option<Arc<dyn ApplyBatchSystem<RocksEngine>>>,
+    apply_system: Option<Box<dyn ApplyBatchSystem<RocksEngine>>>,
 }
 
 impl RaftBatchSystem {
     pub fn router(&self) -> RaftRouter<RocksEngine, RocksEngine> {
         self.router.clone()
-    }
-
-    pub fn apply_system(&self) -> Arc<dyn ApplyBatchSystem<RocksEngine>> {
-        self.apply_system.as_ref().unwrap().clone()
     }
 
     // TODO: reduce arguments
@@ -1128,13 +1119,41 @@ impl RaftBatchSystem {
                 .pool_size(cfg.value().future_poll_size)
                 .build(),
         };
+
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let region_scheduler = workers.region_worker.scheduler();
+        let apply_system = if engines.kv.support_write_batch_vec() {
+            create_apply_batch_system::<RocksWriteBatchVec>(
+                meta.get_id(),
+                format!("[store {}]", meta.get_id()),
+                workers.coprocessor_host.clone(),
+                importer.clone(),
+                region_scheduler.clone(),
+                engines.kv.clone(),
+                ApplyNotifier::Router(self.router.clone()),
+                pending_create_peers.clone(),
+                &cfg.value(),
+            )
+        } else {
+            create_apply_batch_system::<RocksWriteBatch>(
+                meta.get_id(),
+                format!("[store {}]", meta.get_id()),
+                workers.coprocessor_host.clone(),
+                importer.clone(),
+                region_scheduler.clone(),
+                engines.kv.clone(),
+                ApplyNotifier::Router(self.router.clone()),
+                pending_create_peers.clone(),
+                &cfg.value(),
+            )
+        };
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
             engines,
+            region_scheduler,
             router: self.router.clone(),
             split_check_scheduler: workers.split_check_worker.scheduler(),
-            region_scheduler: workers.region_worker.scheduler(),
             pd_scheduler: workers.pd_worker.scheduler(),
             consistency_check_scheduler: workers.consistency_check_worker.scheduler(),
             cleanup_scheduler: workers.cleanup_worker.scheduler(),
@@ -1147,40 +1166,22 @@ impl RaftBatchSystem {
             global_replication_state,
             global_stat: GlobalStoreStat::default(),
             store_meta,
-            pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
+            pending_create_peers,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
             future_poller: workers.future_poller.sender().clone(),
-            batch_system: None,
+            apply_system: apply_system.clone_box(),
         };
+        self.apply_system = Some(apply_system);
         let region_peers = builder.init()?;
-        let engine = builder.engines.kv.clone();
-        if engine.support_write_batch_vec() {
-            self.start_system::<T, C, RocksWriteBatchVec>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-            )?;
-        } else {
-            self.start_system::<T, C, RocksWriteBatch>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-            )?;
-        }
+        self.start_system::<T, C>(workers, region_peers, builder, auto_split_controller)?;
         Ok(())
     }
 
-    fn start_system<
-        T: Transport + 'static,
-        C: PdClient + 'static,
-        W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static,
-    >(
+    fn start_system<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         mut workers: Workers,
         region_peers: Vec<SenderFsmPair<RocksEngine, RocksEngine>>,
-        mut builder: RaftPollerBuilder<T, C>,
+        builder: RaftPollerBuilder<T, C>,
         auto_split_controller: AutoSplitController,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
@@ -1190,21 +1191,6 @@ impl RaftBatchSystem {
         let store = builder.store.clone();
         let pd_client = builder.pd_client.clone();
         let importer = builder.importer.clone();
-        let pool = Self::create_apply_pool::<W>(cfg.apply_batch_system.pool_size);
-        let remote = pool.remote().clone();
-        self.pool = Some(pool);
-        let apply_system = create_apply_batch_system::<W>(
-            builder.store.get_id(),
-            format!("[store {}]", builder.store.get_id()),
-            builder.coprocessor_host.clone(),
-            builder.importer.clone(),
-            builder.region_scheduler.clone(),
-            builder.engines.kv.clone(),
-            ApplyNotifier::Router(self.router.clone()),
-            builder.pending_create_peers.clone(),
-            remote,
-            &builder.cfg.value(),
-        );
         {
             let mut meta = builder.store_meta.lock().unwrap();
             for (_, _, peer_fsm) in &region_peers {
@@ -1226,11 +1212,11 @@ impl RaftBatchSystem {
         let mut address = Vec::with_capacity(region_peers.len());
         for (tx, receiver, fsm) in region_peers {
             address.push(fsm.region_id());
-            apply_system.register(Registration::new(fsm.get_peer()), receiver);
+            builder
+                .apply_system
+                .register(Registration::new(fsm.get_peer()), receiver);
             mailboxes.push((fsm.region_id(), BasicMailbox::new(tx, fsm)));
         }
-        builder.batch_system = Some(apply_system.clone());
-        self.apply_system = Some(apply_system);
         let tag = format!("raftstore-{}", store.get_id());
         self.system.spawn(tag, builder);
         self.router.register_all(mailboxes);
@@ -1307,8 +1293,8 @@ impl RaftBatchSystem {
         handles.push(workers.cleanup_worker.stop());
         handles.push(workers.raftlog_gc_worker.stop());
         self.system.shutdown();
-        if let Some(pool) = self.pool.take() {
-            pool.shutdown();
+        if let Some(apply_system) = self.apply_system.take() {
+            apply_system.shutdown();
         }
         for h in handles {
             if let Some(h) = h {
@@ -1317,18 +1303,6 @@ impl RaftBatchSystem {
         }
         workers.coprocessor_host.shutdown();
         workers.future_poller.shutdown_now().wait().unwrap();
-    }
-
-    fn create_apply_pool<W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static>(
-        pool_size: usize,
-    ) -> yatp::pool::ThreadPool<TaskCell> {
-        let mut builder = ReadPoolBuilder::new(DefaultTicker::default());
-        builder
-            .name_prefix("apply")
-            .thread_count(pool_size, pool_size)
-            .before_pause(flush_tls_ctx::<RocksEngine, W>)
-            .before_stop(flush_tls_ctx::<RocksEngine, W>)
-            .build_yatp_pool()
     }
 }
 
@@ -1343,7 +1317,6 @@ pub fn create_raft_batch_system(
         system,
         workers: None,
         router: raft_router.clone(),
-        pool: None,
         apply_system: None,
     };
     (raft_router, system)

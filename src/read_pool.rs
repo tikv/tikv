@@ -153,10 +153,8 @@ mod tests {
     use super::*;
     use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
     use crate::storage::{RocksEngine as RocksKV, TestEngineBuilder};
-    use engine_rocks::{RocksEngine, RocksWriteBatch};
     use futures03::channel::oneshot;
     use kvproto::kvrpcpb::CommandPri;
-    use raftstore::store::fsm;
     use raftstore::store::ReadStats;
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -174,8 +172,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let ticker =
-            ReporterTicker::<DummyReporter, RocksEngine, RocksWriteBatch>::new(DummyReporter {});
+        let ticker = ReporterTicker::new(DummyReporter {});
         let kv = Arc::new(Mutex::new(engine));
         let pool = ReadPoolBuilder::new(ticker)
             .after_start(move || {
@@ -183,11 +180,9 @@ mod tests {
                 set_tls_engine(engine);
             })
             .before_stop(|| unsafe {
-                fsm::flush_tls_ctx::<RocksEngine, RocksWriteBatch>();
                 destroy_tls_engine::<RocksKV>();
             })
             .max_tasks(2)
-            .before_pause(fsm::flush_tls_ctx::<RocksEngine, RocksWriteBatch>)
             .thread_count(1, 1)
             .build();
 

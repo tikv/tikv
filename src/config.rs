@@ -1855,7 +1855,7 @@ mod readpool_tests {
             use_unified_pool: Some(false),
             ..Default::default()
         };
-        let scheduler = StorageReadPoolConfig {
+        let scheduler = CoprReadPoolConfig {
             use_unified_pool: Some(false),
             ..Default::default()
         };
@@ -1911,10 +1911,7 @@ mod readpool_tests {
             ..Default::default()
         };
         assert!(storage.validate().is_ok());
-        let scheduler = StorageReadPoolConfig {
-            use_unified_pool: Some(false),
-            ..Default::default()
-        };
+        let scheduler = CoprReadPoolConfig::default();
         assert!(scheduler.validate().is_ok());
 
         let coprocessor = CoprReadPoolConfig::default();
