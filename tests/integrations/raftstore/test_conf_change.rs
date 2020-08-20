@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::*;
 
-use futures::Future;
+use futures03::executor::block_on;
 
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
@@ -254,7 +254,7 @@ fn test_server_pd_conf_change() {
 fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize) {
     let mut replica_count = 0;
     for _ in 0..1000 {
-        let region = match pd_client.get_region_by_id(region_id).wait().unwrap() {
+        let region = match block_on(pd_client.get_region_by_id(region_id)).unwrap() {
             Some(r) => r,
             None => continue,
         };
@@ -286,9 +286,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    region = pd_client
-        .get_region_by_id(region_id)
-        .wait()
+    region = block_on(pd_client.get_region_by_id(region_id))
         .unwrap()
         .unwrap();
     let i = stores
@@ -320,9 +318,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.enable_default_operator();
     wait_till_reach_count(Arc::clone(&pd_client), region_id, 5);
 
-    region = pd_client
-        .get_region_by_id(region_id)
-        .wait()
+    region = block_on(pd_client.get_region_by_id(region_id))
         .unwrap()
         .unwrap();
     let peer = region.get_peers().get(1).unwrap().clone();
@@ -383,10 +379,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     pd_client.remove_peer(1, new_peer(1, 1));
 
-    let epoch = cluster
-        .pd_client
-        .get_region_by_id(1)
-        .wait()
+    let epoch = block_on(cluster.pd_client.get_region_by_id(1))
         .unwrap()
         .unwrap()
         .take_region_epoch();
