@@ -9,6 +9,7 @@ use std::time::Duration;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::future::Future;
+use futures03::compat::Compat;
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
@@ -18,6 +19,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ChangeCmd, ObserveID, StoreMeta};
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
+use tikv::config::CdcConfig;
 use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
@@ -228,6 +230,7 @@ pub struct Endpoint<T> {
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     pub fn new(
+        cfg: &CdcConfig,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         raft_router: T,
@@ -248,7 +251,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             observer,
             store_meta,
             scan_batch_size: 1024,
-            min_ts_interval: Duration::from_secs(1),
+            min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
         };
@@ -583,7 +586,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
     fn register_min_ts_event(&self) {
         let timeout = self.timer.delay(self.min_ts_interval);
-        let tso = self.pd_client.get_tso();
+        let tso = Compat::new(self.pd_client.get_tso());
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
         let regions: Vec<(u64, ObserveID)> = self
@@ -1055,6 +1058,7 @@ mod tests {
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));
         let mut ep = Endpoint::new(
+            &CdcConfig::default(),
             pd_client,
             task_sched,
             raft_router.clone(),
@@ -1112,6 +1116,7 @@ mod tests {
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));
         let mut ep = Endpoint::new(
+            &CdcConfig::default(),
             pd_client,
             task_sched,
             raft_router,
