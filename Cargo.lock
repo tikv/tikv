@@ -3151,6 +3151,7 @@ dependencies = [
  "encryption",
  "engine_panic",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "error_code",
  "fail 0.4.0",
