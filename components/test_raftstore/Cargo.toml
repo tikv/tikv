@@ -30,6 +30,7 @@ prost-codec = [
 engine_traits = { path = "../engine_traits" }
 engine_rocks = { path = "../engine_rocks" }
 futures = "0.1"
+futures03 = { package = "futures", version = "0.3", features = ["compat"] }
 futures-cpupool = "0.1"
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"

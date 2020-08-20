@@ -7,7 +7,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use futures::channel::mpsc as future_mpsc;
-use futures::compat::Future01CompatExt;
 use futures::StreamExt;
 use futures_executor::block_on;
 use futures_util::io::AsyncReadExt;
@@ -77,7 +76,7 @@ impl TestSuite {
         cluster.run();
 
         let concurrency_manager =
-            ConcurrencyManager::new(block_on(cluster.pd_client.get_tso().compat()).unwrap());
+            ConcurrencyManager::new(block_on(cluster.pd_client.get_tso()).unwrap());
         let mut endpoints = HashMap::default();
         for (id, engines) in &cluster.engines {
             // Create and run backup endpoints.
