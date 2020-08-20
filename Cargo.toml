@@ -238,15 +238,15 @@ members = [
 default-members = ["cmd"]
 
 [profile.dev]
-opt-level = 0 
+opt-level = 0
 debug = 1 # required for line numbers in tests, see tikv #5049
-codegen-units = 4 
-lto = false 
-incremental = true 
-panic = 'unwind' 
-debug-assertions = true 
-overflow-checks = false 
-rpath = false 
+codegen-units = 4
+lto = false
+incremental = true
+panic = 'unwind'
+debug-assertions = true
+overflow-checks = false
+rpath = false
 
 [profile.release]
 opt-level = 3
@@ -260,14 +260,14 @@ overflow-checks = false
 rpath = false
 
 [profile.test]
-opt-level = 0 
+opt-level = 0
 debug = 1 # enable line numbers by default for easy test debugging
-codegen-units = 16 
-lto = false 
-incremental = true 
-debug-assertions = true 
-overflow-checks = true 
-rpath = false 
+codegen-units = 16
+lto = false
+incremental = true
+debug-assertions = true
+overflow-checks = true
+rpath = false
 
 # The benchmark profile is identical to release, except that lto = false
 [profile.bench]
