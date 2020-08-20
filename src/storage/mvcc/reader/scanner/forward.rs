@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
+use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
@@ -538,8 +538,13 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
                 let lock_value = cursors.lock.value(&mut statistics.lock);
                 Lock::parse(lock_value)?
             };
-            lock.check_ts_conflict(&current_user_key, cfg.ts, &cfg.bypass_locks)
-                .map(|_| ())
+            Lock::check_ts_conflict(
+                Cow::Owned(lock),
+                &current_user_key,
+                cfg.ts,
+                &cfg.bypass_locks,
+            )
+            .map(|_| ())
         }
         IsolationLevel::Rc => Ok(()),
     };

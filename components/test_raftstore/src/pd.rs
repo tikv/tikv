@@ -7,9 +7,11 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use std::{cmp, thread};
 
-use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
+use futures03::compat::Future01CompatExt;
+use futures03::executor::block_on;
+use futures03::future::{err, ok};
 use tokio_timer::timer::Handle;
 
 use kvproto::metapb::{self, PeerRole};
@@ -801,8 +803,7 @@ impl TestPdClient {
     }
 
     pub fn get_region_epoch(&self, region_id: u64) -> metapb::RegionEpoch {
-        self.get_region_by_id(region_id)
-            .wait()
+        block_on(self.get_region_by_id(region_id))
             .unwrap()
             .unwrap()
             .take_region_epoch()
@@ -823,7 +824,7 @@ impl TestPdClient {
     pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 1..500 {
             sleep_ms(10);
-            let region = match self.get_region_by_id(region_id).wait().unwrap() {
+            let region = match block_on(self.get_region_by_id(region_id)).unwrap() {
                 Some(region) => region,
                 None => continue,
             };
@@ -834,14 +835,14 @@ impl TestPdClient {
                 }
             }
         }
-        let region = self.get_region_by_id(region_id).wait().unwrap();
+        let region = block_on(self.get_region_by_id(region_id)).unwrap();
         panic!("region {:?} has no peer {:?}", region, peer);
     }
 
     pub fn must_none_peer(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 1..500 {
             sleep_ms(10);
-            let region = match self.get_region_by_id(region_id).wait().unwrap() {
+            let region = match block_on(self.get_region_by_id(region_id)).unwrap() {
                 Some(region) => region,
                 None => continue,
             };
@@ -851,7 +852,7 @@ impl TestPdClient {
                 _ => continue,
             }
         }
-        let region = self.get_region_by_id(region_id).wait().unwrap();
+        let region = block_on(self.get_region_by_id(region_id)).unwrap();
         panic!("region {:?} has peer {:?}", region, peer);
     }
 
@@ -874,7 +875,7 @@ impl TestPdClient {
     ) {
         'retry: for _ in 1..500 {
             sleep_ms(10);
-            let region = match self.get_region_by_id(region_id).wait().unwrap() {
+            let region = match block_on(self.get_region_by_id(region_id)).unwrap() {
                 Some(region) => region,
                 None => continue 'retry,
             };
@@ -892,7 +893,7 @@ impl TestPdClient {
             }
             return;
         }
-        let region = self.get_region_by_id(region_id).wait().unwrap();
+        let region = block_on(self.get_region_by_id(region_id)).unwrap();
         panic!(
             "region {:?} did not apply joint confchange, add peers: {:?}, remove peers: {:?}",
             region, add_peers, remove_peers
@@ -902,7 +903,7 @@ impl TestPdClient {
     pub fn must_not_in_joint(&self, region_id: u64) {
         for _ in 1..500 {
             sleep_ms(10);
-            let region = match self.get_region_by_id(region_id).wait().unwrap() {
+            let region = match block_on(self.get_region_by_id(region_id)).unwrap() {
                 Some(region) => region,
                 None => continue,
             };
@@ -913,7 +914,7 @@ impl TestPdClient {
                 return;
             }
         }
-        let region = self.get_region_by_id(region_id).wait().unwrap();
+        let region = block_on(self.get_region_by_id(region_id)).unwrap();
         panic!("region {:?} failed to leave joint", region);
     }
 
@@ -950,7 +951,7 @@ impl TestPdClient {
         region_id: u64,
         mut changes: Vec<(ConfChangeType, metapb::Peer)>,
     ) -> (Vec<metapb::Peer>, Vec<metapb::Peer>) {
-        let region = self.get_region_by_id(region_id).wait().unwrap().unwrap();
+        let region = block_on(self.get_region_by_id(region_id)).unwrap().unwrap();
         let (mut add_peers, mut remove_peers) = (Vec::new(), Vec::new());
 
         let to_add_peers = changes
@@ -1008,9 +1009,7 @@ impl TestPdClient {
     }
 
     pub fn is_in_joint(&self, region_id: u64) -> bool {
-        let region = self
-            .get_region_by_id(region_id)
-            .wait()
+        let region = block_on(self.get_region_by_id(region_id))
             .unwrap()
             .expect("region not exist");
         region.get_peers().iter().any(|p| {
@@ -1095,13 +1094,13 @@ impl TestPdClient {
     }
 
     pub fn check_merged(&self, from: u64) -> bool {
-        self.get_region_by_id(from).wait().unwrap().is_none()
+        block_on(self.get_region_by_id(from)).unwrap().is_none()
     }
 
     pub fn check_merged_timeout(&self, from: u64, duration: Duration) {
         let timer = Instant::now();
         loop {
-            let region = self.get_region_by_id(from).wait().unwrap();
+            let region = block_on(self.get_region_by_id(from)).unwrap();
             if let Some(r) = region {
                 if timer.elapsed() > duration {
                     panic!("region {:?} is still not merged.", r);
@@ -1310,11 +1309,11 @@ impl PdClient for TestPdClient {
 
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
         match self.cluster.rl().get_region_by_id(region_id) {
-            Ok(resp) => Box::new(ok(resp)),
-            Err(e) => Box::new(err(e)),
+            Ok(resp) => Box::pin(ok(resp)),
+            Err(e) => Box::pin(err(e)),
         }
     }
 
@@ -1332,7 +1331,7 @@ impl PdClient for TestPdClient {
         replication_status: Option<RegionReplicationStatus>,
     ) -> PdFuture<()> {
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
         let resp = self.cluster.wl().region_heartbeat(
             term,
@@ -1347,9 +1346,9 @@ impl PdClient for TestPdClient {
                 if let Some(store) = self.cluster.wl().stores.get(&store_id) {
                     store.sender.unbounded_send(resp).unwrap();
                 }
-                Box::new(ok(()))
+                Box::pin(ok(()))
             }
-            Err(e) => Box::new(err(e)),
+            Err(e) => Box::pin(err(e)),
         }
     }
 
@@ -1367,7 +1366,7 @@ impl PdClient for TestPdClient {
             .entry(store_id)
             .or_insert_with(Store::default);
         let rx = store.receiver.take().unwrap();
-        Box::new(
+        Box::pin(
             rx.map(|resp| vec![resp])
                 .select(
                     stream::unfold(timer, |timer| {
@@ -1385,13 +1384,14 @@ impl PdClient for TestPdClient {
                         f(resp);
                     }
                     Ok(())
-                }),
+                })
+                .compat(),
         )
     }
 
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
 
         // Must ConfVer and Version be same?
@@ -1402,7 +1402,7 @@ impl PdClient for TestPdClient {
             .unwrap()
             .unwrap();
         if let Err(e) = check_stale_region(&cur_region, &region) {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
 
         let mut resp = pdpb::AskSplitResponse::default();
@@ -1413,7 +1413,7 @@ impl PdClient for TestPdClient {
         }
         resp.set_new_peer_ids(peer_ids);
 
-        Box::new(ok(resp))
+        Box::pin(ok(resp))
     }
 
     fn ask_batch_split(
@@ -1422,11 +1422,11 @@ impl PdClient for TestPdClient {
         count: usize,
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
         if self.is_incompatible {
-            return Box::new(err(Error::Incompatible));
+            return Box::pin(err(Error::Incompatible));
         }
 
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
 
         // Must ConfVer and Version be same?
@@ -1437,7 +1437,7 @@ impl PdClient for TestPdClient {
             .unwrap()
             .unwrap();
         if let Err(e) = check_stale_region(&cur_region, &region) {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
 
         let mut resp = pdpb::AskBatchSplitResponse::default();
@@ -1450,12 +1450,12 @@ impl PdClient for TestPdClient {
             resp.mut_ids().push(id);
         }
 
-        Box::new(ok(resp))
+        Box::pin(ok(resp))
     }
 
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
 
         // Cache it directly now.
@@ -1467,25 +1467,25 @@ impl PdClient for TestPdClient {
         if let Some(ref status) = cluster.replication_status {
             resp.set_replication_status(status.clone());
         }
-        Box::new(ok(resp))
+        Box::pin(ok(resp))
     }
 
     fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {
         // pd just uses this for history show, so here we just count it.
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
         self.cluster.wl().split_count += regions.len() - 1;
-        Box::new(ok(()))
+        Box::pin(ok(()))
     }
 
     fn get_gc_safe_point(&self) -> PdFuture<u64> {
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
 
         let safe_point = self.cluster.rl().get_gc_safe_point();
-        Box::new(ok(safe_point))
+        Box::pin(ok(safe_point))
     }
 
     fn get_store_stats(&self, store_id: u64) -> Result<pdpb::StoreStats> {
@@ -1508,14 +1508,14 @@ impl PdClient for TestPdClient {
 
     fn get_tso(&self) -> PdFuture<TimeStamp> {
         if self.trigger_tso_failure.swap(false, Ordering::SeqCst) {
-            return Box::new(futures::future::result(Err(
-                pd_client::errors::Error::Grpc(grpcio::Error::RpcFailure(grpcio::RpcStatus::new(
+            return Box::pin(err(pd_client::errors::Error::Grpc(
+                grpcio::Error::RpcFailure(grpcio::RpcStatus::new(
                     grpcio::RpcStatusCode::UNKNOWN,
                     Some("tso error".to_owned()),
-                ))),
+                )),
             )));
         }
         let tso = self.tso.fetch_add(1, Ordering::SeqCst);
-        Box::new(futures::future::result(Ok(TimeStamp::new(tso as _))))
+        Box::pin(ok(TimeStamp::new(tso as _)))
     }
 }

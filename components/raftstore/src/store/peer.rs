@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{KvEngine, KvEngines, Snapshot, WriteOptions};
+use engine_traits::{Engines, KvEngine, Snapshot, WriteOptions};
+use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
@@ -28,6 +29,7 @@ use raft::{
     self, Changer, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus, StateRole,
     INVALID_INDEX, NO_LIMIT,
 };
+use raft_engine::RaftEngine;
 use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
 use time::Timespec;
@@ -56,8 +58,7 @@ use super::peer_storage::{
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{
-    self, check_region_epoch, is_initial_msg, is_learner, ChangePeerI, ConfChangeKind, Lease,
-    LeaseState,
+    self, check_region_epoch, is_initial_msg, ChangePeerI, ConfChangeKind, Lease, LeaseState,
 };
 use super::DestroyPeerJob;
 
@@ -182,7 +183,7 @@ pub struct CheckTickResult {
 pub struct Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     /// The ID of the Region which this Peer belongs to.
     region_id: u64,
@@ -294,13 +295,13 @@ where
 impl<EK, ER> Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn new(
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask<EK::Snapshot>>,
-        engines: KvEngines<EK, ER>,
+        engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
     ) -> Result<Peer<EK, ER>> {
@@ -512,7 +513,10 @@ where
     }
 
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
-    pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
+    pub fn maybe_destroy<T, C>(
+        &mut self,
+        ctx: &PollContext<EK, ER, T, C>,
+    ) -> Option<DestroyPeerJob> {
         if self.pending_remove {
             info!(
                 "is being destroyed, skip";
@@ -520,6 +524,17 @@ where
                 "peer_id" => self.peer.get_id(),
             );
             return None;
+        }
+        {
+            let meta = ctx.store_meta.lock().unwrap();
+            if meta.atomic_snap_regions.contains_key(&self.region_id) {
+                info!(
+                    "stale peer is applying atomic snapshot, will destroy next time";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                return None;
+            }
         }
         // If initialized is false, it implicitly means apply fsm does not exist now.
         let initialized = self.get_store().is_initialized();
@@ -572,7 +587,7 @@ where
 
         // Set Tombstone state explicitly
         let mut kv_wb = ctx.engines.kv.write_batch();
-        let mut raft_wb = ctx.engines.raft.write_batch();
+        let mut raft_wb = ctx.engines.raft.log_batch(1024);
         self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
         write_peer_state(
             &mut kv_wb,
@@ -584,7 +599,7 @@ where
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(ctx.cfg.sync_log);
         ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
-        ctx.engines.raft.write_opt(&raft_wb, &write_opts)?;
+        ctx.engines.raft.consume(&mut raft_wb, ctx.cfg.sync_log)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -595,6 +610,7 @@ where
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -618,11 +634,6 @@ where
     #[inline]
     pub fn is_initialized(&self) -> bool {
         self.get_store().is_initialized()
-    }
-
-    #[inline]
-    pub fn is_learner(&self) -> bool {
-        is_learner(&self.peer)
     }
 
     #[inline]
@@ -1264,7 +1275,7 @@ where
             self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
         }
         let mut destroy_regions = vec![];
-        if self.get_pending_snapshot().is_some() {
+        if self.has_pending_snapshot() {
             if !self.ready_to_handle_pending_snap() {
                 let count = self.pending_request_snapshot_count.load(Ordering::SeqCst);
                 debug!(
@@ -1437,7 +1448,7 @@ where
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
-        if apply_snap_result.is_some() && self.is_learner() {
+        if apply_snap_result.is_some() {
             // The peer may change from learner to voter after snapshot applied.
             let peer = self
                 .region()
@@ -2465,6 +2476,7 @@ where
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
                 return Err(e);
             }
@@ -2725,7 +2737,7 @@ where
 impl<EK, ER> Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
@@ -2882,6 +2894,7 @@ where
                 "target_peer_id" => to_peer_id,
                 "target_store_id" => to_store_id,
                 "err" => ?e,
+                "error_code" => %e.error_code(),
             );
             if to_peer_id == self.leader_id() {
                 self.leader_unreachable = true;
@@ -2915,6 +2928,7 @@ where
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -2949,6 +2963,7 @@ where
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -2999,7 +3014,8 @@ where
                 "peer_id" => self.peer.get_id(),
                 "target_peer_id" => to_peer.get_id(),
                 "target_store_id" => to_peer.get_store_id(),
-                "err" => ?e
+                "err" => ?e,
+                "error_code" => %e.error_code(),
             );
         } else {
             ctx.need_flush_trans = true;
@@ -3089,7 +3105,7 @@ pub trait RequestInspector {
 impl<EK, ER> RequestInspector for Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn has_applied_to_current_term(&mut self) -> bool {
         self.get_store().applied_index_term() == self.term()
@@ -3118,7 +3134,7 @@ where
 impl<EK, ER, T, C> ReadExecutor<EK> for PollContext<EK, ER, T, C>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn get_engine(&self) -> &EK {
         &self.engines.kv
@@ -3202,7 +3218,7 @@ pub trait AbstractPeer {
     fn pending_merge_state(&self) -> Option<&MergeState>;
 }
 
-impl<EK: KvEngine, ER: KvEngine> AbstractPeer for Peer<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for Peer<EK, ER> {
     fn meta_peer(&self) -> &metapb::Peer {
         &self.peer
     }

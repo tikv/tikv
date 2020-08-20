@@ -322,7 +322,7 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
     lhs.get_peers().iter().all(|lp| {
         rhs.get_peers()
             .iter()
-            .any(|rp| rp.get_store_id() == lp.get_store_id() && is_learner(rp) == is_learner(lp))
+            .any(|rp| rp.get_store_id() == lp.get_store_id() && rp.get_role() == lp.get_role())
     })
 }
 
