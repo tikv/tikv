@@ -2617,7 +2617,7 @@ where
             }
         } else if req.has_admin_request() {
             // The admin request is rejected because it may need to update epoch checker which
-            // introduces a uncertainty and may breaks the correctness of epoch checker.
+            // introduces an uncertainty and may breaks the correctness of epoch checker.
             return Err(box_err!(
                 "{} peer is not applied to current term, applied_term {}, current_term {}",
                 self.tag,
