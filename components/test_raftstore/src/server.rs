@@ -257,8 +257,11 @@ impl Simulator for ServerCluster {
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         ));
-        let cop =
-            coprocessor::Endpoint::new(&server_cfg, cop_read_pool.handle(), concurrency_manager);
+        let cop = coprocessor::Endpoint::new(
+            &server_cfg,
+            cop_read_pool.handle(),
+            concurrency_manager.clone(),
+        );
         let mut server = None;
         for _ in 0..100 {
             let mut svr = Server::new(
@@ -338,6 +341,7 @@ impl Simulator for ServerCluster {
             importer.clone(),
             split_check_worker,
             AutoSplitController::default(),
+            concurrency_manager,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

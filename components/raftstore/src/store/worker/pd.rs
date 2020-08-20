@@ -2,12 +2,15 @@
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Sender};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
 use std::{cmp, io};
 
-use futures::Future;
+use futures::future::{self, Either, Future, Loop};
 use tokio_core::reactor::Handle;
 
 use engine_traits::KvEngine;
@@ -31,6 +34,7 @@ use crate::store::Callback;
 use crate::store::StoreInfo;
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 
+use concurrency_manager::ConcurrencyManager;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
@@ -127,6 +131,10 @@ where
         cpu_usages: RecordPairVec,
         read_io_rates: RecordPairVec,
         write_io_rates: RecordPairVec,
+    },
+    UpdateMaxTimestamp {
+        term: u64,
+        is_max_ts_synced: Arc<AtomicU64>,
     },
 }
 
@@ -250,6 +258,10 @@ where
                 f,
                 "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
                 cpu_usages, read_io_rates, write_io_rates,
+            ),
+            Task::UpdateMaxTimestamp {..} => write!(
+                f,
+                "update the max timestamp in the concurrency manager",
             ),
         }
     }
@@ -409,7 +421,7 @@ pub struct Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient,
+    T: PdClient + 'static,
 {
     store_id: u64,
     pd_client: Arc<T>,
@@ -426,13 +438,15 @@ where
     // calls Runner's run() on Task received.
     scheduler: Scheduler<Task<EK>>,
     stats_monitor: StatsMonitor<EK>,
+
+    concurrency_manager: ConcurrencyManager,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient,
+    T: PdClient + 'static,
 {
     const INTERVAL_DIVISOR: u32 = 2;
 
@@ -444,6 +458,7 @@ where
         scheduler: Scheduler<Task<EK>>,
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
+        concurrency_manager: ConcurrencyManager,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
@@ -462,6 +477,7 @@ where
             start_ts: UnixSecs::now(),
             scheduler,
             stats_monitor,
+            concurrency_manager,
         }
     }
 
@@ -925,6 +941,45 @@ where
         self.store_stat.store_read_io_rates = read_io_rates;
         self.store_stat.store_write_io_rates = write_io_rates;
     }
+
+    fn handle_update_max_timestamp(
+        &mut self,
+        term: u64,
+        is_max_ts_synced: Arc<AtomicU64>,
+
+        handle: &Handle,
+    ) {
+        let current = term << 1;
+        let new = current + 1;
+        let pd_client = self.pd_client.clone();
+        let concurrency_manager = self.concurrency_manager.clone();
+        let f = future::loop_fn(
+            (pd_client, is_max_ts_synced, concurrency_manager),
+            move |(pd_client, is_max_ts_synced, concurrency_manager)| {
+                if is_max_ts_synced.load(Ordering::SeqCst) == current {
+                    let update = pd_client.get_tso().then(move |res| match res {
+                        Ok(ts) => {
+                            concurrency_manager.update_max_read_ts(ts);
+                            is_max_ts_synced.compare_and_swap(current, new, Ordering::SeqCst);
+                            future::ok(Loop::Break(()))
+                        }
+                        Err(e) => {
+                            warn!("update max timestamp failed: {:?}", e);
+                            future::ok(Loop::Continue((
+                                pd_client,
+                                is_max_ts_synced,
+                                concurrency_manager,
+                            )))
+                        }
+                    });
+                    Either::A(update)
+                } else {
+                    Either::B(future::ok(Loop::Break(())))
+                }
+            },
+        );
+        handle.spawn(f);
+    }
 }
 
 impl<EK, ER, T> Runnable<Task<EK>> for Runner<EK, ER, T>
@@ -1071,6 +1126,10 @@ where
                 read_io_rates,
                 write_io_rates,
             } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
+            Task::UpdateMaxTimestamp {
+                term,
+                is_max_ts_synced,
+            } => self.handle_update_max_timestamp(term, is_max_ts_synced, handle),
         };
     }
 

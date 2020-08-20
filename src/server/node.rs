@@ -143,6 +143,7 @@ where
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
+        concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -184,6 +185,7 @@ where
             importer,
             split_check_worker,
             auto_split_controller,
+            concurrency_manager,
         )?;
 
         Ok(())
@@ -378,6 +380,7 @@ where
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
+        concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -405,6 +408,7 @@ where
             split_check_worker,
             auto_split_controller,
             self.state.clone(),
+            concurrency_manager,
         )?;
         Ok(())
     }

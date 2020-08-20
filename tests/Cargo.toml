@@ -141,6 +141,7 @@ byteorder = "1.2"
 serde_json = "1.0"
 tokio = { version = "0.2", features = ["rt-core"] }
 semver = "0.10"
+concurrency_manager = { path = "../components/concurrency_manager" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 criterion-papi = "0.1"

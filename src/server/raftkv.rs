@@ -510,6 +510,10 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
     fn get_data_version(&self) -> Option<u64> {
         self.get_apply_index().ok()
     }
+
+    fn is_max_ts_synced(&self) -> bool {
+        self.is_max_ts_synced()
+    }
 }
 
 impl<S: Snapshot> EngineIterator for RegionIterator<S> {

@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
@@ -288,6 +288,8 @@ where
     pub local_first_replicate: bool,
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+
+    pub is_max_ts_synced: Arc<AtomicU64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -377,6 +379,7 @@ where
             check_stale_peers: vec![],
             local_first_replicate: false,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
+            is_max_ts_synced: Arc::new(AtomicU64::new(0)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1106,9 +1109,25 @@ where
                     // prewrites or commits will be just a waste.
                     self.last_urgent_proposal_idx = self.raft_group.raft.raft_log.last_index();
                     self.raft_group.skip_bcast_commit(false);
+
+                    // Update max ts asynchronously
+                    if let Err(e) = ctx.pd_scheduler.schedule(PdTask::UpdateMaxTimestamp {
+                        term: self.term(),
+                        is_max_ts_synced: self.is_max_ts_synced.clone(),
+                    }) {
+                        error!(
+                            "failed to update max ts";
+                            "err" => ?e,
+                        );
+                    }
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
+
+                    // When a peer becomes a follower, update `is_max_ts_synced` to new term and
+                    // mark it unsynced.
+                    self.is_max_ts_synced
+                        .store(self.term() << 1, Ordering::SeqCst);
                 }
                 _ => {}
             }
@@ -2653,6 +2672,9 @@ where
             }
         }
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
+        if let Some(snap) = resp.snapshot.as_mut() {
+            snap.set_is_max_ts_synced(Some(self.is_max_ts_synced.clone()));
+        }
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
