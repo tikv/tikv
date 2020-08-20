@@ -169,15 +169,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 
 [[package]]
-name = "aws_sdk"
-version = "0.1.0"
-source = "git+https://github.com/de-sh/rust-rocksdb.git#a61f81fc04bcb632b152fc35dc3dd64092f3dde5"
-dependencies = [
- "cc",
- "cmake",
-]
-
-[[package]]
 name = "backtrace"
 version = "0.3.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1917,7 +1908,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/de-sh/rust-rocksdb.git#a61f81fc04bcb632b152fc35dc3dd64092f3dde5"
+source = "git+https://github.com/de-sh/rust-rocksdb.git#d495eaf32d157c463ade961d9ede1f79f8c876d2"
 dependencies = [
  "cc",
  "cmake",
@@ -1926,7 +1917,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/de-sh/rust-rocksdb.git#a61f81fc04bcb632b152fc35dc3dd64092f3dde5"
+source = "git+https://github.com/de-sh/rust-rocksdb.git#d495eaf32d157c463ade961d9ede1f79f8c876d2"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1946,7 +1937,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/de-sh/rust-rocksdb.git#a61f81fc04bcb632b152fc35dc3dd64092f3dde5"
+source = "git+https://github.com/de-sh/rust-rocksdb.git#d495eaf32d157c463ade961d9ede1f79f8c876d2"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2015,8 +2006,9 @@ dependencies = [
 
 [[package]]
 name = "lz4-sys"
-version = "1.8.3"
-source = "git+https://github.com/busyjay/lz4-rs.git?branch=adjust-build#5a8afe4010c67899fc7af876a58d67fd6269bf81"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dca79aa95d8b3226213ad454d328369853be3a1382d89532a854f4d69640acae"
 dependencies = [
  "cc",
  "libc",
@@ -3312,9 +3304,8 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/de-sh/rust-rocksdb.git#a61f81fc04bcb632b152fc35dc3dd64092f3dde5"
+source = "git+https://github.com/de-sh/rust-rocksdb.git#d495eaf32d157c463ade961d9ede1f79f8c876d2"
 dependencies = [
- "aws_sdk",
  "libc",
  "librocksdb_sys",
 ]
