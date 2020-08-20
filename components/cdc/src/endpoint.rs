@@ -587,13 +587,17 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     }
 
     fn broadcast_resolved_ts(&self, regions: Vec<u64>) {
-        let mut event = Event::default();
-        event.regions = regions;
-        event.event = Some(Event_oneof_event::ResolvedTs(
-            self.min_resolved_ts.into_inner(),
-        ));
+        let mut resolved_ts = ResolvedTs::default();
+        resolved_ts.regions = regions;
+        resolved_ts.ts = self.min_resolved_ts.into_inner();
+        let mut change_data_event = ChangeDataEvent::default();
+        change_data_event.set_resolved_ts(resolved_ts);
         for (id, conn) in &self.connections {
-            if conn.get_sink().send((0, event.clone())).is_err() {
+            if conn
+                .get_sink()
+                .send((0, change_data_event.clone()))
+                .is_err()
+            {
                 error!("send event failed"; "conn" => ?id);
             }
         }
@@ -1192,7 +1196,7 @@ mod tests {
         };
         ep.run(Task::Deregister(deregister));
         let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
-        let event = change_data_event.event.take().unwrap();
+        let event = change_data_event.events[0].event.take().unwrap();
         match event {
             Event_oneof_event::Error(err) => assert!(err.has_not_leader()),
             _ => panic!("unknown event"),
@@ -1226,7 +1230,7 @@ mod tests {
         };
         ep.run(Task::Deregister(deregister));
         let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
-        let event = change_data_event.event.take().unwrap();
+        let event = change_data_event.events[0].event.take().unwrap();
         match event {
             Event_oneof_event::Error(err) => assert!(err.has_not_leader()),
             _ => panic!("unknown event"),

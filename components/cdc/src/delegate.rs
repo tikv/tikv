@@ -14,12 +14,12 @@ use kvproto::cdcpb::{
         row::OpType as EventRowOpType, Entries as EventEntries, Event as Event_oneof_event,
         LogType as EventLogType, Row as EventRow,
     },
-    Error as EventError, Event,
+    ChangeDataEvent, Error as EventError, Event,
 };
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
-    Error as EventError, ErrorDuplicateRequest, Event, EventEntries, EventLogType, EventRow,
-    EventRowOpType, Event_oneof_event,
+    ChangeDataEvent, Error as EventError, ErrorDuplicateRequest, Event, EventEntries, EventLogType,
+    EventRow, EventRowOpType, Event_oneof_event,
 };
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -77,7 +77,7 @@ pub struct Downstream {
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
-    sink: Option<BatchSender<(usize, Event)>>,
+    sink: Option<BatchSender<(usize, ChangeDataEvent)>>,
     state: Arc<AtomicCell<DownstreamState>>,
 }
 
@@ -105,8 +105,10 @@ impl Downstream {
 
     /// Sink events to the downstream.
     /// The size of `Error` and `ResolvedTS` are considered zero.
-    pub fn sink_event(&self, mut change_data_event: Event, size: usize) {
-        change_data_event.set_request_id(self.req_id);
+    pub fn sink_event(&self, mut event: Event, size: usize) {
+        event.set_request_id(self.req_id);
+        let mut change_data_event = ChangeDataEvent::default();
+        change_data_event.mut_events().push(event);
         if self
             .sink
             .as_ref()
@@ -118,7 +120,7 @@ impl Downstream {
         }
     }
 
-    pub fn set_sink(&mut self, sink: BatchSender<(usize, Event)>) {
+    pub fn set_sink(&mut self, sink: BatchSender<(usize, ChangeDataEvent)>) {
         self.sink = Some(sink);
     }
 
@@ -784,18 +786,20 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
-            let (events, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
-                Ok((events, rx)) => (events, rx),
+            let (resps, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
+                Ok((resps, rx)) => (resps, rx),
                 Err(e) => panic!("unexpected recv error: {:?}", e.0),
             };
             rx_wrap.set(Some(rx));
-            let mut events = events.unwrap();
-            assert_eq!(events.len(), 1);
-            for e in &events {
-                assert_eq!(e.1.get_request_id(), request_id);
+            let mut resps = resps.unwrap();
+            assert_eq!(resps.len(), 1);
+            for r in &resps {
+                for e in r.1.get_events() {
+                    assert_eq!(e.get_request_id(), request_id);
+                }
             }
-            let (_, change_data_event) = &mut events[0];
-            let event = change_data_event.event.take().unwrap();
+            let (_, change_data_event) = &mut resps[0];
+            let event = change_data_event.events[0].event.take().unwrap();
             match event {
                 Event_oneof_event::Error(err) => err,
                 _ => panic!("unknown event"),
@@ -906,20 +910,23 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let check_event = |event_rows: Vec<EventRow>| {
-            let (events, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
-                Ok((events, rx)) => (events, rx),
+            let (resps, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
+                Ok((resps, rx)) => (resps, rx),
                 Err(e) => panic!("unexpected recv error: {:?}", e.0),
             };
             rx_wrap.set(Some(rx));
-            let mut events = events.unwrap();
-            assert_eq!(events.len(), 1);
-            for e in &events {
-                assert_eq!(e.1.get_request_id(), request_id);
+            let mut resps = resps.unwrap();
+            assert_eq!(resps.len(), 1);
+            for r in &resps {
+                for e in r.1.get_events() {
+                    assert_eq!(e.get_request_id(), request_id);
+                }
             }
-            let (_, change_data_event) = &mut events[0];
-            assert_eq!(change_data_event.region_id, region_id);
-            assert_eq!(change_data_event.index, 0);
-            let event = change_data_event.event.take().unwrap();
+            let (_, change_data_event) = resps.remove(0);
+            let mut event = change_data_event.events.to_vec().remove(0);
+            assert_eq!(event.region_id, region_id);
+            assert_eq!(event.index, 0);
+            let event = event.event.take().unwrap();
             match event {
                 Event_oneof_event::Entries(entries) => {
                     assert_eq!(entries.entries.as_slice(), event_rows.as_slice());

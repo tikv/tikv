@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use futures::{stream, Future, Sink, Stream};
 use grpcio::*;
-use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event};
+use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest};
 use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
@@ -33,12 +33,12 @@ impl ConnID {
 
 pub struct Conn {
     id: ConnID,
-    sink: BatchSender<(usize, Event)>,
+    sink: BatchSender<(usize, ChangeDataEvent)>,
     downstreams: HashMap<u64, DownstreamID>,
 }
 
 impl Conn {
-    pub fn new(sink: BatchSender<(usize, Event)>) -> Conn {
+    pub fn new(sink: BatchSender<(usize, ChangeDataEvent)>) -> Conn {
         Conn {
             id: ConnID::new(),
             sink,
@@ -54,7 +54,7 @@ impl Conn {
         self.downstreams
     }
 
-    pub fn get_sink(&self) -> BatchSender<(usize, Event)> {
+    pub fn get_sink(&self) -> BatchSender<(usize, ChangeDataEvent)> {
         self.sink.clone()
     }
 
@@ -159,21 +159,25 @@ impl ChangeData for Service {
                 // The size of the response should not exceed CDC_MAX_RESP_SIZE.
                 // Split the events into multiple responses by CDC_MAX_RESP_SIZE here.
                 let events_len = events.len();
-                let mut event_vecs = vec![Vec::with_capacity(events_len)];
+                let mut resp_vecs = Vec::with_capacity(events_len);
+                resp_vecs.push(ChangeDataEvent::default());
                 let mut current_events_size = 0;
                 for (size, event) in events {
-                    if current_events_size + size >= CDC_MAX_RESP_SIZE {
-                        event_vecs.push(Vec::with_capacity(events_len));
+                    if current_events_size >= CDC_MAX_RESP_SIZE {
+                        resp_vecs.push(ChangeDataEvent::default());
                         current_events_size = 0;
                     }
                     current_events_size += size;
-                    event_vecs.last_mut().unwrap().push(event);
+                    if event.resolved_ts.is_some() {
+                        resp_vecs.last_mut().unwrap().resolved_ts = event.resolved_ts.clone();
+                    }
+                    event.events.into_iter().for_each(|e| {
+                        resp_vecs.last_mut().unwrap().mut_events().push(e);
+                    });
                 }
-                let resps = event_vecs.into_iter().map(|events| {
-                    let mut resp = ChangeDataEvent::default();
-                    resp.set_events(events.into());
-                    (resp, WriteFlags::default())
-                });
+                let resps = resp_vecs
+                    .into_iter()
+                    .map(|resp| (resp, WriteFlags::default()));
                 stream::iter_ok(resps)
             })
             .flatten()
