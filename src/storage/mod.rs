@@ -49,12 +49,15 @@ use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::Future;
 use futures03::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
+use parking_lot::deadlock;
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::{
     borrow::Cow,
     iter,
     sync::{atomic, Arc},
+    thread,
+    time::Duration,
 };
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
@@ -180,6 +183,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         );
 
         info!("Storage started.");
+
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_secs(10));
+            let deadlocks = deadlock::check_deadlock();
+            if deadlocks.is_empty() {
+                continue;
+            }
+
+            println!("{} deadlocks detected", deadlocks.len());
+            for (i, threads) in deadlocks.iter().enumerate() {
+                println!("Deadlock #{}", i);
+                for t in threads {
+                    println!("Thread Id {:#?}", t.thread_id());
+                    println!("{:#?}", t.backtrace());
+                }
+            }
+        });
 
         Ok(Storage {
             engine,
