@@ -8,6 +8,7 @@ use std::time::Duration;
 use std::{cmp, io};
 
 use futures::Future;
+use futures03::compat::Compat;
 use tokio_core::reactor::Handle;
 
 use engine_traits::KvEngine;
@@ -18,6 +19,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
+use raft_engine::RaftEngine;
 
 use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::cmd_resp::new_error;
@@ -407,7 +409,7 @@ where
 pub struct Runner<EK, ER, T>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     T: PdClient,
 {
     store_id: u64,
@@ -430,7 +432,7 @@ where
 impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     T: PdClient,
 {
     const INTERVAL_DIVISOR: u32 = 2;
@@ -476,7 +478,7 @@ where
         task: String,
     ) {
         let router = self.router.clone();
-        let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
+        let f = Compat::new(self.pd_client.ask_split(region.clone())).then(move |resp| {
             match resp {
                 Ok(mut resp) => {
                     info!(
@@ -526,71 +528,72 @@ where
         }
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
-        let f = self
-            .pd_client
-            .ask_batch_split(region.clone(), split_keys.len())
-            .then(move |resp| {
-                match resp {
-                    Ok(mut resp) => {
-                        info!(
-                            "try to batch split region";
-                            "region_id" => region.get_id(),
-                            "new_region_ids" => ?resp.get_ids(),
-                            "region" => ?region,
-                            "task" => task,
-                        );
+        let f = Compat::new(
+            self.pd_client
+                .ask_batch_split(region.clone(), split_keys.len()),
+        )
+        .then(move |resp| {
+            match resp {
+                Ok(mut resp) => {
+                    info!(
+                        "try to batch split region";
+                        "region_id" => region.get_id(),
+                        "new_region_ids" => ?resp.get_ids(),
+                        "region" => ?region,
+                        "task" => task,
+                    );
 
-                        let req = new_batch_split_region_request(
-                            split_keys,
-                            resp.take_ids().into(),
-                            right_derive,
+                    let req = new_batch_split_region_request(
+                        split_keys,
+                        resp.take_ids().into(),
+                        right_derive,
+                    );
+                    let region_id = region.get_id();
+                    let epoch = region.take_region_epoch();
+                    send_admin_request(&router, region_id, epoch, peer, req, callback)
+                }
+                // When rolling update, there might be some old version tikvs that don't support batch split in cluster.
+                // In this situation, PD version check would refuse `ask_batch_split`.
+                // But if update time is long, it may cause large Regions, so call `ask_split` instead.
+                Err(Error::Incompatible) => {
+                    let (region_id, peer_id) = (region.id, peer.id);
+                    info!(
+                        "ask_batch_split is incompatible, use ask_split instead";
+                        "region_id" => region_id
+                    );
+                    let task = Task::AskSplit {
+                        region,
+                        split_key: split_keys.pop().unwrap(),
+                        peer,
+                        right_derive,
+                        callback,
+                    };
+                    if let Err(Stopped(t)) = scheduler.schedule(task) {
+                        error!(
+                            "failed to notify pd to split: Stopped";
+                            "region_id" => region_id,
+                            "peer_id" =>  peer_id
                         );
-                        let region_id = region.get_id();
-                        let epoch = region.take_region_epoch();
-                        send_admin_request(&router, region_id, epoch, peer, req, callback)
-                    }
-                    // When rolling update, there might be some old version tikvs that don't support batch split in cluster.
-                    // In this situation, PD version check would refuse `ask_batch_split`.
-                    // But if update time is long, it may cause large Regions, so call `ask_split` instead.
-                    Err(Error::Incompatible) => {
-                        let (region_id, peer_id) = (region.id, peer.id);
-                        info!(
-                            "ask_batch_split is incompatible, use ask_split instead";
-                            "region_id" => region_id
-                        );
-                        let task = Task::AskSplit {
-                            region,
-                            split_key: split_keys.pop().unwrap(),
-                            peer,
-                            right_derive,
-                            callback,
-                        };
-                        if let Err(Stopped(t)) = scheduler.schedule(task) {
-                            error!(
-                                "failed to notify pd to split: Stopped";
-                                "region_id" => region_id,
-                                "peer_id" =>  peer_id
-                            );
-                            match t {
-                                Task::AskSplit { callback, .. } => {
-                                    callback.invoke_with_response(new_error(box_err!(
-                                        "failed to split: Stopped"
-                                    )));
-                                }
-                                _ => unreachable!(),
+                        match t {
+                            Task::AskSplit { callback, .. } => {
+                                callback.invoke_with_response(new_error(box_err!(
+                                    "failed to split: Stopped"
+                                )));
                             }
+                            _ => unreachable!(),
                         }
                     }
-                    Err(e) => {
-                        warn!(
-                            "ask batch split failed";
-                            "region_id" => region.get_id(),
-                            "err" => ?e,
-                        );
-                    }
                 }
-                Ok(())
-            });
+                Err(e) => {
+                    warn!(
+                        "ask batch split failed";
+                        "region_id" => region.get_id(),
+                        "err" => ?e,
+                    );
+                }
+            }
+            Ok(())
+        });
         handle.spawn(f)
     }
 
@@ -616,16 +619,20 @@ where
             .region_keys_read
             .observe(region_stat.read_keys as f64);
 
-        let f = self
-            .pd_client
-            .region_heartbeat(term, region.clone(), peer, region_stat, replication_status)
-            .map_err(move |e| {
-                debug!(
-                    "failed to send heartbeat";
-                    "region_id" => region.get_id(),
-                    "err" => ?e
-                );
-            });
+        let f = Compat::new(self.pd_client.region_heartbeat(
+            term,
+            region.clone(),
+            peer,
+            region_stat,
+            replication_status,
+        ))
+        .map_err(move |e| {
+            debug!(
+                "failed to send heartbeat";
+                "region_id" => region.get_id(),
+                "err" => ?e
+            );
+        });
         handle.spawn(f);
     }
 
@@ -703,9 +710,7 @@ where
             .set(available as i64);
 
         let router = self.router.clone();
-        let f = self
-            .pd_client
-            .store_heartbeat(stats)
+        let f = Compat::new(self.pd_client.store_heartbeat(stats))
             .map_err(|e| {
                 error!("store heartbeat failed"; "err" => ?e);
             })
@@ -718,7 +723,7 @@ where
     }
 
     fn handle_report_batch_split(&self, handle: &Handle, regions: Vec<metapb::Region>) {
-        let f = self.pd_client.report_batch_split(regions).map_err(|e| {
+        let f = Compat::new(self.pd_client.report_batch_split(regions)).map_err(|e| {
             warn!("report split failed"; "err" => ?e);
         });
         handle.spawn(f);
@@ -731,10 +736,8 @@ where
         peer: metapb::Peer,
     ) {
         let router = self.router.clone();
-        let f = self
-            .pd_client
-            .get_region_by_id(local_region.get_id())
-            .then(move |resp| {
+        let f =
+            Compat::new(self.pd_client.get_region_by_id(local_region.get_id())).then(move |resp| {
                 match resp {
                     Ok(Some(pd_region)) => {
                         if is_epoch_stale(
@@ -805,8 +808,8 @@ where
     fn schedule_heartbeat_receiver(&mut self, handle: &Handle) {
         let router = self.router.clone();
         let store_id = self.store_id;
-        let f = self
-            .pd_client
+        let f = Compat::new(
+            self.pd_client
             .handle_region_heartbeat_response(self.store_id, move |mut resp| {
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
@@ -875,7 +878,7 @@ where
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
-            })
+            }))
             .map_err(|e| panic!("unexpected error: {:?}", e))
             .map(move |_| {
                 info!(
@@ -929,7 +932,7 @@ where
 impl<EK, ER, T> Runnable<Task<EK>> for Runner<EK, ER, T>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     T: PdClient,
 {
     fn run(&mut self, task: Task<EK>, handle: &Handle) {
@@ -974,7 +977,7 @@ where
             Task::AutoSplit { split_infos } => {
                 for split_info in split_infos {
                     if let Ok(Some(region)) =
-                        self.pd_client.get_region_by_id(split_info.region_id).wait()
+                        Compat::new(self.pd_client.get_region_by_id(split_info.region_id)).wait()
                     {
                         self.handle_ask_batch_split(
                             handle,
@@ -1145,7 +1148,7 @@ fn send_admin_request<EK, ER>(
     callback: Callback<EK::Snapshot>,
 ) where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     let cmd_type = request.get_cmd_type();
 
@@ -1172,7 +1175,7 @@ fn send_destroy_peer_message<EK, ER>(
     pd_region: metapb::Region,
 ) where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     let mut message = RaftMessage::default();
     message.set_region_id(local_region.get_id());
