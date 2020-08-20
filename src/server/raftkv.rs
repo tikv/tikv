@@ -27,6 +27,7 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
+use tikv_util::minitrace::{self, Event};
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
 
@@ -204,6 +205,7 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
             .map_err(From::from)
     }
 
+    #[minitrace::trace(Event::TiKvRaftKvExecWriteRequests as u32)]
     fn exec_write_requests(
         &self,
         ctx: &Context,
@@ -239,11 +241,15 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
 
+        let handle = minitrace::trace_crossthread();
         self.router
             .send_command_txn_extra(
                 cmd,
                 txn_extra,
                 StoreCallback::Write(Box::new(move |resp| {
+                    let mut handle = handle;
+                    handle.trace_enable(Event::TiKvScheduleWriteTask as u32);
+
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
                 })),
@@ -313,6 +319,7 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         write_modifies(&self.engine, modifies)
     }
 
+    #[minitrace::trace(Event::TiKvRaftKvAsyncWrite as u32)]
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
         if batch.modifies.is_empty() {

@@ -1,38 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::Result;
-use minitrace::jaeger::thrift_compact_encode;
-use minitrace::{Collector, TraceDetails};
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::time::Duration;
-use tipb::TracingProperty;
+use tikv_util::minitrace::{jaeger::thrift_compact_encode, Collector, Event, TraceDetails};
 use tokio::net::UdpSocket;
 use tokio::runtime::{Builder, Runtime};
 
-use protobuf::Message;
 #[cfg(feature = "protobuf-codec")]
 use protobuf::ProtobufEnum;
-
-pub type Event = tipb::TracingEvent;
-
-#[cfg(feature = "protobuf-codec")]
-pub type Key = tipb::TracingPropertyKey;
-#[cfg(feature = "prost-codec")]
-pub type Key = tipb::tracing_property::Key;
-
-/// Attach a property to the current span
-#[inline]
-pub fn property(key: Key, value: String) {
-    minitrace::property_closure(|| {
-        let mut p = TracingProperty::default();
-        p.set_key(key);
-        p.set_value(value);
-
-        // All fields are set properly. It's all right to unwrap.
-        p.write_to_bytes().unwrap()
-    })
-}
 
 /// Tracing Reporter
 pub trait Reporter: Send + Sync {
@@ -122,7 +99,8 @@ impl JaegerReporter {
             },
             // transform encoded property in protobuf to key-value strings
             |bytes| {
-                if let Ok(mut property) = protobuf::parse_from_bytes::<TracingProperty>(bytes) {
+                if let Ok(mut property) = protobuf::parse_from_bytes::<tipb::TracingProperty>(bytes)
+                {
                     let value = property.take_value();
 
                     let key = property.get_key();

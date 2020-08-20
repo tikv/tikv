@@ -13,6 +13,7 @@ use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use raft::SnapshotStatus;
 use std::cell::RefCell;
+use tikv_util::minitrace::{self, Event};
 use tikv_util::time::ThreadReadId;
 use txn_types::TxnExtra;
 
@@ -213,6 +214,7 @@ where
         local_reader.release_snapshot_cache();
     }
 
+    #[minitrace::trace(Event::TiKvRaftStoreSendCommandTxnExtra as u32)]
     fn send_command_txn_extra(
         &self,
         req: RaftCmdRequest,

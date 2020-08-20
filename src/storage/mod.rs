@@ -32,7 +32,6 @@ pub use self::{
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
-use crate::server::tracing;
 use crate::storage::metrics::CommandKind;
 use crate::storage::{
     config::Config,
@@ -49,7 +48,6 @@ use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::Future;
 use futures03::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
-use minitrace::prelude::*;
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::{
@@ -57,6 +55,7 @@ use std::{
     iter,
     sync::{atomic, Arc},
 };
+use tikv_util::minitrace::{self, new_span, prelude::*, Event};
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
 use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
@@ -212,7 +211,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         kv::snapshot(engine, read_id, ctx)
             .map_err(txn::Error::from)
             .map_err(Error::from)
-            .trace_async(tracing::Event::TiKvSnapshot as u32)
+            .trace_async(Event::TiKvSnapshot as u32)
     }
 
     pub fn release_snapshot(&self) {
@@ -220,12 +219,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     #[inline]
+    #[minitrace::trace(Event::TiKvTlsEngine as u32)]
     fn with_tls_engine<F, R>(f: F) -> R
     where
         F: FnOnce(&E) -> R,
     {
-        let _g = minitrace::new_span(tracing::Event::TiKvTlsEngine as u32);
-
         // Safety: the read pools ensure that a TLS engine exists.
         unsafe { with_tls_engine(f) }
     }
@@ -726,7 +724,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(())
     }
 
-    #[minitrace::trace(tracing::Event::TiKvRawGetKeyValue as u32)]
+    #[minitrace::trace(Event::TiKvRawGetKeyValue as u32)]
     fn raw_get_key_value<S: Snapshot>(
         snapshot: &S,
         cf: String,
@@ -762,7 +760,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 {
-                    let _g = minitrace::new_span(tracing::Event::TiKvCollectMetrics as u32);
+                    let _g = new_span(Event::TiKvCollectMetrics as u32);
 
                     tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
                     KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -774,12 +772,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
-                {
-                    let begin_instant = Instant::now_coarse();
-                    let mut stats = Statistics::default();
-                    let r = Self::raw_get_key_value(&snapshot, cf, key, &mut stats);
 
-                    let _g = minitrace::new_span(tracing::Event::TiKvCollectMetrics as u32);
+                let begin_instant = Instant::now_coarse();
+                let mut stats = Statistics::default();
+                let r = Self::raw_get_key_value(&snapshot, cf, key, &mut stats);
+
+                {
+                    let _g = new_span(Event::TiKvCollectMetrics as u32);
 
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
@@ -789,10 +788,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
-                    r
                 }
+
+                r
             }
-            .trace_task(tracing::Event::TiKvRawGetTask as u32),
+            .trace_task(Event::TiKvRawGetTask as u32),
             priority,
             thread_rng().next_u64(),
         );

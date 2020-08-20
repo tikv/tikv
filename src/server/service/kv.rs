@@ -9,7 +9,7 @@ use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
-use crate::server::tracing::{self, Event};
+use crate::server::tracing;
 use crate::server::Error;
 use crate::storage::{
     errors::{
@@ -33,11 +33,11 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
-use minitrace::prelude::*;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, AndThenWith};
+use tikv_util::minitrace::{self, prelude::*, Event};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
 use txn_types::{self, Key};
@@ -156,6 +156,9 @@ macro_rules! requests_to_trace {
 requests_to_trace!(
   raw_get -> Event::TiKvRawGet,
   coprocessor -> Event::TiKvCoprocessor,
+  raw_put -> Event::TiKvRawPut,
+  raw_delete -> Event::TiKvRawDelete,
+  raw_delete_range -> Event::TiKvRawDeleteRange,
 );
 
 macro_rules! handle_request {
@@ -168,7 +171,6 @@ macro_rules! handle_request {
             let begin_instant = Instant::now_coarse();
 
             let (_root_span, collector) = trace_may_enable!($fn_name, !self.tracing_reporter.is_null());
-            tracing::property(tracing::Key::Foo, "Bar".to_string()); // FIXME: for demonstration
             let reporter = self.tracing_reporter.clone();
 
             let future = $future_name(&self.storage, req)

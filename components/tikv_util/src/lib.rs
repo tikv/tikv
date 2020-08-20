@@ -50,6 +50,7 @@ pub mod keybuilder;
 pub mod logger;
 pub mod lru;
 pub mod metrics;
+pub mod minitrace;
 pub mod mpsc;
 pub mod sys;
 pub mod threadpool;
