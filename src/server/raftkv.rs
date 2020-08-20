@@ -27,7 +27,7 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
-use tikv_util::minitrace::{self, Event};
+use tikv_util::minitrace::{self, new_span, Event};
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
 
@@ -137,6 +137,7 @@ fn check_raft_cmd_response(resp: &mut RaftCmdResponse, req_cnt: usize) -> Result
     Ok(())
 }
 
+#[minitrace::trace(Event::TiKvRaftStoreOnWriteResult as u32)]
 fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
     let cb_ctx = new_ctx(&write_resp.response);
     if let Err(e) = check_raft_cmd_response(&mut write_resp.response, req_cnt) {
@@ -241,15 +242,11 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
 
-        let handle = minitrace::trace_crossthread();
         self.router
             .send_command_txn_extra(
                 cmd,
                 txn_extra,
                 StoreCallback::Write(Box::new(move |resp| {
-                    let mut handle = handle;
-                    handle.trace_enable(Event::TiKvScheduleWriteTask as u32);
-
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
                 })),
@@ -369,23 +366,26 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
             ctx,
             reqs,
             batch.extra,
-            Box::new(move |(cb_ctx, res)| match res {
-                Ok(CmdRes::Resp(_)) => {
-                    ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .write
-                        .observe(begin_instant.elapsed_secs());
-                    fail_point!("raftkv_async_write_finish");
-                    cb((cb_ctx, Ok(())))
-                }
-                Ok(CmdRes::Snap(_)) => cb((
-                    cb_ctx,
-                    Err(box_err!("unexpect snapshot, should mutate instead.")),
-                )),
-                Err(e) => {
-                    let status_kind = get_status_kind_from_engine_error(&e);
-                    ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                    cb((cb_ctx, Err(e)))
+            Box::new(move |(cb_ctx, res)| {
+                let _g = new_span(Event::TiKvRaftKvExecWriteRequestsCallback as u32);
+                match res {
+                    Ok(CmdRes::Resp(_)) => {
+                        ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
+                        ASYNC_REQUESTS_DURATIONS_VEC
+                            .write
+                            .observe(begin_instant.elapsed_secs());
+                        fail_point!("raftkv_async_write_finish");
+                        cb((cb_ctx, Ok(())))
+                    }
+                    Ok(CmdRes::Snap(_)) => cb((
+                        cb_ctx,
+                        Err(box_err!("unexpect snapshot, should mutate instead.")),
+                    )),
+                    Err(e) => {
+                        let status_kind = get_status_kind_from_engine_error(&e);
+                        ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
+                        cb((cb_ctx, Err(e)))
+                    }
                 }
             }),
         )

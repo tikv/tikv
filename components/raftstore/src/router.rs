@@ -162,7 +162,7 @@ where
     }
 
     pub fn send_store(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        self.router.send_control(msg).map_err(|e| {
+        self.router.send_control(msg.into()).map_err(|e| {
             RaftStoreError::Transport(match e {
                 TrySendError::Full(_) => DiscardReason::Full,
                 TrySendError::Disconnected(_) => DiscardReason::Disconnected,
@@ -235,7 +235,7 @@ where
     ) -> RaftStoreResult<()> {
         if let Err(SendError(msg)) = self
             .router
-            .force_send(region_id, PeerMsg::SignificantMsg(msg))
+            .force_send(region_id, PeerMsg::SignificantMsg(msg).into())
         {
             // TODO: panic here once we can detect system is shutting down reliably.
             error!("failed to send significant msg"; "msg" => ?msg);
@@ -247,13 +247,13 @@ where
 
     fn casual_send(&self, region_id: u64, msg: CasualMessage<EK>) -> RaftStoreResult<()> {
         self.router
-            .send(region_id, PeerMsg::CasualMessage(msg))
+            .send(region_id, PeerMsg::CasualMessage(msg).into())
             .map_err(|e| handle_send_error(region_id, e))
     }
 
     fn broadcast_unreachable(&self, store_id: u64) {
         let _ = self
             .router
-            .send_control(StoreMsg::StoreUnreachable { store_id });
+            .send_control(StoreMsg::StoreUnreachable { store_id }.into());
     }
 }

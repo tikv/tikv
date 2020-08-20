@@ -186,7 +186,6 @@ fail = { git = "https://github.com/tikv/fail-rs.git", rev = "2cf1175a1a5cc2c70bd
 prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6" }
 
 [patch.'https://github.com/pingcap/tipb.git']
-#tipb = { path = "../tipb", default-features = false }
 tipb = { git = "https://github.com/zhongzc/tipb.git", branch = "tracing", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]

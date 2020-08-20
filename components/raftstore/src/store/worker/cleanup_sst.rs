@@ -86,7 +86,7 @@ impl<C: PdClient, S: StoreRouter> Runner<C, S> {
         // We need to send back the result to check for the stale
         // peer, which may ingest the stale SST before it is
         // destroyed.
-        let msg = StoreMsg::ValidateSSTResult { invalid_ssts };
+        let msg = StoreMsg::ValidateSSTResult { invalid_ssts }.into();
         if let Err(e) = self.store_router.send(msg) {
             error!("send validate sst result failed"; "err" => %e, "error_code" => %e.error_code());
         }

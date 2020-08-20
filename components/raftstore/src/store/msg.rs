@@ -22,8 +22,10 @@ use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
+use tikv_util::minitrace::{self, Event};
 
 use super::{AbstractPeer, RegionSnapshot};
+use bitflags::_core::fmt::Formatter;
 
 #[derive(Debug)]
 pub struct ReadResponse<S: Snapshot> {
@@ -74,6 +76,24 @@ impl<S> Callback<S>
 where
     S: Snapshot,
 {
+    #[inline]
+    pub fn tracing_instrument(self, event: Event) -> Self {
+        let handle = minitrace::trace_crossthread();
+        match self {
+            Callback::None => self,
+            Callback::Read(cb) => Callback::Read(Box::new(move |r| {
+                let mut handle = handle;
+                let _g = handle.trace_enable(event as u32);
+                cb(r)
+            })),
+            Callback::Write(cb) => Callback::Write(Box::new(move |w| {
+                let mut handle = handle;
+                let _g = handle.trace_enable(event as u32);
+                cb(w)
+            })),
+        }
+    }
+
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
             Callback::None => (),
@@ -348,6 +368,10 @@ impl<S: Snapshot> RaftCommand<S> {
     }
 }
 
+pub struct Context {
+    pub tracing_handle: minitrace::CrossthreadTrace,
+}
+
 /// Message that can be sent to a peer.
 pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
@@ -378,6 +402,22 @@ pub enum PeerMsg<EK: KvEngine> {
     UpdateReplicationMode,
 }
 
+pub struct PeerMessage<EK: KvEngine> {
+    pub msg: PeerMsg<EK>,
+    pub context: Context,
+}
+
+impl<EK: KvEngine> From<PeerMsg<EK>> for PeerMessage<EK> {
+    fn from(msg: PeerMsg<EK>) -> Self {
+        Self {
+            msg,
+            context: Context {
+                tracing_handle: minitrace::trace_crossthread(),
+            },
+        }
+    }
+}
+
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -396,6 +436,12 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
         }
+    }
+}
+
+impl<EK: KvEngine> fmt::Debug for PeerMessage<EK> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.msg.fmt(f)
     }
 }
 
@@ -430,6 +476,22 @@ pub enum StoreMsg {
     UpdateReplicationMode(ReplicationStatus),
 }
 
+pub struct StoreMessage {
+    pub msg: StoreMsg,
+    pub context: Context,
+}
+
+impl From<StoreMsg> for StoreMessage {
+    fn from(msg: StoreMsg) -> Self {
+        Self {
+            msg,
+            context: Context {
+                tracing_handle: minitrace::trace_crossthread(),
+            },
+        }
+    }
+}
+
 impl fmt::Debug for StoreMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
@@ -453,5 +515,11 @@ impl fmt::Debug for StoreMsg {
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
         }
+    }
+}
+
+impl fmt::Debug for StoreMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.msg.fmt(f)
     }
 }
