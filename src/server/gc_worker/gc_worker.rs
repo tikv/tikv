@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use engine_rocks::RocksEngine;
 use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures::Future;
+use futures03::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
@@ -53,9 +53,7 @@ pub trait GcSafePointProvider: Send + 'static {
 
 impl<T: PdClient + 'static> GcSafePointProvider for Arc<T> {
     fn get_safe_point(&self) -> Result<TimeStamp> {
-        let future = self.get_gc_safe_point();
-        future
-            .wait()
+        block_on(self.get_gc_safe_point())
             .map(Into::into)
             .map_err(|e| box_err!("failed to get safe point from PD: {:?}", e))
     }
