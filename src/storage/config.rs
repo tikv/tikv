@@ -45,6 +45,12 @@ pub struct Config {
     #[config(skip)]
     // Reserve disk space to make tikv would have enough space to compact when disk is full.
     pub reserve_space: ReadableSize,
+    // If this option is enabled, prewrite will support async commit and locks in the in-memory
+    // lock table are checked for reading requests.
+    // CAUTION: This feature is not ready for production and this option may be removed in the
+    // future.
+    #[config(skip)]
+    pub enable_async_commit: bool,
     #[config(submodule)]
     pub block_cache: BlockCacheConfig,
 }
@@ -57,9 +63,10 @@ impl Default for Config {
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             max_key_size: DEFAULT_MAX_KEY_SIZE,
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
-            scheduler_worker_pool_size: if cpu_num >= 16 { 8 } else { 4 },
+            scheduler_worker_pool_size: if cpu_num >= 16.0 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVER_SPACE_SIZE),
+            enable_async_commit: false,
             block_cache: BlockCacheConfig::default(),
         }
     }

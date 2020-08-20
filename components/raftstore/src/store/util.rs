@@ -46,13 +46,16 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::default();
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
+    peer.set_role(metapb::PeerRole::Voter);
     peer
 }
 
 // a helper function to create learner peer easily.
 pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
-    let mut peer = new_peer(store_id, peer_id);
-    peer.set_is_learner(true);
+    let mut peer = metapb::Peer::default();
+    peer.set_store_id(store_id);
+    peer.set_id(peer_id);
+    peer.set_role(metapb::PeerRole::Learner);
     peer
 }
 
@@ -160,7 +163,7 @@ pub fn check_region_epoch(
             | AdminCmdType::InvalidAdmin
             | AdminCmdType::ComputeHash
             | AdminCmdType::VerifyHash => {}
-            AdminCmdType::ChangePeer => check_conf_ver = true,
+            AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2 => check_conf_ver = true,
             AdminCmdType::Split
             | AdminCmdType::BatchSplit
             | AdminCmdType::PrepareMerge
@@ -295,9 +298,9 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
     // Because every store can only have one replica for the same region,
     // so just one round check is enough.
     lhs.get_peers().iter().all(|lp| {
-        rhs.get_peers().iter().any(|rp| {
-            rp.get_store_id() == lp.get_store_id() && rp.get_is_learner() == lp.get_is_learner()
-        })
+        rhs.get_peers()
+            .iter()
+            .any(|rp| rp.get_store_id() == lp.get_store_id() && rp.get_role() == lp.get_role())
     })
 }
 
@@ -606,13 +609,19 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
     // Here `learners` means learner peers, and `nodes` means voter peers.
     let mut conf_state = ConfState::default();
     for p in region.get_peers() {
-        if p.get_is_learner() {
+        // TODO: when using joint consensus we also need to consider joint state
+        // which contains other roles like IncommingVoter and DemotingVoter
+        if is_learner(p) {
             conf_state.mut_learners().push(p.get_id());
         } else {
             conf_state.mut_voters().push(p.get_id());
         }
     }
     conf_state
+}
+
+pub fn is_learner(peer: &metapb::Peer) -> bool {
+    peer.get_role() == metapb::PeerRole::Learner
 }
 
 pub struct KeysInfoFormatter<
@@ -915,7 +924,7 @@ mod tests {
 
         let mut peer = metapb::Peer::default();
         peer.set_id(2);
-        peer.set_is_learner(true);
+        peer.set_role(metapb::PeerRole::Learner);
         region.mut_peers().push(peer);
 
         let cs = conf_state_from_region(&region);
@@ -930,8 +939,8 @@ mod tests {
         region.mut_peers().push(new_peer(1, 1));
         region.mut_peers().push(new_learner_peer(2, 2));
 
-        assert!(!find_peer(&region, 1).unwrap().get_is_learner());
-        assert!(find_peer(&region, 2).unwrap().get_is_learner());
+        assert!(!is_learner(find_peer(&region, 1).unwrap()));
+        assert!(is_learner(find_peer(&region, 2).unwrap()));
 
         assert!(remove_peer(&mut region, 1).is_some());
         assert!(remove_peer(&mut region, 1).is_none());
@@ -1192,6 +1201,7 @@ mod tests {
             AdminCmdType::Split,
             AdminCmdType::BatchSplit,
             AdminCmdType::ChangePeer,
+            AdminCmdType::ChangePeerV2,
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
             AdminCmdType::RollbackMerge,
