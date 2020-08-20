@@ -111,6 +111,7 @@ pub mod ctor {
         }
     }
 
+    #[derive(Clone)]
     pub struct ColumnFamilyOptions {
         level_zero_file_num_compaction_trigger: Option<i32>,
     }
