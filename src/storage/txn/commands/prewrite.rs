@@ -14,7 +14,7 @@ use crate::storage::txn::{Error, Result};
 use crate::storage::{
     txn::commands::{Command, CommandExt, TypedCommand},
     types::PrewriteResult,
-    Context, Error as StorageError, ProcessResult, ScanMode, Snapshot,
+    Context, Error as StorageError, ProcessResult, Snapshot,
 };
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
