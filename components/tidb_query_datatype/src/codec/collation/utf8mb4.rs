@@ -589,7 +589,7 @@ mod tests {
             (Collation::Utf8Mb4UnicodeCi, 3),
         ];
         let cases = vec![
-            // (sa, sb, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi])
+            // (sa, sb, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi, Utf8Mb4UnicodeCi])
             (
                 "a".as_bytes(),
                 "a".as_bytes(),
@@ -723,7 +723,7 @@ mod tests {
             (Collation::Utf8Mb4UnicodeCi, 3),
         ];
         let cases = vec![
-            // (str, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi])
+            // (str, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi, Utf8Mb4UnicodeCi])
             (
                 "a",
                 [vec![0x61], vec![0x61], vec![0x00, 0x41], vec![0x0E, 0x33]],
