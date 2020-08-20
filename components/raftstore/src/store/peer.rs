@@ -3387,10 +3387,10 @@ mod tests {
             });
         }
         for remove_i in &[0, 65, 98] {
-            let _ = pq.take(remove_i, (remove_i / 10) + 1);
+            let _ = pq.take(*remove_i, (*remove_i / 10) + 1);
             for i in 1..=100 {
                 let pt = pq.find_propose_time(((i / 10) + 1, i));
-                if i <= remove_i || i % 3 == 1 {
+                if i <= *remove_i || i % 3 == 1 {
                     assert!(pt.is_none())
                 } else {
                     assert!(pt.is_some())
