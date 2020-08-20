@@ -5,11 +5,10 @@ use std::time::Duration;
 use std::time::Instant;
 
 use engine_traits::{ColumnFamilyOptions, DBOptions, KvEngine};
-use futures_cpupool::CpuPool;
-use futures_util::compat::{Compat, Future01CompatExt};
-use futures_util::future::FutureExt;
+use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tokio::runtime::Runtime;
 
 use super::Config;
 use super::Result;
@@ -73,7 +72,7 @@ pub struct ImportModeSwitcher<E: KvEngine> {
 }
 
 impl<E: KvEngine> ImportModeSwitcher<E> {
-    pub fn new(cfg: &Config, executor: &CpuPool, db: E) -> ImportModeSwitcher<E> {
+    pub fn new(cfg: &Config, executor: &Runtime, db: E) -> ImportModeSwitcher<E> {
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
         let timeout = cfg.import_mode_timeout.0;
@@ -114,9 +113,7 @@ impl<E: KvEngine> ImportModeSwitcher<E> {
                 }
             }
         };
-        executor
-            .spawn(Compat::new(timer_loop.unit_error().boxed()))
-            .forget();
+        executor.spawn(timer_loop);
 
         ImportModeSwitcher { inner }
     }

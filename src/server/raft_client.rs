@@ -12,6 +12,8 @@ use super::{Config, Result};
 use crossbeam::channel::SendError;
 use engine_rocks::RocksEngine;
 use futures::{future, stream, Future, Poll, Sink, Stream};
+use futures03::compat::Compat;
+use futures03::stream::StreamExt;
 use grpcio::{
     ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
 };
@@ -64,11 +66,14 @@ impl Conn {
         let client2 = client1.clone();
 
         let (tx, rx) = batch::unbounded::<RaftMessage>(RAFT_MSG_NOTIFY_SIZE);
-        let rx = batch::BatchReceiver::new(
-            rx,
-            RAFT_MSG_MAX_BATCH_SIZE,
-            Vec::new,
-            RaftMsgCollector::new(cfg.max_grpc_send_msg_len as usize),
+        let rx = Compat::new(
+            batch::BatchReceiver::new(
+                rx,
+                RAFT_MSG_MAX_BATCH_SIZE,
+                Vec::new,
+                RaftMsgCollector::new(cfg.max_grpc_send_msg_len as usize),
+            )
+            .map(|item| std::result::Result::<_, ()>::Ok(item)),
         );
 
         // Use a mutex to make compiler happy.

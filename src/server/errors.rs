@@ -9,7 +9,7 @@ use grpcio::Error as GrpcError;
 use hyper::Error as HttpError;
 use openssl::error::ErrorStack as OpenSSLError;
 use protobuf::ProtobufError;
-use tokio_sync::oneshot::error::RecvError;
+use tokio::sync::oneshot::error::RecvError;
 
 use super::snap::Task as SnapTask;
 use crate::storage::kv::Error as EngineError;

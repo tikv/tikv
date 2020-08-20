@@ -28,6 +28,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 use tikv_util::timer::{SteadyTimer, Timer};
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
+use tokio::runtime::{Builder as TokioBuilder, Runtime};
 use tokio_threadpool::{Builder, ThreadPool};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -222,7 +223,7 @@ pub struct Endpoint<T> {
     tso_worker: ThreadPool,
     store_meta: Arc<Mutex<StoreMeta>>,
 
-    workers: ThreadPool,
+    workers: Runtime,
 
     min_resolved_ts: TimeStamp,
     min_ts_region_id: u64,
@@ -237,7 +238,12 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         observer: CdcObserver,
         store_meta: Arc<Mutex<StoreMeta>>,
     ) -> Endpoint<T> {
-        let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
+        let workers = TokioBuilder::new()
+            .threaded_scheduler()
+            .thread_name("cdcwkr")
+            .core_threads(4)
+            .build()
+            .unwrap();
         let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
         let ep = Endpoint {
             capture_regions: HashMap::default(),
@@ -502,13 +508,12 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             deregister_downstream(Error::Request(e.into()));
             return;
         }
-        self.workers.spawn(fut.then(move |res| {
-            match res {
+        self.workers.spawn(async move {
+            match fut.await {
                 Ok(resp) => init.on_change_cmd(resp),
                 Err(e) => deregister_downstream(Error::Other(box_err!(e))),
-            };
-            Ok(())
-        }));
+            }
+        });
     }
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {

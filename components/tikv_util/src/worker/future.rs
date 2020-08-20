@@ -8,10 +8,11 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder, JoinHandle};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::executor::block_on;
 use futures::future;
 use futures::stream::StreamExt;
 
-use tokio::runtime::{Handle, Runtime};
+use tokio::task::LocalSet;
 
 use super::metrics::*;
 
@@ -36,7 +37,7 @@ impl<T> From<Stopped<T>> for Box<dyn Error + Sync + Send + 'static> {
 }
 
 pub trait Runnable<T: Display> {
-    fn run(&mut self, t: T, handle: &Handle);
+    fn run(&mut self, t: T);
     fn shutdown(&mut self) {}
 }
 
@@ -104,17 +105,16 @@ where
     let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[name]);
     let metrics_handled_task_count = WORKER_HANDLED_TASK_VEC.with_label_values(&[name]);
 
-    let mut runtime = Runtime::new().unwrap();
-    let handle = runtime.handle().clone();
+    let handle = LocalSet::new();
     {
         let f = rx.take_while(|t| future::ready(t.is_some())).for_each(|t| {
-            runner.run(t.unwrap(), &handle);
+            runner.run(t.unwrap());
             metrics_pending_task_count.dec();
             metrics_handled_task_count.inc();
             future::ready(())
         });
         // `UnboundedReceiver` never returns an error.
-        runtime.block_on(f);
+        block_on(handle.run_until(f));
     }
     runner.shutdown();
     tikv_alloc::remove_thread_memory_accessor();
@@ -194,7 +194,7 @@ mod tests {
 
     use crate::timer::GLOBAL_TIMER_HANDLE;
     use futures::compat::Future01CompatExt;
-    use tokio::runtime::Handle;
+    use tokio::task::spawn_local;
     use tokio_timer::timer;
 
     use super::*;
@@ -205,13 +205,13 @@ mod tests {
     }
 
     impl Runnable<u64> for StepRunner {
-        fn run(&mut self, step: u64, handle: &Handle) {
+        fn run(&mut self, step: u64) {
             self.ch.send(step).unwrap();
             let f = self
                 .timer
                 .delay(Instant::now() + Duration::from_millis(step))
                 .compat();
-            handle.spawn(f);
+            spawn_local(f);
         }
 
         fn shutdown(&mut self) {

@@ -45,7 +45,7 @@ sysinfo = "0.14"
 tikv_alloc = { path = "../tikv_alloc" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
-tokio = { version = "0.2", features = ["rt-core", "sync"] }
+tokio = { version = "0.2", features = ["rt-core", "rt-util", "sync"] }
 tokio-executor = "0.1"
 tokio-timer = "0.2"
 url = "2"

@@ -21,7 +21,7 @@ use kvproto::pdpb::{self, Member};
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
 use security::SecurityManager;
 use tikv_util::time::duration_to_sec;
-use tikv_util::{Either, HandyRwLock};
+use tikv_util::{Either, EitherExt, HandyRwLock};
 use txn_types::TimeStamp;
 
 use super::metrics::*;

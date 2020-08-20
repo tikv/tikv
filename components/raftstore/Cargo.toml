@@ -51,7 +51,6 @@ openssl = "0.10"
 fs2 = "0.4"
 futures = "0.1"
 futures03 = { package = "futures", version = "0.3", features = ["compat"] }
-futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
 hex = "0.4"
 into_other = { path = "../into_other" }
@@ -79,7 +78,7 @@ tidb_query_datatype = { path = "../tidb_query_datatype" }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
-tokio = { version = "0.2", features = ["sync"] }
+tokio = { version = "0.2", features = ["rt-core", "sync"] }
 tokio-core = "0.1"
 tokio-threadpool = "0.1.13"
 tokio-timer = "0.2"

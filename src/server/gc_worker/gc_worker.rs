@@ -20,7 +20,6 @@ use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
 use tikv_util::worker::{
     FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
 };
-use tokio_core::reactor::Handle;
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
@@ -407,7 +406,7 @@ impl<E: Engine> GcRunner<E> {
 
 impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
     #[inline]
-    fn run(&mut self, task: GcTask, _handle: &Handle) {
+    fn run(&mut self, task: GcTask) {
         let enum_label = task.get_enum_label();
 
         GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();

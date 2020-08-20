@@ -53,6 +53,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util" }
 tokio-threadpool = "0.1"
+tokio = { version = "0.2", features = ["rt-threaded"] }
 txn_types = { path = "../txn_types" }
 fail = "0.3"
 lazy_static = "1.3"

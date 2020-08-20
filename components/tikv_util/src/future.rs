@@ -1,7 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::callback::must_call;
+use futures::channel::mpsc;
 use futures::channel::oneshot as futures_oneshot;
+use futures::future::{self, Future, FutureExt, TryFutureExt};
+use futures::stream::{Stream, StreamExt};
 use tokio::sync::oneshot;
 
 /// Generates a paired future and callback so that when callback is being called, its result
@@ -51,4 +54,26 @@ where
         arg_on_drop,
     );
     (callback, future)
+}
+
+/// Create a stream proxy with buffer representing the remote stream. The returned task
+/// will receive messages from the remote stream as much as possible.
+pub fn create_stream_with_buffer<T, ST>(
+    s: ST,
+    size: usize,
+) -> (
+    impl Stream<Item = T> + Send + 'static,
+    impl Future<Output = ()> + Send + 'static,
+)
+where
+    ST: Stream<Item = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = mpsc::channel::<T>(size);
+    let driver = s
+        .then(future::ok::<T, mpsc::SendError>)
+        .forward(tx)
+        .map_err(|e| warn!("stream with buffer send error"; "error" => %e))
+        .map(|_| ());
+    (rx, driver)
 }

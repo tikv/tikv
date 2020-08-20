@@ -31,7 +31,7 @@ use std::time::Duration;
 use std::{env, thread, u64};
 
 use fs2::FileExt;
-use futures::future::Either;
+pub use futures::future::Either;
 use rand::rngs::ThreadRng;
 
 pub mod buffer_vec;

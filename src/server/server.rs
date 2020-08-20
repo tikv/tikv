@@ -24,7 +24,7 @@ use raftstore::store::SnapManager;
 use security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Worker;
-use tikv_util::Either;
+use tikv_util::{Either, EitherExt};
 
 use super::load_statistics::*;
 use super::raft_client::RaftClient;

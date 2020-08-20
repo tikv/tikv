@@ -22,10 +22,11 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use futures::{Async, Future, Poll};
+use futures03::compat::Future01CompatExt;
 use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
 use tikv_util::config::ReadableDuration;
-use tokio_core::reactor::Handle;
+use tokio::task::spawn_local;
 
 struct DelayInner {
     timer: tokio_timer::Delay,
@@ -481,7 +482,7 @@ impl WaiterManager {
             + timeout.into_duration_with_ceiling(self.default_wait_for_lock_timeout.as_millis())
     }
 
-    fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter) {
+    fn handle_wait_for(&mut self, waiter: Waiter) {
         let (waiter_ts, lock) = (waiter.start_ts, waiter.lock);
         let wait_table = self.wait_table.clone();
         let detector_scheduler = self.detector_scheduler.clone();
@@ -495,7 +496,7 @@ impl WaiterManager {
         if let Some(old) = self.wait_table.borrow_mut().add_waiter(waiter) {
             old.notify();
         };
-        handle.spawn(f);
+        spawn_local(f.compat());
     }
 
     fn handle_wake_up(&mut self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
@@ -561,7 +562,7 @@ impl WaiterManager {
 }
 
 impl FutureRunnable<Task> for WaiterManager {
-    fn run(&mut self, task: Task, handle: &Handle) {
+    fn run(&mut self, task: Task) {
         match task {
             Task::WaitFor {
                 start_ts,
@@ -571,7 +572,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 timeout,
             } => {
                 let waiter = Waiter::new(start_ts, cb, pr, lock, self.normalize_deadline(timeout));
-                self.handle_wait_for(handle, waiter);
+                self.handle_wait_for(waiter);
                 TASK_COUNTER_METRICS.wait_for.inc();
             }
             Task::WakeUp {

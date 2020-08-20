@@ -492,6 +492,7 @@ dependencies = [
  "test_util",
  "tikv",
  "tikv_util",
+ "tokio 0.2.13",
  "tokio-threadpool",
  "txn_types",
 ]
@@ -3302,7 +3303,6 @@ dependencies = [
  "fs2",
  "futures 0.1.29",
  "futures 0.3.4",
- "futures-executor",
  "futures-util",
  "hex 0.4.2",
  "into_other",

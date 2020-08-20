@@ -81,7 +81,7 @@ pub const INVALID_ID: u64 = 0;
 /// cluster id in trait interface every time, so passing the cluster id when
 /// creating the PdClient is enough and the PdClient will use this cluster id
 /// all the time.
-pub trait PdClient: Send + Sync {
+pub trait PdClient: Send + Sync + 'static {
     /// Returns the cluster ID.
     fn get_cluster_id(&self) -> Result<u64> {
         unimplemented!();
