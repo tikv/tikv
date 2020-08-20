@@ -136,7 +136,6 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         snapshot: S,
         context: WriteContext<'_, L, P>,
     ) -> Result<WriteResult> {
-        let mut scan_mode = None;
         let rows = self.mutations.len();
         if rows > FORWARD_MIN_MUTATIONS_NUM {
             self.mutations.sort_by(|a, b| a.key().cmp(b.key()));
@@ -159,25 +158,14 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                 // Because in most instances, there won't be more than one transaction write the same key. Seek
                 // operation could skip nonexistent key in CF_LOCK.
                 self.skip_constraint_check = true;
-                scan_mode = Some(ScanMode::Forward)
             }
         }
-        let mut txn = if scan_mode.is_some() {
-            MvccTxn::for_scan(
-                snapshot,
-                scan_mode,
-                self.start_ts,
-                !self.ctx.get_not_fill_cache(),
-                context.pd_client,
-            )
-        } else {
-            MvccTxn::new(
-                snapshot,
-                self.start_ts,
-                !self.ctx.get_not_fill_cache(),
-                context.pd_client,
-            )
-        };
+        let mut txn = MvccTxn::new(
+            snapshot,
+            self.start_ts,
+            !self.ctx.get_not_fill_cache(),
+            context.pd_client,
+        );
 
         // Set extra op here for getting the write record when check write conflict in prewrite.
         txn.extra_op = context.extra_op;

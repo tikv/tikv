@@ -1942,6 +1942,7 @@ mod readpool_tests {
         assert!(cfg.is_unified_pool_enabled());
 
         cfg.coprocessor.use_unified_pool = Some(false);
+        cfg.scheduler.use_unified_pool = Some(false);
         assert!(!cfg.is_unified_pool_enabled());
     }
 

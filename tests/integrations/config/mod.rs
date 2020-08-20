@@ -732,6 +732,9 @@ fn test_do_not_use_unified_readpool_with_legacy_config() {
 
         [readpool.coprocessor]
         normal-concurrency = 1
+
+        [readpool.scheduler]
+        normal-concurrency = 1
     "#;
     let cfg: TiKvConfig = toml::from_str(content).unwrap();
     assert!(!cfg.readpool.is_unified_pool_enabled());

@@ -597,6 +597,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
             statistics,
             pipelined_pessimistic_lock: self.inner.pipelined_pessimistic_lock,
         };
+        let priority = task.cmd.priority();
 
         match task.cmd.process_write(snapshot, context) {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
@@ -630,8 +631,24 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                     };
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
-                        fail_point!("scheduler_async_write_finish");
-                        sched.on_write_finished(cid, write_finished_pr, result, pipelined, tag);
+                        sched
+                            .get_sched_pool()
+                            .clone()
+                            .spawn(
+                                async move {
+                                    fail_point!("scheduler_async_write_finish");
+                                    sched.on_write_finished(
+                                        cid,
+                                        write_finished_pr,
+                                        result,
+                                        pipelined,
+                                        tag,
+                                    );
+                                },
+                                priority,
+                                0,
+                            )
+                            .unwrap();
                         KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                             .get(tag)
                             .observe(rows as f64);

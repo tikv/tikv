@@ -335,7 +335,7 @@ where
     E: KvEngine,
     W: WriteBatch + WriteBatchVecExt<E>,
 {
-    cbs: MustConsumeVec<ApplyCallback<E>>,
+    cbs: Vec<ApplyCallback<E>>,
     apply_res: Vec<ApplyRes<E::Snapshot>>,
     flush_notifier: Vec<FlushCallback>,
     kv_wb: Option<W>,
@@ -359,7 +359,7 @@ where
         ApplyContext::<E, W> {
             core,
             kv_wb: None,
-            cbs: MustConsumeVec::new("callback of apply context"),
+            cbs: vec![],
             apply_res: vec![],
             flush_notifier: vec![],
             kv_wb_last_bytes: 0,
@@ -484,6 +484,7 @@ where
                 cb(need_sync);
             }
         }
+
         need_sync
     }
 
@@ -1937,6 +1938,7 @@ where
         // We must notify other fsm to avoid them block when this fsm is waiting for source region
         if !ctx.flush_notifier.is_empty() || !ctx.cbs.is_empty() {
             ctx.flush();
+            ctx.prepare_for(self);
         }
         self.ready_source_region_id = f.await.unwrap();
         self.handle_start = Instant::now_coarse();
