@@ -65,7 +65,7 @@ impl CommandExt for PrewritePessimistic {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
         let mut txn = MvccTxn::new(
             snapshot,
@@ -76,6 +76,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
         // Althrough pessimistic prewrite doesn't read the write record for checking conflict, we still set extra op here
         // for getting the written keys.
         txn.extra_op = context.extra_op;
+
+        // If async commit is disabled in TiKV, set the secondary_keys in the request to None
+        // so we won't do anything for async commit.
+        if !context.enable_async_commit {
+            self.secondary_keys = None;
+        }
 
         let async_commit_pk: Option<Key> = self
             .secondary_keys

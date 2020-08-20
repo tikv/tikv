@@ -10,7 +10,7 @@ use tempfile::Builder;
 use engine_rocks::util::{self as rocks_util, RocksCFOptions};
 use engine_rocks::{RocksColumnFamilyOptions, RocksDBOptions};
 use engine_traits::{
-    ColumnFamilyOptions, KvEngines, MetricsFlusher, MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    ColumnFamilyOptions, Engines, MetricsFlusher, MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 
 #[test]
@@ -46,7 +46,7 @@ fn test_metrics_flusher() {
     assert!(!raft_engine.is_titan());
 
     let shared_block_cache = false;
-    let engines = KvEngines::new(engine, raft_engine, shared_block_cache);
+    let engines = Engines::new(engine, raft_engine, shared_block_cache);
     let mut metrics_flusher = MetricsFlusher::new(engines);
     metrics_flusher.set_flush_interval(Duration::from_millis(100));
 

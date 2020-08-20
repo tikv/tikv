@@ -14,7 +14,7 @@ use crate::storage::{
     concurrency_manager::ConcurrencyManager, config::Config as StorageConfig, Storage,
 };
 use engine_rocks::RocksEngine;
-use engine_traits::{KvEngines, Peekable};
+use engine_traits::{Engines, Peekable};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
@@ -135,7 +135,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
@@ -207,7 +207,7 @@ where
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engines: &KvEngines<RocksEngine, RocksEngine>) -> Result<u64> {
+    fn check_store(&self, engines: &Engines<RocksEngine, RocksEngine>) -> Result<u64> {
         let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
@@ -252,7 +252,7 @@ where
         }
     }
 
-    fn bootstrap_store(&self, engines: &KvEngines<RocksEngine, RocksEngine>) -> Result<u64> {
+    fn bootstrap_store(&self, engines: &Engines<RocksEngine, RocksEngine>) -> Result<u64> {
         let store_id = self.alloc_id()?;
         debug!("alloc store id"; "store_id" => store_id);
 
@@ -265,7 +265,7 @@ where
     #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
         &self,
-        engines: &KvEngines<RocksEngine, RocksEngine>,
+        engines: &Engines<RocksEngine, RocksEngine>,
         store_id: u64,
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
@@ -289,7 +289,7 @@ where
 
     fn check_or_prepare_bootstrap_cluster(
         &self,
-        engines: &KvEngines<RocksEngine, RocksEngine>,
+        engines: &Engines<RocksEngine, RocksEngine>,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
         if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
@@ -305,7 +305,7 @@ where
 
     fn bootstrap_cluster(
         &mut self,
-        engines: &KvEngines<RocksEngine, RocksEngine>,
+        engines: &Engines<RocksEngine, RocksEngine>,
         first_region: metapb::Region,
     ) -> Result<()> {
         let region_id = first_region.get_id();
@@ -370,7 +370,7 @@ where
     fn start_store<T>(
         &mut self,
         store_id: u64,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,

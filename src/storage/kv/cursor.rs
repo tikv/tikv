@@ -499,7 +499,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 #[cfg(test)]
 mod tests {
     use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_traits::{IterOptions, KvEngines, SyncMutable};
+    use engine_traits::{Engines, IterOptions, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -510,7 +510,7 @@ mod tests {
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn load_default_dataset(engines: KvEngines<RocksEngine, RocksEngine>) -> (Region, DataSet) {
+    fn load_default_dataset(engines: Engines<RocksEngine, RocksEngine>) -> (Region, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
