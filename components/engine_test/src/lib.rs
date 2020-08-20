@@ -29,7 +29,7 @@
 /// Types and constructors for the "raft" engine
 pub mod raft {
     use engine_traits::Result;
-    use crate::ctor::{EngineConstructorExt, EngineOpts};
+    use crate::ctor::{EngineConstructorExt, DBOptions, CFOptions};
 
     #[cfg(feature = "test-engine-raft-panic")]
     pub use engine_panic::{
@@ -41,15 +41,15 @@ pub mod raft {
         RocksEngine as RaftTestEngine,
     };
 
-    pub fn new_all_cfs_engine(path: &str, opts: Option<EngineOpts>) -> Result<RaftTestEngine> {
-        RaftTestEngine::new_all_cfs_engine(path, opts)
+    pub fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<RaftTestEngine> {
+        RaftTestEngine::new_engine_opt(path, db_opt, cfs_opts)
     }
 }
 
 /// Types and constructors for the "kv" engine
 pub mod kv {
     use engine_traits::Result;
-    use crate::ctor::{EngineConstructorExt, EngineOpts};
+    use crate::ctor::{EngineConstructorExt, DBOptions, CFOptions};
 
     #[cfg(feature = "test-engine-kv-panic")]
     pub use engine_panic::{
@@ -61,8 +61,8 @@ pub mod kv {
         RocksEngine as KvTestEngine,
     };
 
-    pub fn new_all_cfs_engine(path: &str, opts: Option<EngineOpts>) -> Result<KvTestEngine> {
-        KvTestEngine::new_all_cfs_engine(path, opts)
+    pub fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<KvTestEngine> {
+        KvTestEngine::new_engine_opt(path, db_opt, cfs_opts)
     }
 }
 
@@ -88,112 +88,103 @@ pub mod ctor {
     /// Specifically, this means that RocksDB constructors should set up
     /// all properties collectors, always.
     pub trait EngineConstructorExt: Sized {
-        /// Create an `EngineOpts` suitable for the engine
-        fn default_opts() -> EngineOpts;
-
-        /// Create a new engine with all column families, as defined
-        /// by `ALL_CFS`.
-        fn new_all_cfs_engine(path: &str, opts: Option<EngineOpts>) -> Result<Self>;
-
-        /// Create a new engine with all "large" column families, as defined
-        /// by `LARGE_CFS`.
-        fn new_large_cfs_engine(path: &str, opts: Option<EngineOpts>) -> Result<Self>;
-
-        /// Create a new engine with specified column families
-        fn new_engine_cfs(path: &str, cfs: &[&str], opts: Option<EngineOpts>) -> Result<Self>;
+        /// Create a new engine with specified column families and options
+        fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self>;
     }
 
-    /// A limited set of engine construction options that can be supported
-    /// in some form across multiple engines.
-    pub struct EngineOpts {
-        /// Applies to all column families
-        pub level_zero_file_num_compaction_trigger: Option<i32>,
+    pub struct DBOptions;
+
+    impl DBOptions {
+        pub fn new() -> DBOptions {
+            DBOptions
+        }
+    }
+
+    pub struct CFOptions<'a> {
+        pub cf: &'a str,
+        pub options: ColumnFamilyOptions,
+    }
+
+    impl<'a> CFOptions<'a> {
+        pub fn new(cf: &'a str, options: ColumnFamilyOptions) -> CFOptions<'a> {
+            CFOptions { cf, options }
+        }
+    }
+
+    pub struct ColumnFamilyOptions {
+        level_zero_file_num_compaction_trigger: Option<i32>,
+    }
+
+    impl ColumnFamilyOptions {
+        pub fn new() -> ColumnFamilyOptions {
+            ColumnFamilyOptions {
+                level_zero_file_num_compaction_trigger: None,
+            }
+        }
+
+        pub fn set_level_zero_file_num_compaction_trigger(&mut self, n: i32) {
+            self.level_zero_file_num_compaction_trigger = Some(n);
+        }
+
+        pub fn get_level_zero_file_num_compaction_trigger(&self) -> Option<i32> {
+            self.level_zero_file_num_compaction_trigger
+        }
     }
 
     mod panic {
         use engine_traits::Result;
-        use super::{EngineConstructorExt, EngineOpts};
+        use engine_panic::PanicEngine;
+        use super::{EngineConstructorExt, DBOptions, CFOptions};
 
         impl EngineConstructorExt for engine_panic::PanicEngine {
-            fn default_opts() -> EngineOpts {
-                EngineOpts {
-                    level_zero_file_num_compaction_trigger: None,
-                }
-            }
-
-            fn new_all_cfs_engine(_path: &str, _opts: Option<EngineOpts>) -> Result<Self> {
-                Ok(engine_panic::PanicEngine)
-            }
-
-            fn new_large_cfs_engine(_path: &str, _opts: Option<EngineOpts>) -> Result<Self> {
-                Ok(engine_panic::PanicEngine)
-            }
-
-            fn new_engine_cfs(_path: &str, _cfs: &[&str], _opts: Option<EngineOpts>) -> Result<Self> {
-                Ok(engine_panic::PanicEngine)
+            fn new_engine_opt(_path: &str, _db_opt: DBOptions, _cfs_opts: Vec<CFOptions>) -> Result<Self> {
+                Ok(PanicEngine)
             }
         }
     }
 
     mod rocks {
-        use super::{EngineConstructorExt, EngineOpts};
+        use super::{EngineConstructorExt, ColumnFamilyOptions, DBOptions, CFOptions};
 
         use engine_traits::Result;
-        use engine_traits::{ALL_CFS, LARGE_CFS};
 
         use engine_rocks::RocksEngine;
         // FIXME: Don't use "raw" module here
-        use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
-        use engine_rocks::raw_util::{new_engine_opt, CFOptions};
+        use engine_rocks::raw::{ColumnFamilyOptions as RocksColumnFamilyOptions, DBOptions as RocksDBOptions};
+        use engine_rocks::raw_util::{new_engine_opt as rocks_new_engine_opt, CFOptions as RocksCFOptions};
         use engine_rocks::properties::{
             MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
         };
         use std::sync::Arc;
 
         impl EngineConstructorExt for engine_rocks::RocksEngine {
-            fn default_opts() -> EngineOpts {
-                EngineOpts {
-                    level_zero_file_num_compaction_trigger: None,
-                }
-            }
-
-            fn new_all_cfs_engine(path: &str, opts: Option<EngineOpts>) -> Result<Self> {
-                Self::new_engine_cfs(path, ALL_CFS, opts)
-            }
-
-            fn new_large_cfs_engine(path: &str, opts: Option<EngineOpts>) -> Result<Self> {
-                Self::new_engine_cfs(path, LARGE_CFS, opts)
-            }
-
-            fn new_engine_cfs(path: &str, cfs: &[&str], opts: Option<EngineOpts>) -> Result<Self> {
-                let db_opts = DBOptions::new();
-                let cfs_opts = cfs
+            fn new_engine_opt(path: &str, _db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self> {
+                let rocks_db_opts = RocksDBOptions::new();
+                let rocks_cfs_opts = cfs_opts
                     .iter()
-                    .map(|cf| {
-                        let mut cf_opts = ColumnFamilyOptions::new();
-                        set_standard_cf_opts(&mut cf_opts);
-                        set_cf_opts(&mut cf_opts, &opts);
-                        CFOptions::new(cf, cf_opts)
+                    .map(|cf_opts| {
+                        let mut rocks_cf_opts = RocksColumnFamilyOptions::new();
+                        set_standard_cf_opts(&mut rocks_cf_opts);
+                        set_cf_opts(&mut rocks_cf_opts, &cf_opts.options);
+                        RocksCFOptions::new(cf_opts.cf, rocks_cf_opts)
                     })
                     .collect();
-                let engine = Arc::new(new_engine_opt(path, db_opts, cfs_opts).unwrap());
+                let engine = Arc::new(rocks_new_engine_opt(path, rocks_db_opts, rocks_cfs_opts).unwrap());
 
                 Ok(RocksEngine::from_db(engine))
             }
         }
 
-        fn set_standard_cf_opts(cf_opts: &mut ColumnFamilyOptions) {
+        fn set_standard_cf_opts(cf_opts: &mut RocksColumnFamilyOptions) {
             let f = Box::new(RangePropertiesCollectorFactory::default());
             cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
             let f = Box::new(MvccPropertiesCollectorFactory::default());
             cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
         }
 
-        fn set_cf_opts(cf_opts: &mut ColumnFamilyOptions, opts: &Option<EngineOpts>) {
-            if let Some(ref opts) = opts {
-                if let Some(trigger) = opts.level_zero_file_num_compaction_trigger {
-                    cf_opts.set_level_zero_file_num_compaction_trigger(trigger);
-                }
+        fn set_cf_opts(rocks_cf_opts: &mut RocksColumnFamilyOptions, cf_opts: &ColumnFamilyOptions) {
+            if let Some(trigger) = cf_opts.get_level_zero_file_num_compaction_trigger() {
+                rocks_cf_opts.set_level_zero_file_num_compaction_trigger(trigger);
             }
         }
     }
