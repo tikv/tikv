@@ -1,13 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{FlowStatsReporter, Statistics};
 use crate::storage::metrics::*;
 use prometheus::local::*;
 use std::cell::RefCell;
 use std::time::Duration;
+use std::sync::{Arc, Mutex};
 use tikv_util::collections::HashMap;
 use tikv_util::read_pool::PoolTicker;
-pub use tikv_util::read_pool::{ReadPool, ReadPoolError, ReadPoolHandle};
+pub use tikv_util::read_pool::{ReadPool, ReadPoolError, ReadPoolHandle, ReadPoolBuilder};
+use crate::config::UnifiedReadPoolConfig;
+use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics};
 use tikv_util::time::Instant;
 
 pub struct SchedLocalMetrics {
@@ -146,6 +148,29 @@ where
             m.command_keyread_histogram_vec.flush();
         });
     }
+}
+
+
+pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
+    config: &UnifiedReadPoolConfig,
+    reporter: R,
+    engine: E,
+) -> ReadPool {
+    let unified_read_pool_name = get_unified_read_pool_name();
+    let mut builder = ReadPoolBuilder::new(ReporterTicker::new(reporter));
+    let raftkv = Arc::new(Mutex::new(engine));
+    builder
+        .name_prefix(unified_read_pool_name)
+        .stack_size(config.stack_size.0 as usize)
+        .thread_count(config.min_thread_count, config.max_thread_count)
+        .after_start(move || {
+            let engine = raftkv.lock().unwrap().clone();
+            set_tls_engine(engine);
+        })
+        .before_stop(|| unsafe {
+            destroy_tls_engine::<E>();
+        })
+        .build()
 }
 
 #[cfg(test)]
