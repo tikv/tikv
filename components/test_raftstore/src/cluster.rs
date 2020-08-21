@@ -1112,8 +1112,10 @@ impl<T: Simulator> Cluster<T> {
         let timer = Instant::now();
         loop {
             self.reset_leader_of_region(region_id);
-            if self.leader_of_region(region_id) == Some(leader.clone()) {
-                return;
+            if let Some(l) = self.leader_of_region(region_id) {
+                if l.get_id() == leader.get_id() && l.get_store_id() == leader.get_store_id() {
+                    return;
+                }
             }
             if timer.elapsed() > Duration::from_secs(5) {
                 panic!("failed to transfer leader to [{}] {:?}", region_id, leader);
