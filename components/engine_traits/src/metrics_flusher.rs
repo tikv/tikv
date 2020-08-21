@@ -12,14 +12,14 @@ const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const FLUSHER_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 
 pub struct MetricsFlusher<K: KvEngine, R: KvEngine> {
-    pub engines: KvEngines<K, R>,
+    pub engines: Engines<K, R>,
     interval: Duration,
     handle: Option<JoinHandle<()>>,
     sender: Option<Sender<bool>>,
 }
 
 impl<K: KvEngine, R: KvEngine> MetricsFlusher<K, R> {
-    pub fn new(engines: KvEngines<K, R>) -> Self {
+    pub fn new(engines: Engines<K, R>) -> Self {
         MetricsFlusher {
             engines,
             interval: DEFAULT_FLUSH_INTERVAL,

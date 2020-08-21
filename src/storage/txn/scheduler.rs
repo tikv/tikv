@@ -25,10 +25,9 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
-use kvproto::kvrpcpb::ExtraOp;
-use pd_client::PdClient;
 use rand::prelude::{thread_rng, RngCore};
 use tikv_util::read_pool::ReadPoolHandle;
+use kvproto::kvrpcpb::{CommandPri, ExtraOp};
 use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
 use txn_types::TimeStamp;
 
@@ -49,8 +48,10 @@ use crate::storage::txn::{
     Error, ProcessResult,
 };
 use crate::storage::{
-    get_priority_tag, types::StorageCallback, Error as StorageError,
-    ErrorInner as StorageErrorInner,
+    concurrency_manager::{ConcurrencyManager, KeyHandleGuard},
+    get_priority_tag,
+    types::StorageCallback,
+    Error as StorageError, ErrorInner as StorageErrorInner,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -136,7 +137,7 @@ impl TaskContext {
     }
 }
 
-struct SchedulerInner<L: LockManager, P: PdClient + 'static> {
+struct SchedulerInner<L: LockManager> {
     // slot_id -> { cid -> `TaskContext` } in the slot.
     task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
 
@@ -156,9 +157,11 @@ struct SchedulerInner<L: LockManager, P: PdClient + 'static> {
 
     lock_mgr: L,
 
-    pd_client: Arc<P>,
+    concurrency_manager: ConcurrencyManager,
 
     pipelined_pessimistic_lock: bool,
+
+    enable_async_commit: bool,
 }
 
 #[inline]
@@ -166,7 +169,7 @@ fn id_index(cid: u64) -> usize {
     cid as usize % TASKS_SLOTS_NUM
 }
 
-impl<L: LockManager, P: PdClient + 'static> SchedulerInner<L, P> {
+impl<L: LockManager> SchedulerInner<L> {
     /// Generates the next command ID.
     #[inline]
     fn gen_id(&self) -> u64 {
@@ -239,24 +242,25 @@ impl<L: LockManager, P: PdClient + 'static> SchedulerInner<L, P> {
 }
 
 /// Scheduler which schedules the execution of `storage::Command`s.
-pub struct Scheduler<E: Engine, L: LockManager, P: PdClient + 'static> {
+pub struct Scheduler<E: Engine, L: LockManager> {
     // `engine` is `None` means currently the program is in scheduler worker threads.
     engine: Option<E>,
-    inner: Arc<SchedulerInner<L, P>>,
+    inner: Arc<SchedulerInner<L>>,
 }
 
-unsafe impl<E: Engine, L: LockManager, P: PdClient + 'static> Send for Scheduler<E, L, P> {}
+unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
 
-impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
+impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Creates a scheduler.
     pub(in crate::storage) fn new(
         engine: E,
         lock_mgr: L,
-        pd_client: Arc<P>,
         worker_pool: ReadPoolHandle,
+        concurrency_manager: ConcurrencyManager,
         concurrency: usize,
         sched_pending_write_threshold: usize,
         pipelined_pessimistic_lock: bool,
+        enable_async_commit: bool,
     ) -> Self {
         // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
         // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
@@ -274,8 +278,9 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
             sched_pending_write_threshold,
             worker_pool,
             lock_mgr,
-            pd_client,
+            concurrency_manager,
             pipelined_pessimistic_lock,
+            enable_async_commit,
         });
 
         slow_log!(t.elapsed(), "initialized the transaction scheduler");
@@ -447,6 +452,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         cid: u64,
         pr: ProcessResult,
         result: EngineResult<()>,
+        lock_guards: Vec<KeyHandleGuard>,
         pipelined: bool,
         tag: metrics::CommandKind,
     ) {
@@ -460,6 +466,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         }
 
         debug!("write command finished"; "cid" => cid, "pipelined" => pipelined);
+        drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
 
         // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
@@ -592,10 +599,11 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
 
         let context = WriteContext {
             lock_mgr: &self.inner.lock_mgr,
-            pd_client: self.inner.pd_client.clone(),
+            concurrency_manager: self.inner.concurrency_manager.clone(),
             extra_op: task.extra_op,
             statistics,
             pipelined_pessimistic_lock: self.inner.pipelined_pessimistic_lock,
+            enable_async_commit: self.inner.enable_async_commit,
         };
         let priority = task.cmd.priority();
 
@@ -608,13 +616,14 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                 rows,
                 pr,
                 lock_info,
+                lock_guards,
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
                 if let Some((lock, is_first_lock, wait_timeout)) = lock_info {
                     scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout);
                 } else if to_be_write.modifies.is_empty() {
-                    scheduler.on_write_finished(cid, pr, Ok(()), false, tag);
+                    scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, tag);
                 } else {
                     let sched = scheduler.clone();
                     // The normal write process is respond to clients and release latches
@@ -641,6 +650,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                                         cid,
                                         write_finished_pr,
                                         result,
+                                        lock_guards,
                                         pipelined,
                                         tag,
                                     );
@@ -680,7 +690,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
     }
 }
 
-impl<E: Engine, L: LockManager, P: PdClient + 'static> Clone for Scheduler<E, L, P> {
+impl<E: Engine, L: LockManager> Clone for Scheduler<E, L> {
     fn clone(&self) -> Self {
         Scheduler {
             engine: self.engine.clone(),
