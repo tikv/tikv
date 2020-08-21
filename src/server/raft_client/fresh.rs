@@ -156,6 +156,8 @@ impl Buffer for BatchMessageBuffer {
         for entry in msg.get_message().get_entries() {
             msg_size += entry.data.len();
         }
+        // To avoid building too large batch, we limit each batch's size. Since `msg_size`
+        // is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
         if self.size > 0
             && (self.size + msg_size + GRPC_SEND_MSG_BUF >= self.cfg.max_grpc_send_msg_len as usize
                 || self.batch.get_msgs().len() >= RAFT_MSG_MAX_BATCH_SIZE)
@@ -612,6 +614,9 @@ where
         let client = back_end.connect(&addr);
         let mut res = back_end.batch_call(&client, addr.clone()).await;
         if res == Ok(()) {
+            // If the call is setup successfully, it will never finish. Returning `Ok(())` means the
+            // batch_call is not supported, we are probably connect to an old version of TiKV. So we
+            // need to fallback to use legacy API.
             res = back_end.call(&client, addr.clone()).await;
         }
         match res {
