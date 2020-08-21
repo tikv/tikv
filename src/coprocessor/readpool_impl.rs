@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::config::CoprReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
-use crate::storage::{Engine, FlowStatsReporter};
-use tikv_util::future_pool::{Builder, Config, FuturePool};
+use crate::storage::{Engine, FlowStatsReporter, FuturePoolTicker};
+use tikv_util::future_pool::{Config, FuturePool};
+use tikv_util::read_pool::{DefaultTicker, ReadPoolBuilder};
 
 use super::metrics::*;
 
@@ -25,9 +26,10 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
             let reporter = reporter.clone();
             let reporter2 = reporter.clone();
             let engine = Arc::new(Mutex::new(engine.clone()));
-            Builder::from_config(config)
+            let pool = ReadPoolBuilder::new(FuturePoolTicker::new(reporter))
                 .name_prefix(name)
-                .on_tick(move || tls_flush(&reporter))
+                .thread_count(config.workers, config.workers)
+                .stack_size(config.stack_size)
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                 .before_stop(move || {
                     // Safety: we call `set_` and `destroy_` with the same engine type.
@@ -36,7 +38,8 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
                     }
                     tls_flush(&reporter2)
                 })
-                .build()
+                .build_single_level_pool();
+            FuturePool::from_pool(pool, name, config.workers, config.max_tasks_per_worker)
         })
         .collect()
 }
@@ -52,11 +55,13 @@ pub fn build_read_pool_for_test<E: Engine>(
         .into_iter()
         .map(|config| {
             let engine = Arc::new(Mutex::new(engine.clone()));
-            Builder::from_config(config)
+            let pool = ReadPoolBuilder::new(DefaultTicker::default())
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                // Safety: we call `set_` and `destroy_` with the same engine type.
-                .before_stop(|| unsafe { destroy_tls_engine::<E>() })
-                .build()
+                .before_stop(|| unsafe {
+                    destroy_tls_engine::<E>();
+                })
+                .build_single_level_pool();
+            FuturePool::from_pool(pool, "test", config.workers, config.max_tasks_per_worker)
         })
         .collect()
 }

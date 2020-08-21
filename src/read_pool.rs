@@ -1,15 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::config::UnifiedReadPoolConfig;
+use crate::storage::kv::{
+    destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics,
+};
 use crate::storage::metrics::*;
 use prometheus::local::*;
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tikv_util::collections::HashMap;
 use tikv_util::read_pool::{PoolTicker, ReadPoolBuilder};
 pub use tikv_util::read_pool::{ReadPool, ReadPoolError, ReadPoolHandle};
 use tikv_util::time::Instant;
-use crate::config::UnifiedReadPoolConfig;
-use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics};
 
 pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,
@@ -155,19 +158,40 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     engine: E,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
-
     let mut builder = ReadPoolBuilder::new(ReporterTicker::new(reporter));
-    let pool = builder.name_prefix(unified_read_pool_name)
+    let raftkv = Arc::new(Mutex::new(engine));
+    let pool = builder
+        .name_prefix(unified_read_pool_name.clone())
+        .stack_size(config.stack_size.0 as usize)
         .thread_count(config.min_thread_count, config.max_thread_count)
+        .after_start(move || {
+            let engine = raftkv.lock().unwrap().clone();
+            set_tls_engine(engine);
+        })
+        .before_stop(|| unsafe {
+            destroy_tls_engine::<E>();
+        })
         .build_multi_level_pool();
-
     ReadPool::Yatp {
         pool,
-        running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
+        running_tasks: metrics::UNIFIED_READ_POOL_RUNNING_TASKS
             .with_label_values(&[&unified_read_pool_name]),
         max_tasks: config
             .max_tasks_per_worker
             .saturating_mul(config.max_thread_count),
+    }
+}
+
+mod metrics {
+    use prometheus::*;
+
+    lazy_static! {
+        pub static ref UNIFIED_READ_POOL_RUNNING_TASKS: IntGaugeVec = register_int_gauge_vec!(
+            "tikv_unified_read_pool_running_tasks",
+            "The number of running tasks in the unified read pool",
+            &["name"]
+        )
+        .unwrap();
     }
 }
 

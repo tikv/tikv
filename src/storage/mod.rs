@@ -27,7 +27,7 @@ pub use self::{
         CbContext, CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
         RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
     },
-    read_pool::{build_read_pool, build_read_pool_for_test},
+    read_pool::{build_read_pool, build_read_pool_for_test, FuturePoolTicker},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
@@ -172,7 +172,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let sched = TxnScheduler::new(
             engine.clone(),
             lock_mgr,
-            pd_client,
             worker_pool,
             concurrency_manager.clone(),
             config.scheduler_concurrency,

@@ -25,9 +25,9 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
+use kvproto::kvrpcpb::ExtraOp;
 use rand::prelude::{thread_rng, RngCore};
 use tikv_util::read_pool::ReadPoolHandle;
-use kvproto::kvrpcpb::{CommandPri, ExtraOp};
 use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
 use txn_types::TimeStamp;
 

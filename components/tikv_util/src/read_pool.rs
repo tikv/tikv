@@ -261,19 +261,6 @@ impl<T: PoolTicker> ReadPoolRunner<T> {
     }
 }
 
-mod metrics {
-    use prometheus::*;
-
-    lazy_static! {
-        pub static ref UNIFIED_READ_POOL_RUNNING_TASKS: IntGaugeVec = register_int_gauge_vec!(
-            "tikv_unified_read_pool_running_tasks",
-            "The number of running tasks in the unified read pool",
-            &["name"]
-        )
-        .unwrap();
-    }
-}
-
 pub struct ReadPoolBuilder<T: PoolTicker> {
     name_prefix: Option<String>,
     ticker: T,
@@ -283,7 +270,6 @@ pub struct ReadPoolBuilder<T: PoolTicker> {
     min_thread_count: usize,
     max_thread_count: usize,
     stack_size: usize,
-    max_tasks: usize,
 }
 
 impl<T: PoolTicker> ReadPoolBuilder<T> {
@@ -297,7 +283,6 @@ impl<T: PoolTicker> ReadPoolBuilder<T> {
             min_thread_count: 1,
             max_thread_count: 1,
             stack_size: 0,
-            max_tasks: std::usize::MAX,
         }
     }
 
@@ -318,8 +303,9 @@ impl<T: PoolTicker> ReadPoolBuilder<T> {
         self
     }
 
-    pub fn max_tasks(&mut self, tasks: usize) -> &mut Self {
-        self.max_tasks = tasks;
+    pub fn pool_size(&mut self, pool_size: usize) -> &mut Self {
+        self.min_thread_count = pool_size;
+        self.max_thread_count = pool_size;
         self
     }
 

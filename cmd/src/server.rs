@@ -42,12 +42,11 @@ use std::{
     sync::{Arc, Mutex},
     thread::JoinHandle,
 };
-use tikv::storage::kv::{destroy_tls_engine, set_tls_engine};
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
-    read_pool::{get_unified_read_pool_name, ReporterTicker},
+    read_pool::build_yatp_read_pool,
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
@@ -64,7 +63,7 @@ use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
-    read_pool::{ReadPool, ReadPoolBuilder},
+    read_pool::ReadPool,
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureWorker, Worker},
@@ -489,25 +488,11 @@ impl TiKVServer {
         let pd_sender = pd_worker.scheduler();
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
-            let cfg = &self.config.readpool.unified;
-            let raftkv = Arc::new(Mutex::new(self.engines.as_ref().unwrap().engine.clone()));
-            let pool = ReadPoolBuilder::new(ReporterTicker::new(pd_sender.clone()))
-                .name_prefix(get_unified_read_pool_name())
-                .thread_count(cfg.min_thread_count, cfg.max_thread_count)
-                .stack_size(cfg.stack_size.0 as usize)
-                .max_tasks(
-                    cfg.max_tasks_per_worker
-                        .saturating_mul(cfg.max_thread_count),
-                )
-                .after_start(move || {
-                    let engine = raftkv.lock().unwrap().clone();
-                    set_tls_engine(engine);
-                })
-                .before_stop(|| unsafe {
-                    destroy_tls_engine::<RaftKv<ServerRaftStoreRouter<RocksEngine>>>();
-                })
-                .build();
-            Some(pool)
+            Some(build_yatp_read_pool(
+                &self.config.readpool.unified,
+                pd_sender.clone(),
+                engines.engine.clone(),
+            ))
         } else {
             None
         };
