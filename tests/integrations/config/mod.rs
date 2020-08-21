@@ -86,6 +86,7 @@ fn test_serde_custom_tikv_config() {
         end_point_stream_batch_row_limit: 4096,
         end_point_enable_batch_if_possible: true,
         end_point_request_max_handle_duration: ReadableDuration::secs(12),
+        end_point_check_memory_locks: true,
         end_point_max_concurrency: 10,
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
@@ -112,16 +113,6 @@ fn test_serde_custom_tikv_config() {
             stack_size: ReadableSize::mb(20),
         },
         coprocessor: CoprReadPoolConfig {
-            use_unified_pool: Some(false),
-            high_concurrency: 2,
-            normal_concurrency: 4,
-            low_concurrency: 6,
-            max_tasks_per_worker_high: 2000,
-            max_tasks_per_worker_normal: 1000,
-            max_tasks_per_worker_low: 3000,
-            stack_size: ReadableSize::mb(12),
-        },
-        scheduler: CoprReadPoolConfig {
             use_unified_pool: Some(false),
             high_concurrency: 2,
             normal_concurrency: 4,
@@ -249,6 +240,7 @@ fn test_serde_custom_tikv_config() {
         info_log_dir: "/var".to_owned(),
         info_log_level: LogLevel::Info,
         rate_bytes_per_sec: ReadableSize::kb(1),
+        rate_limiter_refill_period: ReadableDuration::millis(10),
         rate_limiter_mode: DBRateLimiterMode::AllIo,
         auto_tuned: true,
         bytes_per_sync: ReadableSize::mb(1),
@@ -603,6 +595,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(2),
+        enable_async_commit: true,
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
@@ -658,6 +651,9 @@ fn test_serde_custom_tikv_config() {
         wait_for_lock_timeout: ReadableDuration::millis(10),
         wake_up_delay_duration: ReadableDuration::millis(100),
         pipelined: true,
+    };
+    value.cdc = CdcConfig {
+        min_ts_interval: ReadableDuration::secs(4),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
@@ -731,9 +727,6 @@ fn test_do_not_use_unified_readpool_with_legacy_config() {
         normal-concurrency = 1
 
         [readpool.coprocessor]
-        normal-concurrency = 1
-
-        [readpool.scheduler]
         normal-concurrency = 1
     "#;
     let cfg: TiKvConfig = toml::from_str(content).unwrap();
