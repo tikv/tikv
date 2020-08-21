@@ -135,7 +135,7 @@ where
     },
     UpdateMaxTimestamp {
         term: u64,
-        is_max_ts_synced: Arc<AtomicU64>,
+        max_ts_synced: Arc<AtomicU64>,
     },
 }
 
@@ -947,7 +947,7 @@ where
     fn handle_update_max_timestamp(
         &mut self,
         term: u64,
-        is_max_ts_synced: Arc<AtomicU64>,
+        max_ts_synced: Arc<AtomicU64>,
         handle: &Handle,
     ) {
         let current = term << 1;
@@ -955,11 +955,11 @@ where
         let pd_client = self.pd_client.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let f = async move {
-            while is_max_ts_synced.load(Ordering::SeqCst) == current {
+            while max_ts_synced.load(Ordering::SeqCst) == current {
                 match pd_client.get_tso().await {
                     Ok(ts) => {
                         concurrency_manager.update_max_read_ts(ts);
-                        is_max_ts_synced.compare_and_swap(current, new, Ordering::SeqCst);
+                        max_ts_synced.compare_and_swap(current, new, Ordering::SeqCst);
                         break;
                     }
                     Err(e) => {
@@ -1119,8 +1119,8 @@ where
             } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
             Task::UpdateMaxTimestamp {
                 term,
-                is_max_ts_synced,
-            } => self.handle_update_max_timestamp(term, is_max_ts_synced, handle),
+                max_ts_synced,
+            } => self.handle_update_max_timestamp(term, max_ts_synced, handle),
         };
     }
 

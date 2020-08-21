@@ -289,7 +289,13 @@ where
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 
-    pub is_max_ts_synced: Arc<AtomicU64>,
+    /// The max timestamp recorded in the concurrency manager is only updated at leader.
+    /// So if a peer becomes leader from a follower, the max timestamp can be outdated.
+    /// We need to update the max timestamp with a latest timestamp from PD before this
+    /// peer can work.
+    /// The least significant bit marks whether the timestamp is updated. The other bits
+    /// stores the latest term, so stale updates for old terms won't succeed.
+    pub max_ts_synced: Arc<AtomicU64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -379,7 +385,7 @@ where
             check_stale_peers: vec![],
             local_first_replicate: false,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
-            is_max_ts_synced: Arc::new(AtomicU64::new(0)),
+            max_ts_synced: Arc::new(AtomicU64::new(0)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1113,7 +1119,7 @@ where
                     // Update max ts asynchronously
                     if let Err(e) = ctx.pd_scheduler.schedule(PdTask::UpdateMaxTimestamp {
                         term: self.term(),
-                        is_max_ts_synced: self.is_max_ts_synced.clone(),
+                        max_ts_synced: self.max_ts_synced.clone(),
                     }) {
                         error!(
                             "failed to update max ts";
@@ -1124,10 +1130,9 @@ where
                 StateRole::Follower => {
                     self.leader_lease.expire();
 
-                    // When a peer becomes a follower, update `is_max_ts_synced` to new term and
+                    // When a peer becomes a follower, update `max_ts_synced` to new term and
                     // mark it unsynced.
-                    self.is_max_ts_synced
-                        .store(self.term() << 1, Ordering::SeqCst);
+                    self.max_ts_synced.store(self.term() << 1, Ordering::SeqCst);
                 }
                 _ => {}
             }
@@ -2673,7 +2678,7 @@ where
         }
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
-            snap.set_is_max_ts_synced(Some(self.is_max_ts_synced.clone()));
+            snap.max_ts_synced = Some(self.max_ts_synced.clone());
         }
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());

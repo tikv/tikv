@@ -13,7 +13,7 @@ use kvproto::{errorpb, metapb};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::result;
-use std::time::Duration;
+use std::{sync::atomic::Ordering, time::Duration};
 use txn_types::{Key, TxnExtra, Value};
 
 use super::metrics::*;
@@ -512,7 +512,10 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
     }
 
     fn is_max_ts_synced(&self) -> bool {
-        self.is_max_ts_synced()
+        self.max_ts_synced
+            .as_ref()
+            .map(|v| v.load(Ordering::SeqCst) & 1 == 1)
+            .unwrap_or(false)
     }
 }
 
