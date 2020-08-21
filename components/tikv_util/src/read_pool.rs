@@ -10,7 +10,7 @@ use yatp::pool::{CloneRunnerBuilder, Local, Runner};
 use yatp::queue::Extras;
 use yatp::queue::{multilevel, QueueType};
 use yatp::task::future::{Runner as FutureRunner, TaskCell};
-use yatp::{Remote, ThreadPool};
+use yatp::Remote;
 
 use prometheus::IntGauge;
 
@@ -261,6 +261,23 @@ impl<T: PoolTicker> ReadPoolRunner<T> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Config {
+    pub workers: usize,
+    pub max_tasks_per_worker: usize,
+    pub stack_size: usize,
+}
+
+impl Config {
+    pub fn default_for_test() -> Self {
+        Self {
+            workers: 2,
+            max_tasks_per_worker: std::usize::MAX,
+            stack_size: 2_000_000,
+        }
+    }
+}
+
 pub struct ReadPoolBuilder<T: PoolTicker> {
     name_prefix: Option<String>,
     ticker: T,
@@ -269,6 +286,7 @@ pub struct ReadPoolBuilder<T: PoolTicker> {
     before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
     min_thread_count: usize,
     max_thread_count: usize,
+    max_tasks: usize,
     stack_size: usize,
 }
 
@@ -283,11 +301,24 @@ impl<T: PoolTicker> ReadPoolBuilder<T> {
             min_thread_count: 1,
             max_thread_count: 1,
             stack_size: 0,
+            max_tasks: 0,
         }
+    }
+
+    pub fn config(&mut self, cfg: Config) -> &mut Self {
+        self.max_thread_count = cfg.workers;
+        self.max_tasks = cfg.workers.saturating_mul(cfg.max_tasks_per_worker);
+        self.stack_size = cfg.stack_size;
+        self
     }
 
     pub fn stack_size(&mut self, val: usize) -> &mut Self {
         self.stack_size = val;
+        self
+    }
+
+    pub fn max_tasks(&mut self, val: usize) -> &mut Self {
+        self.max_tasks = val;
         self
     }
 
@@ -333,15 +364,21 @@ impl<T: PoolTicker> ReadPoolBuilder<T> {
         self
     }
 
-    pub fn build_single_level_pool(&mut self) -> ThreadPool<TaskCell> {
+    pub fn build_future_pool(&mut self) -> FuturePool {
         let (builder, runner) = self.create_builder();
-        builder.build_with_queue_and_runner(
+        let pool = builder.build_with_queue_and_runner(
             yatp::queue::QueueType::SingleLevel,
             yatp::pool::CloneRunnerBuilder(runner),
-        )
+        );
+        let name = if let Some(name) = &self.name_prefix {
+            name.as_str()
+        } else {
+            "yatp_pool"
+        };
+        FuturePool::from_pool(pool, name, self.max_thread_count, self.max_tasks)
     }
 
-    pub fn build_multi_level_pool(&mut self) -> ThreadPool<TaskCell> {
+    pub fn build_yatp_pool(&mut self) -> ReadPool {
         let (builder, read_pool_runner) = self.create_builder();
         let name = if let Some(name) = &self.name_prefix {
             name.as_str()
@@ -352,8 +389,13 @@ impl<T: PoolTicker> ReadPoolBuilder<T> {
             multilevel::Builder::new(multilevel::Config::default().name(Some(name)));
         let runner_builder =
             multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
-        builder
-            .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder)
+        let pool = builder
+            .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);
+        ReadPool::Yatp {
+            pool,
+            running_tasks: metrics::UNIFIED_READ_POOL_RUNNING_TASKS.with_label_values(&[name]),
+            max_tasks: self.max_tasks,
+        }
     }
 
     fn create_builder(&mut self) -> (yatp::Builder, ReadPoolRunner<T>) {
@@ -375,5 +417,17 @@ impl<T: PoolTicker> ReadPoolBuilder<T> {
             before_pause,
         );
         (builder, read_pool_runner)
+    }
+}
+mod metrics {
+    use prometheus::*;
+
+    lazy_static! {
+        pub static ref UNIFIED_READ_POOL_RUNNING_TASKS: IntGaugeVec = register_int_gauge_vec!(
+            "tikv_unified_read_pool_running_tasks",
+            "The number of running tasks in the unified read pool",
+            &["name"]
+        )
+        .unwrap();
     }
 }

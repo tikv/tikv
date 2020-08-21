@@ -4,8 +4,8 @@ use crate::config::StorageReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 use crate::storage::metrics;
 use std::sync::{Arc, Mutex};
-use tikv_util::future_pool::{Config, FuturePool};
-use tikv_util::read_pool::{DefaultTicker, PoolTicker, ReadPoolBuilder};
+use tikv_util::future_pool::FuturePool;
+use tikv_util::read_pool::{Config, DefaultTicker, PoolTicker, ReadPoolBuilder};
 use tikv_util::time::{Duration, Instant};
 
 #[derive(Clone)]
@@ -54,14 +54,13 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
     configs
         .into_iter()
         .zip(names)
-        .map(|(config, name)| {
+        .map(|(cfg, name)| {
             let reporter = reporter.clone();
             let reporter2 = reporter.clone();
             let engine = Arc::new(Mutex::new(engine.clone()));
             let pool = ReadPoolBuilder::new(FuturePoolTicker::new(reporter))
                 .name_prefix(name)
-                .thread_count(config.workers, config.workers)
-                .stack_size(config.stack_size)
+                .config(cfg)
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                 .before_stop(move || {
                     // Safety: we call `set_` and `destroy_` with the same engine type.
@@ -70,8 +69,8 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
                     }
                     metrics::tls_flush(&reporter2)
                 })
-                .build_single_level_pool();
-            FuturePool::from_pool(pool, name, config.workers, config.max_tasks_per_worker)
+                .build_future_pool();
+            pool
         })
         .collect()
 }
@@ -87,16 +86,16 @@ pub fn build_read_pool_for_test<E: Engine>(
     configs
         .into_iter()
         .zip(names)
-        .map(|(config, name)| {
+        .map(|(cfg, name)| {
             let engine = Arc::new(Mutex::new(engine.clone()));
-            let pool = ReadPoolBuilder::new(DefaultTicker::default())
+            ReadPoolBuilder::new(DefaultTicker::default())
                 .name_prefix(name)
+                .config(cfg)
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                 .before_stop(|| unsafe {
                     destroy_tls_engine::<E>();
                 })
-                .build_single_level_pool();
-            FuturePool::from_pool(pool, name, config.workers, config.max_tasks_per_worker)
+                .build_future_pool()
         })
         .collect()
 }

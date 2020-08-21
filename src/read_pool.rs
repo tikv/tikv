@@ -158,11 +158,15 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     engine: E,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
-    let mut builder = ReadPoolBuilder::new(ReporterTicker::new(reporter));
     let raftkv = Arc::new(Mutex::new(engine));
-    let pool = builder
+    ReadPoolBuilder::new(ReporterTicker::new(reporter))
         .name_prefix(unified_read_pool_name.clone())
         .stack_size(config.stack_size.0 as usize)
+        .max_tasks(
+            config
+                .max_tasks_per_worker
+                .saturating_mul(config.max_thread_count),
+        )
         .thread_count(config.min_thread_count, config.max_thread_count)
         .after_start(move || {
             let engine = raftkv.lock().unwrap().clone();
@@ -171,28 +175,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .before_stop(|| unsafe {
             destroy_tls_engine::<E>();
         })
-        .build_multi_level_pool();
-    ReadPool::Yatp {
-        pool,
-        running_tasks: metrics::UNIFIED_READ_POOL_RUNNING_TASKS
-            .with_label_values(&[&unified_read_pool_name]),
-        max_tasks: config
-            .max_tasks_per_worker
-            .saturating_mul(config.max_thread_count),
-    }
-}
-
-mod metrics {
-    use prometheus::*;
-
-    lazy_static! {
-        pub static ref UNIFIED_READ_POOL_RUNNING_TASKS: IntGaugeVec = register_int_gauge_vec!(
-            "tikv_unified_read_pool_running_tasks",
-            "The number of running tasks in the unified read pool",
-            &["name"]
-        )
-        .unwrap();
-    }
+        .build_yatp_pool()
 }
 
 #[cfg(test)]

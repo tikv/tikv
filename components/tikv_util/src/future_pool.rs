@@ -37,23 +37,6 @@ impl std::error::Error for Full {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Config {
-    pub workers: usize,
-    pub max_tasks_per_worker: usize,
-    pub stack_size: usize,
-}
-
-impl Config {
-    pub fn default_for_test() -> Self {
-        Self {
-            workers: 2,
-            max_tasks_per_worker: std::usize::MAX,
-            stack_size: 2_000_000,
-        }
-    }
-}
-
 #[derive(Clone)]
 struct Env {
     metrics_running_task_count: IntGauge,
@@ -80,12 +63,7 @@ impl crate::AssertSend for FuturePool {}
 impl crate::AssertSync for FuturePool {}
 
 impl FuturePool {
-    pub fn from_pool(
-        pool: ThreadPool,
-        name: &str,
-        pool_size: usize,
-        max_tasks_per_worker: usize,
-    ) -> Self {
+    pub fn from_pool(pool: ThreadPool, name: &str, pool_size: usize, max_tasks: usize) -> Self {
         let env = Env {
             metrics_running_task_count: metrics::FUTUREPOOL_RUNNING_TASK_VEC
                 .with_label_values(&[name]),
@@ -94,7 +72,6 @@ impl FuturePool {
             metrics_pool_schedule_duration: metrics::FUTUREPOOL_SCHEDULE_DURATION_VEC
                 .with_label_values(&[name]),
         };
-        let max_tasks = pool_size.saturating_mul(max_tasks_per_worker);
         FuturePool {
             pool: Arc::new(pool),
             env,
