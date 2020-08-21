@@ -50,5 +50,6 @@ tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util" }
 tokio-threadpool = "0.1"
 tokio-timer = "0.2"
+tokio = { version = "0.2", features = ["rt-threaded"]}
 txn_types = { path = "../txn_types" }
 encryption = { path = "../encryption" }

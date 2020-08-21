@@ -4244,6 +4244,7 @@ dependencies = [
  "test_util",
  "tikv",
  "tikv_util",
+ "tokio 0.2.13",
  "tokio-threadpool",
  "tokio-timer",
  "txn_types",

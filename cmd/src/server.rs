@@ -496,6 +496,16 @@ impl TiKVServer {
             None
         };
 
+        // The `DebugService` and `DiagnosticsService` will share the same thread pool
+        let debug_thread_pool = Builder::new()
+            .threaded_scheduler()
+            .thread_name(thd_name!("debugger"))
+            .core_threads(1)
+            .on_thread_start(|| tikv_alloc::add_thread_memory_accessor())
+            .on_thread_stop(|| tikv_alloc::remove_thread_memory_accessor())
+            .build()
+            .unwrap();
+
         let storage_read_pool_handle = if self.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
@@ -569,6 +579,7 @@ impl TiKVServer {
             snap_mgr.clone(),
             gc_worker.clone(),
             unified_read_pool,
+            debug_thread_pool,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
@@ -688,20 +699,10 @@ impl TiKVServer {
             fatal!("failed to register import service");
         }
 
-        // The `DebugService` and `DiagnosticsService` will share the same thread pool
-        let pool = Builder::new()
-            .threaded_scheduler()
-            .thread_name(thd_name!("debugger"))
-            .core_threads(1)
-            .on_thread_start(|| tikv_alloc::add_thread_memory_accessor())
-            .on_thread_stop(|| tikv_alloc::remove_thread_memory_accessor())
-            .build()
-            .unwrap();
-
         // Debug service.
         let debug_service = DebugService::new(
             engines.engines.clone(),
-            pool.clone(),
+            servers.server.get_debug_thread_pool().clone(),
             engines.raft_router.clone(),
             self.cfg_controller.as_ref().unwrap().clone(),
             self.security_mgr.clone(),
@@ -716,7 +717,7 @@ impl TiKVServer {
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
-            pool,
+            servers.server.get_debug_thread_pool().clone(),
             self.config.log_file.clone(),
             self.config.slow_log_file.clone(),
             self.security_mgr.clone(),
