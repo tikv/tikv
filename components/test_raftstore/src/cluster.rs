@@ -1115,6 +1115,9 @@ impl<T: Simulator> Cluster<T> {
                         if error.has_epoch_not_match()
                             || error.has_not_leader()
                             || error.has_stale_command()
+                            || error
+                                .get_message()
+                                .contains("peer is not applied to current term")
                         {
                             warn!("fail to split: {:?}, ignore.", error);
                             return;
