@@ -160,7 +160,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     let unified_read_pool_name = get_unified_read_pool_name();
     let raftkv = Arc::new(Mutex::new(engine));
     ReadPoolBuilder::new(ReporterTicker::new(reporter))
-        .name_prefix(unified_read_pool_name.clone())
+        .name_prefix(unified_read_pool_name)
         .stack_size(config.stack_size.0 as usize)
         .max_tasks(
             config
