@@ -162,7 +162,7 @@ impl Buffer for BatchMessageBuffer {
             && (self.size + msg_size + GRPC_SEND_MSG_BUF >= self.cfg.max_grpc_send_msg_len as usize
                 || self.batch.get_msgs().len() >= RAFT_MSG_MAX_BATCH_SIZE)
         {
-            self.size = 0;
+            self.size += msg_size;
             self.overflowing = Some(msg);
             return;
         }
@@ -380,14 +380,19 @@ where
         }
     }
 
-    fn clean_up(&mut self, e: &grpcio::Error) {
+    fn clean_up(&mut self, sink_err: &Option<grpcio::Error>, recv_err: &Option<grpcio::Error>) {
+        error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.addr);
+
         let router = &self.router;
         self.buffer.clear(|msg| {
             let _ = router.report_unreachable(msg.get_region_id(), msg.get_to_peer().get_id());
         });
 
         if let Some(tx) = self.lifetime.take() {
-            if super::grpc_error_is_unimplemented(e) {
+            let should_fallback = [sink_err, recv_err]
+                .iter()
+                .any(|e| e.as_ref().map_or(false, super::grpc_error_is_unimplemented));
+            if should_fallback {
                 // Asks backend to fallback.
                 let _ = tx.send(());
             }
@@ -409,20 +414,18 @@ where
             if !self.buffer.empty() {
                 match self.buffer.flush(&mut self.sender) {
                     Ok(false) => return Ok(Async::NotReady),
-                    Ok(true) => {
-                        continue;
-                    }
+                    Ok(true) => continue,
                     Err(e) => {
-                        error!("failed to send message"; "store_id" => self.store_id, "error" => ?e, "addr" => %self.addr);
-                        self.clean_up(&e);
+                        let re = self.receiver.poll().err();
+                        self.clean_up(&Some(e), &re);
                         return Err(());
                     }
                 }
             }
 
             if let Err(e) = self.sender.poll_complete() {
-                error!("connection fail"; "store_id" => self.store_id, "error" => ?e, "addr" => %self.addr);
-                self.clean_up(&e);
+                let re = self.receiver.poll().err();
+                self.clean_up(&Some(e), &re);
                 return Err(());
             }
             match self.receiver.poll() {
@@ -432,8 +435,7 @@ where
                     return Ok(Async::Ready(()));
                 }
                 Err(e) => {
-                    error!("connection abort"; "store_id" => self.store_id, "error" => ?e, "addr" => %self.addr);
-                    self.clean_up(&e);
+                    self.clean_up(&None, &Some(e));
                     return Err(());
                 }
             }
