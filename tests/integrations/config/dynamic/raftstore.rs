@@ -114,7 +114,7 @@ fn start_raftstore(
             Arc::default(),
         )
         .unwrap();
-    (cfg_controller, raft_router, system)
+    (cfg_controller, raft_router, system.apply_router(), system)
 }
 
 fn validate_store<F>(router: &RaftRouter<RocksEngine, RocksEngine>, f: F)
@@ -131,11 +131,29 @@ where
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 }
 
+fn validate_apply<F>(router: &ApplyRouter<RocksEngine>, region_id: u64, validate: F)
+where
+    F: FnOnce(bool) + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    router.schedule_task(
+        region_id,
+        ApplyTask::Validate(
+            region_id,
+            Box::new(move |(_, sync_log): (_, bool)| {
+                validate(sync_log);
+                tx.send(()).unwrap();
+            }),
+        ),
+    );
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+}
+
 #[test]
 fn test_update_raftstore_config() {
     let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
     config.validate().unwrap();
-    let (cfg_controller, router, mut system) = start_raftstore(config.clone(), &_dir);
+    let (cfg_controller, router, _, mut system) = start_raftstore(config.clone(), &_dir);
 
     // dispatch updated config
     let change = {
@@ -165,15 +183,20 @@ fn test_update_apply_store_config() {
     let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
     config.raft_store.sync_log = true;
     config.validate().unwrap();
-    let (cfg_controller, raft_router, mut system) = start_raftstore(config.clone(), &_dir);
+    let (cfg_controller, raft_router, apply_router, mut system) =
+        start_raftstore(config.clone(), &_dir);
 
     // register region
     let region_id = 1;
     let mut reg = Registration::default();
     reg.region.set_id(region_id);
+    apply_router.schedule_task(region_id, ApplyTask::Registration(reg));
 
     validate_store(&raft_router, move |cfg: &Config| {
         assert_eq!(cfg.sync_log, true);
+    });
+    validate_apply(&apply_router, region_id, |sync_log| {
+        assert_eq!(sync_log, true);
     });
 
     // dispatch updated config
@@ -184,6 +207,9 @@ fn test_update_apply_store_config() {
     // both configs should be updated
     validate_store(&raft_router, move |cfg: &Config| {
         assert_eq!(cfg.sync_log, false);
+    });
+    validate_apply(&apply_router, region_id, |sync_log| {
+        assert_eq!(sync_log, false);
     });
 
     system.shutdown();

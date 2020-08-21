@@ -26,7 +26,7 @@ use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::{
     AutoSplitController, Callback, LocalReader, SnapManagerBuilder, SplitCheckRunner,
 };
@@ -66,6 +66,7 @@ struct ServerMeta {
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
+    raw_apply_router: ApplyRouter<RocksEngine>,
     worker: Worker<ResolveTask>,
     gc_worker: GcWorker<RaftKv<SimulateStoreTransport>>,
 }
@@ -119,6 +120,10 @@ impl ServerCluster {
 
     pub fn get_addr(&self, node_id: u64) -> &str {
         &self.addrs[&node_id]
+    }
+
+    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter<RocksEngine> {
+        self.metas.get(&node_id).unwrap().raw_apply_router.clone()
     }
 
     pub fn get_server_router(&self, node_id: u64) -> SimulateStoreTransport {
@@ -294,6 +299,7 @@ impl Simulator for ServerCluster {
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans);
         let server_cfg = Arc::new(cfg.server.clone());
+        let apply_router = system.apply_router();
 
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
@@ -356,6 +362,7 @@ impl Simulator for ServerCluster {
             node_id,
             ServerMeta {
                 raw_router: router,
+                raw_apply_router: apply_router,
                 node,
                 server,
                 sim_router,

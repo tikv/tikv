@@ -1,14 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{FlowStatsReporter, Statistics};
 use crate::storage::metrics::*;
 use prometheus::local::*;
 use std::cell::RefCell;
 use std::time::Duration;
 use tikv_util::collections::HashMap;
-use tikv_util::read_pool::PoolTicker;
+use tikv_util::read_pool::{PoolTicker, ReadPoolBuilder};
 pub use tikv_util::read_pool::{ReadPool, ReadPoolError, ReadPoolHandle};
 use tikv_util::time::Instant;
+use crate::config::UnifiedReadPoolConfig;
+use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics};
 
 pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,
@@ -145,6 +146,28 @@ where
             m.processing_write_duration.flush();
             m.command_keyread_histogram_vec.flush();
         });
+    }
+}
+
+pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
+    config: &UnifiedReadPoolConfig,
+    reporter: R,
+    engine: E,
+) -> ReadPool {
+    let unified_read_pool_name = get_unified_read_pool_name();
+
+    let mut builder = ReadPoolBuilder::new(ReporterTicker::new(reporter));
+    let pool = builder.name_prefix(unified_read_pool_name)
+        .thread_count(config.min_thread_count, config.max_thread_count)
+        .build_multi_level_pool();
+
+    ReadPool::Yatp {
+        pool,
+        running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
+            .with_label_values(&[&unified_read_pool_name]),
+        max_tasks: config
+            .max_tasks_per_worker
+            .saturating_mul(config.max_thread_count),
     }
 }
 

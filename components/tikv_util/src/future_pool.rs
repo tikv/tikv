@@ -3,8 +3,6 @@
 //! This mod implemented a wrapped future pool that supports `on_tick()` which
 //! is invoked no less than the specific interval.
 
-mod builder;
-mod metrics;
 
 pub use self::builder::{Builder, Config};
 
@@ -28,58 +26,28 @@ thread_local! {
     static THREAD_LAST_TICK_TIME: Cell<Instant> = Cell::new(Instant::now_coarse());
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Config {
+    pub workers: usize,
+    pub max_tasks_per_worker: usize,
+    pub stack_size: usize,
+}
+
+impl Config {
+    pub fn default_for_test() -> Self {
+        Self {
+            workers: 2,
+            max_tasks_per_worker: std::usize::MAX,
+            stack_size: 2_000_000,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Env {
     metrics_running_task_count: IntGauge,
     metrics_handled_task_count: IntCounter,
     metrics_pool_schedule_duration: Histogram,
-}
-
-#[derive(Clone)]
-struct FuturePoolRunner {
-    inner: future::Runner,
-    before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
-    after_start: Option<Arc<dyn Fn() + Send + Sync>>,
-    on_tick: Option<Arc<dyn Fn() + Send + Sync>>,
-    env: Env,
-}
-
-impl yatp::pool::Runner for FuturePoolRunner {
-    type TaskCell = future::TaskCell;
-
-    fn start(&mut self, local: &mut Local<Self::TaskCell>) {
-        self.inner.start(local);
-        if let Some(after_start) = &self.after_start {
-            after_start();
-        }
-        tikv_alloc::add_thread_memory_accessor();
-    }
-
-    fn handle(&mut self, local: &mut Local<Self::TaskCell>, task_cell: Self::TaskCell) -> bool {
-        let finished = self.inner.handle(local, task_cell);
-        if finished {
-            self.env.metrics_handled_task_count.inc();
-            self.env.metrics_running_task_count.dec();
-            try_tick_thread(&self.on_tick);
-        }
-        finished
-    }
-
-    fn pause(&mut self, local: &mut Local<Self::TaskCell>) -> bool {
-        self.inner.pause(local)
-    }
-
-    fn resume(&mut self, local: &mut Local<Self::TaskCell>) {
-        self.inner.resume(local)
-    }
-
-    fn end(&mut self, local: &mut Local<Self::TaskCell>) {
-        if let Some(before_stop) = &self.before_stop {
-            before_stop();
-        }
-        self.inner.end(local);
-        tikv_alloc::remove_thread_memory_accessor();
-    }
 }
 
 #[derive(Clone)]
@@ -143,13 +111,17 @@ impl FuturePool {
     {
         let timer = Instant::now_coarse();
         let h_schedule = self.env.metrics_pool_schedule_duration.clone();
+        let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
+        let metrics_running_task_count = self.env.metrics_running_task_count.clone();
 
         self.gate_spawn()?;
 
-        self.env.metrics_running_task_count.inc();
+        metrics_running_task_count.inc();
         self.pool.spawn(async move {
             h_schedule.observe(timer.elapsed_secs());
             let _ = future.await;
+            metrics_handled_task_count.inc();
+            metrics_running_task_count.dec();
         });
         Ok(())
     }
@@ -166,39 +138,25 @@ impl FuturePool {
         F::Output: Send,
     {
         let timer = Instant::now_coarse();
-        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
 
         self.gate_spawn()?;
+        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
+        let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
+        let metrics_running_task_count = self.env.metrics_running_task_count.clone();
 
         let (tx, rx) = oneshot::channel();
-        self.env.metrics_running_task_count.inc();
+        metrics_running_task_count.inc();
         self.pool.spawn(async move {
             h_schedule.observe(timer.elapsed_secs());
             let res = future.await;
             let _ = tx.send(res);
+            metrics_handled_task_count.inc();
+            metrics_running_task_count.dec();
         });
         Ok(rx)
     }
 }
 
-/// Tries to trigger a tick in current thread.
-///
-/// This function is effective only when it is called in thread pool worker
-/// thread.
-#[inline]
-fn try_tick_thread(on_tick: &Option<Arc<dyn Fn() + Send + Sync>>) {
-    THREAD_LAST_TICK_TIME.with(|tls_last_tick| {
-        let now = Instant::now_coarse();
-        let last_tick = tls_last_tick.get();
-        if now.duration_since(last_tick) < TICK_INTERVAL {
-            return;
-        }
-        tls_last_tick.set(now);
-        if let Some(f) = on_tick {
-            f();
-        }
-    })
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Full {
@@ -216,6 +174,30 @@ impl std::error::Error for Full {
     fn description(&self) -> &str {
         "future pool is full"
     }
+}
+
+use prometheus::*;
+
+lazy_static! {
+    pub static ref FUTUREPOOL_RUNNING_TASK_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_futurepool_pending_task_total",
+        "Current future_pool pending + running tasks.",
+        &["name"]
+    )
+    .unwrap();
+    pub static ref FUTUREPOOL_HANDLED_TASK_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_futurepool_handled_task_total",
+        "Total number of future_pool handled tasks.",
+        &["name"]
+    )
+    .unwrap();
+    pub static ref FUTUREPOOL_SCHEDULE_DURATION_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_futurepool_schedule_duration",
+        "Histogram of future_pool handle duration.",
+        &["name"],
+        exponential_buckets(0.0005, 2.0, 15).unwrap()
+    )
+    .unwrap();
 }
 
 #[cfg(test)]

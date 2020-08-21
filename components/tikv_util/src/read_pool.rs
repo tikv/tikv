@@ -347,7 +347,7 @@ impl<T: PoolTicker> ReadPoolBuilder<T> {
         self
     }
 
-    pub fn build_yatp_pool(&mut self) -> ThreadPool<TaskCell> {
+    pub fn build_single_level_pool(&mut self) -> ThreadPool<TaskCell> {
         let (builder, runner) = self.create_builder();
         builder.build_with_queue_and_runner(
             yatp::queue::QueueType::SingleLevel,
@@ -355,7 +355,7 @@ impl<T: PoolTicker> ReadPoolBuilder<T> {
         )
     }
 
-    pub fn build(&mut self) -> ReadPool {
+    pub fn build_multi_level_pool(&mut self) -> ThreadPool<TaskCell> {
         let (builder, read_pool_runner) = self.create_builder();
         let name = if let Some(name) = &self.name_prefix {
             name.as_str()
@@ -366,13 +366,8 @@ impl<T: PoolTicker> ReadPoolBuilder<T> {
             multilevel::Builder::new(multilevel::Config::default().name(Some(name)));
         let runner_builder =
             multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
-        let pool = builder
-            .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);
-        ReadPool::Yatp {
-            pool,
-            running_tasks: metrics::UNIFIED_READ_POOL_RUNNING_TASKS.with_label_values(&[name]),
-            max_tasks: self.max_tasks,
-        }
+        builder
+            .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder)
     }
 
     fn create_builder(&mut self) -> (yatp::Builder, ReadPoolRunner<T>) {
