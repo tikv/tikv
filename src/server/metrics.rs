@@ -422,6 +422,11 @@ lazy_static! {
         &["cf"]
     )
     .unwrap();
+    pub static ref RAFTKV_WRITE_SIZE: IntCounter = register_int_counter!(
+        "tikv_storage_raftkv_write_size",
+        "Total size of asynchronous write requests"
+    )
+    .unwrap();
 }
 
 lazy_static! {

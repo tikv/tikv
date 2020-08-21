@@ -10,6 +10,7 @@ use kvproto::raft_cmdpb::{
     RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
 };
 use kvproto::{errorpb, metapb};
+use protobuf::Message as _;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::result;
@@ -238,7 +239,7 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
-
+        RAFTKV_WRITE_SIZE.inc_by(cmd.compute_size() as i64);
         self.router
             .send_command_txn_extra(
                 cmd,
