@@ -14,7 +14,7 @@ use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, MetricsFlusher};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use fs2::FileExt;
-use futures::Future;
+use futures03::executor::block_on;
 use futures_cpupool::Builder;
 use kvproto::{
     backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -174,10 +174,7 @@ impl TiKVServer {
         region_info_accessor.start();
 
         // Initialize concurrency manager
-        let latest_ts = pd_client
-            .get_tso()
-            .wait()
-            .expect("failed to get timestamp from PD");
+        let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts.into());
 
         TiKVServer {
