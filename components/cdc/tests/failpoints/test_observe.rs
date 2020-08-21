@@ -2,6 +2,7 @@
 use crate::{new_event_feed, TestSuite};
 use futures::sink::Sink;
 use futures::Future;
+use futures03::executor::block_on;
 use grpcio::WriteFlags;
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
@@ -50,7 +51,7 @@ fn test_observe_duplicate_cmd() {
 
     let (k, v) = ("key1".to_owned(), "value".to_owned());
     // Prewrite
-    let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.key = k.clone().into_bytes();
@@ -74,7 +75,7 @@ fn test_observe_duplicate_cmd() {
     fail::cfg(fp, "pause").unwrap();
 
     // Async commit
-    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let commit_resp =
         suite.async_kv_commit(region.get_id(), vec![k.into_bytes()], start_ts, commit_ts);
     sleep_ms(200);

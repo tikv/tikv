@@ -5,7 +5,7 @@ use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::*;
 use std::{result, thread};
 
-use futures::Future;
+use futures03::executor::block_on;
 use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
@@ -410,9 +410,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
-        self.pd_client
-            .get_region_by_id(region_id)
-            .wait()
+        block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .map(|region| region.get_peers().iter().map(Peer::get_store_id).collect())
     }
@@ -847,10 +845,7 @@ impl<T: Simulator> Cluster<T> {
         region_id: u64,
         peer: metapb::Peer,
     ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
-        let region = self
-            .pd_client
-            .get_region_by_id(region_id)
-            .wait()
+        let region = block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .unwrap();
         let remove_peer = new_change_peer_request(ConfChangeType::RemoveNode, peer);
@@ -863,10 +858,7 @@ impl<T: Simulator> Cluster<T> {
         region_id: u64,
         peer: metapb::Peer,
     ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
-        let region = self
-            .pd_client
-            .get_region_by_id(region_id)
-            .wait()
+        let region = block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .unwrap();
         let add_peer = new_change_peer_request(ConfChangeType::AddNode, peer);
@@ -956,9 +948,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
-        self.pd_client
-            .get_region_by_id(region_id)
-            .wait()
+        block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .unwrap()
             .take_region_epoch()
@@ -1182,6 +1172,9 @@ impl<T: Simulator> Cluster<T> {
                         if error.has_epoch_not_match()
                             || error.has_not_leader()
                             || error.has_stale_command()
+                            || error
+                                .get_message()
+                                .contains("peer is not applied to current term")
                         {
                             warn!("fail to split: {:?}, ignore.", error);
                             return;
@@ -1258,17 +1251,11 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
-        let region = self
-            .pd_client
-            .get_region_by_id(target)
-            .wait()
+        let region = block_on(self.pd_client.get_region_by_id(target))
             .unwrap()
             .unwrap();
         let prepare_merge = new_prepare_merge(region);
-        let source = self
-            .pd_client
-            .get_region_by_id(source)
-            .wait()
+        let source = block_on(self.pd_client.get_region_by_id(source))
             .unwrap()
             .unwrap();
         let req = new_admin_request(source.get_id(), source.get_region_epoch(), prepare_merge);
