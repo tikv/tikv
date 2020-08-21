@@ -114,6 +114,11 @@ impl<S: Snapshot> ProposalQueue<S> {
     }
 
     fn push(&mut self, p: Proposal<S>) {
+        if let Some(f) = self.queue.front() {
+            // The term must be increasing among all log entries and the index
+            // must be increasing inside a given term
+            assert!((p.term, p.index) > (f.term, f.index));
+        }
         self.queue.push_back(p);
     }
 
