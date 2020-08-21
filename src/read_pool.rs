@@ -183,6 +183,7 @@ mod tests {
     use super::*;
     use crate::storage::TestEngineBuilder;
     use futures03::channel::oneshot;
+    use kvproto::kvrpcpb::CommandPri;
     use raftstore::store::ReadStats;
     use std::thread;
 
