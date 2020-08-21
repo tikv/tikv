@@ -5,7 +5,6 @@ use std::sync::Arc;
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, MiscExt};
 use futures::{future, stream, Future, Stream};
-use futures_cpupool::CpuPool;
 use grpcio::{Error as GrpcError, WriteFlags};
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use kvproto::debugpb::{self, *};
@@ -13,6 +12,7 @@ use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
     StatusCmdType, StatusRequest,
 };
+use tokio::runtime::Runtime;
 use tokio_sync::oneshot;
 
 use crate::config::ConfigController;

@@ -614,8 +614,8 @@ pub mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use kvproto::kvrpcpb::LockInfo;
     use futures03::executor::block_on;
+    use kvproto::kvrpcpb::LockInfo;
     use rand::prelude::*;
     use tikv_util::config::ReadableDuration;
     use tokio_core::reactor::Core;
@@ -833,7 +833,12 @@ pub mod tests {
                 lock_info.set_lock_version(lock_ts.into_inner());
             }
             waiter.notify();
-            expect_write_conflict(block_on(f).unwrap(), waiter_ts, lock_info, conflict_commit_ts);
+            expect_write_conflict(
+                block_on(f).unwrap(),
+                waiter_ts,
+                lock_info,
+                conflict_commit_ts,
+            );
         }
 
         // Deadlock
@@ -1163,7 +1168,14 @@ pub mod tests {
         // It conflicts with the last transaction.
         lock_info.set_lock_version(lock.ts.into_inner() - 1);
         assert_elapsed(
-            || expect_write_conflict(block_on(f).unwrap(), waiter_ts, lock_info, *commit_ts.decr()),
+            || {
+                expect_write_conflict(
+                    block_on(f).unwrap(),
+                    waiter_ts,
+                    lock_info,
+                    *commit_ts.decr(),
+                )
+            },
             wake_up_delay_duration - 50,
             wake_up_delay_duration + 200,
         );

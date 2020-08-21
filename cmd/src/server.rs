@@ -14,8 +14,7 @@ use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, MetricsFlusher};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use fs2::FileExt;
-use futures03::executor::block_on;
-use futures_cpupool::Builder;
+use futures::executor::block_on;
 use kvproto::{
     backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
@@ -67,6 +66,7 @@ use tikv_util::{
     time::Monitor,
     worker::{FutureWorker, Worker},
 };
+use tokio::runtime::Builder;
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -690,11 +690,13 @@ impl TiKVServer {
 
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
         let pool = Builder::new()
-            .name_prefix(thd_name!("debugger"))
-            .pool_size(1)
-            .after_start(|| tikv_alloc::add_thread_memory_accessor())
-            .before_stop(|| tikv_alloc::remove_thread_memory_accessor())
-            .create();
+            .threaded_scheduler()
+            .thread_name(thd_name!("debugger"))
+            .core_threads(1)
+            .on_thread_start(|| tikv_alloc::add_thread_memory_accessor())
+            .on_thread_stop(|| tikv_alloc::remove_thread_memory_accessor())
+            .build()
+            .unwrap();
 
         // Debug service.
         let debug_service = DebugService::new(
