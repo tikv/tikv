@@ -15,7 +15,7 @@ TiKV is hosted by the [Cloud Native Computing Foundation](https://cncf.io/) (CNC
 
 ---
 
-With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, TiKV guarantees data consistency. [Placement Driver (PD)](https://github.com/pingcap/pd/), which is introduced to implement auto-sharding, enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
+With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, TiKV guarantees data consistency. [Placement Driver (PD)](https://github.com/tikv/pd/), which is introduced to implement auto-sharding, enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
 
 TiKV has the following key features:
 
@@ -62,7 +62,7 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 TiKV was originally a component of [TiDB](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage a TiKV cluster. You can use TiKV together with TiDB or separately on its own.
 
-We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's wiki page](https://github.com/tikv/tikv/wiki/TiKV-Documentation).
+We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on our official website [TiKV's wiki page](https://tikv.org/docs/4.0/concepts/overview/).
 
 ### Testing deployment
 
@@ -178,7 +178,7 @@ To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https:
 
 ### Configuration
 
-Read our configuration guide to learn about various [configuration options](https://github.com/pingcap/docs/blob/master/op-guide/configuration.md).
+Read our configuration guide to learn about various [configuration options](https://github.com/pingcap/docs/blob/master/tikv-configuration-file.md).
 
 ## Contributing
 
@@ -236,4 +236,4 @@ TiKV is under the Apache 2.0 license. See the [LICENSE](./LICENSE) file for deta
 
 - Thanks [etcd](https://github.com/coreos/etcd) for providing some great open source tools.
 - Thanks [RocksDB](https://github.com/facebook/rocksdb) for their powerful storage engines.
-- Thanks [rust-clippy](https://github.com/Manishearth/rust-clippy). We do love the great project.
+- Thanks [rust-clippy](https://github.com/rust-lang/rust-clippy). We do love the great project.
