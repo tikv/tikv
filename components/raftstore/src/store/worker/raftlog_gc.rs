@@ -50,34 +50,15 @@ impl<EK: KvEngine, ER: KvEngine> Runner<EK, ER> {
     }
 
     /// Does the GC job and returns the count of logs collected.
-    fn gc_raft_log(&mut self, region_id: u64, start_idx: u64, end_idx: u64) -> Result<u64, Error> {
-        let mut first_idx = start_idx;
-        if first_idx == 0 {
-            let start_key = keys::raft_log_key(region_id, 0);
-            first_idx = end_idx;
-            if let Some((k, _)) = box_try!(self.engines.raft.seek(&start_key)) {
-                first_idx = box_try!(keys::raft_log_index(&k));
-            }
-        }
-        if first_idx >= end_idx {
-            info!("no need to gc"; "region_id" => region_id);
-            return Ok(0);
-        }
-        let mut raft_wb = self.engines.raft.write_batch();
-        for idx in first_idx..end_idx {
-            let key = keys::raft_log_key(region_id, idx);
-            box_try!(raft_wb.delete(&key));
-            if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
-                // Avoid large write batch to reduce latency.
-                self.engines.raft.write(&raft_wb).unwrap();
-                raft_wb.clear();
-            }
-        }
-        // TODO: disable WAL here.
-        if !raft_wb.is_empty() {
-            self.engines.raft.write(&raft_wb).unwrap();
-        }
-        Ok(end_idx - first_idx)
+    fn gc_raft_log<ER: RaftEngine>(
+        &mut self,
+        raft_engine: ER,
+        region_id: u64,
+        start_idx: u64,
+        end_idx: u64,
+    ) -> Result<usize, Error> {
+        let deleted = box_try!(self.engines.raft.gc(region_id, start_idx, end_idx));
+        Ok(deleted)
     }
 
     fn report_collected(&self, collected: u64) {
@@ -92,7 +73,8 @@ impl<EK: KvEngine, ER: KvEngine> Runner<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, ER: KvEngine> Runnable<Task> for Runner<EK, ER> {
+
+impl<ER: RaftEngine> Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         debug!(
             "execute gc log";
@@ -102,11 +84,11 @@ impl<EK: KvEngine, ER: KvEngine> Runnable<Task> for Runner<EK, ER> {
         match self.gc_raft_log(task.region_id, task.start_idx, task.end_idx) {
             Err(e) => {
                 error!("failed to gc"; "region_id" => task.region_id, "err" => %e);
-                self.report_collected(0);
+                self.report_collected(0 as u64);
             }
             Ok(n) => {
                 debug!("collected log entries"; "region_id" => task.region_id, "entry_count" => n);
-                self.report_collected(n);
+                self.report_collected(n as u64);
             }
         }
     }
