@@ -17,7 +17,7 @@ use raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
 use raftstore::{DiscardReason, Error, Result};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::ThreadReadId;
-use tikv_util::{Either, EitherExt, HandyRwLock};
+use tikv_util::{Either, HandyRwLock};
 use txn_types::TxnExtra;
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {

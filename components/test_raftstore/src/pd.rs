@@ -28,7 +28,7 @@ use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::{Either, EitherExt, HandyRwLock};
+use tikv_util::{Either, HandyRwLock};
 use txn_types::TimeStamp;
 
 use super::*;

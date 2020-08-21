@@ -297,10 +297,12 @@ mod tests {
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
         let cfg = Config::default();
-        let threads = futures_cpupool::Builder::new()
-            .name_prefix("sst-importer")
-            .pool_size(cfg.num_threads)
-            .create();
+        let threads = tokio::runtime::Builder::new()
+            .threaded_scheduler()
+            .thread_name("sst-importer")
+            .core_threads(cfg.num_threads)
+            .build()
+            .unwrap();
 
         let mut switcher = ImportModeSwitcher::new(&cfg, &threads, db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
@@ -333,10 +335,13 @@ mod tests {
             import_mode_timeout: ReadableDuration::millis(300),
             ..Config::default()
         };
-        let threads = futures_cpupool::Builder::new()
-            .name_prefix("sst-importer")
-            .pool_size(cfg.num_threads)
-            .create();
+
+        let threads = tokio::runtime::Builder::new()
+            .threaded_scheduler()
+            .thread_name("sst-importer")
+            .core_threads(cfg.num_threads)
+            .build()
+            .unwrap();
 
         let mut switcher = ImportModeSwitcher::new(&cfg, &threads, db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);

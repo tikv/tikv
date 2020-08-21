@@ -1140,7 +1140,7 @@ mod tests {
             gc_worker
                 .physical_scan_lock(Context::default(), max_ts.into(), start_key, limit, cb)
                 .unwrap();
-            f.wait().unwrap()
+            block_on(f).unwrap()
         };
 
         let mut expected_lock_info = Vec::new();

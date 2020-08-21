@@ -862,7 +862,7 @@ where
         }).map_err(|e| panic!("unexpected error: {:?}", e));
 
         let f = async move {
-            if let Ok(_) = resp.await {
+            if resp.await.is_ok() {
                 info!(
                     "region heartbeat response handler exit";
                     "store_id" => store_id,
