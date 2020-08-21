@@ -4,11 +4,11 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 
-use engine_traits::MAX_DELETE_BATCH_SIZE;
-use engine_traits::{KvEngine, KvEngines, Mutable, WriteBatch};
+use raft_engine::RaftEngine;
 use tikv_util::worker::Runnable;
 
-pub struct Task {
+pub struct Task<ER: RaftEngine> {
+    pub raft_engine: ER,
     pub region_id: u64,
     pub start_idx: u64,
     pub end_idx: u64,
@@ -18,7 +18,7 @@ pub struct TaskRes {
     pub collected: u64,
 }
 
-impl Display for Task {
+impl<ER: RaftEngine> Display for Task<ER> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -39,45 +39,25 @@ quick_error! {
     }
 }
 
-pub struct Runner<EK: KvEngine, ER: KvEngine> {
+pub struct Runner {
     ch: Option<Sender<TaskRes>>,
-    engines: KvEngines<EK, ER>,
 }
 
-impl<EK: KvEngine, ER: KvEngine> Runner<EK, ER> {
-    pub fn new(ch: Option<Sender<TaskRes>>, engines: KvEngines<EK, ER>) -> Runner<EK, ER> {
-        Runner { ch, engines }
+impl Runner {
+    pub fn new(ch: Option<Sender<TaskRes>>) -> Runner {
+        Runner { ch }
     }
 
     /// Does the GC job and returns the count of logs collected.
-    fn gc_raft_log(&mut self, region_id: u64, start_idx: u64, end_idx: u64) -> Result<u64, Error> {
-        let mut first_idx = start_idx;
-        if first_idx == 0 {
-            let start_key = keys::raft_log_key(region_id, 0);
-            first_idx = end_idx;
-            if let Some((k, _)) = box_try!(self.engines.raft.seek(&start_key)) {
-                first_idx = box_try!(keys::raft_log_index(&k));
-            }
-        }
-        if first_idx >= end_idx {
-            info!("no need to gc"; "region_id" => region_id);
-            return Ok(0);
-        }
-        let mut raft_wb = self.engines.raft.write_batch();
-        for idx in first_idx..end_idx {
-            let key = keys::raft_log_key(region_id, idx);
-            box_try!(raft_wb.delete(&key));
-            if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
-                // Avoid large write batch to reduce latency.
-                self.engines.raft.write(&raft_wb).unwrap();
-                raft_wb.clear();
-            }
-        }
-        // TODO: disable WAL here.
-        if !raft_wb.is_empty() {
-            self.engines.raft.write(&raft_wb).unwrap();
-        }
-        Ok(end_idx - first_idx)
+    fn gc_raft_log<ER: RaftEngine>(
+        &mut self,
+        raft_engine: ER,
+        region_id: u64,
+        start_idx: u64,
+        end_idx: u64,
+    ) -> Result<usize, Error> {
+        let deleted = box_try!(raft_engine.gc(region_id, start_idx, end_idx));
+        Ok(deleted)
     }
 
     fn report_collected(&self, collected: u64) {
@@ -92,32 +72,27 @@ impl<EK: KvEngine, ER: KvEngine> Runner<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, ER: KvEngine> Runnable<Task> for Runner<EK, ER> {
-    fn run(&mut self, task: Task) {
+impl<ER: RaftEngine> Runnable<Task<ER>> for Runner {
+    fn run(&mut self, task: Task<ER>) {
         debug!(
             "execute gc log";
             "region_id" => task.region_id,
             "end_index" => task.end_idx,
         );
-        match self.gc_raft_log(task.region_id, task.start_idx, task.end_idx) {
+        match self.gc_raft_log(
+            task.raft_engine,
+            task.region_id,
+            task.start_idx,
+            task.end_idx,
+        ) {
             Err(e) => {
                 error!("failed to gc"; "region_id" => task.region_id, "err" => %e);
-                self.report_collected(0);
+                self.report_collected(0 as u64);
             }
             Ok(n) => {
                 debug!("collected log entries"; "region_id" => task.region_id, "entry_count" => n);
-                self.report_collected(n);
+                self.report_collected(n as u64);
             }
-        }
-    }
-
-    fn run_batch(&mut self, tasks: &mut Vec<Task>) {
-        // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
-        self.engines.kv.sync().unwrap_or_else(|e| {
-            panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
-        });
-        for t in tasks.drain(..) {
-            self.run(t);
         }
     }
 }
@@ -126,22 +101,18 @@ impl<EK: KvEngine, ER: KvEngine> Runnable<Task> for Runner<EK, ER> {
 mod tests {
     use super::*;
     use engine_rocks::util::new_engine;
-    use engine_traits::{KvEngine, KvEngines, WriteBatchExt, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{KvEngine, Mutable, WriteBatchExt, CF_DEFAULT};
     use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
 
     #[test]
     fn test_gc_raft_log() {
-        let dir = Builder::new().prefix("gc-raft-log-test").tempdir().unwrap();
-        let path_raft = dir.path().join("raft");
-        let path_kv = dir.path().join("kv");
-        let raft_db = new_engine(path_kv.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
-        let kv_db = new_engine(path_raft.to_str().unwrap(), None, ALL_CFS, None).unwrap();
-        let engines = KvEngines::new(kv_db, raft_db.clone(), false);
+        let path = Builder::new().prefix("gc-raft-log-test").tempdir().unwrap();
+        let raft_db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
 
         let (tx, rx) = mpsc::channel();
-        let mut runner = Runner::new(Some(tx), engines);
+        let mut runner = Runner::new(Some(tx));
 
         // generate raft logs
         let region_id = 1;
@@ -155,6 +126,7 @@ mod tests {
         let tbls = vec![
             (
                 Task {
+                    raft_engine: raft_db.clone(),
                     region_id,
                     start_idx: 0,
                     end_idx: 10,
@@ -165,6 +137,7 @@ mod tests {
             ),
             (
                 Task {
+                    raft_engine: raft_db.clone(),
                     region_id,
                     start_idx: 0,
                     end_idx: 50,
@@ -175,6 +148,7 @@ mod tests {
             ),
             (
                 Task {
+                    raft_engine: raft_db.clone(),
                     region_id,
                     start_idx: 50,
                     end_idx: 50,
@@ -185,6 +159,7 @@ mod tests {
             ),
             (
                 Task {
+                    raft_engine: raft_db.clone(),
                     region_id,
                     start_idx: 50,
                     end_idx: 60,

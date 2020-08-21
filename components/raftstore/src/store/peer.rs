@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{KvEngine, KvEngines, Snapshot, WriteOptions};
+use engine_traits::{Engines, KvEngine, Snapshot, WriteOptions};
 use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -29,25 +29,25 @@ use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
+use raft_engine::RaftEngine;
 use smallvec::SmallVec;
 use time::Timespec;
 use txn_types::TxnExtra;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
-use crate::store::fsm::apply::{ApplyRouter, CatchUpLogs, Registration};
+use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
+use crate::store::util::is_learner;
 use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, GlobalReplicationState, PdTask, ReadResponse};
 use crate::{Error, Result};
-//use futures03::channel::mpsc::Sender as FutureSender;
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::Scheduler;
-use tokio::sync::mpsc::Receiver as FutureReceiver;
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -181,7 +181,7 @@ pub struct CheckTickResult {
 pub struct Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     /// The ID of the Region which this Peer belongs to.
     region_id: u64,
@@ -288,22 +288,20 @@ where
     pub local_first_replicate: bool,
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    pub apply_router: ApplyRouter<EK>,
 }
 
 impl<EK, ER> Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn new(
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask<EK::Snapshot>>,
-        engines: KvEngines<EK, ER>,
+        engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
-        apply_router: ApplyRouter<EK>,
     ) -> Result<Peer<EK, ER>> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
@@ -378,7 +376,6 @@ where
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
             local_first_replicate: false,
-            apply_router,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
         };
 
@@ -446,17 +443,10 @@ where
 
     /// Register self to apply_scheduler so that the peer is then usable.
     /// Also trigger `RegionChangeEvent::Create` here.
-    pub fn activate<T, C>(
-        &mut self,
-        ctx: &PollContext<EK, ER, T, C>,
-        apply_receiver: Option<FutureReceiver<ApplyTask<EK>>>,
-    ) {
-        let reg = Registration::new(self);
-        if let Some(receiver) = apply_receiver {
-            ctx.apply_batch_system.register(reg, receiver);
-        } else {
-            self.apply_router.schedule(ApplyTask::Registration(reg));
-        }
+    pub fn activate<T, C>(&self, ctx: &PollContext<EK, ER, T, C>) {
+        ctx.apply_router
+            .schedule_task(self.region_id, ApplyTask::register(self));
+
         ctx.coprocessor_host.on_region_changed(
             self.region(),
             RegionChangeEvent::Create,
@@ -521,7 +511,10 @@ where
     }
 
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
-    pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
+    pub fn maybe_destroy<T, C>(
+        &mut self,
+        ctx: &PollContext<EK, ER, T, C>,
+    ) -> Option<DestroyPeerJob> {
         if self.pending_remove {
             info!(
                 "is being destroyed, skip";
@@ -529,6 +522,17 @@ where
                 "peer_id" => self.peer.get_id(),
             );
             return None;
+        }
+        {
+            let meta = ctx.store_meta.lock().unwrap();
+            if meta.atomic_snap_regions.contains_key(&self.region_id) {
+                info!(
+                    "stale peer is applying atomic snapshot, will destroy next time";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                return None;
+            }
         }
         // If initialized is false, it implicitly means apply fsm does not exist now.
         let initialized = self.get_store().is_initialized();
@@ -581,7 +585,7 @@ where
 
         // Set Tombstone state explicitly
         let mut kv_wb = ctx.engines.kv.write_batch();
-        let mut raft_wb = ctx.engines.raft.write_batch();
+        let mut raft_wb = ctx.engines.raft.log_batch(1024);
         self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
         write_peer_state(
             &mut kv_wb,
@@ -593,7 +597,7 @@ where
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(ctx.cfg.sync_log);
         ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
-        ctx.engines.raft.write_opt(&raft_wb, &write_opts)?;
+        ctx.engines.raft.consume(&mut raft_wb, ctx.cfg.sync_log)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -1269,7 +1273,7 @@ where
             self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
         }
         let mut destroy_regions = vec![];
-        if self.get_pending_snapshot().is_some() {
+        if self.has_pending_snapshot() {
             if !self.ready_to_handle_pending_snap() {
                 let count = self.pending_request_snapshot_count.load(Ordering::SeqCst);
                 debug!(
@@ -1313,7 +1317,8 @@ where
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
                 self.pending_request_snapshot_count
                     .fetch_add(1, Ordering::SeqCst);
-                self.apply_router.schedule(ApplyTask::Snapshot(gen_task));
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
             }
             return None;
         }
@@ -1441,7 +1446,7 @@ where
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
-        if apply_snap_result.is_some() && self.peer.get_is_learner() {
+        if apply_snap_result.is_some() {
             // The peer may change from learner to voter after snapshot applied.
             let peer = self
                 .region()
@@ -1477,7 +1482,7 @@ where
         }
 
         if apply_snap_result.is_some() {
-            self.activate(ctx, None);
+            self.activate(ctx);
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));
@@ -1570,7 +1575,8 @@ where
                     term,
                     cbs,
                 );
-                self.apply_router.schedule(ApplyTask::apply(apply));
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::apply(apply));
             }
             fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
             // Check whether there is a pending generate snapshot task, the task
@@ -1580,7 +1586,8 @@ where
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
                 self.pending_request_snapshot_count
                     .fetch_add(1, Ordering::SeqCst);
-                self.apply_router.schedule(ApplyTask::Snapshot(gen_task));
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
             }
         }
 
@@ -1936,7 +1943,7 @@ where
         let peer = change_peer.get_peer();
 
         // Check the request itself is valid or not.
-        match (change_type, peer.get_is_learner()) {
+        match (change_type, is_learner(peer)) {
             (ConfChangeType::AddNode, true) | (ConfChangeType::AddLearnerNode, false) => {
                 warn!(
                     "invalid conf change request";
@@ -2680,7 +2687,7 @@ where
 impl<EK, ER> Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
@@ -3044,7 +3051,7 @@ pub trait RequestInspector {
 impl<EK, ER> RequestInspector for Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn has_applied_to_current_term(&mut self) -> bool {
         self.get_store().applied_index_term() == self.term()
@@ -3073,7 +3080,7 @@ where
 impl<EK, ER, T, C> ReadExecutor<EK> for PollContext<EK, ER, T, C>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn get_engine(&self) -> &EK {
         &self.engines.kv
@@ -3101,6 +3108,7 @@ fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
         let req = msg.get_admin_request();
         return match req.get_cmd_type() {
             AdminCmdType::ChangePeer
+            | AdminCmdType::ChangePeerV2
             | AdminCmdType::Split
             | AdminCmdType::BatchSplit
             | AdminCmdType::PrepareMerge
@@ -3126,6 +3134,7 @@ fn is_request_urgent(req: &RaftCmdRequest) -> bool {
         AdminCmdType::Split
         | AdminCmdType::BatchSplit
         | AdminCmdType::ChangePeer
+        | AdminCmdType::ChangePeerV2
         | AdminCmdType::ComputeHash
         | AdminCmdType::VerifyHash
         | AdminCmdType::PrepareMerge
@@ -3155,7 +3164,7 @@ pub trait AbstractPeer {
     fn pending_merge_state(&self) -> Option<&MergeState>;
 }
 
-impl<EK: KvEngine, ER: KvEngine> AbstractPeer for Peer<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for Peer<EK, ER> {
     fn meta_peer(&self) -> &metapb::Peer {
         &self.peer
     }
@@ -3213,6 +3222,7 @@ mod tests {
             AdminCmdType::Split,
             AdminCmdType::BatchSplit,
             AdminCmdType::ChangePeer,
+            AdminCmdType::ChangePeerV2,
             AdminCmdType::ComputeHash,
             AdminCmdType::VerifyHash,
             AdminCmdType::PrepareMerge,

@@ -129,12 +129,6 @@ make_auto_flush_static_metric! {
         consistency_check,
         cleanup_import_sst,
     }
-    pub label_enum FlushType {
-        auto,
-        wait,
-        pause,
-        replace,
-    }
 
     pub struct RaftEventDuration : LocalHistogram {
         "type" => RaftEventDurationType
@@ -181,10 +175,6 @@ make_auto_flush_static_metric! {
     }
     pub struct PerfContextTimeDuration : LocalHistogram {
         "type" => PerfContextType
-    }
-
-    pub struct FlushTypeVec : LocalIntCounter {
-        "type" => FlushType,
     }
 }
 
@@ -485,13 +475,4 @@ lazy_static! {
             "The number of pending entries in the channel of apply FSMs."
     )
     .unwrap();
-
-    pub static ref APPLY_FLUSH_TYPE_COUNTER_VEC: IntCounterVec =
-        register_int_counter_vec!(
-            "tikv_raftstore_apply_flush_counter",
-            "Total number of admin cmd processed.",
-            &["type"]
-        ).unwrap();
-    pub static ref APPLY_FLUSH_TYPE_COUNTER: FlushTypeVec =
-        auto_flush_from!(APPLY_FLUSH_TYPE_COUNTER_VEC, FlushTypeVec);
 }

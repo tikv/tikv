@@ -10,12 +10,12 @@ mod peer;
 pub mod store;
 
 pub use self::apply::{
-    create_apply_batch_system, flush_tls_ctx, Apply, ApplyBatchSystem, ApplyMetrics, ApplyRes,
-    ApplyRouter, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult, GenSnapTask, Msg as ApplyTask,
-    Notifier as ApplyNotifier, ObserveID, Proposal, Registration, TaskRes as ApplyTaskRes,
+    create_apply_batch_system, Apply, ApplyBatchSystem, ApplyMetrics, ApplyRes, ApplyRouter,
+    Builder as ApplyPollerBuilder, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult, GenSnapTask,
+    Msg as ApplyTask, Notifier as ApplyNotifier, ObserveID, Proposal, Registration,
+    TaskRes as ApplyTaskRes,
 };
 pub use self::peer::{DestroyPeerJob, GroupState, PeerFsm};
 pub use self::store::{
-    create_raft_batch_system, new_compaction_listener, RaftBatchSystem, RaftPollerBuilder,
-    RaftRouter, StoreInfo, StoreMeta,
+    create_raft_batch_system, RaftBatchSystem, RaftPollerBuilder, RaftRouter, StoreInfo, StoreMeta,
 };
