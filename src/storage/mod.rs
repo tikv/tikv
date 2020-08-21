@@ -359,7 +359,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         }
 
                         let snap = Self::with_tls_engine(|engine| {
-                            Self::snapshot(engine, read_id.clone(), req.get_context())
+                            Self::snapshot(engine, read_id.clone(), &ctx)
                         });
                         req_snaps.push(Ok((
                             snap,
