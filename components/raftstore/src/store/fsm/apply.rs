@@ -23,7 +23,7 @@ use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use error_code::ErrorCodeExt;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
+use kvproto::metapb::{Peer as PeerMeta, PeerRole, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
     RaftCmdRequest, RaftCmdResponse, Request, Response,
@@ -53,7 +53,8 @@ use crate::store::peer_storage::{
     self, write_initial_apply_state, write_peer_state, ENTRY_MEM_SIZE,
 };
 use crate::store::util::{
-    check_region_epoch, compare_region_epoch, KeysInfoFormatter, PerfContextStatistics,
+    check_region_epoch, compare_region_epoch, is_learner, KeysInfoFormatter, PerfContextStatistics,
+    ADMIN_CMD_EPOCH_MAP,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
 use crate::{observe_perf_context_type, report_perf_context, Error, Result};
@@ -270,7 +271,7 @@ where
     EK: KvEngine,
 {
     region: Region,
-    cbs: Vec<(Option<Callback<EK::Snapshot>>, RaftCmdResponse)>,
+    cbs: Vec<(Option<Callback<EK::Snapshot>>, Cmd)>,
 }
 
 impl<EK> ApplyCallback<EK>
@@ -283,16 +284,16 @@ where
     }
 
     fn invoke_all(self, host: &CoprocessorHost<EK>) {
-        for (cb, mut resp) in self.cbs {
-            host.post_apply(&self.region, &mut resp);
+        for (cb, mut cmd) in self.cbs {
+            host.post_apply(&self.region, &mut cmd);
             if let Some(cb) = cb {
-                cb.invoke_with_response(resp)
+                cb.invoke_with_response(cmd.response)
             };
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<EK::Snapshot>>, resp: RaftCmdResponse) {
-        self.cbs.push((cb, resp));
+    fn push(&mut self, cb: Option<Callback<EK::Snapshot>>, cmd: Cmd) {
+        self.cbs.push((cb, cmd));
     }
 }
 
@@ -979,11 +980,14 @@ where
         //    it will also propose an empty entry. But that entry will not contain
         //    any associated callback. So no need to clear callback.
         while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
-            apply_ctx
-                .cbs
-                .last_mut()
-                .unwrap()
-                .push(cmd.cb.take(), cmd_resp::err_resp(Error::StaleCommand, term));
+            apply_ctx.cbs.last_mut().unwrap().push(
+                cmd.cb.take(),
+                Cmd::new(
+                    cmd.index,
+                    RaftCmdRequest::default(),
+                    cmd_resp::err_resp(Error::StaleCommand, term),
+                ),
+            );
         }
         ApplyResult::None
     }
@@ -1098,16 +1102,16 @@ where
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
+        let cmd = Cmd::new(index, cmd, resp);
         let (cmd_cb, txn_extra) = self.find_pending(index, term, is_conf_change);
         if let Some(observe_cmd) = self.observe_cmd.as_ref() {
-            let cmd = Cmd::new(index, cmd, resp.clone());
             apply_ctx.txn_extras.push(txn_extra);
             apply_ctx
                 .host
-                .on_apply_cmd(observe_cmd.id, self.region_id(), cmd);
+                .on_apply_cmd(observe_cmd.id, self.region_id(), cmd.clone());
         }
 
-        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
+        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, cmd);
 
         exec_result
     }
@@ -1132,9 +1136,13 @@ where
 
         ctx.exec_ctx = Some(self.new_ctx(index, term));
         ctx.kv_wb_mut().set_save_point();
+        let mut origin_epoch = None;
         let (resp, exec_result) = match self.exec_raft_cmd(ctx, &req) {
             Ok(a) => {
                 ctx.kv_wb_mut().pop_save_point().unwrap();
+                if req.has_admin_request() {
+                    origin_epoch = Some(self.region.get_region_epoch().clone());
+                }
                 a
             }
             Err(e) => {
@@ -1195,6 +1203,19 @@ where
                     self.region = region.clone();
                     self.is_merging = false;
                 }
+            }
+        }
+        if let Some(epoch) = origin_epoch {
+            let cmd_type = req.get_admin_request().get_cmd_type();
+            let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+            // The chenge-epoch behavior **MUST BE** equal to the settings in `ADMIN_CMD_EPOCH_MAP`
+            if (epoch_state.change_ver
+                && epoch.get_version() == self.region.get_region_epoch().get_version())
+                || (epoch_state.change_conf_ver
+                    && epoch.get_conf_ver() == self.region.get_region_epoch().get_conf_ver())
+            {
+                panic!("{} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
+                        self.tag, req, epoch_state, epoch, self.region.get_region_epoch());
             }
         }
 
@@ -1271,6 +1292,7 @@ where
 
         let (mut response, exec_result) = match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
+            AdminCmdType::ChangePeerV2 => panic!("unsupported admin command type"),
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
@@ -1621,7 +1643,7 @@ where
                 let mut exists = false;
                 if let Some(p) = util::find_peer_mut(&mut region, store_id) {
                     exists = true;
-                    if !p.get_is_learner() || p.get_id() != peer.get_id() {
+                    if !is_learner(p) || p.get_id() != peer.get_id() {
                         error!(
                             "can't add duplicated peer";
                             "region_id" => self.region_id(),
@@ -1635,7 +1657,7 @@ where
                             self.region
                         ));
                     } else {
-                        p.set_is_learner(false);
+                        p.set_role(PeerRole::Voter);
                     }
                 }
                 if !exists {
@@ -1972,6 +1994,12 @@ where
         let mut resp = AdminResponse::default();
         resp.mut_splits().set_regions(regions.clone().into());
         PEER_ADMIN_CMD_COUNTER.batch_split.success.inc();
+
+        fail_point!(
+            "apply_after_split_1_3",
+            self.id == 3 && self.region_id() == 1,
+            |_| { unreachable!() }
+        );
 
         Ok((
             resp,
@@ -4049,7 +4077,7 @@ mod tests {
             self.pre_query_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {
+        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Cmd) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
     }

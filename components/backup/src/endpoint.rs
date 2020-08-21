@@ -51,7 +51,8 @@ struct Request {
     cancel: Arc<AtomicBool>,
     is_raw_kv: bool,
     cf: CfName,
-    compress_type: CompressionType,
+    compression_type: CompressionType,
+    compression_level: i32,
 }
 
 /// Backup Task.
@@ -116,7 +117,8 @@ impl Task {
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
                 cf,
-                compress_type: req.get_compression_type(),
+                compression_type: req.get_compression_type(),
+                compression_level: req.get_compression_level(),
             },
             resp,
         };
@@ -291,15 +293,21 @@ impl BackupRange {
         backup_ts: TimeStamp,
         start_ts: TimeStamp,
         compression_type: Option<SstCompressionType>,
+        compression_level: i32,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer =
-            match BackupWriter::new(db, &file_name, storage.limiter.clone(), compression_type) {
-                Ok(w) => w,
-                Err(e) => {
-                    error!("backup writer failed"; "error" => ?e);
-                    return Err(e);
-                }
-            };
+        let mut writer = match BackupWriter::new(
+            db,
+            &file_name,
+            storage.limiter.clone(),
+            compression_type,
+            compression_level,
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                error!("backup writer failed"; "error" => ?e);
+                return Err(e);
+            }
+        };
         let stat = match self.backup(
             &mut writer,
             engine,
@@ -327,16 +335,23 @@ impl BackupRange {
         storage: &LimitedStorage,
         file_name: String,
         cf: CfName,
-        ct: Option<SstCompressionType>,
+        compression_type: Option<SstCompressionType>,
+        compression_level: i32,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer =
-            match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone(), ct) {
-                Ok(w) => w,
-                Err(e) => {
-                    error!("backup writer failed"; "error" => ?e);
-                    return Err(e);
-                }
-            };
+        let mut writer = match BackupRawKVWriter::new(
+            db,
+            &file_name,
+            cf,
+            storage.limiter.clone(),
+            compression_type,
+            compression_level,
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                error!("backup writer failed"; "error" => ?e);
+                return Err(e);
+            }
+        };
         let stat = match self.backup_raw(&mut writer, engine) {
             Ok(s) => s,
             Err(e) => return Err(e),
@@ -662,11 +677,19 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     tikv_util::file::sha256(&input).ok().map(|b| hex::encode(b))
                 });
                 let name = backup_file_name(store_id, &brange.region, key);
-                let ct = to_sst_compression_type(request.compress_type);
+                let ct = to_sst_compression_type(request.compression_type);
 
                 let (res, start_key, end_key) = if is_raw_kv {
                     (
-                        brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf, ct),
+                        brange.backup_raw_kv_to_file(
+                            &engine,
+                            db.clone(),
+                            &storage,
+                            name,
+                            cf,
+                            ct,
+                            request.compression_level,
+                        ),
                         brange
                             .start_key
                             .map_or_else(|| vec![], |k| k.into_encoded()),
@@ -683,6 +706,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             backup_ts,
                             start_ts,
                             ct,
+                            request.compression_level,
                         ),
                         brange
                             .start_key
@@ -1043,7 +1067,8 @@ pub mod tests {
                         cancel: Arc::default(),
                         is_raw_kv: false,
                         cf: engine_traits::CF_DEFAULT,
-                        compress_type: CompressionType::Unknown,
+                        compression_type: CompressionType::Unknown,
+                        compression_level: 0,
                     },
                     resp: tx,
                 };

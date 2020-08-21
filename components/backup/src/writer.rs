@@ -125,18 +125,21 @@ impl BackupWriter {
         name: &str,
         limiter: Limiter,
         compression_type: Option<SstCompressionType>,
+        compression_level: i32,
     ) -> Result<BackupWriter> {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
             .set_db(RocksEngine::from_ref(&db))
             .set_compression_type(compression_type)
+            .set_compression_level(compression_level)
             .build(name)?;
         let write = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_WRITE)
             .set_db(RocksEngine::from_ref(&db))
             .set_compression_type(compression_type)
+            .set_compression_level(compression_level)
             .build(name)?;
         let name = name.to_owned();
         Ok(BackupWriter {
@@ -225,12 +228,14 @@ impl BackupRawKVWriter {
         cf: CfName,
         limiter: Limiter,
         compression_type: Option<SstCompressionType>,
+        compression_level: i32,
     ) -> Result<BackupRawKVWriter> {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(cf)
             .set_db(RocksEngine::from_ref(&db))
             .set_compression_type(compression_type)
+            .set_compression_level(compression_level)
             .build(name)?;
         Ok(BackupRawKVWriter {
             name: name.to_owned(),
@@ -347,13 +352,13 @@ mod tests {
 
         // Test empty file.
         let mut writer =
-            BackupWriter::new(db.get_sync_db(), "foo", Limiter::new(INFINITY), None).unwrap();
+            BackupWriter::new(db.get_sync_db(), "foo", Limiter::new(INFINITY), None, 0).unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
         let mut writer =
-            BackupWriter::new(db.get_sync_db(), "foo1", Limiter::new(INFINITY), None).unwrap();
+            BackupWriter::new(db.get_sync_db(), "foo1", Limiter::new(INFINITY), None, 0).unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {
@@ -380,7 +385,7 @@ mod tests {
 
         // Test write and default.
         let mut writer =
-            BackupWriter::new(db.get_sync_db(), "foo2", Limiter::new(INFINITY), None).unwrap();
+            BackupWriter::new(db.get_sync_db(), "foo2", Limiter::new(INFINITY), None, 0).unwrap();
         writer
             .write(
                 vec![
