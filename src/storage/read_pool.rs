@@ -4,8 +4,7 @@ use crate::config::StorageReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 use crate::storage::metrics;
 use std::sync::{Arc, Mutex};
-use tikv_util::future_pool::FuturePool;
-use tikv_util::read_pool::{Config, DefaultTicker, PoolTicker, ReadPoolBuilder};
+use tikv_util::read_pool::{Config, DefaultTicker, FuturePool, PoolTicker, ReadPoolBuilder};
 use tikv_util::time::{Duration, Instant};
 
 #[derive(Clone)]

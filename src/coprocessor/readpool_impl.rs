@@ -5,8 +5,7 @@ use std::sync::{Arc, Mutex};
 use crate::config::CoprReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use crate::storage::{Engine, FlowStatsReporter, FuturePoolTicker};
-use tikv_util::future_pool::FuturePool;
-use tikv_util::read_pool::{Config, DefaultTicker, ReadPoolBuilder};
+use tikv_util::read_pool::{Config, DefaultTicker, FuturePool, ReadPoolBuilder};
 
 use super::metrics::*;
 

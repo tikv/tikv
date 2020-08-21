@@ -13,28 +13,11 @@ use yatp::task::future;
 
 type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
+use super::errors::Full;
 use crate::time::Instant;
 
 thread_local! {
     static THREAD_LAST_TICK_TIME: Cell<Instant> = Cell::new(Instant::now_coarse());
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Full {
-    pub current_tasks: usize,
-    pub max_tasks: usize,
-}
-
-impl std::fmt::Display for Full {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(fmt, "future pool is full")
-    }
-}
-
-impl std::error::Error for Full {
-    fn description(&self) -> &str {
-        "future pool is full"
-    }
 }
 
 #[derive(Clone)]
@@ -197,7 +180,8 @@ mod metrics {
 mod tests {
     use super::*;
 
-    use super::super::read_pool::{DefaultTicker, PoolTicker, ReadPoolBuilder as Builder};
+    use super::super::{DefaultTicker, PoolTicker, ReadPoolBuilder as Builder};
+    use crate::time::Duration;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::thread;
@@ -223,15 +207,20 @@ mod tests {
 
     #[derive(Clone)]
     pub struct SequenceTicker {
-        pub tick_sequence: Arc<AtomicUsize>,
         last_tick: Instant,
+        tick: Arc<dyn Fn() + Send + Sync>,
     }
 
+    const TICK_INTERVAL: Duration = Duration::from_secs(1);
+
     impl SequenceTicker {
-        pub fn new() -> SequenceTicker {
+        pub fn new<F>(tick: F) -> SequenceTicker
+        where
+            F: Fn() + Send + Sync + 'static,
+        {
             SequenceTicker {
-                tick_sequence: Arc::new(AtomicUsize::new(0)),
                 last_tick: Instant::now_coarse(),
+                tick: Arc::new(tick),
             }
         }
     }
@@ -242,24 +231,22 @@ mod tests {
             if now.duration_since(self.last_tick) < TICK_INTERVAL {
                 return;
             }
-            let seq = tick_sequence.fetch_add(1, Ordering::SeqCst);
-            tx.send(seq).unwrap();
-            self.last_tick.set(now);
+            self.last_tick = now;
+            let tick = self.tick.clone();
+            tick();
         }
     }
 
     #[test]
     fn test_tick() {
+        let tick_sequence = Arc::new(AtomicUsize::new(0));
         let (tx, rx) = mpsc::sync_channel(1000);
 
-        let ticker = SequenceTicker::new();
-        let pool = Builder::new(ticker)
-            .pool_size(1)
-            .on_tick(move || {
-                let seq = tick_sequence.fetch_add(1, Ordering::SeqCst);
-                tx.send(seq).unwrap();
-            })
-            .build();
+        let ticker = SequenceTicker::new(move || {
+            let seq = tick_sequence.fetch_add(1, Ordering::SeqCst);
+            tx.send(seq).unwrap();
+        });
+        let pool = Builder::new(ticker).pool_size(1).build_future_pool();
 
         assert!(rx.try_recv().is_err());
 
@@ -304,15 +291,14 @@ mod tests {
 
     #[test]
     fn test_tick_multi_thread() {
+        let tick_sequence = Arc::new(AtomicUsize::new(0));
         let (tx, rx) = mpsc::sync_channel(1000);
-        let ticker = SequenceTicker::new();
-        let pool = Builder::new(ticker)
-            .pool_size(2)
-            .on_tick(move || {
-                let seq = tick_sequence.fetch_add(1, Ordering::SeqCst);
-                tx.send(seq).unwrap();
-            })
-            .build();
+        let ticker = SequenceTicker::new(move || {
+            let seq = tick_sequence.fetch_add(1, Ordering::SeqCst);
+            tx.send(seq).unwrap();
+        });
+
+        let pool = Builder::new(ticker).pool_size(2).build_future_pool();
 
         assert!(rx.try_recv().is_err());
 
@@ -341,8 +327,9 @@ mod tests {
 
     #[test]
     fn test_handle_result() {
-        let ticker = SequenceTicker::new();
-        let pool = Builder::new(ticker).pool_size(1).build();
+        let pool = Builder::new(DefaultTicker {})
+            .pool_size(1)
+            .build_future_pool();
 
         let handle = pool.spawn_handle(async { 42 });
 
@@ -351,11 +338,10 @@ mod tests {
 
     #[test]
     fn test_running_task_count() {
-        let ticker = SequenceTicker::new();
-        let pool = Builder::new(ticker)
+        let pool = Builder::new(DefaultTicker {})
             .name_prefix("future_pool_for_running_task_test") // The name is important
             .pool_size(2)
-            .build();
+            .build_future_pool();
 
         assert_eq!(pool.get_running_task_count(), 0);
 
@@ -403,12 +389,11 @@ mod tests {
     #[test]
     fn test_full() {
         let (tx, rx) = mpsc::channel();
-        let ticker = SequenceTicker::new();
-        let pool = Builder::new(ticker)
+        let read_pool = Builder::new(DefaultTicker {})
             .name_prefix("future_pool_test_full")
             .pool_size(2)
             .max_tasks(4)
-            .build();
+            .build_future_pool();
 
         wait_on_new_thread(
             tx.clone(),
