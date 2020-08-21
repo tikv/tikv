@@ -275,7 +275,7 @@ where
     E: 'static,
 {
     pub registry: Registry<E>,
-    consistency_check_host: ConsistencyCheckHost<E>,
+    consistency_check_observer: ConsistencyCheckObserver<E>,
 }
 
 impl<E: KvEngine> Default for CoprocessorHost<E>
@@ -285,7 +285,7 @@ where
     fn default() -> Self {
         CoprocessorHost {
             registry: Default::default(),
-            consistency_check_host: ConsistencyCheckHost::<E>::new(),
+            consistency_check_observer: ConsistencyCheckObserver::<E>::new(),
         }
     }
 }
@@ -307,10 +307,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
             400,
             BoxSplitCheckObserver::new(TableCheckObserver::default()),
         );
-        let consistency_check_host = ConsistencyCheckHost::new();
+        let consistency_check_observer = ConsistencyCheckObserver::new();
         CoprocessorHost {
             registry,
-            consistency_check_host,
+            consistency_check_observer,
         }
     }
 
@@ -423,8 +423,8 @@ impl<E: KvEngine> CoprocessorHost<E> {
         host
     }
 
-    pub fn get_consistency_checker_host(&self) -> &ConsistencyCheckHost<E> {
-        &self.consistency_check_host
+    pub fn get_consistency_checker_host(&self) -> &ConsistencyCheckObserver<E> {
+        &self.consistency_check_observer
     }
 
     pub fn on_role_change(&self, region: &Region, role: StateRole) {

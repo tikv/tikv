@@ -20,7 +20,7 @@ pub mod split_observer;
 
 pub use self::config::{Config, ConsistencyCheckMethod};
 pub use self::consistency_check::{
-    ConsistencyCheckHost, ConsistencyChecker, RawConsistencyChecker,
+    ConsistencyCheckObserver, ConsistencyChecker, RawConsistencyChecker,
 };
 pub use self::dispatcher::{
     BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxQueryObserver,

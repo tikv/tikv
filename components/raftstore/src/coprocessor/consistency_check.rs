@@ -6,23 +6,23 @@ use kvproto::metapb::Region;
 
 use crate::Result;
 
-pub struct ConsistencyCheckHost<E: KvEngine> {
+pub struct ConsistencyCheckObserver<E: KvEngine> {
     _engine: PhantomData<E>,
     checker: Arc<dyn ConsistencyChecker<Snap = E::Snapshot>>,
 }
 
-impl<E: KvEngine> Clone for ConsistencyCheckHost<E> {
-    fn clone(&self) -> ConsistencyCheckHost<E> {
-        ConsistencyCheckHost {
+impl<E: KvEngine> Clone for ConsistencyCheckObserver<E> {
+    fn clone(&self) -> ConsistencyCheckObserver<E> {
+        ConsistencyCheckObserver {
             _engine: PhantomData::default(),
             checker: self.checker.clone(),
         }
     }
 }
 
-impl<E: KvEngine> ConsistencyCheckHost<E> {
-    pub fn new() -> ConsistencyCheckHost<E> {
-        ConsistencyCheckHost {
+impl<E: KvEngine> ConsistencyCheckObserver<E> {
+    pub fn new() -> ConsistencyCheckObserver<E> {
+        ConsistencyCheckObserver {
             _engine: PhantomData::default(),
             checker: Arc::new(RawConsistencyChecker::<E>::default()),
         }
