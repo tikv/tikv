@@ -1200,7 +1200,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     fn start_system<
         T: Transport + 'static,
         C: PdClient + 'static,
-        W: WriteBatch + WriteBatchVecExt<EK> + 'static,
+        W: WriteBatchVecExt<EK> + 'static,
     >(
         &mut self,
         mut workers: Workers<EK, ER>,
