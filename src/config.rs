@@ -1493,7 +1493,7 @@ const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 impl Default for UnifiedReadPoolConfig {
     fn default() -> UnifiedReadPoolConfig {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num * 0.8) as usize;
+        let mut concurrency = (cpu_num * 0.5) as usize;
         concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             min_thread_count: 1,
