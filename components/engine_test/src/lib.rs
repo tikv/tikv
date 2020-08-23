@@ -34,11 +34,13 @@ pub mod raft {
     #[cfg(feature = "test-engine-raft-panic")]
     pub use engine_panic::{
         PanicEngine as RaftTestEngine,
+        PanicSnapshot as RaftTestSnapshot,
     };
 
     #[cfg(feature = "test-engine-raft-rocksdb")]
     pub use engine_rocks::{
         RocksEngine as RaftTestEngine,
+        RocksSnapshot as RaftTestSnapshot,
     };
 
     pub fn new_engine(path: &str, db_opt: Option<DBOptions>, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<RaftTestEngine> {
@@ -58,11 +60,13 @@ pub mod kv {
     #[cfg(feature = "test-engine-kv-panic")]
     pub use engine_panic::{
         PanicEngine as KvTestEngine,
+        PanicSnapshot as KvTestSnapshot,
     };
 
     #[cfg(feature = "test-engine-kv-rocksdb")]
     pub use engine_rocks::{
         RocksEngine as KvTestEngine,
+        RocksSnapshot as KvTestSnapshot,
     };
 
     pub fn new_engine(path: &str, db_opt: Option<DBOptions>, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<KvTestEngine> {
