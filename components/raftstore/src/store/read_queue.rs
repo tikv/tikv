@@ -7,7 +7,7 @@ use crate::store::fsm::apply;
 use crate::store::metrics::*;
 use crate::store::{Callback, Config};
 
-use engine_traits::{KvEngine, Snapshot};
+use engine_traits::KvEngine;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -17,23 +17,23 @@ use uuid::Uuid;
 
 const READ_QUEUE_SHRINK_SIZE: usize = 64;
 
-pub struct ReadIndexRequest<S>
+pub struct ReadIndexRequest<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
     pub id: Uuid,
-    pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)>,
+    pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<EK::Snapshot>, Option<u64>)>,
     pub renew_lease_time: Timespec,
     pub read_index: Option<u64>,
     // `true` means it's in `ReadIndexQueue::reads`.
     in_contexts: bool,
 }
 
-impl<S> ReadIndexRequest<S>
+impl<EK> ReadIndexRequest<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
-    pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<S>, read_index: u64) {
+    pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>, read_index: u64) {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         self.cmds.push((req, cb, Some(read_index)));
     }
@@ -41,7 +41,7 @@ where
     pub fn with_command(
         id: Uuid,
         req: RaftCmdRequest,
-        cb: Callback<S>,
+        cb: Callback<EK::Snapshot>,
         renew_lease_time: Timespec,
     ) -> Self {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
@@ -57,9 +57,9 @@ where
     }
 }
 
-impl<S> Drop for ReadIndexRequest<S>
+impl<EK> Drop for ReadIndexRequest<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
     fn drop(&mut self) {
         let dur = (monotonic_raw_now() - self.renew_lease_time)
@@ -73,7 +73,7 @@ pub struct ReadIndexQueue<EK>
 where
     EK: KvEngine,
 {
-    reads: VecDeque<ReadIndexRequest<EK::Snapshot>>,
+    reads: VecDeque<ReadIndexRequest<EK>>,
     ready_cnt: usize,
     // How many requests are handled.
     handled_cnt: usize,
@@ -163,7 +163,7 @@ where
         self.contexts.clear();
     }
 
-    pub fn push_back(&mut self, mut read: ReadIndexRequest<EK::Snapshot>, is_leader: bool) {
+    pub fn push_back(&mut self, mut read: ReadIndexRequest<EK>, is_leader: bool) {
         if !is_leader {
             read.in_contexts = true;
             let offset = self.handled_cnt + self.reads.len();
@@ -173,11 +173,11 @@ where
         self.retry_countdown = usize::MAX;
     }
 
-    pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest<EK::Snapshot>> {
+    pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest<EK>> {
         self.reads.back_mut()
     }
 
-    pub fn last_ready(&self) -> Option<&ReadIndexRequest<EK::Snapshot>> {
+    pub fn last_ready(&self) -> Option<&ReadIndexRequest<EK>> {
         if self.ready_cnt > 0 {
             return Some(&self.reads[self.ready_cnt - 1]);
         }
@@ -268,7 +268,7 @@ where
         }
     }
 
-    pub fn pop_front(&mut self) -> Option<ReadIndexRequest<EK::Snapshot>> {
+    pub fn pop_front(&mut self) -> Option<ReadIndexRequest<EK>> {
         if self.ready_cnt == 0 {
             return None;
         }
@@ -286,7 +286,7 @@ where
     }
 
     /// Raft could have not been ready to handle the poped task. So put it back into the queue.
-    pub fn push_front(&mut self, read: ReadIndexRequest<EK::Snapshot>) {
+    pub fn push_front(&mut self, read: ReadIndexRequest<EK>) {
         debug_assert!(read.read_index.is_some());
         self.reads.push_front(read);
         self.ready_cnt += 1;

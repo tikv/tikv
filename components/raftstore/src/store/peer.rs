@@ -1764,7 +1764,7 @@ where
 
     fn response_read<T, C>(
         &self,
-        read: &mut ReadIndexRequest<EK::Snapshot>,
+        read: &mut ReadIndexRequest<EK>,
         ctx: &mut PollContext<EK, ER, T, C>,
         replica_read: bool,
     ) {
