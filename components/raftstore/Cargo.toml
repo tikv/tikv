@@ -53,7 +53,6 @@ futures = "0.1"
 futures03 = { package = "futures", version = "0.3", features = ["compat"] }
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
-futures03 = { package = "futures", version = "0.3" }
 hex = "0.4"
 into_other = { path = "../into_other" }
 keys = { path = "../keys" }

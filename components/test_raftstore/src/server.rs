@@ -202,7 +202,6 @@ impl Simulator for ServerCluster {
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
-            storage_read_pool.handle(),
             lock_mgr.clone(),
             concurrency_manager.clone(),
             false,

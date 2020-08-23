@@ -1814,20 +1814,16 @@ pub struct ReadPoolConfig {
     pub unified: UnifiedReadPoolConfig,
     pub coprocessor: CoprReadPoolConfig,
     pub storage: StorageReadPoolConfig,
-    pub scheduler: CoprReadPoolConfig,
 }
 
 impl ReadPoolConfig {
     pub fn is_unified_pool_enabled(&self) -> bool {
-        self.storage.use_unified_pool()
-            || self.coprocessor.use_unified_pool()
-            || self.scheduler.use_unified_pool()
+        self.storage.use_unified_pool() || self.coprocessor.use_unified_pool()
     }
 
     pub fn adjust_use_unified_pool(&mut self) {
         self.storage.adjust_use_unified_pool();
         self.coprocessor.adjust_use_unified_pool();
-        self.scheduler.adjust_use_unified_pool();
     }
 
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
@@ -1836,7 +1832,6 @@ impl ReadPoolConfig {
         }
         self.storage.validate()?;
         self.coprocessor.validate()?;
-        self.scheduler.validate()?;
         Ok(())
     }
 }
@@ -1859,10 +1854,6 @@ mod readpool_tests {
             use_unified_pool: Some(false),
             ..Default::default()
         };
-        let scheduler = CoprReadPoolConfig {
-            use_unified_pool: Some(false),
-            ..Default::default()
-        };
         assert!(storage.validate().is_ok());
         let coprocessor = CoprReadPoolConfig {
             use_unified_pool: Some(false),
@@ -1873,7 +1864,6 @@ mod readpool_tests {
             unified,
             storage,
             coprocessor,
-            scheduler,
         };
         assert!(!cfg.is_unified_pool_enabled());
         assert!(cfg.validate().is_ok());
@@ -1895,7 +1885,6 @@ mod readpool_tests {
             unified,
             storage,
             coprocessor,
-            scheduler,
         };
         assert!(!invalid_cfg.is_unified_pool_enabled());
         assert!(invalid_cfg.validate().is_err());
@@ -1915,8 +1904,6 @@ mod readpool_tests {
             ..Default::default()
         };
         assert!(storage.validate().is_ok());
-        let scheduler = CoprReadPoolConfig::default();
-        assert!(scheduler.validate().is_ok());
 
         let coprocessor = CoprReadPoolConfig::default();
         assert!(coprocessor.validate().is_ok());
@@ -1924,7 +1911,6 @@ mod readpool_tests {
             unified,
             storage,
             coprocessor,
-            scheduler,
         };
         cfg.adjust_use_unified_pool();
         assert!(cfg.is_unified_pool_enabled());
@@ -1946,7 +1932,6 @@ mod readpool_tests {
         assert!(cfg.is_unified_pool_enabled());
 
         cfg.coprocessor.use_unified_pool = Some(false);
-        cfg.scheduler.use_unified_pool = Some(false);
         assert!(!cfg.is_unified_pool_enabled());
     }
 

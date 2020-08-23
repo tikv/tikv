@@ -12,10 +12,7 @@ use std::{mem, thread, u64};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{
-    CompactExt, CompactionJobInfo, Engines, Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable,
-    WriteBatch, WriteBatchExt, WriteOptions,
-};
+use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -818,7 +815,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T, C> {
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
-    raftlog_gc_scheduler: Scheduler<RaftlogGcTask<ER>>,
+    raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
@@ -833,7 +830,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T, C> {
     pub engines: Engines<EK, ER>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
-    apply_system: Box<dyn ApplyBatchSystem<RocksEngine>>,
+    apply_system: Box<dyn ApplyBatchSystem<EK>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T, C> RaftPollerBuilder<EK, ER, T, C> {
@@ -1061,13 +1058,13 @@ where
     }
 }
 
-struct Workers<EK: KvEngine, ER: RaftEngine> {
+struct Workers<EK: KvEngine> {
     pd_worker: FutureWorker<PdTask<EK>>,
     consistency_check_worker: Worker<ConsistencyCheckTask<EK::Snapshot>>,
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
-    raftlog_gc_worker: Worker<RaftlogGcTask<ER>>,
+    raftlog_gc_worker: Worker<RaftlogGcTask>,
     region_worker: Worker<RegionTask<EK::Snapshot>>,
     coprocessor_host: CoprocessorHost<EK>,
     future_poller: ThreadPool,
@@ -1075,10 +1072,8 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm>,
-    apply_router: ApplyRouter<EK>,
-    apply_system: ApplyBatchSystem<EK>,
     router: RaftRouter<EK, ER>,
-    workers: Option<Workers<EK, ER>>,
+    workers: Option<Workers<EK>>,
     apply_system: Option<Box<dyn ApplyBatchSystem<EK>>>,
 }
 
@@ -1129,7 +1124,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let region_scheduler = workers.region_worker.scheduler();
         let apply_system = if engines.kv.support_write_batch_vec() {
-            create_apply_batch_system::<RocksWriteBatchVec>(
+            create_apply_batch_system::<EK, ER, EK::WriteBatchVec>(
                 meta.get_id(),
                 format!("[store {}]", meta.get_id()),
                 workers.coprocessor_host.clone(),
@@ -1141,7 +1136,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 &cfg.value(),
             )
         } else {
-            create_apply_batch_system::<RocksWriteBatch>(
+            create_apply_batch_system::<EK, ER, EK::WriteBatch>(
                 meta.get_id(),
                 format!("[store {}]", meta.get_id()),
                 workers.coprocessor_host.clone(),
@@ -1185,7 +1180,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
     fn start_system<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
-        mut workers: Workers<EK, ER>,
+        mut workers: Workers<EK>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
         builder: RaftPollerBuilder<EK, ER, T, C>,
         auto_split_controller: AutoSplitController,

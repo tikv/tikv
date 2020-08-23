@@ -4,8 +4,8 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 
-use engine_traits::MAX_DELETE_BATCH_SIZE;
-use engine_traits::{KvEngine, KvEngines, Mutable, WriteBatch};
+use engine_traits::{Engines, KvEngine};
+use raft_engine::RaftEngine;
 use tikv_util::worker::Runnable;
 
 pub struct Task {
@@ -39,20 +39,24 @@ quick_error! {
     }
 }
 
-pub struct Runner<EK: KvEngine, ER: KvEngine> {
+pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     ch: Option<Sender<TaskRes>>,
-    engines: KvEngines<EK, ER>,
+    tasks: Vec<Task>,
+    engines: Engines<EK, ER>,
 }
 
-impl<EK: KvEngine, ER: KvEngine> Runner<EK, ER> {
-    pub fn new(ch: Option<Sender<TaskRes>>, engines: KvEngines<EK, ER>) -> Runner<EK, ER> {
-        Runner { ch, engines }
+impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
+    pub fn new(ch: Option<Sender<TaskRes>>, engines: Engines<EK, ER>) -> Runner<EK, ER> {
+        Runner {
+            ch,
+            engines,
+            tasks: vec![],
+        }
     }
 
     /// Does the GC job and returns the count of logs collected.
-    fn gc_raft_log<ER: RaftEngine>(
+    fn gc_raft_log(
         &mut self,
-        raft_engine: ER,
         region_id: u64,
         start_idx: u64,
         end_idx: u64,
@@ -73,8 +77,7 @@ impl<EK: KvEngine, ER: KvEngine> Runner<EK, ER> {
     }
 }
 
-
-impl<ER: RaftEngine> Runnable<Task> for Runner {
+impl<EK: KvEngine, ER: RaftEngine> Runnable<Task> for Runner<EK, ER> {
     fn run(&mut self, task: Task) {
         debug!(
             "execute gc log";
@@ -95,10 +98,25 @@ impl<ER: RaftEngine> Runnable<Task> for Runner {
 
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
+        self.tasks.append(tasks);
+        if self.tasks.len() < 100 {
+            return;
+        }
         self.engines.kv.sync().unwrap_or_else(|e| {
             panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
         });
-        for t in tasks.drain(..) {
+        let tasks = std::mem::replace(&mut self.tasks, vec![]);
+        for t in tasks {
+            self.run(t);
+        }
+    }
+
+    fn shutdown(&mut self) {
+        self.engines.kv.sync().unwrap_or_else(|e| {
+            panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
+        });
+        let tasks = std::mem::replace(&mut self.tasks, vec![]);
+        for t in tasks {
             self.run(t);
         }
     }
@@ -108,7 +126,7 @@ impl<ER: RaftEngine> Runnable<Task> for Runner {
 mod tests {
     use super::*;
     use engine_rocks::util::new_engine;
-    use engine_traits::{KvEngine, KvEngines, WriteBatchExt, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{Engines, KvEngine, Mutable, WriteBatchExt, ALL_CFS, CF_DEFAULT};
     use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
@@ -120,7 +138,7 @@ mod tests {
         let path_kv = dir.path().join("kv");
         let raft_db = new_engine(path_kv.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let kv_db = new_engine(path_raft.to_str().unwrap(), None, ALL_CFS, None).unwrap();
-        let engines = KvEngines::new(kv_db, raft_db.clone(), false);
+        let engines = Engines::new(kv_db, raft_db.clone(), false);
 
         let (tx, rx) = mpsc::channel();
         let mut runner = Runner::new(Some(tx), engines);

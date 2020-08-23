@@ -1,15 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::config::UnifiedReadPoolConfig;
+use crate::storage::kv::{
+    destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics,
+};
 use crate::storage::metrics::*;
 use prometheus::local::*;
 use std::cell::RefCell;
-use std::time::Duration;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tikv_util::collections::HashMap;
 use tikv_util::read_pool::PoolTicker;
-pub use tikv_util::read_pool::{ReadPool, ReadPoolError, ReadPoolHandle, ReadPoolBuilder};
-use crate::config::UnifiedReadPoolConfig;
-use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics};
+pub use tikv_util::read_pool::{ReadPool, ReadPoolBuilder, ReadPoolError, ReadPoolHandle};
 use tikv_util::time::Instant;
 
 pub struct SchedLocalMetrics {
@@ -149,7 +151,6 @@ where
         });
     }
 }
-
 
 pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &UnifiedReadPoolConfig,

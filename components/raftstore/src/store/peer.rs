@@ -49,6 +49,7 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::Scheduler;
+use tikv_util::Either;
 use tokio::sync::mpsc::Receiver as FutureReceiver;
 
 use super::cmd_resp;
