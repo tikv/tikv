@@ -15,6 +15,10 @@ impl RocksColumnFamilyOptions {
     pub fn into_raw(self) -> RawCFOptions {
         self.0
     }
+
+    pub fn as_raw_mut(&mut self) -> &mut RawCFOptions {
+        &mut self.0
+    }
 }
 
 impl ColumnFamilyOptions for RocksColumnFamilyOptions {

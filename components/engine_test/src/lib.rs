@@ -191,16 +191,14 @@ pub mod ctor {
     mod rocks {
         use super::{EngineConstructorExt, ColumnFamilyOptions, DBOptions, CFOptions};
 
-        use engine_traits::Result;
+        use engine_traits::{Result, DBOptions as DBOptionsTrait, ColumnFamilyOptions as ColumnFamilyOptionsTrait};
 
-        use engine_rocks::RocksEngine;
-        // FIXME: Don't use "raw" module here
-        use engine_rocks::raw::{ColumnFamilyOptions as RocksColumnFamilyOptions, DBOptions as RocksDBOptions};
-        use engine_rocks::raw_util::{new_engine_opt as rocks_new_engine_opt, CFOptions as RocksCFOptions};
+        use engine_rocks::{RocksColumnFamilyOptions, RocksDBOptions};
+        use engine_rocks::util::{new_engine_opt as rocks_new_engine_opt, RocksCFOptions};
+        use engine_rocks::raw::{ColumnFamilyOptions as RawRocksColumnFamilyOptions};
         use engine_rocks::properties::{
             MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
         };
-        use std::sync::Arc;
 
         impl EngineConstructorExt for engine_rocks::RocksEngine {
             fn new_engine_opt(path: &str, _db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self> {
@@ -209,18 +207,16 @@ pub mod ctor {
                     .iter()
                     .map(|cf_opts| {
                         let mut rocks_cf_opts = RocksColumnFamilyOptions::new();
-                        set_standard_cf_opts(&mut rocks_cf_opts, &cf_opts.options);
+                        set_standard_cf_opts(rocks_cf_opts.as_raw_mut(), &cf_opts.options);
                         set_cf_opts(&mut rocks_cf_opts, &cf_opts.options);
                         RocksCFOptions::new(cf_opts.cf, rocks_cf_opts)
                     })
                     .collect();
-                let engine = Arc::new(rocks_new_engine_opt(path, rocks_db_opts, rocks_cfs_opts).unwrap());
-
-                Ok(RocksEngine::from_db(engine))
+                rocks_new_engine_opt(path, rocks_db_opts, rocks_cfs_opts)
             }
         }
 
-        fn set_standard_cf_opts(rocks_cf_opts: &mut RocksColumnFamilyOptions, cf_opts: &ColumnFamilyOptions) {
+        fn set_standard_cf_opts(rocks_cf_opts: &mut RawRocksColumnFamilyOptions, cf_opts: &ColumnFamilyOptions) {
             if !cf_opts.get_no_range_properties() {
                 let f = Box::new(RangePropertiesCollectorFactory::default());
                 rocks_cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
