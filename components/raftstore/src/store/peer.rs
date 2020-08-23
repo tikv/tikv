@@ -75,15 +75,15 @@ pub enum StaleState {
     LeaderMissing,
 }
 
-struct ProposalQueue<S>
+struct ProposalQueue<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
-    queue: VecDeque<Proposal<S>>,
+    queue: VecDeque<Proposal<EK::Snapshot>>,
 }
 
-impl<S: Snapshot> ProposalQueue<S> {
-    fn new() -> ProposalQueue<S> {
+impl<EK> ProposalQueue<EK> where EK: KvEngine {
+    fn new() -> ProposalQueue<EK> {
         ProposalQueue {
             queue: VecDeque::new(),
         }
@@ -100,7 +100,7 @@ impl<S: Snapshot> ProposalQueue<S> {
 
     // Return all proposals that before (and included) the proposal
     // at the given term and index
-    fn take(&mut self, index: u64, term: u64) -> Vec<Proposal<S>> {
+    fn take(&mut self, index: u64, term: u64) -> Vec<Proposal<EK::Snapshot>> {
         let mut propos = Vec::new();
         while let Some(p) = self.queue.pop_front() {
             // Comparing the term first then the index, because the term is
@@ -117,7 +117,7 @@ impl<S: Snapshot> ProposalQueue<S> {
         propos
     }
 
-    fn push(&mut self, p: Proposal<S>) {
+    fn push(&mut self, p: Proposal<EK::Snapshot>) {
         self.queue.push_back(p);
     }
 
@@ -343,7 +343,7 @@ where
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
 
-    proposals: ProposalQueue<EK::Snapshot>,
+    proposals: ProposalQueue<EK>,
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
     pending_reads: ReadIndexQueue<EK::Snapshot>,
