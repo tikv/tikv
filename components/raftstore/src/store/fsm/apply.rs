@@ -2425,9 +2425,9 @@ pub fn compact_raft_log(
     Ok(())
 }
 
-pub struct Apply<S>
+pub struct Apply<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
     pub peer_id: u64,
     pub region_id: u64,
@@ -2436,12 +2436,12 @@ where
     pub last_committed_index: u64,
     pub committed_index: u64,
     pub committed_term: u64,
-    pub cbs: Vec<Proposal<S>>,
+    pub cbs: Vec<Proposal<EK::Snapshot>>,
     entries_mem_size: i64,
     entries_count: i64,
 }
 
-impl<S: Snapshot> Apply<S> {
+impl<EK> Apply<EK> where EK: KvEngine {
     pub(crate) fn new(
         peer_id: u64,
         region_id: u64,
@@ -2450,8 +2450,8 @@ impl<S: Snapshot> Apply<S> {
         last_committed_index: u64,
         committed_index: u64,
         committed_term: u64,
-        cbs: Vec<Proposal<S>>,
-    ) -> Apply<S> {
+        cbs: Vec<Proposal<EK::Snapshot>>,
+    ) -> Apply<EK> {
         let entries_mem_size =
             (ENTRY_MEM_SIZE * entries.capacity()) as i64 + get_entries_mem_size(&entries);
         APPLY_PENDING_BYTES_GAUGE.add(entries_mem_size);
@@ -2472,7 +2472,7 @@ impl<S: Snapshot> Apply<S> {
     }
 }
 
-impl<S: Snapshot> Drop for Apply<S> {
+impl<EK> Drop for Apply<EK> where EK: KvEngine {
     fn drop(&mut self) {
         APPLY_PENDING_BYTES_GAUGE.sub(self.entries_mem_size);
         APPLY_PENDING_ENTRIES_GAUGE.sub(self.entries_count);
@@ -2649,7 +2649,7 @@ where
 {
     Apply {
         start: Instant,
-        apply: Apply<EK::Snapshot>,
+        apply: Apply<EK>,
     },
     Registration(Registration),
     LogsUpToDate(CatchUpLogs),
@@ -2670,7 +2670,7 @@ impl<EK> Msg<EK>
 where
     EK: KvEngine,
 {
-    pub fn apply(apply: Apply<EK::Snapshot>) -> Msg<EK> {
+    pub fn apply(apply: Apply<EK>) -> Msg<EK> {
         Msg::Apply {
             start: Instant::now(),
             apply,
@@ -2811,7 +2811,7 @@ where
     fn handle_apply<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, ER, W>,
-        mut apply: Apply<EK::Snapshot>,
+        mut apply: Apply<EK>,
     ) {
         if apply_ctx.timer.is_none() {
             apply_ctx.timer = Some(Instant::now_coarse());
@@ -3728,7 +3728,7 @@ mod tests {
         }
     }
 
-    fn apply<S: Snapshot>(
+    fn apply<EK: KvEngine>(
         peer_id: u64,
         region_id: u64,
         term: u64,
@@ -3736,8 +3736,8 @@ mod tests {
         last_committed_index: u64,
         committed_term: u64,
         committed_index: u64,
-        cbs: Vec<Proposal<S>>,
-    ) -> Apply<S> {
+        cbs: Vec<Proposal<EK::Snapshot>>,
+    ) -> Apply<EK> {
         Apply::new(
             peer_id,
             region_id,
