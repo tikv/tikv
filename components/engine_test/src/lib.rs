@@ -111,15 +111,40 @@ pub mod ctor {
         }
     }
 
+    /// Properties for a single column family
+    ///
+    /// All engines must emulate column families, but at present it is not clear
+    /// how non-RocksDB engines should deal with the wide variety of options for
+    /// column families.
+    ///
+    /// At present this very closely mirrors the column family options
+    /// for RocksDB, with the exception that it provides no capacity for
+    /// installing table property collectors, which have little hope of being
+    /// emulated on arbitrary engines.
+    ///
+    /// Instead, the RocksDB constructors need to always install the table
+    /// property collectors that TiKV needs, and other engines need to
+    /// accomplish the same high-level ends those table properties are used for
+    /// by their own means.
+    ///
+    /// At present, they should probably emulate, reinterpret, or ignore them as
+    /// suitable to get tikv functioning.
+    ///
+    /// In the future TiKV will probably have engine-specific configuration
+    /// options.
     #[derive(Clone)]
     pub struct ColumnFamilyOptions {
         level_zero_file_num_compaction_trigger: Option<i32>,
+        /// On RocksDB, turns off the range properties collector. Only used in
+        /// tests. Unclear how other engines should deal with this.
+        no_range_properties: bool,
     }
 
     impl ColumnFamilyOptions {
         pub fn new() -> ColumnFamilyOptions {
             ColumnFamilyOptions {
                 level_zero_file_num_compaction_trigger: None,
+                no_range_properties: false,
             }
         }
 
@@ -130,6 +155,15 @@ pub mod ctor {
         pub fn get_level_zero_file_num_compaction_trigger(&self) -> Option<i32> {
             self.level_zero_file_num_compaction_trigger
         }
+
+        pub fn set_no_range_properties(&mut self, v: bool) {
+            self.no_range_properties = v;
+        }
+
+        pub fn get_no_range_properties(&self) -> bool {
+            self.no_range_properties
+        }
+        
     }
 
     mod panic {
@@ -165,7 +199,7 @@ pub mod ctor {
                     .iter()
                     .map(|cf_opts| {
                         let mut rocks_cf_opts = RocksColumnFamilyOptions::new();
-                        set_standard_cf_opts(&mut rocks_cf_opts);
+                        set_standard_cf_opts(&mut rocks_cf_opts, &cf_opts.options);
                         set_cf_opts(&mut rocks_cf_opts, &cf_opts.options);
                         RocksCFOptions::new(cf_opts.cf, rocks_cf_opts)
                     })
@@ -176,11 +210,13 @@ pub mod ctor {
             }
         }
 
-        fn set_standard_cf_opts(cf_opts: &mut RocksColumnFamilyOptions) {
-            let f = Box::new(RangePropertiesCollectorFactory::default());
-            cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        fn set_standard_cf_opts(rocks_cf_opts: &mut RocksColumnFamilyOptions, cf_opts: &ColumnFamilyOptions) {
+            if !cf_opts.get_no_range_properties() {
+                let f = Box::new(RangePropertiesCollectorFactory::default());
+                rocks_cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+            }
             let f = Box::new(MvccPropertiesCollectorFactory::default());
-            cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+            rocks_cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
         }
 
         fn set_cf_opts(rocks_cf_opts: &mut RocksColumnFamilyOptions, cf_opts: &ColumnFamilyOptions) {
