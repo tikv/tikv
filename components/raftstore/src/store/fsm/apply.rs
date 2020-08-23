@@ -2436,7 +2436,7 @@ where
     pub last_committed_index: u64,
     pub committed_index: u64,
     pub committed_term: u64,
-    pub cbs: Vec<Proposal<EK::Snapshot>>,
+    pub cbs: Vec<Proposal<EK>>,
     entries_mem_size: i64,
     entries_count: i64,
 }
@@ -2450,7 +2450,7 @@ impl<EK> Apply<EK> where EK: KvEngine {
         last_committed_index: u64,
         committed_index: u64,
         committed_term: u64,
-        cbs: Vec<Proposal<EK::Snapshot>>,
+        cbs: Vec<Proposal<EK>>,
     ) -> Apply<EK> {
         let entries_mem_size =
             (ENTRY_MEM_SIZE * entries.capacity()) as i64 + get_entries_mem_size(&entries);
@@ -2515,14 +2515,14 @@ impl Registration {
     }
 }
 
-pub struct Proposal<S>
+pub struct Proposal<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
     pub is_conf_change: bool,
     pub index: u64,
     pub term: u64,
-    pub cb: Callback<S>,
+    pub cb: Callback<EK::Snapshot>,
     /// `renew_lease_time` contains the last time when a peer starts to renew lease.
     pub renew_lease_time: Option<Timespec>,
     pub txn_extra: TxnExtra,
@@ -2859,7 +2859,7 @@ where
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn append_proposal(&mut self, props_drainer: Drain<Proposal<EK::Snapshot>>) {
+    fn append_proposal(&mut self, props_drainer: Drain<Proposal<EK>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = props_drainer.len();
         if self.delegate.stopped {
@@ -3712,12 +3712,12 @@ mod tests {
         }
     }
 
-    fn proposal<S: Snapshot>(
+    fn proposal<EK: KvEngine>(
         is_conf_change: bool,
         index: u64,
         term: u64,
-        cb: Callback<S>,
-    ) -> Proposal<S> {
+        cb: Callback<EK::Snapshot>,
+    ) -> Proposal<EK> {
         Proposal {
             is_conf_change,
             index,
@@ -3736,7 +3736,7 @@ mod tests {
         last_committed_index: u64,
         committed_term: u64,
         committed_index: u64,
-        cbs: Vec<Proposal<EK::Snapshot>>,
+        cbs: Vec<Proposal<EK>>,
     ) -> Apply<EK> {
         Apply::new(
             peer_id,
@@ -3942,7 +3942,7 @@ mod tests {
         system.shutdown();
     }
 
-    fn cb<S: Snapshot>(idx: u64, term: u64, tx: Sender<RaftCmdResponse>) -> Proposal<S> {
+    fn cb<EK>(idx: u64, term: u64, tx: Sender<RaftCmdResponse>) -> Proposal<EK> where EK: KvEngine {
         proposal(
             false,
             idx,

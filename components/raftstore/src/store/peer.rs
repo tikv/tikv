@@ -79,7 +79,7 @@ struct ProposalQueue<EK>
 where
     EK: KvEngine,
 {
-    queue: VecDeque<Proposal<EK::Snapshot>>,
+    queue: VecDeque<Proposal<EK>>,
 }
 
 impl<EK> ProposalQueue<EK> where EK: KvEngine {
@@ -100,7 +100,7 @@ impl<EK> ProposalQueue<EK> where EK: KvEngine {
 
     // Return all proposals that before (and included) the proposal
     // at the given term and index
-    fn take(&mut self, index: u64, term: u64) -> Vec<Proposal<EK::Snapshot>> {
+    fn take(&mut self, index: u64, term: u64) -> Vec<Proposal<EK>> {
         let mut propos = Vec::new();
         while let Some(p) = self.queue.pop_front() {
             // Comparing the term first then the index, because the term is
@@ -117,7 +117,7 @@ impl<EK> ProposalQueue<EK> where EK: KvEngine {
         propos
     }
 
-    fn push(&mut self, p: Proposal<EK::Snapshot>) {
+    fn push(&mut self, p: Proposal<EK>) {
         self.queue.push_back(p);
     }
 
@@ -2081,7 +2081,7 @@ where
     fn post_propose<T, C>(
         &mut self,
         poll_ctx: &mut PollContext<EK, ER, T, C>,
-        mut p: Proposal<EK::Snapshot>,
+        mut p: Proposal<EK>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
         if poll_ctx.current_time.is_none() {
