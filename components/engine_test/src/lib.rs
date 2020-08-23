@@ -134,6 +134,7 @@ pub mod ctor {
     /// options.
     #[derive(Clone)]
     pub struct ColumnFamilyOptions {
+        disable_auto_compactions: bool,
         level_zero_file_num_compaction_trigger: Option<i32>,
         /// On RocksDB, turns off the range properties collector. Only used in
         /// tests. Unclear how other engines should deal with this.
@@ -143,9 +144,18 @@ pub mod ctor {
     impl ColumnFamilyOptions {
         pub fn new() -> ColumnFamilyOptions {
             ColumnFamilyOptions {
+                disable_auto_compactions: false,
                 level_zero_file_num_compaction_trigger: None,
                 no_range_properties: false,
             }
+        }
+
+        pub fn set_disable_auto_compactions(&mut self, v: bool) {
+            self.disable_auto_compactions = v;
+        }
+
+        pub fn get_disable_auto_compactions(&self) -> bool {
+            self.disable_auto_compactions
         }
 
         pub fn set_level_zero_file_num_compaction_trigger(&mut self, n: i32) {
@@ -222,6 +232,9 @@ pub mod ctor {
         fn set_cf_opts(rocks_cf_opts: &mut RocksColumnFamilyOptions, cf_opts: &ColumnFamilyOptions) {
             if let Some(trigger) = cf_opts.get_level_zero_file_num_compaction_trigger() {
                 rocks_cf_opts.set_level_zero_file_num_compaction_trigger(trigger);
+            }
+            if cf_opts.get_disable_auto_compactions() {
+                rocks_cf_opts.set_disable_auto_compactions(true);
             }
         }
     }
