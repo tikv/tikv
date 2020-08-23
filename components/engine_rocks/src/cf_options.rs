@@ -32,6 +32,10 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
         self.0.get_level_zero_stop_writes_trigger()
     }
 
+    fn set_level_zero_file_num_compaction_trigger(&mut self, v: i32) {
+        self.0.set_level_zero_file_num_compaction_trigger(v)
+    }
+
     fn get_soft_pending_compaction_bytes_limit(&self) -> u64 {
         self.0.get_soft_pending_compaction_bytes_limit()
     }
@@ -54,6 +58,10 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
 
     fn get_target_file_size_base(&self) -> u64 {
         self.0.get_target_file_size_base()
+    }
+
+    fn set_disable_auto_compactions(&mut self, v: bool) {
+        self.0.set_disable_auto_compactions(v)
     }
 
     fn get_disable_auto_compactions(&self) -> bool {
