@@ -346,7 +346,7 @@ where
     proposals: ProposalQueue<EK>,
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
-    pending_reads: ReadIndexQueue<EK::Snapshot>,
+    pending_reads: ReadIndexQueue<EK>,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,

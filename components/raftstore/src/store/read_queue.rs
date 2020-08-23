@@ -7,7 +7,7 @@ use crate::store::fsm::apply;
 use crate::store::metrics::*;
 use crate::store::{Callback, Config};
 
-use engine_traits::Snapshot;
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -69,11 +69,11 @@ where
     }
 }
 
-pub struct ReadIndexQueue<S>
+pub struct ReadIndexQueue<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
-    reads: VecDeque<ReadIndexRequest<S>>,
+    reads: VecDeque<ReadIndexRequest<EK::Snapshot>>,
     ready_cnt: usize,
     // How many requests are handled.
     handled_cnt: usize,
@@ -83,11 +83,11 @@ where
     retry_countdown: usize,
 }
 
-impl<S> Default for ReadIndexQueue<S>
+impl<EK> Default for ReadIndexQueue<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
-    fn default() -> ReadIndexQueue<S> {
+    fn default() -> ReadIndexQueue<EK> {
         ReadIndexQueue {
             reads: VecDeque::new(),
             ready_cnt: 0,
@@ -98,9 +98,9 @@ where
     }
 }
 
-impl<S> ReadIndexQueue<S>
+impl<EK> ReadIndexQueue<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
     /// Check it's necessary to retry pending read requests or not.
     /// Return true if all such conditions are satisfied:
@@ -163,7 +163,7 @@ where
         self.contexts.clear();
     }
 
-    pub fn push_back(&mut self, mut read: ReadIndexRequest<S>, is_leader: bool) {
+    pub fn push_back(&mut self, mut read: ReadIndexRequest<EK::Snapshot>, is_leader: bool) {
         if !is_leader {
             read.in_contexts = true;
             let offset = self.handled_cnt + self.reads.len();
@@ -173,11 +173,11 @@ where
         self.retry_countdown = usize::MAX;
     }
 
-    pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest<S>> {
+    pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest<EK::Snapshot>> {
         self.reads.back_mut()
     }
 
-    pub fn last_ready(&self) -> Option<&ReadIndexRequest<S>> {
+    pub fn last_ready(&self) -> Option<&ReadIndexRequest<EK::Snapshot>> {
         if self.ready_cnt > 0 {
             return Some(&self.reads[self.ready_cnt - 1]);
         }
@@ -268,7 +268,7 @@ where
         }
     }
 
-    pub fn pop_front(&mut self) -> Option<ReadIndexRequest<S>> {
+    pub fn pop_front(&mut self) -> Option<ReadIndexRequest<EK::Snapshot>> {
         if self.ready_cnt == 0 {
             return None;
         }
@@ -286,7 +286,7 @@ where
     }
 
     /// Raft could have not been ready to handle the poped task. So put it back into the queue.
-    pub fn push_front(&mut self, read: ReadIndexRequest<S>) {
+    pub fn push_front(&mut self, read: ReadIndexRequest<EK::Snapshot>) {
         debug_assert!(read.read_index.is_some());
         self.reads.push_front(read);
         self.ready_cnt += 1;
@@ -297,11 +297,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::RocksEngine;
 
     #[test]
     fn test_read_queue_fold() {
-        let mut queue = ReadIndexQueue::<RocksSnapshot>::default();
+        let mut queue = ReadIndexQueue::<RocksEngine>::default();
         queue.handled_cnt = 125;
         for _ in 0..100 {
             let id = Uuid::new_v4();
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_become_leader_then_become_follower() {
-        let mut queue = ReadIndexQueue::<RocksSnapshot>::default();
+        let mut queue = ReadIndexQueue::<RocksEngine>::default();
         queue.handled_cnt = 100;
 
         // Push a pending comand when the peer is follower.
@@ -400,7 +400,7 @@ mod tests {
 
     #[test]
     fn test_retake_leadership() {
-        let mut queue = ReadIndexQueue::<RocksSnapshot>::default();
+        let mut queue = ReadIndexQueue::<RocksEngine>::default();
         queue.handled_cnt = 100;
 
         // Push a pending read comand when the peer is leader.
@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn test_advance_replica_reads_out_of_order() {
-        let mut queue = ReadIndexQueue::<RocksSnapshot>::default();
+        let mut queue = ReadIndexQueue::<RocksEngine>::default();
         queue.handled_cnt = 100;
 
         let ids: [Uuid; 2] = [Uuid::new_v4(), Uuid::new_v4()];
