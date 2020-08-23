@@ -41,6 +41,10 @@ pub mod raft {
         RocksEngine as RaftTestEngine,
     };
 
+    pub fn new_engine(path: &str, db_opt: Option<DBOptions>, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<RaftTestEngine> {
+        RaftTestEngine::new_engine(path, db_opt, cfs, opts)
+    }
+
     pub fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<RaftTestEngine> {
         RaftTestEngine::new_engine_opt(path, db_opt, cfs_opts)
     }
@@ -60,6 +64,10 @@ pub mod kv {
     pub use engine_rocks::{
         RocksEngine as KvTestEngine,
     };
+
+    pub fn new_engine(path: &str, db_opt: Option<DBOptions>, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<KvTestEngine> {
+        KvTestEngine::new_engine(path, db_opt, cfs, opts)
+    }
 
     pub fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<KvTestEngine> {
         KvTestEngine::new_engine_opt(path, db_opt, cfs_opts)
@@ -88,6 +96,14 @@ pub mod ctor {
     /// Specifically, this means that RocksDB constructors should set up
     /// all properties collectors, always.
     pub trait EngineConstructorExt: Sized {
+        /// Create a new engine with either:
+        ///
+        /// - The column families specified as `cfs`, with default options, or
+        /// - The column families specified as `opts`, with options.
+        ///
+        /// Note that if `opts` is not `None` then the `cfs` argument is completely ignored.
+        fn new_engine(path: &str, db_opt: Option<DBOptions>, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<Self>;
+
         /// Create a new engine with specified column families and options
         fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self>;
     }
@@ -182,6 +198,10 @@ pub mod ctor {
         use super::{EngineConstructorExt, DBOptions, CFOptions};
 
         impl EngineConstructorExt for engine_panic::PanicEngine {
+            fn new_engine(_path: &str, _db_opt: Option<DBOptions>, _cfs: &[&str], _opts: Option<Vec<CFOptions>>) -> Result<Self> {
+                Ok(PanicEngine)
+            }
+
             fn new_engine_opt(_path: &str, _db_opt: DBOptions, _cfs_opts: Vec<CFOptions>) -> Result<Self> {
                 Ok(PanicEngine)
             }
@@ -194,13 +214,42 @@ pub mod ctor {
         use engine_traits::{Result, DBOptions as DBOptionsTrait, ColumnFamilyOptions as ColumnFamilyOptionsTrait};
 
         use engine_rocks::{RocksColumnFamilyOptions, RocksDBOptions};
-        use engine_rocks::util::{new_engine_opt as rocks_new_engine_opt, RocksCFOptions};
+        use engine_rocks::util::{new_engine_opt as rocks_new_engine_opt, new_engine as rocks_new_engine, RocksCFOptions};
         use engine_rocks::raw::{ColumnFamilyOptions as RawRocksColumnFamilyOptions};
         use engine_rocks::properties::{
             MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
         };
 
         impl EngineConstructorExt for engine_rocks::RocksEngine {
+            // FIXME this is duplicating behavior from engine_rocks::raw_util in order to
+            // call set_standard_cf_opts.
+            fn new_engine(path: &str, db_opt: Option<DBOptions>, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<Self> {
+                let rocks_db_opts = match db_opt {
+                    Some(_opt) => panic!(), // todo
+                    None => None,
+                };
+                let cfs_opts = match opts {
+                    Some(opts) => opts,
+                    None => {
+                        let mut default_cfs_opts = Vec::with_capacity(cfs.len());
+                        for cf in cfs {
+                            default_cfs_opts.push(CFOptions::new(*cf, ColumnFamilyOptions::new()));
+                        }
+                        default_cfs_opts
+                    }
+                };
+                let rocks_cfs_opts = cfs_opts
+                    .iter()
+                    .map(|cf_opts| {
+                        let mut rocks_cf_opts = RocksColumnFamilyOptions::new();
+                        set_standard_cf_opts(rocks_cf_opts.as_raw_mut(), &cf_opts.options);
+                        set_cf_opts(&mut rocks_cf_opts, &cf_opts.options);
+                        RocksCFOptions::new(cf_opts.cf, rocks_cf_opts)
+                    })
+                    .collect();
+                rocks_new_engine(path, rocks_db_opts, &[], Some(rocks_cfs_opts))
+            }
+
             fn new_engine_opt(path: &str, _db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self> {
                 let rocks_db_opts = RocksDBOptions::new();
                 let rocks_cfs_opts = cfs_opts
