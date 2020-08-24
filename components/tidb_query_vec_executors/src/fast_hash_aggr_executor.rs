@@ -273,7 +273,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
             }
             RpnStackNode::Vector { value, .. } => {
                 let group_by_physical_vec = value.as_ref();
-                let group_by_logical_rows = value.logical_rows();
+                let group_by_logical_rows = value.logical_rows_struct();
 
                 match_template::match_template! {
                     TT = [Int, Real, Duration, Decimal, DateTime],
@@ -383,7 +383,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
 
 fn calc_groups_each_row<'a, TT: EvaluableRef<'a>, T: 'a + ChunkRef<'a, TT>, S, F>(
     physical_column: T,
-    logical_rows: &[usize],
+    logical_rows: LogicalRows<'a>,
     aggr_fns: &[Box<dyn AggrFunction>],
     group: &mut HashMap<Option<S>, usize>,
     states: &mut Vec<Box<dyn AggrFunctionState>>,
@@ -395,7 +395,7 @@ where
     F: Fn(Option<TT>) -> Result<Option<S>>,
 {
     for physical_idx in logical_rows {
-        let val = map_to_sort_key(physical_column.get_option_ref(*physical_idx))?;
+        let val = map_to_sort_key(physical_column.get_option_ref(physical_idx))?;
 
         // Not using the entry API so that when entry exists there is no clone.
         match group.get(&val) {
