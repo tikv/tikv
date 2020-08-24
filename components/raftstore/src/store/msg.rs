@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_traits::{KvEngine, Snapshot};
+use engine_traits::{KvEngine};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -26,9 +26,9 @@ use tikv_util::escape;
 use super::{AbstractPeer, RegionSnapshot};
 
 #[derive(Debug)]
-pub struct ReadResponse<S: Snapshot> {
+pub struct ReadResponse<EK> where EK: KvEngine {
     pub response: RaftCmdResponse,
-    pub snapshot: Option<RegionSnapshot<S>>,
+    pub snapshot: Option<RegionSnapshot<EK::Snapshot>>,
     pub txn_extra_op: TxnExtraOp,
 }
 
@@ -40,11 +40,11 @@ pub struct WriteResponse {
 // This is only necessary because of seeming limitations in derive(Clone) w/r/t
 // generics. If it can be deleted in the future in favor of derive, it should
 // be.
-impl<S> Clone for ReadResponse<S>
+impl<EK> Clone for ReadResponse<EK>
 where
-    S: Snapshot,
+    EK: KvEngine
 {
-    fn clone(&self) -> ReadResponse<S> {
+    fn clone(&self) -> ReadResponse<EK> {
         ReadResponse {
             response: self.response.clone(),
             snapshot: self.snapshot.clone(),
@@ -53,7 +53,7 @@ where
     }
 }
 
-pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
+pub type ReadCallback<EK> = Box<dyn FnOnce(ReadResponse<EK>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 
 /// Variants of callbacks for `Msg`.
@@ -65,14 +65,14 @@ pub enum Callback<EK> where EK: KvEngine {
     /// No callback.
     None,
     /// Read callback.
-    Read(ReadCallback<EK::Snapshot>),
+    Read(ReadCallback<EK>),
     /// Write callback.
     Write(WriteCallback),
 }
 
 impl<EK> Callback<EK>
 where
-    EK: KvEngine
+    EK: KvEngine,
 {
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
@@ -92,7 +92,7 @@ where
         }
     }
 
-    pub fn invoke_read(self, args: ReadResponse<EK::Snapshot>) {
+    pub fn invoke_read(self, args: ReadResponse<EK>) {
         match self {
             Callback::Read(read) => read(args),
             other => panic!("expect Callback::Read(..), got {:?}", other),

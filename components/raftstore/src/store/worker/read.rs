@@ -80,7 +80,7 @@ pub trait ReadExecutor<E: KvEngine> {
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
         mut ts: Option<ThreadReadId>,
-    ) -> ReadResponse<E::Snapshot> {
+    ) -> ReadResponse<E> {
         let requests = msg.get_requests();
         let mut response = ReadResponse {
             response: RaftCmdResponse::default(),
@@ -694,7 +694,7 @@ mod tests {
 
     use crate::store::util::Lease;
     use crate::store::Callback;
-    use engine_rocks::{RocksEngine, RocksSnapshot};
+    use engine_rocks::{RocksEngine};
     use engine_traits::ALL_CFS;
     use tikv_util::time::monotonic_raw_now;
 
@@ -844,7 +844,7 @@ mod tests {
         let region = region1;
         let task = RaftCommand::<RocksEngine>::new(
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 let snap = resp.snapshot.unwrap();
                 assert_eq!(snap.get_region(), &region);
             })),
@@ -868,7 +868,7 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd_store_id,
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_store_not_match());
                 assert!(resp.snapshot.is_none());
@@ -886,7 +886,7 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd_peer_id,
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 assert!(
                     resp.response.get_header().has_error(),
                     "{:?}",
@@ -910,7 +910,7 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd_term,
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_stale_command(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());
@@ -944,7 +944,7 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_server_is_busy(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());

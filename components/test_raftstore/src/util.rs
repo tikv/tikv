@@ -25,7 +25,7 @@ use engine_rocks::config::BlobRunMode;
 use engine_rocks::encryption::get_env;
 use engine_rocks::raw::DB;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{Engines, Iterable, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
@@ -346,7 +346,7 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksEngine>, mpsc::Receiver<R
 
     let (tx, rx) = mpsc::channel();
     let cb = if is_read {
-        Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+        Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
             // we don't care error actually.
             let _ = tx.send(resp.response);
         }))
@@ -404,7 +404,7 @@ pub fn async_read_on_peer<T: Simulator>(
 pub fn batch_read_on_peer<T: Simulator>(
     cluster: &mut Cluster<T>,
     requests: &[(metapb::Peer, metapb::Region)],
-) -> Vec<ReadResponse<RocksSnapshot>> {
+) -> Vec<ReadResponse<RocksEngine>> {
     let batch_id = Some(ThreadReadId::new());
     let (tx, rx) = mpsc::sync_channel(3);
     let mut results = vec![];

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam::atomic::AtomicCell;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine};
 use futures::future::Future;
 use futures03::compat::Compat;
 use kvproto::cdcpb::*;
@@ -671,7 +671,7 @@ struct Initializer {
 }
 
 impl Initializer {
-    fn on_change_cmd(&self, mut resp: ReadResponse<RocksSnapshot>) {
+    fn on_change_cmd(&self, mut resp: ReadResponse<RocksEngine>) {
         if let Some(region_snapshot) = resp.snapshot {
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
             let region = region_snapshot.get_region().clone();

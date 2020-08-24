@@ -2854,7 +2854,7 @@ where
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
-    ) -> ReadResponse<EK::Snapshot> {
+    ) -> ReadResponse<EK> {
         let region = self.region().clone();
         if check_epoch {
             if let Err(e) = check_region_epoch(&req, &region, true) {

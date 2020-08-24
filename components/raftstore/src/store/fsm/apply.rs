@@ -4555,7 +4555,7 @@ mod tests {
                     region_id: 1,
                     enabled: enabled.clone(),
                 },
-                cb: Callback::Read(Box::new(|resp: ReadResponse<RocksSnapshot>| {
+                cb: Callback::Read(Box::new(|resp: ReadResponse<RocksEngine>| {
                     assert!(!resp.response.get_header().has_error());
                     assert!(resp.snapshot.is_some());
                     let snap = resp.snapshot.unwrap();
