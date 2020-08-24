@@ -2780,25 +2780,23 @@ mod tests {
 
     #[test]
     fn test_last_cfg_modified() {
-        let mut tikv_cfg = TiKvConfig::default();
-        let last_cfg = TiKvConfig::default();
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let store_path = Path::new(&cfg.storage.data_dir);
+        let last_cfg_path = _dir.join(LAST_CONFIG_FILE);
 
-        let store_path = Path::new(&tikv_cfg.storage.data_dir);
-        let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
-
-        last_cfg.write_to_file(&last_cfg_path).unwrap();
+        cfg.write_to_file(&last_cfg_path).unwrap();
 
         let mut last_cfg_metadata = last_cfg_path.metadata().unwrap();
         let first_modified = last_cfg_metadata.modified().unwrap();
 
         // not write to file when config is the equivalent of last one.
-        assert!(persist_config(&tikv_cfg).is_ok());
+        assert!(persist_config(&cfg).is_ok());
         last_cfg_metadata = last_cfg_path.metadata().unwrap();
         assert_eq!(last_cfg_metadata.modified().unwrap(), first_modified);
 
         // write to file when config is the inequivalent of last one.
-        tikv_cfg.log_level = slog::Level::Warning;
-        assert!(persist_config(&tikv_cfg).is_ok());
+        cfg.cfg_path = store_path.join(TMP_CONFIG_FILE).display().to_string();
+        assert!(persist_config(&cfg).is_ok());
         last_cfg_metadata = last_cfg_path.metadata().unwrap();
         assert_ne!(last_cfg_metadata.modified().unwrap(), first_modified);
     }
