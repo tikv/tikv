@@ -28,6 +28,7 @@ pub use self::stats::{
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
+use tikv_util::callback::Callback as UtilCallback;
 use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
@@ -112,6 +113,16 @@ pub trait Engine: Send + Clone + 'static {
     ) -> Result<()>;
 
     fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
+
+    fn async_write_with_pipelined_write_cb(
+        &self,
+        ctx: &Context,
+        batch: WriteData,
+        callback: Callback<()>,
+        _: Option<UtilCallback<()>>,
+    ) -> Result<()> {
+        self.async_write(ctx, batch, callback)
+    }
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);

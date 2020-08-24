@@ -13,6 +13,7 @@ use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use raft::SnapshotStatus;
 use std::cell::RefCell;
+use tikv_util::callback::Callback as UtilCallback;
 use tikv_util::time::ThreadReadId;
 use txn_types::TxnExtra;
 
@@ -26,15 +27,16 @@ where
 
     /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
-        self.send_command_txn_extra(req, TxnExtra::default(), cb)
+        self.send_command_pw_cb_and_txn_extra(req, cb, None, TxnExtra::default())
     }
 
     /// Sends RaftCmdRequest to local store with txn extras.
-    fn send_command_txn_extra(
+    fn send_command_pw_cb_and_txn_extra(
         &self,
         req: RaftCmdRequest,
-        txn_extra: TxnExtra,
         cb: Callback<EK::Snapshot>,
+        pw_cb: Option<UtilCallback<()>>,
+        txn_extra: TxnExtra,
     ) -> RaftStoreResult<()>;
 
     /// Sends Snapshot to local store.
@@ -102,11 +104,12 @@ where
     }
 
     /// Sends RaftCmdRequest to local store with txn extra.
-    fn send_command_txn_extra(
+    fn send_command_pw_cb_and_txn_extra(
         &self,
         _: RaftCmdRequest,
-        _: TxnExtra,
         _: Callback<EK::Snapshot>,
+        _: Option<UtilCallback<()>>,
+        _: TxnExtra,
     ) -> RaftStoreResult<()> {
         Ok(())
     }
@@ -213,13 +216,14 @@ where
         local_reader.release_snapshot_cache();
     }
 
-    fn send_command_txn_extra(
+    fn send_command_pw_cb_and_txn_extra(
         &self,
         req: RaftCmdRequest,
-        txn_extra: TxnExtra,
         cb: Callback<EK::Snapshot>,
+        pw_cb: Option<UtilCallback<()>>,
+        txn_extra: TxnExtra,
     ) -> RaftStoreResult<()> {
-        let cmd = RaftCommand::with_txn_extra(req, cb, txn_extra);
+        let cmd = RaftCommand::with_pw_cb_and_txn_extra(req, cb, pw_cb, txn_extra);
         let region_id = cmd.request.get_header().get_region_id();
         self.router
             .send_raft_command(cmd)

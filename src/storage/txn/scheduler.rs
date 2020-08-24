@@ -27,7 +27,9 @@ use std::sync::Arc;
 use std::u64;
 
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
-use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
+use tikv_util::{
+    callback::must_call, callback::Callback as UtilCallback, collections::HashMap, time::Instant,
+};
 use txn_types::TimeStamp;
 
 use crate::storage::kv::{
@@ -666,17 +668,35 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .unwrap()
                     });
 
-                    if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
+                    let sched = scheduler.clone();
+                    let sched_pool = sched.get_sched_pool(priority).clone();
+                    let pw_callback: Option<UtilCallback<()>> = if pipelined {
+                        Some(Box::new(move |_| {
+                            sched_pool
+                                .pool
+                                .spawn(async move {
+                                    fail_point!("scheduler_pipelined_write_finish");
+
+                                    sched.on_pipelined_write(cid, pipelined_write_pr, tag);
+
+                                    future::ok::<_, ()>(())
+                                })
+                                .unwrap()
+                        }))
+                    } else {
+                        None
+                    };
+
+                    if let Err(e) = engine.async_write_with_pipelined_write_cb(
+                        &ctx,
+                        to_be_write,
+                        engine_cb,
+                        pw_callback,
+                    ) {
                         SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                         info!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         scheduler.finish_with_err(cid, e.into());
-                    } else if pipelined {
-                        fail_point!("scheduler_pipelined_write_finish");
-
-                        // The write task is scheduled to engine successfully.
-                        // Respond to client early.
-                        scheduler.on_pipelined_write(cid, pipelined_write_pr, tag);
                     }
                 }
             }

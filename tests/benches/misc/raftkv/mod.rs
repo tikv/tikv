@@ -74,13 +74,16 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
         Ok(())
     }
 
-    fn send_command_txn_extra(
+    fn send_command_pw_cb_and_txn_extra(
         &self,
         req: RaftCmdRequest,
-        txn_extra: TxnExtra,
         cb: Callback<RocksSnapshot>,
+        pw_cb: Option<UtilCallback<()>>,
+        txn_extra: TxnExtra,
     ) -> Result<()> {
-        self.invoke(RaftCommand::with_txn_extra(req, cb, txn_extra));
+        self.invoke(RaftCommand::with_pw_cb_and_txn_extra(
+            req, cb, pw_cb, txn_extra,
+        ));
         Ok(())
     }
 

@@ -21,6 +21,7 @@ use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
+use tikv_util::callback::Callback as UtilCallback;
 use tikv_util::escape;
 
 use super::{AbstractPeer, RegionSnapshot};
@@ -320,31 +321,46 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
 
 /// Raft command is the command that is expected to be proposed by the
 /// leader of the target raft group.
-#[derive(Debug)]
 pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
+    pub pw_callback: Option<UtilCallback<()>>,
     pub txn_extra: TxnExtra,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
     #[inline]
-    pub fn with_txn_extra(
+    pub fn with_pw_cb_and_txn_extra(
         request: RaftCmdRequest,
         callback: Callback<S>,
+        pw_callback: Option<UtilCallback<()>>,
         txn_extra: TxnExtra,
     ) -> RaftCommand<S> {
         RaftCommand {
+            send_time: Instant::now(),
             request,
             callback,
+            pw_callback,
             txn_extra,
-            send_time: Instant::now(),
         }
     }
 
     pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
-        Self::with_txn_extra(request, callback, TxnExtra::default())
+        Self::with_pw_cb_and_txn_extra(request, callback, None, TxnExtra::default())
+    }
+}
+
+impl<S> fmt::Debug for RaftCommand<S>
+where
+    S: Snapshot,
+{
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_struct("RaftCommand")
+            .field("send_time", &self.send_time)
+            .field("request", &self.request)
+            .field("callback", &self.callback)
+            .finish()
     }
 }
 
