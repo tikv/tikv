@@ -258,7 +258,7 @@ impl Progress {
 
 pub struct LocalReader<C, E>
 where
-    C: ProposalRouter<E::Snapshot>,
+    C: ProposalRouter<E>,
     E: KvEngine,
 {
     store_id: Cell<Option<u64>>,
@@ -275,7 +275,7 @@ where
 
 impl<C, E> ReadExecutor<E> for LocalReader<C, E>
 where
-    C: ProposalRouter<E::Snapshot>,
+    C: ProposalRouter<E>,
     E: KvEngine,
 {
     fn get_engine(&self) -> &E {
@@ -302,7 +302,7 @@ where
 
 impl<C, E> LocalReader<C, E>
 where
-    C: ProposalRouter<E::Snapshot>,
+    C: ProposalRouter<E>,
     E: KvEngine,
 {
     pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
@@ -519,7 +519,7 @@ where
 
 impl<C, E> Clone for LocalReader<C, E>
 where
-    C: ProposalRouter<E::Snapshot> + Clone,
+    C: ProposalRouter<E> + Clone,
     E: KvEngine,
 {
     fn clone(&self) -> Self {
