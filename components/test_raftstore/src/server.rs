@@ -16,7 +16,7 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use kvproto::tikvpb::TikvClient;
 use tempfile::{Builder, TempDir};
-use tokio::runtime::{Builder as TokioBuilder, Handle, Runtime};
+use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
 use encryption::DataKeyManager;
@@ -228,14 +228,6 @@ impl Simulator for ServerCluster {
             security_mgr.clone(),
         );
 
-        let debug_service = DebugService::new(
-            engines.clone(),
-            self.debug_pool.handle().clone(),
-            raft_router,
-            ConfigController::default(),
-            security_mgr.clone(),
-        );
-
         // Create deadlock service.
         let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
 
@@ -254,12 +246,23 @@ impl Simulator for ServerCluster {
             coprocessor::Endpoint::new(&server_cfg, cop_read_pool.handle(), concurrency_manager);
         let mut server = None;
         // Create Debug service.
-        let debug_thread_pool = Builder::new()
-            .threaded_scheduler()
-            .thread_name(thd_name!("debugger"))
-            .core_threads(1)
-            .build()
-            .unwrap();
+        let debug_thread_pool = Arc::new(
+            TokioBuilder::new()
+                .threaded_scheduler()
+                .thread_name(thd_name!("debugger"))
+                .core_threads(1)
+                .build()
+                .unwrap(),
+        );
+        let debug_thread_handle = debug_thread_pool.handle().clone();
+        let debug_service = DebugService::new(
+            engines.clone(),
+            debug_thread_handle,
+            raft_router,
+            ConfigController::default(),
+            security_mgr.clone(),
+        );
+
         for _ in 0..100 {
             let mut svr = Server::new(
                 &server_cfg,
@@ -271,7 +274,7 @@ impl Simulator for ServerCluster {
                 snap_mgr.clone(),
                 gc_worker.clone(),
                 None,
-                debug_thread_pool,
+                debug_thread_pool.clone(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));

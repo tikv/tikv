@@ -497,14 +497,16 @@ impl TiKVServer {
         };
 
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
-        let debug_thread_pool = Builder::new()
-            .threaded_scheduler()
-            .thread_name(thd_name!("debugger"))
-            .core_threads(1)
-            .on_thread_start(|| tikv_alloc::add_thread_memory_accessor())
-            .on_thread_stop(|| tikv_alloc::remove_thread_memory_accessor())
-            .build()
-            .unwrap();
+        let debug_thread_pool = Arc::new(
+            Builder::new()
+                .threaded_scheduler()
+                .thread_name(thd_name!("debugger"))
+                .core_threads(1)
+                .on_thread_start(|| tikv_alloc::add_thread_memory_accessor())
+                .on_thread_stop(|| tikv_alloc::remove_thread_memory_accessor())
+                .build()
+                .unwrap(),
+        );
 
         let storage_read_pool_handle = if self.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()

@@ -65,7 +65,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     grpc_thread_load: Arc<ThreadLoad>,
     yatp_read_pool: Option<ReadPool>,
     readpool_normal_thread_load: Arc<ThreadLoad>,
-    debug_thread_pool: Runtime,
+    debug_thread_pool: Arc<Runtime>,
     timer: Handle,
 }
 
@@ -81,7 +81,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         snap_mgr: SnapManager,
         gc_worker: GcWorker<E>,
         yatp_read_pool: Option<ReadPool>,
-        debug_thread_pool: Runtime,
+        debug_thread_pool: Arc<Runtime>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.stats_concurrency > 0 {
@@ -297,6 +297,7 @@ mod tests {
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use security::SecurityConfig;
+    use tokio::runtime::Builder as TokioBuilder;
     use txn_types::TxnExtra;
 
     #[derive(Clone)]
@@ -422,12 +423,14 @@ mod tests {
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
         );
-        let debug_thread_pool = Builder::new()
-            .threaded_scheduler()
-            .thread_name(thd_name!("debugger"))
-            .core_threads(1)
-            .build()
-            .unwrap();
+        let debug_thread_pool = Arc::new(
+            TokioBuilder::new()
+                .threaded_scheduler()
+                .thread_name(thd_name!("debugger"))
+                .core_threads(1)
+                .build()
+                .unwrap(),
+        );
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
             &cfg,
