@@ -299,8 +299,13 @@ where
         }
         for r in req.get_requests() {
             match r.get_cmd_type() {
-                CmdType::Delete | CmdType::Put => (),
-                _ => {
+                CmdType::Delete | CmdType::Put | CmdType::Prewrite | CmdType::Commit => (),
+                CmdType::Invalid
+                | CmdType::Get
+                | CmdType::Snap
+                | CmdType::DeleteRange
+                | CmdType::IngestSst
+                | CmdType::ReadIndex => {
                     return false;
                 }
             }
