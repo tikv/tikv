@@ -213,9 +213,7 @@ struct OldValueReader<S: EngineSnapshot> {
 
 impl<S: EngineSnapshot> OldValueReader<S> {
     fn new(snapshot: S) -> Self {
-        let mut iter_opts = IterOptions::default()
-            .use_prefix_seek()
-            .set_prefix_same_as_start(true);
+        let mut iter_opts = IterOptions::default();
         iter_opts.set_fill_cache(false);
         let write_cursor = snapshot
             .iter_cf(CF_WRITE, iter_opts, ScanMode::Mixed)
