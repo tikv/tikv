@@ -6,7 +6,9 @@ use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-pub use tidb_query_datatype::codec::data_type::{LogicalRows, BATCH_MAX_SIZE};
+pub use tidb_query_datatype::codec::data_type::{
+    LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS,
+};
 use tidb_query_datatype::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
 use tidb_query_datatype::expr::EvalContext;
 
@@ -42,8 +44,8 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     /// Gets a reference to the logical rows.
     pub fn logical_rows_struct(&self) -> LogicalRows {
         match self {
-            RpnStackNodeVectorValue::Generated { physical_value } => LogicalRows::Identical {
-                size: physical_value.len(),
+            RpnStackNodeVectorValue::Generated { physical_value } => LogicalRows::Ref {
+                logical_rows: &IDENTICAL_LOGICAL_ROWS[0..physical_value.len()],
             },
 
             RpnStackNodeVectorValue::Ref { logical_rows, .. } => LogicalRows::Ref { logical_rows },
