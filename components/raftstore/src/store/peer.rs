@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{Engines, KvEngine, Snapshot, WriteOptions};
+use engine_traits::{Engines, KvEngine, WriteOptions};
 use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -182,14 +182,14 @@ pub struct CheckTickResult {
     up_to_date: bool,
 }
 
-pub struct ProposedAdminCmd<S: Snapshot> {
+pub struct ProposedAdminCmd<EK> where EK: KvEngine {
     epoch_state: AdminCmdEpochState,
     index: u64,
-    cbs: Vec<Callback<S>>,
+    cbs: Vec<Callback<EK::Snapshot>>,
 }
 
-impl<S: Snapshot> ProposedAdminCmd<S> {
-    fn new(epoch_state: AdminCmdEpochState, index: u64) -> ProposedAdminCmd<S> {
+impl<EK> ProposedAdminCmd<EK> where EK: KvEngine {
+    fn new(epoch_state: AdminCmdEpochState, index: u64) -> ProposedAdminCmd<EK> {
         ProposedAdminCmd {
             epoch_state,
             index,
@@ -201,7 +201,7 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
 struct CmdEpochChecker<EK> where EK: KvEngine {
     // Although it's a deque, because of the characteristics of the settings from `ADMIN_CMD_EPOCH_MAP`,
     // the max size of admin cmd is 2, i.e. split/merge and change peer.
-    proposed_admin_cmd: VecDeque<ProposedAdminCmd<EK::Snapshot>>,
+    proposed_admin_cmd: VecDeque<ProposedAdminCmd<EK>>,
     term: u64,
 }
 
