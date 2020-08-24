@@ -72,7 +72,7 @@ where
 {
     pub index: u64,
     pub term: u64,
-    pub cb: Option<Callback<EK::Snapshot>>,
+    pub cb: Option<Callback<EK>>,
     pub txn_extra: TxnExtra,
 }
 
@@ -80,7 +80,7 @@ impl<EK> PendingCmd<EK>
 where
     EK: KvEngine,
 {
-    fn new(index: u64, term: u64, cb: Callback<EK::Snapshot>, txn_extra: TxnExtra) -> PendingCmd<EK> {
+    fn new(index: u64, term: u64, cb: Callback<EK>, txn_extra: TxnExtra) -> PendingCmd<EK> {
         PendingCmd {
             index,
             term,
@@ -271,7 +271,7 @@ where
     EK: KvEngine,
 {
     region: Region,
-    cbs: Vec<(Option<Callback<EK::Snapshot>>, Cmd)>,
+    cbs: Vec<(Option<Callback<EK>>, Cmd)>,
 }
 
 impl<EK> ApplyCallback<EK>
@@ -292,7 +292,7 @@ where
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<EK::Snapshot>>, cmd: Cmd) {
+    fn push(&mut self, cb: Option<Callback<EK>>, cmd: Cmd) {
         self.cbs.push((cb, cmd));
     }
 }
@@ -616,7 +616,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl 
     notify_req_region_removed(region_id, cmd.cb.take().unwrap());
 }
 
-pub fn notify_req_region_removed(region_id: u64, cb: Callback<impl Snapshot>) {
+pub fn notify_req_region_removed(region_id: u64, cb: Callback<impl KvEngine>) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
     cb.invoke_with_response(resp);
@@ -639,7 +639,7 @@ fn notify_stale_command(
     notify_stale_req(term, cmd.cb.take().unwrap());
 }
 
-pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>) {
+pub fn notify_stale_req(term: u64, cb: Callback<impl KvEngine>) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
     cb.invoke_with_response(resp);
 }
@@ -1031,7 +1031,7 @@ where
         index: u64,
         term: u64,
         is_conf_change: bool,
-    ) -> (Option<Callback<EK::Snapshot>>, TxnExtra) {
+    ) -> (Option<Callback<EK>>, TxnExtra) {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
@@ -2522,7 +2522,7 @@ where
     pub is_conf_change: bool,
     pub index: u64,
     pub term: u64,
-    pub cb: Callback<EK::Snapshot>,
+    pub cb: Callback<EK>,
     /// `renew_lease_time` contains the last time when a peer starts to renew lease.
     pub renew_lease_time: Option<Timespec>,
     pub txn_extra: TxnExtra,
@@ -2659,7 +2659,7 @@ where
     Change {
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
     },
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
@@ -3071,7 +3071,7 @@ where
         apply_ctx: &mut ApplyContext<EK, ER, W>,
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
     ) {
         let (observe_id, region_id, enabled) = match cmd {
             ChangeCmd::RegisterObserver {
@@ -3716,7 +3716,7 @@ mod tests {
         is_conf_change: bool,
         index: u64,
         term: u64,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
     ) -> Proposal<EK> {
         Proposal {
             is_conf_change,

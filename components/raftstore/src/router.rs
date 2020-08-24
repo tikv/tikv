@@ -25,7 +25,7 @@ where
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK>) -> RaftStoreResult<()> {
         self.send_command_txn_extra(req, TxnExtra::default(), cb)
     }
 
@@ -34,7 +34,7 @@ where
         &self,
         req: RaftCmdRequest,
         txn_extra: TxnExtra,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
     ) -> RaftStoreResult<()>;
 
     /// Sends Snapshot to local store.
@@ -42,7 +42,7 @@ where
         &self,
         _read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
     ) -> RaftStoreResult<()> {
         self.send_command(req, cb)
     }
@@ -106,7 +106,7 @@ where
         &self,
         _: RaftCmdRequest,
         _: TxnExtra,
-        _: Callback<EK::Snapshot>,
+        _: Callback<EK>,
     ) -> RaftStoreResult<()> {
         Ok(())
     }
@@ -189,7 +189,7 @@ where
             .map_err(|e| handle_send_error(region_id, e))
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK>) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
         let region_id = cmd.request.get_header().get_region_id();
         self.router
@@ -201,7 +201,7 @@ where
         &self,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
     ) -> RaftStoreResult<()> {
         let mut local_reader = self.local_reader.borrow_mut();
         local_reader.read(read_id, req, cb);
@@ -217,7 +217,7 @@ where
         &self,
         req: RaftCmdRequest,
         txn_extra: TxnExtra,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
     ) -> RaftStoreResult<()> {
         let cmd = RaftCommand::with_txn_extra(req, cb, txn_extra);
         let region_id = cmd.request.get_header().get_region_id();

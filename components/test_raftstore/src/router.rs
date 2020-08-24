@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};
@@ -60,14 +60,14 @@ impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
     fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
         unimplemented!()
     }
-    fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksSnapshot>) -> RaftStoreResult<()> {
+    fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksEngine>) -> RaftStoreResult<()> {
         unimplemented!()
     }
     fn send_command_txn_extra(
         &self,
         _: RaftCmdRequest,
         _: TxnExtra,
-        _: Callback<RocksSnapshot>,
+        _: Callback<RocksEngine>,
     ) -> RaftStoreResult<()> {
         unimplemented!()
     }

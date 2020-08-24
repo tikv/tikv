@@ -22,7 +22,7 @@ where
     EK: KvEngine,
 {
     pub id: Uuid,
-    pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<EK::Snapshot>, Option<u64>)>,
+    pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<EK>, Option<u64>)>,
     pub renew_lease_time: Timespec,
     pub read_index: Option<u64>,
     // `true` means it's in `ReadIndexQueue::reads`.
@@ -33,7 +33,7 @@ impl<EK> ReadIndexRequest<EK>
 where
     EK: KvEngine,
 {
-    pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>, read_index: u64) {
+    pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<EK>, read_index: u64) {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         self.cmds.push((req, cb, Some(read_index)));
     }
@@ -41,7 +41,7 @@ where
     pub fn with_command(
         id: Uuid,
         req: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
         renew_lease_time: Timespec,
     ) -> Self {
         RAFT_READ_INDEX_PENDING_COUNT.inc();

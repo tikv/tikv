@@ -285,7 +285,6 @@ mod tests {
     use raftstore::Result as RaftStoreResult;
 
     use crate::storage::lock_manager::DummyLockManager;
-    use engine_rocks::RocksSnapshot;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use security::SecurityConfig;
@@ -326,7 +325,7 @@ mod tests {
         fn send_command(
             &self,
             _: RaftCmdRequest,
-            _: Callback<RocksSnapshot>,
+            _: Callback<RocksEngine>,
         ) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
@@ -336,7 +335,7 @@ mod tests {
             &self,
             _: RaftCmdRequest,
             _: TxnExtra,
-            _: Callback<RocksSnapshot>,
+            _: Callback<RocksEngine>,
         ) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())

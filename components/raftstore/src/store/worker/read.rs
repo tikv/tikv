@@ -428,7 +428,7 @@ where
         &mut self,
         mut read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
-        cb: Callback<E::Snapshot>,
+        cb: Callback<E>,
     ) {
         let region_id = req.get_header().get_region_id();
         loop {
@@ -506,7 +506,7 @@ where
         &mut self,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
-        cb: Callback<E::Snapshot>,
+        cb: Callback<E>,
     ) {
         self.propose_raft_command(read_id, req, cb);
         self.metrics.maybe_flush();

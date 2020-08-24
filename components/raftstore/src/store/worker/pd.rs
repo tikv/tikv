@@ -82,7 +82,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<E::Snapshot>,
+        callback: Callback<E>,
     },
     AskBatchSplit {
         region: metapb::Region,
@@ -90,7 +90,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<E::Snapshot>,
+        callback: Callback<E>,
     },
     AutoSplit {
         split_infos: Vec<SplitInfo>,
@@ -474,7 +474,7 @@ where
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<EK::Snapshot>,
+        callback: Callback<EK>,
         task: String,
     ) {
         let router = self.router.clone();
@@ -518,7 +518,7 @@ where
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<EK::Snapshot>,
+        callback: Callback<EK>,
         task: String,
     ) {
         if split_keys.is_empty() {
@@ -1145,7 +1145,7 @@ fn send_admin_request<EK, ER>(
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback<EK::Snapshot>,
+    callback: Callback<EK>,
 ) where
     EK: KvEngine,
     ER: RaftEngine,

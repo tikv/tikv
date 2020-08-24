@@ -122,7 +122,7 @@ where
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<E::Snapshot>, usize)>,
+    callbacks: Vec<(Callback<E>, usize)>,
     txn_extra: TxnExtra,
 }
 
@@ -702,7 +702,7 @@ where
         &mut self,
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
     ) {
         fail_point!("raft_on_capture_change");
         let region_id = self.region_id();
@@ -818,7 +818,7 @@ where
         self.fsm.peer.raft_group.report_snapshot(to_peer_id, status)
     }
 
-    fn on_leader_callback(&mut self, cb: Callback<EK::Snapshot>) {
+    fn on_leader_callback(&mut self, cb: Callback<EK>) {
         let msg = new_read_index_request(
             self.region_id(),
             self.region().get_region_epoch().clone(),
@@ -3068,7 +3068,7 @@ where
     fn propose_raft_command(
         &mut self,
         mut msg: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
         txn_extra: TxnExtra,
     ) {
         match self.pre_propose_raft_command(&msg) {
@@ -3329,7 +3329,7 @@ where
         &mut self,
         region_epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
     ) {
         if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
             cb.invoke_with_response(new_error(e));

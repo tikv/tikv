@@ -63,7 +63,7 @@ pub trait Simulator {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<RocksEngine>,
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
@@ -96,7 +96,7 @@ pub trait Simulator {
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<RocksEngine>,
     );
 
     fn call_command_on_node(
@@ -1140,7 +1140,7 @@ impl<T: Simulator> Cluster<T> {
         &mut self,
         region: &metapb::Region,
         split_key: &[u8],
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<RocksEngine>,
     ) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();

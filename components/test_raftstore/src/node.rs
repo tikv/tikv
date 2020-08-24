@@ -13,7 +13,7 @@ use raft::SnapshotStatus;
 
 use super::*;
 use encryption::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine};
 use engine_traits::{Engines, MiscExt, Peekable};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
@@ -331,7 +331,7 @@ impl Simulator for NodeCluster {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<RocksEngine>,
     ) -> Result<()> {
         if !self
             .trans
@@ -361,7 +361,7 @@ impl Simulator for NodeCluster {
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<RocksEngine>,
     ) {
         if !self
             .trans

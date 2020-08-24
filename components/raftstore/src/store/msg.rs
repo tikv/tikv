@@ -61,18 +61,18 @@ pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 ///         `GetRequest` and `SnapRequest`
 ///  - `Write`: a callback for write only requests including `AdminRequest`
 ///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
-pub enum Callback<S: Snapshot> {
+pub enum Callback<EK> where EK: KvEngine {
     /// No callback.
     None,
     /// Read callback.
-    Read(ReadCallback<S>),
+    Read(ReadCallback<EK::Snapshot>),
     /// Write callback.
     Write(WriteCallback),
 }
 
-impl<S> Callback<S>
+impl<EK> Callback<EK>
 where
-    S: Snapshot,
+    EK: KvEngine
 {
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
@@ -92,7 +92,7 @@ where
         }
     }
 
-    pub fn invoke_read(self, args: ReadResponse<S>) {
+    pub fn invoke_read(self, args: ReadResponse<EK::Snapshot>) {
         match self {
             Callback::Read(read) => read(args),
             other => panic!("expect Callback::Read(..), got {:?}", other),
@@ -107,9 +107,9 @@ where
     }
 }
 
-impl<S> fmt::Debug for Callback<S>
+impl<EK> fmt::Debug for Callback<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
@@ -222,9 +222,9 @@ where
     CaptureChange {
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        callback: Callback<EK::Snapshot>,
+        callback: Callback<EK>,
     },
-    LeaderCallback(Callback<EK::Snapshot>),
+    LeaderCallback(Callback<EK>),
 }
 
 /// Message that will be sent to a peer.
@@ -237,7 +237,7 @@ pub enum CasualMessage<EK: KvEngine> {
         // It's an encoded key.
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
-        callback: Callback<EK::Snapshot>,
+        callback: Callback<EK>,
     },
 
     /// Hash result of ComputeHash command.
@@ -324,7 +324,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
 pub struct RaftCommand<EK> where EK: KvEngine {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
-    pub callback: Callback<EK::Snapshot>,
+    pub callback: Callback<EK>,
     pub txn_extra: TxnExtra,
 }
 
@@ -332,7 +332,7 @@ impl<EK> RaftCommand<EK> where EK: KvEngine {
     #[inline]
     pub fn with_txn_extra(
         request: RaftCmdRequest,
-        callback: Callback<EK::Snapshot>,
+        callback: Callback<EK>,
         txn_extra: TxnExtra,
     ) -> RaftCommand<EK> {
         RaftCommand {
@@ -343,7 +343,7 @@ impl<EK> RaftCommand<EK> where EK: KvEngine {
         }
     }
 
-    pub fn new(request: RaftCmdRequest, callback: Callback<EK::Snapshot>) -> RaftCommand<EK> {
+    pub fn new(request: RaftCmdRequest, callback: Callback<EK>) -> RaftCommand<EK> {
         Self::with_txn_extra(request, callback, TxnExtra::default())
     }
 }

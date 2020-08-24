@@ -185,7 +185,7 @@ pub struct CheckTickResult {
 pub struct ProposedAdminCmd<EK> where EK: KvEngine {
     epoch_state: AdminCmdEpochState,
     index: u64,
-    cbs: Vec<Callback<EK::Snapshot>>,
+    cbs: Vec<Callback<EK>>,
 }
 
 impl<EK> ProposedAdminCmd<EK> where EK: KvEngine {
@@ -296,7 +296,7 @@ impl<EK> CmdEpochChecker<EK> where EK: KvEngine {
         }
     }
 
-    pub fn attach_to_conflict_cmd(&mut self, index: u64, cb: Callback<EK::Snapshot>) {
+    pub fn attach_to_conflict_cmd(&mut self, index: u64, cb: Callback<EK>) {
         if let Some(cmd) = self
             .proposed_admin_cmd
             .iter_mut()
@@ -2007,7 +2007,7 @@ where
     pub fn propose<T: Transport, C>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T, C>,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
         txn_extra: TxnExtra,
@@ -2275,7 +2275,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T, C>,
         req: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
     ) {
         ctx.raft_metrics.propose.local_read += 1;
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().committed_index())))
@@ -2339,7 +2339,7 @@ where
         poll_ctx: &mut PollContext<EK, ER, T, C>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
     ) -> bool {
         if let Err(e) = self.pre_read_index() {
             debug!(
@@ -2749,7 +2749,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T, C>,
         req: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<EK>,
     ) -> bool {
         ctx.raft_metrics.propose.transfer_leader += 1;
 

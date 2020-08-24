@@ -19,7 +19,7 @@ use tempfile::{Builder, TempDir};
 
 use super::*;
 use encryption::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine};
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
@@ -399,7 +399,7 @@ impl Simulator for ServerCluster {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<RocksEngine>,
     ) -> Result<()> {
         let router = match self.metas.get(&node_id) {
             None => return Err(box_err!("missing sender for store {}", node_id)),
@@ -413,7 +413,7 @@ impl Simulator for ServerCluster {
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<RocksEngine>,
     ) {
         match self.metas.get(&node_id) {
             None => {
