@@ -18,7 +18,7 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
+use engine_traits::{KvEngine, Snapshot, WriteBatch};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use error_code::ErrorCodeExt;
 use kvproto::import_sstpb::SstMeta;
@@ -62,7 +62,6 @@ use crate::{observe_perf_context_type, report_perf_context, Error, Result};
 use super::metrics::*;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
-const WRITE_BATCH_LIMIT: usize = 16;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
@@ -306,7 +305,7 @@ pub trait Notifier<EK: KvEngine>: Send {
 struct ApplyContext<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatchVecExt<EK>,
+    W: WriteBatch<EK>,
 {
     tag: String,
     timer: Option<Instant>,
@@ -350,7 +349,7 @@ where
 impl<EK, W> ApplyContext<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatchVecExt<EK>,
+    W: WriteBatch<EK>,
 {
     pub fn new(
         tag: String,
@@ -420,7 +419,7 @@ where
     /// Otherwise create `RocksWriteBatch`.
     pub fn prepare_write_batch(&mut self) {
         if self.kv_wb.is_none() {
-            let kv_wb = W::write_batch_vec(&self.engine, WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE);
+            let kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
             self.kv_wb = Some(kv_wb);
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
@@ -470,8 +469,7 @@ where
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
-                let kv_wb =
-                    W::write_batch_vec(&self.engine, WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
                 self.kv_wb = Some(kv_wb);
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
@@ -811,7 +809,7 @@ where
     }
 
     /// Handles all the committed_entries, namely, applies the committed entries.
-    fn handle_raft_committed_entries<W: WriteBatchVecExt<EK>>(
+    fn handle_raft_committed_entries<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
         mut committed_entries_drainer: Drain<Entry>,
@@ -878,12 +876,12 @@ where
         }
     }
 
-    fn update_metrics<W: WriteBatchVecExt<EK>>(&mut self, apply_ctx: &ApplyContext<EK, W>) {
+    fn update_metrics<W: WriteBatch<EK>>(&mut self, apply_ctx: &ApplyContext<EK, W>) {
         self.metrics.written_bytes += apply_ctx.delta_bytes();
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state<W: WriteBatchVecExt<EK>>(&self, wb: &mut W) {
+    fn write_apply_state<W: WriteBatch<EK>>(&self, wb: &mut W) {
         wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
@@ -897,7 +895,7 @@ where
         });
     }
 
-    fn handle_raft_entry_normal<W: WriteBatchVecExt<EK>>(
+    fn handle_raft_entry_normal<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
         entry: &Entry,
@@ -947,7 +945,7 @@ where
         ApplyResult::None
     }
 
-    fn handle_raft_entry_conf_change<W: WriteBatchVecExt<EK>>(
+    fn handle_raft_entry_conf_change<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
         entry: &Entry,
@@ -1023,7 +1021,7 @@ where
         (None, TxnExtra::default())
     }
 
-    fn process_raft_cmd<W: WriteBatchVecExt<EK>>(
+    fn process_raft_cmd<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
         index: u64,
@@ -1079,7 +1077,7 @@ where
     ///   2. it encounters an error that may not occur on all stores, in this case
     /// we should try to apply the entry again or panic. Considering that this
     /// usually due to disk operation fail, which is rare, so just panic is ok.
-    fn apply_raft_cmd<W: WriteBatchVecExt<EK>>(
+    fn apply_raft_cmd<W: WriteBatch<EK>>(
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         index: u64,
@@ -1177,7 +1175,7 @@ where
         (resp, exec_result)
     }
 
-    fn destroy<W: WriteBatchVecExt<EK>>(&mut self, apply_ctx: &mut ApplyContext<EK, W>) {
+    fn destroy<W: WriteBatch<EK>>(&mut self, apply_ctx: &mut ApplyContext<EK, W>) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
         for cmd in self.pending_cmds.normals.drain(..) {
@@ -1208,7 +1206,7 @@ where
     EK: KvEngine,
 {
     // Only errors that will also occur on all other stores should be returned.
-    fn exec_raft_cmd<W: WriteBatchVecExt<EK>>(
+    fn exec_raft_cmd<W: WriteBatch<EK>>(
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         req: &RaftCmdRequest,
@@ -1224,7 +1222,7 @@ where
         }
     }
 
-    fn exec_admin_cmd<W: WriteBatchVecExt<EK>>(
+    fn exec_admin_cmd<W: WriteBatch<EK>>(
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         req: &RaftCmdRequest,
@@ -1268,7 +1266,7 @@ where
         Ok((resp, exec_result))
     }
 
-    fn exec_write_cmd<W: WriteBatchVecExt<EK>>(
+    fn exec_write_cmd<W: WriteBatch<EK>>(
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         req: &RaftCmdRequest,
@@ -1345,7 +1343,7 @@ impl<EK> ApplyDelegate<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
+    fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1386,7 +1384,7 @@ where
         Ok(resp)
     }
 
-    fn handle_delete<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
+    fn handle_delete<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1539,7 +1537,7 @@ impl<EK> ApplyDelegate<EK>
 where
     EK: KvEngine,
 {
-    fn exec_change_peer<W: WriteBatchVecExt<EK>>(
+    fn exec_change_peer<W: WriteBatch<EK>>(
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         request: &AdminRequest,
@@ -1738,7 +1736,7 @@ where
         ))
     }
 
-    fn exec_split<W: WriteBatchVecExt<EK>>(
+    fn exec_split<W: WriteBatch<EK>>(
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
@@ -1760,7 +1758,7 @@ where
         self.exec_batch_split(ctx, &admin_req)
     }
 
-    fn exec_batch_split<W: WriteBatchVecExt<EK>>(
+    fn exec_batch_split<W: WriteBatch<EK>>(
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
@@ -1963,7 +1961,7 @@ where
         ))
     }
 
-    fn exec_prepare_merge<W: WriteBatchVecExt<EK>>(
+    fn exec_prepare_merge<W: WriteBatch<EK>>(
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
@@ -2034,7 +2032,7 @@ where
     // 7.   resume `exec_commit_merge` in target apply fsm
     // 8.   `on_ready_commit_merge` in target peer fsm and send `MergeResult` to source peer fsm
     // 9.   `on_merge_result` in source peer fsm (destroy itself)
-    fn exec_commit_merge<W: WriteBatchVecExt<EK>>(
+    fn exec_commit_merge<W: WriteBatch<EK>>(
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
@@ -2166,7 +2164,7 @@ where
         ))
     }
 
-    fn exec_rollback_merge<W: WriteBatchVecExt<EK>>(
+    fn exec_rollback_merge<W: WriteBatch<EK>>(
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
@@ -2208,7 +2206,7 @@ where
         ))
     }
 
-    fn exec_compact_log<W: WriteBatchVecExt<EK>>(
+    fn exec_compact_log<W: WriteBatch<EK>>(
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
@@ -2268,7 +2266,7 @@ where
         ))
     }
 
-    fn exec_compute_hash<W: WriteBatchVecExt<EK>>(
+    fn exec_compute_hash<W: WriteBatch<EK>>(
         &self,
         ctx: &ApplyContext<EK, W>,
         _: &AdminRequest,
@@ -2288,7 +2286,7 @@ where
         ))
     }
 
-    fn exec_verify_hash<W: WriteBatchVecExt<EK>>(
+    fn exec_verify_hash<W: WriteBatch<EK>>(
         &self,
         _: &ApplyContext<EK, W>,
         req: &AdminRequest,
@@ -2760,7 +2758,7 @@ where
     }
 
     /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
-    fn handle_apply<W: WriteBatchVecExt<EK>>(
+    fn handle_apply<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
         mut apply: Apply<EK::Snapshot>,
@@ -2840,7 +2838,7 @@ where
         APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
-    fn destroy<W: WriteBatchVecExt<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>) {
+    fn destroy<W: WriteBatch<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>) {
         let region_id = self.delegate.region_id();
         if ctx.apply_res.iter().any(|res| res.region_id == region_id) {
             // Flush before destroying to avoid reordering messages.
@@ -2860,11 +2858,7 @@ where
     }
 
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
-    fn handle_destroy<W: WriteBatchVecExt<EK>>(
-        &mut self,
-        ctx: &mut ApplyContext<EK, W>,
-        d: Destroy,
-    ) {
+    fn handle_destroy<W: WriteBatch<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>, d: Destroy) {
         assert_eq!(d.region_id, self.delegate.region_id());
         if d.merge_from_snapshot {
             assert_eq!(self.delegate.stopped, false);
@@ -2886,7 +2880,7 @@ where
         }
     }
 
-    fn resume_pending<W: WriteBatchVecExt<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>) {
+    fn resume_pending<W: WriteBatch<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>) {
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
             if source_region_id == 0 {
@@ -2918,7 +2912,7 @@ where
         }
     }
 
-    fn logs_up_to_date_for_merge<W: WriteBatchVecExt<EK>>(
+    fn logs_up_to_date_for_merge<W: WriteBatch<EK>>(
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         catch_up_logs: CatchUpLogs,
@@ -2955,7 +2949,7 @@ where
     }
 
     #[allow(unused_mut)]
-    fn handle_snapshot<W: WriteBatchVecExt<EK>>(
+    fn handle_snapshot<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
         snap_task: GenSnapTask,
@@ -3012,7 +3006,7 @@ where
         );
     }
 
-    fn handle_change<W: WriteBatchVecExt<EK>>(
+    fn handle_change<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
         cmd: ChangeCmd,
@@ -3091,7 +3085,7 @@ where
         cb.invoke_read(resp);
     }
 
-    fn handle_tasks<W: WriteBatchVecExt<EK>>(
+    fn handle_tasks<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
         msgs: &mut Vec<Msg<EK>>,
@@ -3188,7 +3182,7 @@ impl Fsm for ControlFsm {
 pub struct ApplyPoller<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatchVecExt<EK>,
+    W: WriteBatch<EK>,
 {
     msg_buf: Vec<Msg<EK>>,
     apply_ctx: ApplyContext<EK, W>,
@@ -3199,7 +3193,7 @@ where
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatchVecExt<EK>,
+    W: WriteBatch<EK>,
 {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -3283,7 +3277,7 @@ where
     }
 }
 
-pub struct Builder<EK: KvEngine, W: WriteBatchVecExt<EK>> {
+pub struct Builder<EK: KvEngine, W: WriteBatch<EK>> {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<EK>,
@@ -3299,7 +3293,7 @@ pub struct Builder<EK: KvEngine, W: WriteBatchVecExt<EK>> {
 
 impl<EK: KvEngine, W> Builder<EK, W>
 where
-    W: WriteBatchVecExt<EK>,
+    W: WriteBatch<EK>,
 {
     pub fn new<T, C, ER: RaftEngine>(
         builder: &RaftPollerBuilder<EK, ER, T, C>,
@@ -3325,7 +3319,7 @@ where
 impl<EK, W> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatchVecExt<EK>,
+    W: WriteBatch<EK>,
 {
     type Handler = ApplyPoller<EK, W>;
 
