@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error;
+use std::fmt;
 use std::io;
 use std::net;
 use std::result;
@@ -141,6 +142,31 @@ quick_error! {
             from()
             display("Encryption {}", err)
         }
+    }
+}
+
+pub struct ErrorPtr(pub Box<Error>);
+
+impl From<Error> for ErrorPtr {
+    fn from(e: Error) -> Self {
+        ErrorPtr(Box::new(e))
+    }
+}
+impl fmt::Debug for ErrorPtr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl fmt::Display for ErrorPtr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for ErrorPtr {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        std::error::Error::source(&self.0)
     }
 }
 

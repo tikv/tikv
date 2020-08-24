@@ -54,10 +54,12 @@ use crate::store::util::{
 use crate::store::util::{KeysInfoFormatter, PerfContextStatistics};
 
 use crate::store::{cmd_resp, util, RegionSnapshot};
-use crate::{observe_perf_context_type, report_perf_context, Error, Result};
+use crate::{observe_perf_context_type, report_perf_context, Error, ErrorPtr, Result};
 use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 use tokio::sync::mpsc::{channel, Receiver, Sender as FutureSender};
 use txn_types::TxnExtra;
+
+type ResultPtr<T> = std::result::Result<T, ErrorPtr>;
 
 use super::metrics::*;
 
@@ -996,39 +998,31 @@ where
     ) -> (RaftCmdResponse, ApplyResult<EK::Snapshot>) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
-        let include_region =
-            req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
-        if let Err(e) = check_region_epoch(req, &self.region, include_region) {
-            debug!("epoch not match";
-                "region_id" => self.region_id(),
-                "peer_id" => self.id(),
-                "err" => ?e);
-            self.apply_state.set_applied_index(index);
-            self.applied_index_term = term;
-            return (cmd_resp::new_error(e), ApplyResult::None);
-        }
         ctx.kv_wb_mut().set_save_point();
-        let apply_res = if req.has_admin_request() {
-            self.exec_admin_cmd(ctx, index, term, req).await
-        } else {
-            self.exec_write_cmd(ctx, req)
-        };
-        let (resp, exec_result) = match apply_res {
+        let (resp, exec_result) = match self.exec_raft_cmd(ctx, index, term, &req).await {
             Ok(a) => {
                 ctx.kv_wb_mut().pop_save_point().unwrap();
-                if req.has_admin_request() {}
                 a
             }
-            Err(e) => {
+            Err(err_ptr) => {
                 // clear dirty values.
                 ctx.kv_wb_mut().rollback_to_save_point().unwrap();
-                error!(
-                    "execute raft command";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
-                );
+                let e = *err_ptr.0;
+                match e {
+                    Error::EpochNotMatch(..) => debug!(
+                        "epoch not match";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "err" => ?e
+                    ),
+                    _ => error!(
+                        "execute raft command";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "err" => ?e,
+                        "error_code" => %e.error_code(),
+                    ),
+                }
                 (cmd_resp::new_error(e), ApplyResult::None)
             }
         };
@@ -1095,13 +1089,31 @@ where
         ExecContext::new(self.apply_state.clone(), index, term)
     }
 
+    async fn exec_raft_cmd<W: WriteBatchVecExt<EK>, ER: RaftEngine>(
+        &mut self,
+        ctx: &mut ApplyContext<EK, ER, W>,
+        index: u64,
+        term: u64,
+        req: &RaftCmdRequest,
+    ) -> ResultPtr<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
+        // Include region for epoch not match after merge may cause key not in range.
+        let include_region =
+            req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
+        check_region_epoch(req, &self.region, include_region).map_err(|e| ErrorPtr::from(e))?;
+        if req.has_admin_request() {
+            self.exec_admin_cmd(ctx, index, term, req).await
+        } else {
+            self.exec_write_cmd(ctx, req)
+        }
+    }
+
     async fn exec_admin_cmd<W: WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
         ctx: &mut ApplyContext<EK, ER, W>,
         index: u64,
         term: u64,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> ResultPtr<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         let mut exec_ctx = self.new_ctx(index, term);
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
@@ -1130,7 +1142,8 @@ where
             AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request).await,
             AdminCmdType::RollbackMerge => self.exec_rollback_merge(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
-        }?;
+        }
+        .map_err(|e| ErrorPtr::from(e))?;
         response.set_cmd_type(cmd_type);
 
         let mut resp = RaftCmdResponse::default();
@@ -1147,7 +1160,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK, ER, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> ResultPtr<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!(
             "on_apply_write_cmd",
             cfg!(release) || self.id() == 3,
@@ -1189,7 +1202,8 @@ where
                     continue;
                 }
                 CmdType::Prewrite | CmdType::Invalid | CmdType::ReadIndex => {
-                    Err(box_err!("invalid cmd type, message maybe corrupted"))
+                    let e: Error = box_err!("invalid cmd type, message maybe corrupted");
+                    Err(e.into())
                 }
             }?;
 
@@ -1223,10 +1237,10 @@ impl<EK> ApplyFsm<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
+    fn handle_put<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> ResultPtr<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, &self.region)?;
+        util::check_key_in_region(key, &self.region).map_err(|e| ErrorPtr::from(e))?;
 
         let resp = Response::default();
         let key = keys::data_key(key);
@@ -1264,10 +1278,10 @@ where
         Ok(resp)
     }
 
-    fn handle_delete<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
+    fn handle_delete<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> ResultPtr<Response> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, &self.region)?;
+        util::check_key_in_region(key, &self.region).map_err(|e| ErrorPtr::from(e))?;
 
         let key = keys::data_key(key);
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
@@ -1312,23 +1326,24 @@ where
         req: &Request,
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
-    ) -> Result<Response> {
+    ) -> ResultPtr<Response> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
         let notify_only = req.get_delete_range().get_notify_only();
         if !e_key.is_empty() && s_key >= e_key {
-            return Err(box_err!(
+            let e: Error = box_err!(
                 "invalid delete range command, start_key: {:?}, end_key: {:?}",
                 s_key,
                 e_key
-            ));
+            );
+            return Err(e.into());
         }
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(s_key, &self.region)?;
         let end_key = keys::data_end_key(e_key);
         let region_end_key = keys::data_end_key(self.region.get_end_key());
         if end_key > region_end_key {
-            return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
+            return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()).into());
         }
 
         let resp = Response::default();
@@ -1337,7 +1352,8 @@ where
             cf = CF_DEFAULT;
         }
         if ALL_CFS.iter().find(|x| **x == cf).is_none() {
-            return Err(box_err!("invalid delete range command, cf: {:?}", cf));
+            let e: Error = box_err!("invalid delete range command, cf: {:?}", cf);
+            return Err(e.into());
         }
 
         let start_key = keys::data_key(s_key);
@@ -1383,7 +1399,7 @@ where
         engine: &EK,
         req: &Request,
         ssts: &mut Vec<SstMeta>,
-    ) -> Result<Response> {
+    ) -> ResultPtr<Response> {
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
@@ -1398,7 +1414,7 @@ where
             );
             // This file is not valid, we can delete it here.
             let _ = importer.delete(sst);
-            return Err(e);
+            return Err(e.into());
         }
 
         importer.ingest(sst, engine).unwrap_or_else(|e| {
