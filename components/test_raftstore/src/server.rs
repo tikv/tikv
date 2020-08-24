@@ -19,7 +19,7 @@ use tempfile::{Builder, TempDir};
 
 use super::*;
 use encryption::DataKeyManager;
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};

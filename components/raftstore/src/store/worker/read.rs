@@ -502,12 +502,7 @@ where
     /// the last RaftCommand which left a snapshot cached in LocalReader. ThreadReadId is composed
     /// by thread_id and a thread_local incremental sequence.
     #[inline]
-    pub fn read(
-        &mut self,
-        read_id: Option<ThreadReadId>,
-        req: RaftCmdRequest,
-        cb: Callback<E>,
-    ) {
+    pub fn read(&mut self, read_id: Option<ThreadReadId>, req: RaftCmdRequest, cb: Callback<E>) {
         self.propose_raft_command(read_id, req, cb);
         self.metrics.maybe_flush();
     }
@@ -694,7 +689,7 @@ mod tests {
 
     use crate::store::util::Lease;
     use crate::store::Callback;
-    use engine_rocks::{RocksEngine};
+    use engine_rocks::RocksEngine;
     use engine_traits::ALL_CFS;
     use tikv_util::time::monotonic_raw_now;
 

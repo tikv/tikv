@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};

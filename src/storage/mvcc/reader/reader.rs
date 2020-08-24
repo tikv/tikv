@@ -1493,8 +1493,7 @@ mod tests {
         // Creates a reader and scan locks,
         let check_scan_lock =
             |start_key: Option<Key>, limit, expect_res: &[_], expect_is_remain| {
-                let snap =
-                    RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region.clone());
+                let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region.clone());
                 let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
                 let res = reader
                     .scan_locks(start_key.as_ref(), |l| l.ts <= 10.into(), limit)

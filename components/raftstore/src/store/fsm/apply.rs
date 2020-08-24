@@ -2441,7 +2441,10 @@ where
     entries_count: i64,
 }
 
-impl<EK> Apply<EK> where EK: KvEngine {
+impl<EK> Apply<EK>
+where
+    EK: KvEngine,
+{
     pub(crate) fn new(
         peer_id: u64,
         region_id: u64,
@@ -2472,7 +2475,10 @@ impl<EK> Apply<EK> where EK: KvEngine {
     }
 }
 
-impl<EK> Drop for Apply<EK> where EK: KvEngine {
+impl<EK> Drop for Apply<EK>
+where
+    EK: KvEngine,
+{
     fn drop(&mut self) {
         APPLY_PENDING_BYTES_GAUGE.sub(self.entries_mem_size);
         APPLY_PENDING_ENTRIES_GAUGE.sub(self.entries_count);
@@ -3451,8 +3457,7 @@ where
                         "region_id" => region_id
                     );
                     for p in apply.cbs.drain(..) {
-                        let cmd =
-                            PendingCmd::<EK>::new(p.index, p.term, p.cb, p.txn_extra);
+                        let cmd = PendingCmd::<EK>::new(p.index, p.term, p.cb, p.txn_extra);
                         notify_region_removed(apply.region_id, apply.peer_id, cmd);
                     }
                     return;
@@ -3942,7 +3947,10 @@ mod tests {
         system.shutdown();
     }
 
-    fn cb<EK>(idx: u64, term: u64, tx: Sender<RaftCmdResponse>) -> Proposal<EK> where EK: KvEngine {
+    fn cb<EK>(idx: u64, term: u64, tx: Sender<RaftCmdResponse>) -> Proposal<EK>
+    where
+        EK: KvEngine,
+    {
         proposal(
             false,
             idx,

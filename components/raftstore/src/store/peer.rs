@@ -82,7 +82,10 @@ where
     queue: VecDeque<Proposal<EK>>,
 }
 
-impl<EK> ProposalQueue<EK> where EK: KvEngine {
+impl<EK> ProposalQueue<EK>
+where
+    EK: KvEngine,
+{
     fn new() -> ProposalQueue<EK> {
         ProposalQueue {
             queue: VecDeque::new(),
@@ -182,13 +185,19 @@ pub struct CheckTickResult {
     up_to_date: bool,
 }
 
-pub struct ProposedAdminCmd<EK> where EK: KvEngine {
+pub struct ProposedAdminCmd<EK>
+where
+    EK: KvEngine,
+{
     epoch_state: AdminCmdEpochState,
     index: u64,
     cbs: Vec<Callback<EK>>,
 }
 
-impl<EK> ProposedAdminCmd<EK> where EK: KvEngine {
+impl<EK> ProposedAdminCmd<EK>
+where
+    EK: KvEngine,
+{
     fn new(epoch_state: AdminCmdEpochState, index: u64) -> ProposedAdminCmd<EK> {
         ProposedAdminCmd {
             epoch_state,
@@ -198,14 +207,20 @@ impl<EK> ProposedAdminCmd<EK> where EK: KvEngine {
     }
 }
 
-struct CmdEpochChecker<EK> where EK: KvEngine {
+struct CmdEpochChecker<EK>
+where
+    EK: KvEngine,
+{
     // Although it's a deque, because of the characteristics of the settings from `ADMIN_CMD_EPOCH_MAP`,
     // the max size of admin cmd is 2, i.e. split/merge and change peer.
     proposed_admin_cmd: VecDeque<ProposedAdminCmd<EK>>,
     term: u64,
 }
 
-impl<EK> Default for CmdEpochChecker<EK> where EK: KvEngine {
+impl<EK> Default for CmdEpochChecker<EK>
+where
+    EK: KvEngine,
+{
     fn default() -> CmdEpochChecker<EK> {
         CmdEpochChecker {
             proposed_admin_cmd: VecDeque::new(),
@@ -214,7 +229,10 @@ impl<EK> Default for CmdEpochChecker<EK> where EK: KvEngine {
     }
 }
 
-impl<EK> CmdEpochChecker<EK> where EK: KvEngine {
+impl<EK> CmdEpochChecker<EK>
+where
+    EK: KvEngine,
+{
     fn maybe_update_term(&mut self, term: u64) {
         assert!(term >= self.term);
         if term > self.term {
@@ -313,7 +331,10 @@ impl<EK> CmdEpochChecker<EK> where EK: KvEngine {
     }
 }
 
-impl<EK> Drop for CmdEpochChecker<EK> where EK: KvEngine {
+impl<EK> Drop for CmdEpochChecker<EK>
+where
+    EK: KvEngine,
+{
     fn drop(&mut self) {
         for state in self.proposed_admin_cmd.drain(..) {
             for cb in state.cbs {

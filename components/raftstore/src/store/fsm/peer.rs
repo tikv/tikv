@@ -698,12 +698,7 @@ where
         self.register_split_region_check_tick();
     }
 
-    fn on_capture_change(
-        &mut self,
-        cmd: ChangeCmd,
-        region_epoch: RegionEpoch,
-        cb: Callback<EK>,
-    ) {
+    fn on_capture_change(&mut self, cmd: ChangeCmd, region_epoch: RegionEpoch, cb: Callback<EK>) {
         fail_point!("raft_on_capture_change");
         let region_id = self.region_id();
         let msg =

@@ -50,11 +50,7 @@ where
     fn release_snapshot_cache(&self) {}
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
-    fn significant_send(
-        &self,
-        region_id: u64,
-        msg: SignificantMsg<EK>,
-    ) -> RaftStoreResult<()>;
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg<EK>) -> RaftStoreResult<()>;
 
     /// Reports the peer being unreachable to the Region.
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
@@ -226,11 +222,7 @@ where
             .map_err(|e| handle_send_error(region_id, e))
     }
 
-    fn significant_send(
-        &self,
-        region_id: u64,
-        msg: SignificantMsg<EK>,
-    ) -> RaftStoreResult<()> {
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg<EK>) -> RaftStoreResult<()> {
         if let Err(SendError(msg)) = self
             .router
             .force_send(region_id, PeerMsg::SignificantMsg(msg))

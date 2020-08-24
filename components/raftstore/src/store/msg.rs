@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_traits::{KvEngine};
+use engine_traits::KvEngine;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -26,7 +26,10 @@ use tikv_util::escape;
 use super::{AbstractPeer, RegionSnapshot};
 
 #[derive(Debug)]
-pub struct ReadResponse<EK> where EK: KvEngine {
+pub struct ReadResponse<EK>
+where
+    EK: KvEngine,
+{
     pub response: RaftCmdResponse,
     pub snapshot: Option<RegionSnapshot<EK>>,
     pub txn_extra_op: TxnExtraOp,
@@ -42,7 +45,7 @@ pub struct WriteResponse {
 // be.
 impl<EK> Clone for ReadResponse<EK>
 where
-    EK: KvEngine
+    EK: KvEngine,
 {
     fn clone(&self) -> ReadResponse<EK> {
         ReadResponse {
@@ -61,7 +64,10 @@ pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 ///         `GetRequest` and `SnapRequest`
 ///  - `Write`: a callback for write only requests including `AdminRequest`
 ///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
-pub enum Callback<EK> where EK: KvEngine {
+pub enum Callback<EK>
+where
+    EK: KvEngine,
+{
     /// No callback.
     None,
     /// Read callback.
@@ -321,14 +327,20 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
 /// Raft command is the command that is expected to be proposed by the
 /// leader of the target raft group.
 #[derive(Debug)]
-pub struct RaftCommand<EK> where EK: KvEngine {
+pub struct RaftCommand<EK>
+where
+    EK: KvEngine,
+{
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<EK>,
     pub txn_extra: TxnExtra,
 }
 
-impl<EK> RaftCommand<EK> where EK: KvEngine {
+impl<EK> RaftCommand<EK>
+where
+    EK: KvEngine,
+{
     #[inline]
     pub fn with_txn_extra(
         request: RaftCmdRequest,

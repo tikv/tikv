@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam::atomic::AtomicCell;
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use futures::future::Future;
 use futures03::compat::Compat;
 use kvproto::cdcpb::*;

@@ -3,7 +3,7 @@
 use engine_rocks::{RocksEngine, RocksTablePropertiesCollection};
 use engine_traits::CfName;
 use engine_traits::CF_DEFAULT;
-use engine_traits::{IterOptions, Peekable, ReadOptions, Snapshot, TablePropertiesExt, KvEngine};
+use engine_traits::{IterOptions, KvEngine, Peekable, ReadOptions, Snapshot, TablePropertiesExt};
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,

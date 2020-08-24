@@ -322,11 +322,7 @@ mod tests {
             Ok(())
         }
 
-        fn send_command(
-            &self,
-            _: RaftCmdRequest,
-            _: Callback<RocksEngine>,
-        ) -> RaftStoreResult<()> {
+        fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksEngine>) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }

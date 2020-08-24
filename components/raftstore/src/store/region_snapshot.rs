@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::store::{util, PeerStorage};
 use crate::{Error, Result};
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use engine_traits::util::check_key_in_range;
 use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
@@ -23,7 +23,10 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 ///
 /// Only data within a region can be accessed.
 #[derive(Debug)]
-pub struct RegionSnapshot<EK> where EK: KvEngine {
+pub struct RegionSnapshot<EK>
+where
+    EK: KvEngine,
+{
     snap: Arc<EK::Snapshot>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
@@ -128,7 +131,12 @@ where
         self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
 
-    fn scan_impl<F>(&self, mut it: RegionIterator<EK::Snapshot>, start_key: &[u8], mut f: F) -> Result<()>
+    fn scan_impl<F>(
+        &self,
+        mut it: RegionIterator<EK::Snapshot>,
+        start_key: &[u8],
+        mut f: F,
+    ) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {

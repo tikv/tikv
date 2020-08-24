@@ -3,7 +3,7 @@
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
-use engine_traits::{KvEngine};
+use engine_traits::KvEngine;
 use kvproto::raft_serverpb::RaftMessage;
 use raft_engine::RaftEngine;
 use std::sync::mpsc;
@@ -61,10 +61,7 @@ where
     ER: RaftEngine,
 {
     #[inline]
-    fn send(
-        &self,
-        cmd: RaftCommand<EK>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<EK>>> {
+    fn send(&self, cmd: RaftCommand<EK>) -> std::result::Result<(), TrySendError<RaftCommand<EK>>> {
         self.send_raft_command(cmd)
     }
 }
@@ -101,7 +98,10 @@ where
     }
 }
 
-impl<EK> ProposalRouter<EK> for mpsc::SyncSender<RaftCommand<EK>> where EK: KvEngine {
+impl<EK> ProposalRouter<EK> for mpsc::SyncSender<RaftCommand<EK>>
+where
+    EK: KvEngine,
+{
     fn send(&self, cmd: RaftCommand<EK>) -> std::result::Result<(), TrySendError<RaftCommand<EK>>> {
         match self.try_send(cmd) {
             Ok(()) => Ok(()),

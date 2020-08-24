@@ -13,7 +13,7 @@ use raft::SnapshotStatus;
 
 use super::*;
 use encryption::DataKeyManager;
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use engine_traits::{Engines, MiscExt, Peekable};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
