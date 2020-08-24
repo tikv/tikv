@@ -2895,12 +2895,12 @@ where
 
     fn on_ready_result(
         &mut self,
-        exec_results: &mut VecDeque<ExecResult<EK::Snapshot>>,
+        exec_results: &mut VecDeque<Box<ExecResult<EK::Snapshot>>>,
         metrics: &ApplyMetrics,
     ) {
         // handle executing committed log results
         while let Some(result) = exec_results.pop_front() {
-            match result {
+            match *result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(cp),
                 ExecResult::CompactLog { first_index, state } => {
                     self.on_ready_compact_log(first_index, state)

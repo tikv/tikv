@@ -245,6 +245,17 @@ pub enum ExecResult<S> {
     },
 }
 
+pub enum ApplyResult<S> {
+    None,
+    Res(Box<ExecResult<S>>),
+}
+
+impl<S: Snapshot> ApplyResult<S> {
+    fn res(ret: ExecResult<S>) -> Self {
+        ApplyResult::Res(Box::new(ret))
+    }
+}
+
 struct ExecContext {
     apply_state: RaftApplyState,
     index: u64,
@@ -496,7 +507,7 @@ where
     pub fn finish_for(
         &mut self,
         fsm: &mut ApplyFsm<EK>,
-        results: VecDeque<ExecResult<EK::Snapshot>>,
+        results: VecDeque<Box<ExecResult<EK::Snapshot>>>,
     ) {
         if !fsm.pending_remove {
             fsm.write_apply_state(self.kv_wb.as_mut().unwrap());
@@ -770,7 +781,7 @@ where
                 );
             }
 
-            if let Some(res) = match entry.get_entry_type() {
+            if let ApplyResult::Res(res) = match entry.get_entry_type() {
                 EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, entry).await,
                 EntryType::EntryConfChange => {
                     self.handle_raft_entry_conf_change(apply_ctx, entry).await
@@ -814,7 +825,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<EK, ER, W>,
         entry: Entry,
-    ) -> Option<ExecResult<EK::Snapshot>> {
+    ) -> ApplyResult<EK::Snapshot> {
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
@@ -851,25 +862,25 @@ where
                 ),
             );
         }
-        None
+        ApplyResult::None
     }
 
     async fn handle_raft_entry_conf_change<W: WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, ER, W>,
         entry: Entry,
-    ) -> Option<ExecResult<EK::Snapshot>> {
+    ) -> ApplyResult<EK::Snapshot> {
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: ConfChange = util::parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
         match self.process_raft_cmd(apply_ctx, index, term, cmd).await {
-            None => {
+            ApplyResult::None => {
                 // If failed, tell Raft that the `ConfChange` was aborted.
-                Some(ExecResult::ChangePeer(Default::default()))
+                ApplyResult::res(ExecResult::ChangePeer(Default::default()))
             }
-            Some(mut res) => {
-                if let ExecResult::ChangePeer(ref mut cp) = res {
+            ApplyResult::Res(mut res) => {
+                if let ExecResult::ChangePeer(ref mut cp) = *res {
                     cp.conf_change = conf_change;
                 } else {
                     panic!(
@@ -877,7 +888,7 @@ where
                         self.tag, res, conf_change, index
                     );
                 }
-                Some(res)
+                ApplyResult::Res(res)
             }
         }
     }
@@ -930,7 +941,7 @@ where
         index: u64,
         term: u64,
         cmd: RaftCmdRequest,
-    ) -> Option<ExecResult<EK::Snapshot>> {
+    ) -> ApplyResult<EK::Snapshot> {
         if index == 0 {
             panic!(
                 "{} processing raft command needs a none zero index",
@@ -982,49 +993,52 @@ where
         index: u64,
         term: u64,
         req: &RaftCmdRequest,
-    ) -> (RaftCmdResponse, Option<ExecResult<EK::Snapshot>>) {
+    ) -> (RaftCmdResponse, ApplyResult<EK::Snapshot>) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
-
-        let mut exec_ctx = self.new_ctx(index, term);
+        let include_region =
+            req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
+        if let Err(e) = check_region_epoch(req, &self.region, include_region) {
+            debug!("epoch not match";
+                "region_id" => self.region_id(),
+                "peer_id" => self.id(),
+                "err" => ?e);
+            self.apply_state.set_applied_index(index);
+            self.applied_index_term = term;
+            return (cmd_resp::new_error(e), ApplyResult::None);
+        }
         ctx.kv_wb_mut().set_save_point();
-        let mut origin_epoch = None;
-        let (resp, exec_result) = match self.exec_raft_cmd(ctx, &mut exec_ctx, &req).await {
+        let apply_res = if req.has_admin_request() {
+            self.exec_admin_cmd(ctx, index, term, req).await
+        } else {
+            self.exec_write_cmd(ctx, req)
+        };
+        let (resp, exec_result) = match apply_res {
             Ok(a) => {
                 ctx.kv_wb_mut().pop_save_point().unwrap();
-                if req.has_admin_request() {
-                    origin_epoch = Some(self.region.get_region_epoch().clone());
-                }
+                if req.has_admin_request() {}
                 a
             }
             Err(e) => {
                 // clear dirty values.
                 ctx.kv_wb_mut().rollback_to_save_point().unwrap();
-                match e {
-                    Error::EpochNotMatch(..) => debug!(
-                        "epoch not match";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                        "err" => ?e
-                    ),
-                    _ => error!(
-                        "execute raft command";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                        "err" => ?e,
-                        "error_code" => %e.error_code(),
-                    ),
-                }
-                (cmd_resp::new_error(e), None)
+                error!(
+                    "execute raft command";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.id(),
+                    "err" => ?e,
+                    "error_code" => %e.error_code(),
+                );
+                (cmd_resp::new_error(e), ApplyResult::None)
             }
         };
-        exec_ctx.apply_state.set_applied_index(index);
-        self.apply_state = exec_ctx.apply_state;
+        self.apply_state.set_applied_index(index);
         self.applied_index_term = term;
 
-        if let Some(ref exec_result) = exec_result {
-            match *exec_result {
-                ExecResult::ChangePeer(ref cp) => {
+        if let ApplyResult::Res(res) = exec_result {
+            let epoch = self.region.get_region_epoch().clone();
+            match res.as_ref() {
+                ExecResult::ChangePeer(cp) => {
                     self.region = cp.region.clone();
                 }
                 ExecResult::ComputeHash { .. }
@@ -1032,26 +1046,24 @@ where
                 | ExecResult::CompactLog { .. }
                 | ExecResult::DeleteRange { .. }
                 | ExecResult::IngestSst { .. } => {}
-                ExecResult::SplitRegion { ref derived, .. } => {
+                ExecResult::SplitRegion { derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
                     self.metrics.delete_keys_hint = 0;
                 }
-                ExecResult::PrepareMerge { ref region, .. } => {
+                ExecResult::PrepareMerge { region, .. } => {
                     self.region = region.clone();
                     self.is_merging = true;
                 }
-                ExecResult::CommitMerge { ref region, .. } => {
+                ExecResult::CommitMerge { region, .. } => {
                     self.region = region.clone();
                     self.last_merge_version = region.get_region_epoch().get_version();
                 }
-                ExecResult::RollbackMerge { ref region, .. } => {
+                ExecResult::RollbackMerge { region, .. } => {
                     self.region = region.clone();
                     self.is_merging = false;
                 }
             }
-        }
-        if let Some(epoch) = origin_epoch {
             let cmd_type = req.get_admin_request().get_cmd_type();
             let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
             // The chenge-epoch behavior **MUST BE** equal to the settings in `ADMIN_CMD_EPOCH_MAP`
@@ -1063,9 +1075,10 @@ where
                 panic!("{} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
                         self.tag, req, epoch_state, epoch, self.region.get_region_epoch());
             }
+            return (resp, ApplyResult::Res(res));
         }
 
-        (resp, exec_result)
+        (resp, ApplyResult::None)
     }
 
     fn clear_all_commands_as_stale(&mut self) {
@@ -1082,29 +1095,14 @@ where
         ExecContext::new(self.apply_state.clone(), index, term)
     }
 
-    async fn exec_raft_cmd<W: WriteBatchVecExt<EK>, ER: RaftEngine>(
-        &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
-        exec_ctx: &mut ExecContext,
-        req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, Option<ExecResult<EK::Snapshot>>)> {
-        // Include region for epoch not match after merge may cause key not in range.
-        let include_region =
-            req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
-        check_region_epoch(req, &self.region, include_region)?;
-        if req.has_admin_request() {
-            self.exec_admin_cmd(ctx, exec_ctx, req).await
-        } else {
-            self.exec_write_cmd(ctx, req)
-        }
-    }
-
     async fn exec_admin_cmd<W: WriteBatchVecExt<EK>, ER: RaftEngine>(
         &mut self,
         ctx: &mut ApplyContext<EK, ER, W>,
-        exec_ctx: &mut ExecContext,
+        index: u64,
+        term: u64,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, Option<ExecResult<EK::Snapshot>>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
+        let mut exec_ctx = self.new_ctx(index, term);
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
@@ -1119,16 +1117,16 @@ where
         }
 
         let (mut response, exec_result) = match cmd_type {
-            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, exec_ctx, request),
+            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, &mut exec_ctx, request),
             AdminCmdType::ChangePeerV2 => panic!("unsupported admin command type"),
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
-            AdminCmdType::CompactLog => self.exec_compact_log(exec_ctx, request),
+            AdminCmdType::CompactLog => self.exec_compact_log(&mut exec_ctx, request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
-            AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, exec_ctx, request),
+            AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, &mut exec_ctx, request),
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
             // TODO: is it backward compatible to add new cmd_type?
-            AdminCmdType::PrepareMerge => self.exec_prepare_merge(ctx, exec_ctx, request),
+            AdminCmdType::PrepareMerge => self.exec_prepare_merge(ctx, &mut exec_ctx, request),
             AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request).await,
             AdminCmdType::RollbackMerge => self.exec_rollback_merge(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
@@ -1140,6 +1138,7 @@ where
             let uuid = req.get_header().get_uuid().to_vec();
             resp.mut_header().set_uuid(uuid);
         }
+        self.apply_state = exec_ctx.apply_state;
         resp.set_admin_response(response);
         Ok((resp, exec_result))
     }
@@ -1148,7 +1147,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK, ER, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, Option<ExecResult<EK::Snapshot>>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!(
             "on_apply_write_cmd",
             cfg!(release) || self.id() == 3,
@@ -1208,11 +1207,11 @@ where
 
         assert!(ranges.is_empty() || ssts.is_empty());
         let exec_res = if !ranges.is_empty() {
-            Some(ExecResult::DeleteRange { ranges })
+            ApplyResult::res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
-            Some(ExecResult::IngestSst { ssts })
+            ApplyResult::res(ExecResult::IngestSst { ssts })
         } else {
-            None
+            ApplyResult::None
         };
 
         Ok((resp, exec_res))
@@ -1423,7 +1422,7 @@ where
         ctx: &mut ApplyContext<EK, ER, W>,
         exec_ctx: &mut ExecContext,
         request: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult<EK::Snapshot>>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
         let store_id = peer.get_store_id();
@@ -1609,7 +1608,7 @@ where
 
         Ok((
             resp,
-            Some(ExecResult::ChangePeer(ChangePeer {
+            ApplyResult::res(ExecResult::ChangePeer(ChangePeer {
                 index: exec_ctx.index,
                 conf_change: Default::default(),
                 peer: peer.clone(),
@@ -1622,7 +1621,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK, ER, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult<EK::Snapshot>>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         info!(
             "split is deprecated, redirect to use batch split";
             "region_id" => self.region_id(),
@@ -1644,7 +1643,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK, ER, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult<EK::Snapshot>>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!(
             "apply_before_split_1_3",
             self.id == 3 && self.region_id() == 1,
@@ -1838,7 +1837,7 @@ where
 
         Ok((
             resp,
-            Some(ExecResult::SplitRegion {
+            ApplyResult::res(ExecResult::SplitRegion {
                 regions,
                 derived,
                 new_split_regions,
@@ -1851,7 +1850,7 @@ where
         ctx: &mut ApplyContext<EK, ER, W>,
         exec_ctx: &mut ExecContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult<EK::Snapshot>>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!("apply_before_prepare_merge");
 
         PEER_ADMIN_CMD_COUNTER.prepare_merge.all.inc();
@@ -1898,7 +1897,7 @@ where
 
         Ok((
             AdminResponse::default(),
-            Some(ExecResult::PrepareMerge {
+            ApplyResult::res(ExecResult::PrepareMerge {
                 region,
                 state: merging_state,
             }),
@@ -1921,7 +1920,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK, ER, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult<EK::Snapshot>>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         {
             let apply_before_commit_merge = || {
                 fail_point!(
@@ -2043,7 +2042,7 @@ where
         let resp = AdminResponse::default();
         Ok((
             resp,
-            Some(ExecResult::CommitMerge {
+            ApplyResult::res(ExecResult::CommitMerge {
                 region,
                 source: source_region.to_owned(),
             }),
@@ -2054,7 +2053,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK, ER, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult<EK::Snapshot>>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
         let region_state_key = keys::region_state_key(self.region_id());
         let state: RegionLocalState = match ctx.core.engine.get_msg_cf(CF_RAFT, &region_state_key) {
@@ -2085,7 +2084,7 @@ where
         let resp = AdminResponse::default();
         Ok((
             resp,
-            Some(ExecResult::RollbackMerge {
+            ApplyResult::res(ExecResult::RollbackMerge {
                 region,
                 commit: rollback.get_commit(),
             }),
@@ -2096,7 +2095,7 @@ where
         &mut self,
         exec_ctx: &mut ExecContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult<EK::Snapshot>>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
 
         let compact_index = req.get_compact_log().get_compact_index();
@@ -2110,7 +2109,7 @@ where
                 "compact_index" => compact_index,
                 "first_index" => first_index,
             );
-            return Ok((resp, None));
+            return Ok((resp, ApplyResult::None));
         }
         if self.is_merging {
             info!(
@@ -2119,7 +2118,7 @@ where
                 "peer_id" => self.id(),
                 "compact_index" => compact_index
             );
-            return Ok((resp, None));
+            return Ok((resp, ApplyResult::None));
         }
 
         let compact_term = req.get_compact_log().get_compact_term();
@@ -2149,7 +2148,7 @@ where
 
         Ok((
             resp,
-            Some(ExecResult::CompactLog {
+            ApplyResult::res(ExecResult::CompactLog {
                 state: exec_ctx.apply_state.get_truncated_state().clone(),
                 first_index,
             }),
@@ -2161,11 +2160,11 @@ where
         ctx: &ApplyContext<EK, ER, W>,
         exec_ctx: &ExecContext,
         _: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult<EK::Snapshot>>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         let resp = AdminResponse::default();
         Ok((
             resp,
-            Some(ExecResult::ComputeHash {
+            ApplyResult::res(ExecResult::ComputeHash {
                 region: self.region.clone(),
                 index: exec_ctx.index,
                 // This snapshot may be held for a long time, which may cause too many
@@ -2181,12 +2180,15 @@ where
         &self,
         _: &ApplyContext<EK, ER, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult<EK::Snapshot>>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
         let hash = verify_req.get_hash().to_vec();
         let resp = AdminResponse::default();
-        Ok((resp, Some(ExecResult::VerifyHash { index, hash })))
+        Ok((
+            resp,
+            ApplyResult::res(ExecResult::VerifyHash { index, hash }),
+        ))
     }
 }
 
@@ -2583,7 +2585,7 @@ where
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
-    pub exec_res: VecDeque<ExecResult<S>>,
+    pub exec_res: VecDeque<Box<ExecResult<S>>>,
     pub metrics: ApplyMetrics,
 }
 
@@ -3433,7 +3435,10 @@ mod tests {
             pending_create_peers,
             &cfg.value(),
         );
-
+        println!("size: {}", std::mem::size_of::<RaftCmdRequest>());
+        println!("size: {}", std::mem::size_of::<RaftCmdResponse>());
+        println!("size: {}", std::mem::size_of::<ExecResult<RocksSnapshot>>());
+        println!("size: {}", std::mem::size_of::<ExecContext>());
         let mut reg = Registration::default();
         reg.id = 1;
         reg.region.set_id(2);
