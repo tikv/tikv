@@ -1,9 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
+use engine_rocks::{RocksEngine, RocksTablePropertiesCollection};
 use engine_traits::CfName;
 use engine_traits::CF_DEFAULT;
-use engine_traits::{IterOptions, Peekable, ReadOptions, Snapshot, TablePropertiesExt};
+use engine_traits::{IterOptions, Peekable, ReadOptions, Snapshot, TablePropertiesExt, KvEngine};
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
@@ -112,7 +112,7 @@ pub struct RaftKv<S: RaftStoreRouter<RocksEngine> + 'static> {
 
 pub enum CmdRes {
     Resp(Vec<Response>),
-    Snap(RegionSnapshot<RocksSnapshot>),
+    Snap(RegionSnapshot<RocksEngine>),
 }
 
 fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
@@ -272,7 +272,7 @@ impl<S: RaftStoreRouter<RocksEngine>> Debug for RaftKv<S> {
 }
 
 impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
-    type Snap = RegionSnapshot<RocksSnapshot>;
+    type Snap = RegionSnapshot<RocksEngine>;
     type Local = RocksEngine;
 
     fn kv_engine(&self) -> RocksEngine {
@@ -285,7 +285,7 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         region.set_end_key(end_key.to_owned());
         // Use a fake peer to avoid panic.
         region.mut_peers().push(Default::default());
-        Ok(RegionSnapshot::<RocksSnapshot>::from_raw(
+        Ok(RegionSnapshot::<RocksEngine>::from_raw(
             self.engine.clone(),
             region,
         ))
@@ -447,8 +447,8 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
     }
 }
 
-impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
-    type Iter = RegionIterator<S>;
+impl<EK: KvEngine> EngineSnapshot for RegionSnapshot<EK> {
+    type Iter = RegionIterator<EK::Snapshot>;
 
     fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(

@@ -11,7 +11,7 @@ use kvproto::metapb;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
-use engine_rocks::{Compat, RocksSnapshot};
+use engine_rocks::{Compat, RocksEngine};
 use engine_traits::Peekable;
 use pd_client::PdClient;
 use raftstore::store::{Callback, RegionSnapshot};
@@ -337,7 +337,7 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         .map(|(p, r)| (p.clone(), r))
         .collect();
     let responses = batch_read_on_peer(cluster, &requests);
-    let snaps: Vec<RegionSnapshot<RocksSnapshot>> = responses
+    let snaps: Vec<RegionSnapshot<RocksEngine>> = responses
         .into_iter()
         .map(|response| {
             assert!(!response.response.get_header().has_error());
@@ -358,7 +358,7 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     // make sure that region 2 could renew lease.
     cluster.must_put(b"k55", b"v2");
     let responses = batch_read_on_peer(cluster, &requests);
-    let snaps2: Vec<RegionSnapshot<RocksSnapshot>> = responses
+    let snaps2: Vec<RegionSnapshot<RocksEngine>> = responses
         .into_iter()
         .map(|response| {
             assert!(!response.response.get_header().has_error());

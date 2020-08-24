@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::store::{util, PeerStorage};
 use crate::{Error, Result};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine};
 use engine_traits::util::check_key_in_range;
 use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
@@ -23,26 +23,25 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 ///
 /// Only data within a region can be accessed.
 #[derive(Debug)]
-pub struct RegionSnapshot<S: Snapshot> {
-    snap: Arc<S>,
+pub struct RegionSnapshot<EK> where EK: KvEngine {
+    snap: Arc<EK::Snapshot>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
 }
 
-impl<S> RegionSnapshot<S>
+impl<EK> RegionSnapshot<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
-    #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
-    pub fn new(ps: &PeerStorage<RocksEngine, RocksEngine>) -> RegionSnapshot<RocksSnapshot> {
+    pub fn new(ps: &PeerStorage<EK, RocksEngine>) -> RegionSnapshot<EK> {
         RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), Arc::new(ps.region().clone()))
     }
 
-    pub fn from_raw(db: RocksEngine, region: Region) -> RegionSnapshot<RocksSnapshot> {
+    pub fn from_raw(db: EK, region: Region) -> RegionSnapshot<EK> {
         RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), Arc::new(region))
     }
 
-    pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>) -> RegionSnapshot<S> {
+    pub fn from_snapshot(snap: Arc<EK::Snapshot>, region: Arc<Region>) -> RegionSnapshot<EK> {
         RegionSnapshot {
             snap,
             region,
@@ -58,7 +57,7 @@ where
     }
 
     #[inline]
-    pub fn get_snapshot(&self) -> &S {
+    pub fn get_snapshot(&self) -> &EK::Snapshot {
         self.snap.as_ref()
     }
 
@@ -86,11 +85,11 @@ where
         }
     }
 
-    pub fn iter(&self, iter_opt: IterOptions) -> RegionIterator<S> {
+    pub fn iter(&self, iter_opt: IterOptions) -> RegionIterator<EK::Snapshot> {
         RegionIterator::new(&self.snap, Arc::clone(&self.region), iter_opt)
     }
 
-    pub fn iter_cf(&self, cf: &str, iter_opt: IterOptions) -> Result<RegionIterator<S>> {
+    pub fn iter_cf(&self, cf: &str, iter_opt: IterOptions) -> Result<RegionIterator<EK::Snapshot>> {
         Ok(RegionIterator::new_cf(
             &self.snap,
             Arc::clone(&self.region),
@@ -129,7 +128,7 @@ where
         self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
 
-    fn scan_impl<F>(&self, mut it: RegionIterator<S>, start_key: &[u8], mut f: F) -> Result<()>
+    fn scan_impl<F>(&self, mut it: RegionIterator<EK::Snapshot>, start_key: &[u8], mut f: F) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
@@ -151,9 +150,9 @@ where
     }
 }
 
-impl<S> Clone for RegionSnapshot<S>
+impl<EK> Clone for RegionSnapshot<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
     fn clone(&self) -> Self {
         RegionSnapshot {
@@ -164,11 +163,11 @@ where
     }
 }
 
-impl<S> Peekable for RegionSnapshot<S>
+impl<EK> Peekable for RegionSnapshot<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
-    type DBVector = <S as Peekable>::DBVector;
+    type DBVector = <<EK as KvEngine>::Snapshot as Peekable>::DBVector;
 
     fn get_value_opt(
         &self,
@@ -208,9 +207,9 @@ where
     }
 }
 
-impl<S> RegionSnapshot<S>
+impl<EK> RegionSnapshot<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
     #[inline(never)]
     fn handle_get_value_error(&self, e: EngineError, cf: &str, key: &[u8]) -> EngineError {
@@ -496,7 +495,7 @@ mod tests {
         let key3 = b"key3";
         engines.kv.put_msg(&data_key(key3), &r).expect("");
 
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<RocksEngine>::new(&store);
         let v3 = snap.get_msg(key3).expect("");
         assert_eq!(v3, Some(r));
 
@@ -513,9 +512,9 @@ mod tests {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
         let (store, _) = load_default_dataset(engines);
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<RocksEngine>::new(&store);
 
-        let check_seek_result = |snap: &RegionSnapshot<RocksSnapshot>,
+        let check_seek_result = |snap: &RegionSnapshot<RocksEngine>,
                                  lower_bound: Option<&[u8]>,
                                  upper_bound: Option<&[u8]>,
                                  seek_table: &Vec<(
@@ -597,7 +596,7 @@ mod tests {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
         let (store, _) = load_multiple_levels_dataset(engines);
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<RocksEngine>::new(&store);
 
         seek_table = vec![
             (b"a01", false, None, None),
@@ -625,7 +624,7 @@ mod tests {
         let engines = new_temp_engine(&path);
         let (store, base_data) = load_default_dataset(engines.clone());
 
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<RocksEngine>::new(&store);
         let mut data = vec![];
         snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
@@ -660,7 +659,7 @@ mod tests {
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
         let store = new_peer_storage(engines.clone(), &region);
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<RocksEngine>::new(&store);
         data.clear();
         snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
@@ -686,7 +685,7 @@ mod tests {
 
         // test iterator with upper bound
         let store = new_peer_storage(engines, &region);
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<RocksEngine>::new(&store);
         let mut iter = snap.iter(IterOptions::new(
             None,
             Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
@@ -709,7 +708,7 @@ mod tests {
         let engines = new_temp_engine(&path);
         let (store, test_data) = load_default_dataset(engines);
 
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<RocksEngine>::new(&store);
         let mut iter_opt = IterOptions::default();
         iter_opt.set_lower_bound(b"a3", 1);
         let mut iter = snap.iter(iter_opt);

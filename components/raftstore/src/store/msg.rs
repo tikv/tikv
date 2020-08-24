@@ -28,7 +28,7 @@ use super::{AbstractPeer, RegionSnapshot};
 #[derive(Debug)]
 pub struct ReadResponse<EK> where EK: KvEngine {
     pub response: RaftCmdResponse,
-    pub snapshot: Option<RegionSnapshot<EK::Snapshot>>,
+    pub snapshot: Option<RegionSnapshot<EK>>,
     pub txn_extra_op: TxnExtraOp,
 }
 

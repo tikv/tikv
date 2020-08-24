@@ -9,7 +9,7 @@ use std::time::Duration;
 use engine_rocks::raw::{IngestExternalFileOptions, Writable};
 use engine_rocks::util::get_cf_handle;
 use engine_rocks::RocksEngine;
-use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
+use engine_rocks::{Compat, RocksSstWriterBuilder};
 use engine_traits::{
     CompactExt, Engines, KvEngine, MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT,
     CF_WRITE,
@@ -390,7 +390,7 @@ fn test_delete_files_in_range_for_titan() {
     r.mut_peers().push(Peer::default());
     r.set_start_key(b"a".to_vec());
     r.set_end_key(b"z".to_vec());
-    let snapshot = RegionSnapshot::<RocksSnapshot>::from_raw(engines1.kv.clone(), r);
+    let snapshot = RegionSnapshot::<RocksEngine>::from_raw(engines1.kv.clone(), r);
     let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
         .range(Some(Key::from_raw(b"a")), None)
         .build()

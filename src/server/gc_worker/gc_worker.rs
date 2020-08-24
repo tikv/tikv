@@ -802,7 +802,6 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::mpsc::channel;
 
-    use engine_rocks::RocksSnapshot;
     use engine_traits::KvEngine;
     use futures::Future;
     use kvproto::{kvrpcpb::Op, metapb};
@@ -831,7 +830,7 @@ mod tests {
 
     impl Engine for PrefixedEngine {
         // Use RegionSnapshot which can remove the z prefix internally.
-        type Snap = RegionSnapshot<RocksSnapshot>;
+        type Snap = RegionSnapshot<RocksEngine>;
         type Local = RocksEngine;
 
         fn kv_engine(&self) -> RocksEngine {
