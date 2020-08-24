@@ -85,6 +85,7 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<RaftStoreBlackHole>,
+    concurrency_managers: HashMap<u64, ConcurrencyManager>,
 }
 
 impl ServerCluster {
@@ -115,6 +116,7 @@ impl ServerCluster {
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
             raft_client,
+            concurrency_managers: HashMap::default(),
         }
     }
 
@@ -133,6 +135,10 @@ impl ServerCluster {
     /// To trigger GC manually.
     pub fn get_gc_worker(&self, node_id: u64) -> &GcWorker<RaftKv<SimulateStoreTransport>> {
         &self.metas.get(&node_id).unwrap().gc_worker
+    }
+
+    pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
+        self.concurrency_managers.get(&node_id).unwrap().clone()
     }
 }
 
@@ -338,7 +344,7 @@ impl Simulator for ServerCluster {
             importer.clone(),
             split_check_worker,
             AutoSplitController::default(),
-            concurrency_manager,
+            concurrency_manager.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -375,6 +381,8 @@ impl Simulator for ServerCluster {
             },
         );
         self.addrs.insert(node_id, format!("{}", addr));
+        self.concurrency_managers
+            .insert(node_id, concurrency_manager);
 
         Ok(node_id)
     }

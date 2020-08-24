@@ -1265,7 +1265,9 @@ where
                     self.last_urgent_proposal_idx = self.raft_group.raft.raft_log.last_index();
                     self.raft_group.skip_bcast_commit(false);
 
-                    // Update max ts asynchronously
+                    // When a peer becomes a leader, update `max_ts_synced` to new term and
+                    // mark it unsynced. Then, update max timestamp from PD asynchronously.
+                    self.max_ts_synced.store(self.term() << 1, Ordering::SeqCst);
                     if let Err(e) = ctx.pd_scheduler.schedule(PdTask::UpdateMaxTimestamp {
                         term: self.term(),
                         max_ts_synced: self.max_ts_synced.clone(),
@@ -1278,10 +1280,6 @@ where
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
-
-                    // When a peer becomes a follower, update `max_ts_synced` to new term and
-                    // mark it unsynced.
-                    self.max_ts_synced.store(self.term() << 1, Ordering::SeqCst);
                 }
                 _ => {}
             }
