@@ -35,7 +35,7 @@ impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
     fn significant_send(
         &self,
         region_id: u64,
-        msg: SignificantMsg<RocksSnapshot>,
+        msg: SignificantMsg<RocksEngine>,
     ) -> RaftStoreResult<()> {
         let mut senders = self.senders.lock().unwrap();
         if let Some(tx) = senders.get_mut(&region_id) {

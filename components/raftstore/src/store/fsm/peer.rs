@@ -730,7 +730,7 @@ where
         );
     }
 
-    fn on_significant_msg(&mut self, msg: SignificantMsg<EK::Snapshot>) {
+    fn on_significant_msg(&mut self, msg: SignificantMsg<EK>) {
         match msg {
             SignificantMsg::SnapshotStatus {
                 to_peer_id, status, ..

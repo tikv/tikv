@@ -314,7 +314,7 @@ mod tests {
     #[derive(Clone)]
     struct TestRaftStoreRouter {
         tx: Sender<usize>,
-        significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
+        significant_msg_sender: Sender<SignificantMsg<RocksEngine>>,
     }
 
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
@@ -345,7 +345,7 @@ mod tests {
         fn significant_send(
             &self,
             _: u64,
-            msg: SignificantMsg<RocksSnapshot>,
+            msg: SignificantMsg<RocksEngine>,
         ) -> RaftStoreResult<()> {
             self.significant_msg_sender.send(msg).unwrap();
             Ok(())
@@ -362,7 +362,7 @@ mod tests {
     }
 
     fn is_unreachable_to(
-        msg: &SignificantMsg<RocksSnapshot>,
+        msg: &SignificantMsg<RocksEngine>,
         region_id: u64,
         to_peer_id: u64,
     ) -> bool {

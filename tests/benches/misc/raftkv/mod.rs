@@ -84,7 +84,7 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
         Ok(())
     }
 
-    fn significant_send(&self, _: u64, _: SignificantMsg<RocksSnapshot>) -> Result<()> {
+    fn significant_send(&self, _: u64, _: SignificantMsg<RocksEngine>) -> Result<()> {
         Ok(())
     }
 
