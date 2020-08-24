@@ -59,7 +59,6 @@ use crate::raftstore::{Error, Result};
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
-    pub async_remove: bool,
     pub region_id: u64,
     pub peer: metapb::Peer,
 }
@@ -1283,7 +1282,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
+        // The initialized flag implicitly means whether apply fsm exists or not.
         if job.initialized {
+<<<<<<< HEAD:src/raftstore/store/fsm/peer.rs
             // When initialized is true and async_remove is false, apply fsm doesn't need to
             // send destroy msg to peer fsm because peer fsm has already destroyed.
             // In this case, if apply fsm sends destroy msg, peer fsm may be destroyed twice
@@ -1299,8 +1300,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "region_id" => job.region_id,
                 "peer_id" => job.peer.get_id(),
             );
+=======
+            // Destroy the apply fsm first, wait for the reply msg from apply fsm
+            self.ctx
+                .apply_router
+                .schedule_task(job.region_id, ApplyTask::destroy(job.region_id, false));
+>>>>>>> c4b7e8f... raftstore: destroy process must be asynchronous if peer is initialized (#8455):components/raftstore/src/store/fsm/peer.rs
             false
         } else {
+            // Destroy the peer fsm directly
             self.destroy_peer(false);
             true
         }
@@ -2110,6 +2118,43 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         } else {
             self.on_stale_merge();
         }
+<<<<<<< HEAD:src/raftstore/store/fsm/peer.rs
+=======
+        match result {
+            MergeResultKind::FromTargetLog => {
+                info!(
+                    "merge finished";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "target_region" => ?self.fsm.peer.pending_merge_state.as_ref().unwrap().target,
+                );
+                self.destroy_peer(true);
+            }
+            MergeResultKind::FromTargetSnapshotStep1 => {
+                info!(
+                    "merge finished with target snapshot";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "target_region_id" => target_region_id,
+                );
+                self.fsm.peer.pending_remove = true;
+                // Destroy apply fsm at first
+                self.ctx.apply_router.schedule_task(
+                    self.fsm.region_id(),
+                    ApplyTask::destroy(self.fsm.region_id(), true),
+                );
+            }
+            MergeResultKind::FromTargetSnapshotStep2 => {
+                // `merge_by_target` is true because this region's range already belongs to
+                // its target region so we must not clear data otherwise its target region's
+                // data will corrupt.
+                self.destroy_peer(true);
+            }
+            MergeResultKind::Stale => {
+                self.on_stale_merge(target_region_id);
+            }
+        };
+>>>>>>> c4b7e8f... raftstore: destroy process must be asynchronous if peer is initialized (#8455):components/raftstore/src/store/fsm/peer.rs
     }
 
     fn on_stale_merge(&mut self) {
