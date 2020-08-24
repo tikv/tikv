@@ -2233,7 +2233,11 @@ impl RegionProposal {
 
 pub struct Destroy {
     region_id: u64,
+<<<<<<< HEAD:src/raftstore/store/fsm/apply.rs
     async_remove: bool,
+=======
+    merge_from_snapshot: bool,
+>>>>>>> c4b7e8f... raftstore: destroy process must be asynchronous if peer is initialized (#8455):components/raftstore/src/store/fsm/apply.rs
 }
 
 /// A message that asks the delegate to apply to the given logs and then reply to
@@ -2312,10 +2316,17 @@ impl Msg {
         Msg::Registration(Registration::new(peer))
     }
 
+<<<<<<< HEAD:src/raftstore/store/fsm/apply.rs
     pub fn destroy(region_id: u64, async_remove: bool) -> Msg {
         Msg::Destroy(Destroy {
             region_id,
             async_remove,
+=======
+    pub fn destroy(region_id: u64, merge_from_snapshot: bool) -> Msg<EK> {
+        Msg::Destroy(Destroy {
+            region_id,
+            merge_from_snapshot,
+>>>>>>> c4b7e8f... raftstore: destroy process must be asynchronous if peer is initialized (#8455):components/raftstore/src/store/fsm/apply.rs
         })
     }
 }
@@ -2490,6 +2501,7 @@ impl ApplyFsm {
         assert_eq!(d.region_id, self.delegate.region_id());
         if !self.delegate.stopped {
             self.destroy(ctx);
+<<<<<<< HEAD:src/raftstore/store/fsm/apply.rs
             if d.async_remove {
                 ctx.notifier.notify(
                     self.delegate.region_id(),
@@ -2498,9 +2510,18 @@ impl ApplyFsm {
                             region_id: self.delegate.region_id(),
                             peer_id: self.delegate.id,
                         },
+=======
+            ctx.notifier.notify(
+                self.delegate.region_id(),
+                PeerMsg::ApplyRes {
+                    res: TaskRes::Destroy {
+                        region_id: self.delegate.region_id(),
+                        peer_id: self.delegate.id,
+                        merge_from_snapshot: d.merge_from_snapshot,
+>>>>>>> c4b7e8f... raftstore: destroy process must be asynchronous if peer is initialized (#8455):components/raftstore/src/store/fsm/apply.rs
                     },
-                );
-            }
+                },
+            );
         }
     }
 
@@ -2709,6 +2730,9 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
             }
             expected_msg_count = None;
         }
+        fail_point!("before_handle_normal_3", normal.delegate.id() == 3, |_| {
+            None
+        });
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => self.msg_buf.push(msg),
@@ -3197,7 +3221,11 @@ mod tests {
             assert_eq!(delegate.apply_state.get_applied_index(), 4);
         });
 
+<<<<<<< HEAD:src/raftstore/store/fsm/apply.rs
         router.schedule_task(2, Msg::destroy(2, true));
+=======
+        router.schedule_task(2, Msg::destroy(2, false));
+>>>>>>> c4b7e8f... raftstore: destroy process must be asynchronous if peer is initialized (#8455):components/raftstore/src/store/fsm/apply.rs
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Destroy { region_id, peer_id } => (region_id, peer_id),

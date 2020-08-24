@@ -417,6 +417,7 @@ impl Peer {
             );
             return None;
         }
+<<<<<<< HEAD:src/raftstore/store/peer.rs
         // If initialized is false, it implicitly means apply fsm does not exist now.
         let initialized = self.get_store().is_initialized();
         // If async_remove is true, it means peer fsm needs to be removed after its
@@ -424,6 +425,21 @@ impl Peer {
         // If it is false, it means either apply fsm does not exist or there is no task
         // in apply fsm so it's ok to remove peer fsm immediately.
         let async_remove = if self.is_applying_snapshot() {
+=======
+        {
+            let meta = ctx.store_meta.lock().unwrap();
+            if meta.atomic_snap_regions.contains_key(&self.region_id) {
+                info!(
+                    "stale peer is applying atomic snapshot, will destroy next time";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                return None;
+            }
+        }
+
+        if self.is_applying_snapshot() {
+>>>>>>> c4b7e8f... raftstore: destroy process must be asynchronous if peer is initialized (#8455):components/raftstore/src/store/peer.rs
             if !self.mut_store().cancel_applying_snap() {
                 info!(
                     "stale peer is applying snapshot, will destroy next time";
@@ -432,16 +448,12 @@ impl Peer {
                 );
                 return None;
             }
-            // There is no tasks in apply/local read worker.
-            false
-        } else {
-            initialized
-        };
+        }
+
         self.pending_remove = true;
 
         Some(DestroyPeerJob {
-            async_remove,
-            initialized,
+            initialized: self.get_store().is_initialized(),
             region_id: self.region_id,
             peer: self.peer.clone(),
         })
