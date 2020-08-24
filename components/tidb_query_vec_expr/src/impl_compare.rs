@@ -275,21 +275,15 @@ pub fn least_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
 pub fn interval_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
     let target = match args[0] {
         None => return Ok(Some(-1)),
-        Some(v) => v,
+        Some(v) => Some(v),
     };
 
-    let mut left = 1;
-    let mut right = args.len();
-    while left < right {
-        let mid = left + (right - left) / 2;
-        let m = args[mid].unwrap_or(target);
-        if target < m {
-            right = mid
-        } else {
-            left = mid + 1
-        }
+    let arr = &args[1..];
+
+    match arr.binary_search(&target) {
+        Ok(pos) => Ok(Some(pos as Int + 1)),
+        Err(pos) => Ok(Some(pos as Int)),
     }
-    Ok(Some((left - 1) as i64))
 }
 
 #[rpn_fn(nullable, varg, min_args = 2)]
@@ -333,22 +327,15 @@ pub fn least_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
 pub fn interval_real(args: &[Option<&Real>]) -> Result<Option<Int>> {
     let target = match args[0] {
         None => return Ok(Some(-1)),
-        Some(v) => v,
+        Some(v) => Some(v),
     };
 
-    let mut left = 1;
-    let mut right = args.len();
+    let arr = &args[1..];
 
-    while left < right {
-        let mid = left + (right - left) / 2;
-        let m = args[mid].unwrap_or(target);
-        if target < m {
-            right = mid
-        } else {
-            left = mid + 1
-        }
+    match arr.binary_search(&target) {
+        Ok(pos) => Ok(Some(pos as Int + 1)),
+        Err(pos) => Ok(Some(pos as Int)),
     }
-    Ok(Some((left - 1) as i64))
 }
 
 #[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
