@@ -2782,7 +2782,7 @@ mod tests {
     fn test_last_cfg_modified() {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         let store_path = Path::new(&cfg.storage.data_dir);
-        let last_cfg_path = _dir.join(LAST_CONFIG_FILE);
+        let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
 
         cfg.write_to_file(&last_cfg_path).unwrap();
 
