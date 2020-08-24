@@ -308,7 +308,7 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result
     Ok(greatest.map(|time| time.to_string().into_bytes()))
 }
 
-#[rpn_fn(varg, min_args = 2, capture = [ctx])]
+#[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
 #[inline]
 pub fn greatest_string(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     let mut greatest = None;
@@ -334,25 +334,25 @@ pub fn greatest_string(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Resu
     Ok(greatest.map(|greatest_val| greatest_val.to_owned().into_bytes()))
 }
 
-#[rpn_fn(varg, min_args = 2)]
+#[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
 pub fn least_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
     do_get_extremum(args, min)
 }
 
-#[rpn_fn(varg, min_args = 2)]
+#[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
 pub fn least_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
     do_get_extremum(args, |x, y| x.min(y))
 }
 
-#[rpn_fn(varg, min_args = 2)]
+#[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
 pub fn least_decimal(args: &[Option<&Decimal>]) -> Result<Option<Decimal>> {
     do_get_extremum(args, |x, y| x.min(y))
 }
 
-#[rpn_fn(varg, min_args = 2, capture = [ctx])]
+#[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
 #[inline]
 pub fn least_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     use tidb_query_datatype::codec::mysql;
@@ -403,7 +403,7 @@ pub fn least_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Op
     }
 }
 
-#[rpn_fn(varg, min_args = 2, capture = [ctx])]
+#[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
 #[inline]
 pub fn least_string(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     let mut least = None;
