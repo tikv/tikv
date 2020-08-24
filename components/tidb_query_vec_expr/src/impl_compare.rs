@@ -362,7 +362,8 @@ pub fn least_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Op
         mysql::MAX_FSP,
         false,
     )?);
-    let mut invalid_time = None;
+    // If any invalid time is found, least_time will use the string comprasion result
+    let mut least_str = None;
     let mut invalid_time_found = false;
 
     for arg in args {
@@ -376,7 +377,7 @@ pub fn least_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Op
                             .map(|_| Ok(None))?;
                     }
                 };
-                invalid_time = match invalid_time {
+                least_str = match least_str {
                     Some(str_val) => min(Some(s), Some(str_val)),
                     None => Some(s),
                 };
@@ -397,7 +398,7 @@ pub fn least_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Op
     }
 
     if invalid_time_found {
-        Ok(invalid_time.map(|str_val| str_val.to_string().into_bytes()))
+        Ok(least_str.map(|str_val| str_val.to_string().into_bytes()))
     } else {
         Ok(least.map(|time| time.to_string().into_bytes()))
     }
