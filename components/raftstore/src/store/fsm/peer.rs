@@ -2591,6 +2591,11 @@ where
         let reader = meta.readers.remove(&source.get_id()).unwrap();
         reader.mark_invalid();
 
+        // If a follower merges into a leader, a more recent read may happen
+        // on the leader of the follower. So max ts should be updated after
+        // a region merge.
+        self.fsm.peer.require_updating_max_ts(&self.ctx.pd_scheduler);
+
         drop(meta);
 
         // make approximate size and keys updated in time.

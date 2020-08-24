@@ -191,9 +191,9 @@ fn test_sync_max_ts_after_leader_transfer() {
         ctx.set_region_epoch(epoch);
 
         let snapshot = storage.snapshot(&ctx).unwrap();
-        let max_ts_synced = snapshot.max_ts_synced.clone().unwrap();
+        let max_ts_sync_status = snapshot.max_ts_sync_status.clone().unwrap();
         for retry in 0..10 {
-            if max_ts_synced.load(Ordering::SeqCst) & 1 == 1 {
+            if max_ts_sync_status.load(Ordering::SeqCst) & 1 == 1 {
                 break;
             }
             thread::sleep(Duration::from_millis(1 << retry));

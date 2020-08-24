@@ -512,7 +512,7 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
     }
 
     fn is_max_ts_synced(&self) -> bool {
-        self.max_ts_synced
+        self.max_ts_sync_status
             .as_ref()
             .map(|v| v.load(Ordering::SeqCst) & 1 == 1)
             .unwrap_or(false)
