@@ -166,7 +166,7 @@ fn test_server_transfer_leader_during_snapshot() {
 
 #[test]
 fn test_sync_max_ts_after_leader_transfer() {
-    use tikv::storage::Engine;
+    use tikv::storage::{Engine, Snapshot};
 
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
@@ -191,19 +191,20 @@ fn test_sync_max_ts_after_leader_transfer() {
         ctx.set_region_epoch(epoch);
 
         let snapshot = storage.snapshot(&ctx).unwrap();
-        let max_ts_synced = snapshot.max_ts_synced.unwrap();
+        let max_ts_synced = snapshot.max_ts_synced.clone().unwrap();
         for retry in 0..10 {
             if max_ts_synced.load(Ordering::SeqCst) & 1 == 1 {
                 break;
             }
             thread::sleep(Duration::from_millis(1 << retry));
         }
-        assert_eq!(max_ts_synced.load(Ordering::SeqCst) & 1, 1);
+        assert!(snapshot.is_max_ts_synced());
     };
 
     wait_for_synced(&mut cluster);
     let max_ts = cm.max_read_ts();
 
+    cluster.pd_client.trigger_tso_failure();
     // Transfer the leader out and back
     cluster.must_transfer_leader(1, new_peer(2, 2));
     cluster.must_transfer_leader(1, new_peer(1, 1));
