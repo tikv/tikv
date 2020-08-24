@@ -2426,7 +2426,7 @@ pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     let tmp_cfg_path = store_path.join(TMP_CONFIG_FILE);
 
     let same_as_last_cfg = fs::read_to_string(&last_cfg_path).map_or(false, |last_cfg| {
-        serde_json::to_string(&config).unwrap() == last_cfg
+        toml::to_string(&config).unwrap() == last_cfg
     });
     if same_as_last_cfg {
         return Ok(());
