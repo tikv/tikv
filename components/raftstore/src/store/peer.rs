@@ -198,15 +198,15 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
     }
 }
 
-struct CmdEpochChecker<S: Snapshot> {
+struct CmdEpochChecker<EK> where EK: KvEngine {
     // Although it's a deque, because of the characteristics of the settings from `ADMIN_CMD_EPOCH_MAP`,
     // the max size of admin cmd is 2, i.e. split/merge and change peer.
-    proposed_admin_cmd: VecDeque<ProposedAdminCmd<S>>,
+    proposed_admin_cmd: VecDeque<ProposedAdminCmd<EK::Snapshot>>,
     term: u64,
 }
 
-impl<S: Snapshot> Default for CmdEpochChecker<S> {
-    fn default() -> CmdEpochChecker<S> {
+impl<EK> Default for CmdEpochChecker<EK> where EK: KvEngine {
+    fn default() -> CmdEpochChecker<EK> {
         CmdEpochChecker {
             proposed_admin_cmd: VecDeque::new(),
             term: 0,
@@ -214,7 +214,7 @@ impl<S: Snapshot> Default for CmdEpochChecker<S> {
     }
 }
 
-impl<S: Snapshot> CmdEpochChecker<S> {
+impl<EK> CmdEpochChecker<EK> where EK: KvEngine {
     fn maybe_update_term(&mut self, term: u64) {
         assert!(term >= self.term);
         if term > self.term {
@@ -296,7 +296,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         }
     }
 
-    pub fn attach_to_conflict_cmd(&mut self, index: u64, cb: Callback<S>) {
+    pub fn attach_to_conflict_cmd(&mut self, index: u64, cb: Callback<EK::Snapshot>) {
         if let Some(cmd) = self
             .proposed_admin_cmd
             .iter_mut()
@@ -313,7 +313,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
     }
 }
 
-impl<S: Snapshot> Drop for CmdEpochChecker<S> {
+impl<EK> Drop for CmdEpochChecker<EK> where EK: KvEngine {
     fn drop(&mut self) {
         for state in self.proposed_admin_cmd.drain(..) {
             for cb in state.cbs {
@@ -434,7 +434,7 @@ where
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     /// Check whether this proposal can be proposed based on its epoch
-    cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
+    cmd_epoch_checker: CmdEpochChecker<EK>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -3589,7 +3589,7 @@ mod tests {
 
     #[test]
     fn test_cmd_epoch_checker() {
-        use engine_rocks::RocksSnapshot;
+        use engine_rocks::RocksEngine;
         fn new_admin_request(cmd_type: AdminCmdType) -> RaftCmdRequest {
             let mut request = RaftCmdRequest::default();
             request.mut_admin_request().set_cmd_type(cmd_type);
@@ -3602,7 +3602,7 @@ mod tests {
         let prepare_merge_admin = new_admin_request(AdminCmdType::PrepareMerge);
         let change_peer_admin = new_admin_request(AdminCmdType::ChangePeer);
 
-        let mut epoch_checker = CmdEpochChecker::<RocksSnapshot>::default();
+        let mut epoch_checker = CmdEpochChecker::<RocksEngine>::default();
 
         assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
         assert_eq!(epoch_checker.term, 10);
