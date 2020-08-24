@@ -49,7 +49,7 @@ impl HashAggregationHelper {
                 }
                 RpnStackNode::Vector { value, .. } => {
                     let physical_vec = value.as_ref();
-                    let logical_rows = value.logical_rows();
+                    let logical_rows = value.logical_rows_struct();
                     match_template_evaluable! {
                         TT, match physical_vec {
                             VectorValue::TT(vec) => {
@@ -58,7 +58,7 @@ impl HashAggregationHelper {
                                     .zip(logical_rows)
                                 {
                                     let aggr_fn_state = &mut states[*states_offset + idx];
-                                    update!(aggr_fn_state, &mut entities.context, vec.get_option_ref(*physical_idx))?;
+                                    update!(aggr_fn_state, &mut entities.context, vec.get_option_ref(physical_idx))?;
                                 }
                             }
                         }

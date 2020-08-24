@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{KvEngine, KvEngines, Snapshot, WriteOptions};
+use engine_traits::{Engines, KvEngine, Snapshot, WriteOptions};
 use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -29,6 +29,7 @@ use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
+use raft_engine::RaftEngine;
 use smallvec::SmallVec;
 use time::Timespec;
 use txn_types::TxnExtra;
@@ -38,6 +39,7 @@ use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
+use crate::store::util::is_learner;
 use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, GlobalReplicationState, PdTask, ReadResponse};
 use crate::{Error, Result};
@@ -46,6 +48,7 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::Scheduler;
+use tikv_util::Either;
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -55,7 +58,10 @@ use super::peer_storage::{
 };
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
-use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
+use super::util::{
+    self, check_region_epoch, is_initial_msg, AdminCmdEpochState, Lease, LeaseState,
+    ADMIN_CMD_EPOCH_MAP, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -176,10 +182,151 @@ pub struct CheckTickResult {
     up_to_date: bool,
 }
 
+pub struct ProposedAdminCmd<S: Snapshot> {
+    epoch_state: AdminCmdEpochState,
+    index: u64,
+    cbs: Vec<Callback<S>>,
+}
+
+impl<S: Snapshot> ProposedAdminCmd<S> {
+    fn new(epoch_state: AdminCmdEpochState, index: u64) -> ProposedAdminCmd<S> {
+        ProposedAdminCmd {
+            epoch_state,
+            index,
+            cbs: Vec::new(),
+        }
+    }
+}
+
+struct CmdEpochChecker<S: Snapshot> {
+    // Although it's a deque, because of the characteristics of the settings from `ADMIN_CMD_EPOCH_MAP`,
+    // the max size of admin cmd is 2, i.e. split/merge and change peer.
+    proposed_admin_cmd: VecDeque<ProposedAdminCmd<S>>,
+    term: u64,
+}
+
+impl<S: Snapshot> Default for CmdEpochChecker<S> {
+    fn default() -> CmdEpochChecker<S> {
+        CmdEpochChecker {
+            proposed_admin_cmd: VecDeque::new(),
+            term: 0,
+        }
+    }
+}
+
+impl<S: Snapshot> CmdEpochChecker<S> {
+    fn maybe_update_term(&mut self, term: u64) {
+        assert!(term >= self.term);
+        if term > self.term {
+            self.term = term;
+            for cmd in self.proposed_admin_cmd.drain(..) {
+                for cb in cmd.cbs {
+                    apply::notify_stale_req(term, cb);
+                }
+            }
+        }
+    }
+
+    /// Check if the proposal can be proposed on the basis of its epoch and previous proposed admin cmds.
+    ///
+    /// Returns None if passing the epoch check, otherwise returns a index which is the last
+    /// admin cmd index conflicted with this proposal.
+    pub fn propose_check_epoch(&mut self, req: &RaftCmdRequest, term: u64) -> Option<u64> {
+        self.maybe_update_term(term);
+        let (check_ver, check_conf_ver) = if !req.has_admin_request() {
+            (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
+        } else {
+            let cmd_type = req.get_admin_request().get_cmd_type();
+            // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
+            let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+            (epoch_state.check_ver, epoch_state.check_ver)
+        };
+        self.last_conflict_index(check_ver, check_conf_ver)
+    }
+
+    pub fn post_propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
+        self.maybe_update_term(term);
+        // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
+        let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+        assert!(self
+            .last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
+            .is_none());
+
+        if epoch_state.change_conf_ver || epoch_state.change_ver {
+            if let Some(cmd) = self.proposed_admin_cmd.back() {
+                assert!(cmd.index < index);
+            }
+            self.proposed_admin_cmd
+                .push_back(ProposedAdminCmd::new(epoch_state, index));
+        }
+    }
+
+    fn last_conflict_index(&self, check_ver: bool, check_conf_ver: bool) -> Option<u64> {
+        self.proposed_admin_cmd
+            .iter()
+            .rev()
+            .find(|cmd| {
+                (check_ver && cmd.epoch_state.change_ver)
+                    || (check_conf_ver && cmd.epoch_state.change_conf_ver)
+            })
+            .map(|cmd| cmd.index)
+    }
+
+    pub fn advance_apply(&mut self, index: u64, term: u64, region: &metapb::Region) {
+        self.maybe_update_term(term);
+        while !self.proposed_admin_cmd.is_empty() {
+            let cmd = self.proposed_admin_cmd.front_mut().unwrap();
+            if cmd.index <= index {
+                for cb in cmd.cbs.drain(..) {
+                    let mut resp = cmd_resp::new_error(Error::EpochNotMatch(
+                        format!(
+                            "current epoch of region {} is {:?}",
+                            region.get_id(),
+                            region.get_region_epoch(),
+                        ),
+                        vec![region.to_owned()],
+                    ));
+                    cmd_resp::bind_term(&mut resp, term);
+                    cb.invoke_with_response(resp);
+                }
+            } else {
+                break;
+            }
+            self.proposed_admin_cmd.pop_front();
+        }
+    }
+
+    pub fn attach_to_conflict_cmd(&mut self, index: u64, cb: Callback<S>) {
+        if let Some(cmd) = self
+            .proposed_admin_cmd
+            .iter_mut()
+            .rev()
+            .find(|cmd| cmd.index == index)
+        {
+            cmd.cbs.push(cb);
+        } else {
+            panic!(
+                "index {} can not found in proposed_admin_cmd, callback {:?}",
+                index, cb
+            );
+        }
+    }
+}
+
+impl<S: Snapshot> Drop for CmdEpochChecker<S> {
+    fn drop(&mut self) {
+        for state in self.proposed_admin_cmd.drain(..) {
+            for cb in state.cbs {
+                apply::notify_stale_req(self.term, cb);
+            }
+        }
+    }
+}
+
 pub struct Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     /// The ID of the Region which this Peer belongs to.
     region_id: u64,
@@ -286,18 +433,20 @@ where
     pub local_first_replicate: bool,
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    /// Check whether this proposal can be proposed based on its epoch
+    cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
 }
 
 impl<EK, ER> Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn new(
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask<EK::Snapshot>>,
-        engines: KvEngines<EK, ER>,
+        engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
     ) -> Result<Peer<EK, ER>> {
@@ -375,6 +524,7 @@ where
             check_stale_peers: vec![],
             local_first_replicate: false,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
+            cmd_epoch_checker: Default::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -509,7 +659,10 @@ where
     }
 
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
-    pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
+    pub fn maybe_destroy<T, C>(
+        &mut self,
+        ctx: &PollContext<EK, ER, T, C>,
+    ) -> Option<DestroyPeerJob> {
         if self.pending_remove {
             info!(
                 "is being destroyed, skip";
@@ -518,13 +671,19 @@ where
             );
             return None;
         }
-        // If initialized is false, it implicitly means apply fsm does not exist now.
-        let initialized = self.get_store().is_initialized();
-        // If async_remove is true, it means peer fsm needs to be removed after its
-        // corresponding apply fsm was removed.
-        // If it is false, it means either apply fsm does not exist or there is no task
-        // in apply fsm so it's ok to remove peer fsm immediately.
-        let async_remove = if self.is_applying_snapshot() {
+        {
+            let meta = ctx.store_meta.lock().unwrap();
+            if meta.atomic_snap_regions.contains_key(&self.region_id) {
+                info!(
+                    "stale peer is applying atomic snapshot, will destroy next time";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                return None;
+            }
+        }
+
+        if self.is_applying_snapshot() {
             if !self.mut_store().cancel_applying_snap() {
                 info!(
                     "stale peer is applying snapshot, will destroy next time";
@@ -533,16 +692,12 @@ where
                 );
                 return None;
             }
-            // There is no tasks in apply/local read worker.
-            false
-        } else {
-            initialized
-        };
+        }
+
         self.pending_remove = true;
 
         Some(DestroyPeerJob {
-            async_remove,
-            initialized,
+            initialized: self.get_store().is_initialized(),
             region_id: self.region_id,
             peer: self.peer.clone(),
         })
@@ -569,7 +724,7 @@ where
 
         // Set Tombstone state explicitly
         let mut kv_wb = ctx.engines.kv.write_batch();
-        let mut raft_wb = ctx.engines.raft.write_batch();
+        let mut raft_wb = ctx.engines.raft.log_batch(1024);
         self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
         write_peer_state(
             &mut kv_wb,
@@ -581,7 +736,7 @@ where
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(ctx.cfg.sync_log);
         ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
-        ctx.engines.raft.write_opt(&raft_wb, &write_opts)?;
+        ctx.engines.raft.consume(&mut raft_wb, ctx.cfg.sync_log)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -1098,6 +1253,7 @@ where
             }
             ctx.coprocessor_host
                 .on_role_change(self.region(), ss.raft_state);
+            self.cmd_epoch_checker.maybe_update_term(self.term());
         }
     }
 
@@ -1257,7 +1413,7 @@ where
             self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
         }
         let mut destroy_regions = vec![];
-        if self.get_pending_snapshot().is_some() {
+        if self.has_pending_snapshot() {
             if !self.ready_to_handle_pending_snap() {
                 let count = self.pending_request_snapshot_count.load(Ordering::SeqCst);
                 debug!(
@@ -1430,7 +1586,7 @@ where
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
-        if apply_snap_result.is_some() && self.peer.get_is_learner() {
+        if apply_snap_result.is_some() {
             // The peer may change from learner to voter after snapshot applied.
             let peer = self
                 .region()
@@ -1586,6 +1742,11 @@ where
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply(self.last_applying_idx);
+            self.cmd_epoch_checker.advance_apply(
+                self.last_applying_idx,
+                self.term(),
+                self.raft_group.store().region(),
+            );
         } else {
             self.raft_group.advance_append(ready);
         }
@@ -1706,6 +1867,12 @@ where
 
         self.raft_group
             .advance_apply(apply_state.get_applied_index());
+
+        self.cmd_epoch_checker.advance_apply(
+            apply_state.get_applied_index(),
+            self.term(),
+            self.raft_group.store().region(),
+        );
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
         self.mut_store().set_applied_state(apply_state);
@@ -1842,7 +2009,11 @@ where
 
         ctx.raft_metrics.propose.all += 1;
 
-        let mut is_conf_change = false;
+        let req_admin_cmd_type = if !req.has_admin_request() {
+            None
+        } else {
+            Some(req.get_admin_request().get_cmd_type())
+        };
         let is_urgent = is_request_urgent(&req);
 
         let policy = self.inspect(&req);
@@ -1856,10 +2027,7 @@ where
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
             }
-            Ok(RequestPolicy::ProposeConfChange) => {
-                is_conf_change = true;
-                self.propose_conf_change(ctx, &req)
-            }
+            Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
             Err(e) => Err(e),
         };
 
@@ -1869,7 +2037,13 @@ where
                 cb.invoke_with_response(err_resp);
                 false
             }
-            Ok(idx) => {
+            Ok(Either::Right(idx)) => {
+                if !cb.is_none() {
+                    self.cmd_epoch_checker.attach_to_conflict_cmd(idx, cb);
+                }
+                false
+            }
+            Ok(Either::Left(idx)) => {
                 if is_urgent {
                     self.last_urgent_proposal_idx = idx;
                     // Eager flush to make urgent proposal be applied on all nodes as soon as
@@ -1878,13 +2052,17 @@ where
                 }
                 self.should_wake_up = true;
                 let p = Proposal {
-                    is_conf_change,
+                    is_conf_change: req_admin_cmd_type == Some(AdminCmdType::ChangePeer),
                     index: idx,
                     term: self.term(),
                     cb,
                     txn_extra,
                     renew_lease_time: None,
                 };
+                if let Some(cmd_type) = req_admin_cmd_type {
+                    self.cmd_epoch_checker
+                        .post_propose(cmd_type, idx, self.term());
+                }
                 self.post_propose(ctx, p);
                 true
             }
@@ -1927,7 +2105,7 @@ where
         let peer = change_peer.get_peer();
 
         // Check the request itself is valid or not.
-        match (change_type, peer.get_is_learner()) {
+        match (change_type, is_learner(peer)) {
             (ConfChangeType::AddNode, true) | (ConfChangeType::AddLearnerNode, false) => {
                 warn!(
                     "invalid conf change request";
@@ -2254,7 +2432,7 @@ where
         // update leader lease.
         if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
             let req = RaftCmdRequest::default();
-            if let Ok(index) = self.propose_normal(poll_ctx, req) {
+            if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req) {
                 let p = Proposal {
                     is_conf_change: false,
                     index,
@@ -2388,22 +2566,26 @@ where
 
         match req.get_admin_request().get_cmd_type() {
             AdminCmdType::Split | AdminCmdType::BatchSplit => ctx.insert(ProposalContext::SPLIT),
+            AdminCmdType::PrepareMerge => {
+                self.pre_propose_prepare_merge(poll_ctx, req)?;
+                ctx.insert(ProposalContext::PREPARE_MERGE);
+            }
             _ => {}
-        }
-
-        if req.get_admin_request().has_prepare_merge() {
-            self.pre_propose_prepare_merge(poll_ctx, req)?;
-            ctx.insert(ProposalContext::PREPARE_MERGE);
         }
 
         Ok(ctx)
     }
 
+    /// Propose normal request to raft
+    ///
+    /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located on `index` position.
+    /// Ok(Either::Right(index)) means the proposal is rejected by `CmdEpochChecker` and the `index` is the position of
+    /// the last conflict admin cmd.
     fn propose_normal<T, C>(
         &mut self,
         poll_ctx: &mut PollContext<EK, ER, T, C>,
         mut req: RaftCmdRequest,
-    ) -> Result<u64> {
+    ) -> Result<Either<u64, u64>> {
         if self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
         {
@@ -2414,6 +2596,26 @@ where
         }
 
         poll_ctx.raft_metrics.propose.normal += 1;
+
+        if self.get_store().applied_index_term() == self.term() {
+            // Only when applied index's term is equal to current leader's term, the information
+            // in epoch checker is up to date and can be used to check epoch.
+            if let Some(index) = self
+                .cmd_epoch_checker
+                .propose_check_epoch(&req, self.term())
+            {
+                return Ok(Either::Right(index));
+            }
+        } else if req.has_admin_request() {
+            // The admin request is rejected because it may need to update epoch checker which
+            // introduces an uncertainty and may breaks the correctness of epoch checker.
+            return Err(box_err!(
+                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                self.tag,
+                self.get_store().applied_index_term(),
+                self.term()
+            ));
+        }
 
         // TODO: validate request for unexpected changes.
         let ctx = match self.pre_propose(poll_ctx, &mut req) {
@@ -2429,6 +2631,7 @@ where
                 return Err(e);
             }
         };
+
         let data = req.write_to_bytes()?;
 
         // TODO: use local histogram metrics
@@ -2456,7 +2659,7 @@ where
             self.last_proposed_prepare_merge_idx = propose_index;
         }
 
-        Ok(propose_index)
+        Ok(Either::Left(propose_index))
     }
 
     fn execute_transfer_leader<T, C>(
@@ -2558,11 +2761,14 @@ where
     // 2. Removing the leader is not allowed in the configuration;
     // 3. The conf change makes the raft group not healthy;
     // 4. The conf change is dropped by raft group internally.
+    /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located on `index` position.
+    /// Ok(Either::Right(index)) means the proposal is rejected by `CmdEpochChecker` and the `index` is the position of
+    /// the last conflict admin cmd.
     fn propose_conf_change<T, C>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T, C>,
         req: &RaftCmdRequest,
-    ) -> Result<u64> {
+    ) -> Result<Either<u64, u64>> {
         if self.pending_merge_state.is_some() {
             return Err(box_err!(
                 "{} peer in merging mode, can't do proposal.",
@@ -2579,6 +2785,23 @@ where
                 "{} there is a pending conf change, try later",
                 self.tag
             ));
+        }
+        // Actually, according to the implementation of conf change in raft-rs, this check must be
+        // passed if the previous check that `pending_conf_index` should be less than or equal to
+        // `self.get_store().applied_index()` is passed.
+        if self.get_store().applied_index_term() != self.term() {
+            return Err(box_err!(
+                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                self.tag,
+                self.get_store().applied_index_term(),
+                self.term()
+            ));
+        }
+        if let Some(index) = self
+            .cmd_epoch_checker
+            .propose_check_epoch(&req, self.term())
+        {
+            return Ok(Either::Right(index));
         }
 
         self.check_conf_change(ctx, req)?;
@@ -2613,7 +2836,7 @@ where
             return Err(Error::NotLeader(self.region_id, None));
         }
 
-        Ok(propose_index)
+        Ok(Either::Left(propose_index))
     }
 
     fn handle_read<T, C>(
@@ -2671,7 +2894,7 @@ where
 impl<EK, ER> Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
@@ -3035,7 +3258,7 @@ pub trait RequestInspector {
 impl<EK, ER> RequestInspector for Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn has_applied_to_current_term(&mut self) -> bool {
         self.get_store().applied_index_term() == self.term()
@@ -3064,7 +3287,7 @@ where
 impl<EK, ER, T, C> ReadExecutor<EK> for PollContext<EK, ER, T, C>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn get_engine(&self) -> &EK {
         &self.engines.kv
@@ -3092,6 +3315,7 @@ fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
         let req = msg.get_admin_request();
         return match req.get_cmd_type() {
             AdminCmdType::ChangePeer
+            | AdminCmdType::ChangePeerV2
             | AdminCmdType::Split
             | AdminCmdType::BatchSplit
             | AdminCmdType::PrepareMerge
@@ -3117,6 +3341,7 @@ fn is_request_urgent(req: &RaftCmdRequest) -> bool {
         AdminCmdType::Split
         | AdminCmdType::BatchSplit
         | AdminCmdType::ChangePeer
+        | AdminCmdType::ChangePeerV2
         | AdminCmdType::ComputeHash
         | AdminCmdType::VerifyHash
         | AdminCmdType::PrepareMerge
@@ -3146,7 +3371,7 @@ pub trait AbstractPeer {
     fn pending_merge_state(&self) -> Option<&MergeState>;
 }
 
-impl<EK: KvEngine, ER: KvEngine> AbstractPeer for Peer<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for Peer<EK, ER> {
     fn meta_peer(&self) -> &metapb::Peer {
         &self.peer
     }
@@ -3204,6 +3429,7 @@ mod tests {
             AdminCmdType::Split,
             AdminCmdType::BatchSplit,
             AdminCmdType::ChangePeer,
+            AdminCmdType::ChangePeerV2,
             AdminCmdType::ComputeHash,
             AdminCmdType::VerifyHash,
             AdminCmdType::PrepareMerge,
@@ -3350,5 +3576,67 @@ mod tests {
             };
             assert!(inspector.inspect(&req).is_err());
         }
+    }
+
+    #[test]
+    fn test_cmd_epoch_checker() {
+        use engine_rocks::RocksSnapshot;
+        fn new_admin_request(cmd_type: AdminCmdType) -> RaftCmdRequest {
+            let mut request = RaftCmdRequest::default();
+            request.mut_admin_request().set_cmd_type(cmd_type);
+            request
+        }
+
+        let region = metapb::Region::default();
+        let normal_cmd = RaftCmdRequest::default();
+        let split_admin = new_admin_request(AdminCmdType::BatchSplit);
+        let prepare_merge_admin = new_admin_request(AdminCmdType::PrepareMerge);
+        let change_peer_admin = new_admin_request(AdminCmdType::ChangePeer);
+
+        let mut epoch_checker = CmdEpochChecker::<RocksSnapshot>::default();
+
+        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
+        assert_eq!(epoch_checker.term, 10);
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 5, 10);
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
+
+        // Both conflict with the split admin cmd
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
+            Some(5)
+        );
+
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&change_peer_admin, 10),
+            None
+        );
+        epoch_checker.post_propose(AdminCmdType::ChangePeer, 6, 10);
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
+
+        // Conflict with the split admin cmd
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
+        // Conflict with the change peer admin cmd
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
+            Some(6)
+        );
+
+        epoch_checker.advance_apply(4, 10, &region);
+        // Have no effect on `proposed_admin_cmd`
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
+
+        epoch_checker.advance_apply(5, 10, &region);
+        // Left one change peer admin cmd
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
+
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), None);
+
+        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), Some(6));
+        // Change term to 6
+        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 11), None);
+        assert_eq!(epoch_checker.term, 11);
+        // Should be empty
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 0);
     }
 }

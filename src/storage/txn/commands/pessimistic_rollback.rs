@@ -8,7 +8,6 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Result as StorageResult, Snapshot};
-use pd_client::PdClient;
 use txn_types::{Key, TimeStamp};
 
 command! {
@@ -35,15 +34,13 @@ impl CommandExt for PessimisticRollback {
     gen_lock!(keys: multiple);
 }
 
-impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
-    for PessimisticRollback
-{
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            context.pd_client,
+            context.concurrency_manager,
         );
 
         let rows = self.keys.len();
@@ -61,6 +58,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
             rows,
             pr: ProcessResult::MultiRes { results: vec![] },
             lock_info: None,
+            lock_guards: vec![],
         })
     }
 }
