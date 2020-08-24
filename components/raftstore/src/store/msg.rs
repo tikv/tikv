@@ -321,20 +321,20 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
 /// Raft command is the command that is expected to be proposed by the
 /// leader of the target raft group.
 #[derive(Debug)]
-pub struct RaftCommand<S: Snapshot> {
+pub struct RaftCommand<EK> where EK: KvEngine {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
-    pub callback: Callback<S>,
+    pub callback: Callback<EK::Snapshot>,
     pub txn_extra: TxnExtra,
 }
 
-impl<S: Snapshot> RaftCommand<S> {
+impl<EK> RaftCommand<EK> where EK: KvEngine {
     #[inline]
     pub fn with_txn_extra(
         request: RaftCmdRequest,
-        callback: Callback<S>,
+        callback: Callback<EK::Snapshot>,
         txn_extra: TxnExtra,
-    ) -> RaftCommand<S> {
+    ) -> RaftCommand<EK> {
         RaftCommand {
             request,
             callback,
@@ -343,7 +343,7 @@ impl<S: Snapshot> RaftCommand<S> {
         }
     }
 
-    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
+    pub fn new(request: RaftCmdRequest, callback: Callback<EK::Snapshot>) -> RaftCommand<EK> {
         Self::with_txn_extra(request, callback, TxnExtra::default())
     }
 }
@@ -357,7 +357,7 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
-    RaftCommand(RaftCommand<EK::Snapshot>),
+    RaftCommand(RaftCommand<EK>),
     /// Tick is periodical task. If target peer doesn't exist there is a potential
     /// that the raft node will not work anymore.
     Tick(PeerTicks),

@@ -30,7 +30,7 @@ pub trait ProposalRouter<EK>
 where
     EK: KvEngine,
 {
-    fn send(&self, cmd: RaftCommand<EK::Snapshot>) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>>;
+    fn send(&self, cmd: RaftCommand<EK>) -> std::result::Result<(), TrySendError<RaftCommand<EK>>>;
 }
 
 /// Routes message to store FSM.
@@ -63,8 +63,8 @@ where
     #[inline]
     fn send(
         &self,
-        cmd: RaftCommand<EK::Snapshot>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>> {
+        cmd: RaftCommand<EK>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<EK>>> {
         self.send_raft_command(cmd)
     }
 }
@@ -101,8 +101,8 @@ where
     }
 }
 
-impl<EK> ProposalRouter<EK> for mpsc::SyncSender<RaftCommand<EK::Snapshot>> where EK: KvEngine {
-    fn send(&self, cmd: RaftCommand<EK::Snapshot>) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>> {
+impl<EK> ProposalRouter<EK> for mpsc::SyncSender<RaftCommand<EK>> where EK: KvEngine {
+    fn send(&self, cmd: RaftCommand<EK>) -> std::result::Result<(), TrySendError<RaftCommand<EK>>> {
         match self.try_send(cmd) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(cmd)) => Err(TrySendError::Disconnected(cmd)),

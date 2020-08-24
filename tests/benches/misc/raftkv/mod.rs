@@ -39,7 +39,7 @@ impl SyncBenchRouter {
 }
 
 impl SyncBenchRouter {
-    fn invoke(&self, cmd: RaftCommand<RocksSnapshot>) {
+    fn invoke(&self, cmd: RaftCommand<RocksEngine>) {
         let mut response = RaftCmdResponse::default();
         cmd_resp::bind_term(&mut response, 1);
         match cmd.callback {

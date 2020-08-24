@@ -319,7 +319,7 @@ where
         }
     }
 
-    fn redirect(&mut self, mut cmd: RaftCommand<E::Snapshot>) {
+    fn redirect(&mut self, mut cmd: RaftCommand<E>) {
         debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
@@ -707,8 +707,8 @@ mod tests {
         store_meta: Arc<Mutex<StoreMeta>>,
     ) -> (
         TempDir,
-        LocalReader<SyncSender<RaftCommand<RocksSnapshot>>, RocksEngine>,
-        Receiver<RaftCommand<RocksSnapshot>>,
+        LocalReader<SyncSender<RaftCommand<RocksEngine>>, RocksEngine>,
+        Receiver<RaftCommand<RocksEngine>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let db = engine_rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
@@ -732,8 +732,8 @@ mod tests {
     }
 
     fn must_redirect(
-        reader: &mut LocalReader<SyncSender<RaftCommand<RocksSnapshot>>, RocksEngine>,
-        rx: &Receiver<RaftCommand<RocksSnapshot>>,
+        reader: &mut LocalReader<SyncSender<RaftCommand<RocksEngine>>, RocksEngine>,
+        rx: &Receiver<RaftCommand<RocksEngine>>,
         cmd: RaftCmdRequest,
     ) {
         reader.propose_raft_command(
@@ -752,9 +752,9 @@ mod tests {
     }
 
     fn must_not_redirect(
-        reader: &mut LocalReader<SyncSender<RaftCommand<RocksSnapshot>>, RocksEngine>,
-        rx: &Receiver<RaftCommand<RocksSnapshot>>,
-        task: RaftCommand<RocksSnapshot>,
+        reader: &mut LocalReader<SyncSender<RaftCommand<RocksEngine>>, RocksEngine>,
+        rx: &Receiver<RaftCommand<RocksEngine>>,
+        task: RaftCommand<RocksEngine>,
     ) {
         reader.propose_raft_command(None, task.request, task.callback);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
@@ -836,13 +836,13 @@ mod tests {
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
         let task =
-            RaftCommand::<RocksSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
+            RaftCommand::<RocksEngine>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
 
         // Let's read.
         let region = region1;
-        let task = RaftCommand::<RocksSnapshot>::new(
+        let task = RaftCommand::<RocksEngine>::new(
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let snap = resp.snapshot.unwrap();

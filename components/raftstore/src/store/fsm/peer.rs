@@ -313,7 +313,7 @@ where
         true
     }
 
-    fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
+    fn add(&mut self, cmd: RaftCommand<E>, req_size: u32) {
         let req_num = cmd.request.get_requests().len();
         let RaftCommand {
             mut request,
@@ -348,7 +348,7 @@ where
         false
     }
 
-    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<E::Snapshot>> {
+    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<E>> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
