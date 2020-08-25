@@ -7,6 +7,7 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::{borrow::Cow, time::*};
 
+use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, IterOptions, SstCompressionType, DATA_KEY_PREFIX_LEN};
@@ -24,7 +25,7 @@ use tikv::storage::mvcc::Error as MvccError;
 use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
-use tikv::storage::{concurrency_manager::ConcurrencyManager, Statistics};
+use tikv::storage::Statistics;
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
