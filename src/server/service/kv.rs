@@ -147,24 +147,22 @@ macro_rules! handle_request {
 
             let resp = $future_name(&self.storage, req);
             let task = async move {
-                let result = async move {
-                    let resp = resp.await?;
-                    sink.success(resp).compat().map_err(Error::from).await
-                };
-                match result.await {
-                    Ok(_) => GRPC_MSG_HISTOGRAM_STATIC
-                        .$fn_name
-                        .observe(duration_to_sec(begin_instant.elapsed())),
-                    Err(e) => {
-                        debug!("kv rpc failed";
-                            "request" => stringify!($fn_name),
-                            "err" => ?e
-                        );
-                        GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
-                    }
-                }
-            };
-            ctx.spawn(Compat::new(task.unit_error().boxed()));
+                let resp = resp.await?;
+                sink.success(resp).compat().map_err(Error::from).await?;
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .$fn_name
+                    .observe(duration_to_sec(begin_instant.elapsed()));
+                ServerResult::Ok(())
+            }
+            .map_err(|e| {
+                debug!("kv rpc failed";
+                    "request" => stringify!($fn_name),
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
+            });
+
+            ctx.spawn(Compat::new(task.boxed()));
         }
     }
 }
@@ -313,25 +311,22 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let begin_instant = Instant::now_coarse();
         let future = future_cop(&self.cop, Some(ctx.peer()), req);
         let task = async move {
-            let result = async move {
-                let resp = future.await?;
-                sink.success(resp).compat().map_err(Error::from).await
-            };
-            match result.await {
-                Ok(_) => GRPC_MSG_HISTOGRAM_STATIC
-                    .coprocessor
-                    .observe(duration_to_sec(begin_instant.elapsed())),
-                Err(e) => {
-                    debug!("kv rpc failed";
-                        "request" => "coprocessor",
-                        "err" => ?e
-                    );
-                    GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
-                }
-            }
-        };
+            let resp = future.await?;
+            sink.success(resp).compat().map_err(Error::from).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .coprocessor
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "coprocessor",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
+        });
 
-        ctx.spawn(Compat::new(task.unit_error().boxed()));
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn register_lock_observer(
@@ -349,30 +344,27 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let res = self.gc_worker.start_collecting(req.get_max_ts().into(), cb);
 
         let task = async move {
-            let result = async move {
-                res.map_err(Error::from)?;
-                let res = f.await.map_err(Error::from)?;
-                let mut resp = RegisterLockObserverResponse::default();
-                if let Err(e) = res {
-                    resp.set_error(format!("{}", e));
-                }
-                sink.success(resp).compat().map_err(Error::from).await
-            };
-            match result.await {
-                Ok(_) => GRPC_MSG_HISTOGRAM_STATIC
-                    .register_lock_observer
-                    .observe(duration_to_sec(begin_instant.elapsed())),
-                Err(e) => {
-                    debug!("kv rpc failed";
-                        "request" => "register_lock_observer",
-                        "err" => ?e
-                    );
-                    GRPC_MSG_FAIL_COUNTER.register_lock_observer.inc();
-                }
+            res.map_err(Error::from)?;
+            let res = f.await.map_err(Error::from)?;
+            let mut resp = RegisterLockObserverResponse::default();
+            if let Err(e) = res {
+                resp.set_error(format!("{}", e));
             }
-        };
+            sink.success(resp).compat().map_err(Error::from).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .register_lock_observer
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "register_lock_observer",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.register_lock_observer.inc();
+        });
 
-        ctx.spawn(Compat::new(task.unit_error().boxed()));
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn check_lock_observer(
@@ -392,34 +384,31 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             .get_collected_locks(req.get_max_ts().into(), cb);
 
         let task = async move {
-            let result = async move {
-                res.map_err(Error::from)?;
-                let res = f.await.map_err(Error::from)?;
-                let mut resp = CheckLockObserverResponse::default();
-                match res {
-                    Ok((locks, is_clean)) => {
-                        resp.set_is_clean(is_clean);
-                        resp.set_locks(locks.into());
-                    }
-                    Err(e) => resp.set_error(format!("{}", e)),
+            res.map_err(Error::from)?;
+            let res = f.await.map_err(Error::from)?;
+            let mut resp = CheckLockObserverResponse::default();
+            match res {
+                Ok((locks, is_clean)) => {
+                    resp.set_is_clean(is_clean);
+                    resp.set_locks(locks.into());
                 }
-                sink.success(resp).compat().map_err(Error::from).await
-            };
-            match result.await {
-                Ok(_) => GRPC_MSG_HISTOGRAM_STATIC
-                    .check_lock_observer
-                    .observe(duration_to_sec(begin_instant.elapsed())),
-                Err(e) => {
-                    debug!("kv rpc failed";
-                        "request" => "check_lock_observer",
-                        "err" => ?e
-                    );
-                    GRPC_MSG_FAIL_COUNTER.check_lock_observer.inc();
-                }
+                Err(e) => resp.set_error(format!("{}", e)),
             }
-        };
+            sink.success(resp).compat().map_err(Error::from).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .check_lock_observer
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "check_lock_observer",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.check_lock_observer.inc();
+        });
 
-        ctx.spawn(Compat::new(task.unit_error().boxed()));
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn remove_lock_observer(
@@ -437,30 +426,27 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let res = self.gc_worker.stop_collecting(req.get_max_ts().into(), cb);
 
         let task = async move {
-            let result = async move {
-                res.map_err(Error::from)?;
-                let res = f.await.map_err(Error::from)?;
-                let mut resp = RemoveLockObserverResponse::default();
-                if let Err(e) = res {
-                    resp.set_error(format!("{}", e));
-                }
-                sink.success(resp).compat().map_err(Error::from).await
-            };
-            match result.await {
-                Ok(_) => GRPC_MSG_HISTOGRAM_STATIC
-                    .remove_lock_observer
-                    .observe(duration_to_sec(begin_instant.elapsed())),
-                Err(e) => {
-                    debug!("kv rpc failed";
-                        "request" => "remove_lock_observer",
-                        "err" => ?e
-                    );
-                    GRPC_MSG_FAIL_COUNTER.remove_lock_observer.inc();
-                }
+            res.map_err(Error::from)?;
+            let res = f.await.map_err(Error::from)?;
+            let mut resp = RemoveLockObserverResponse::default();
+            if let Err(e) = res {
+                resp.set_error(format!("{}", e));
             }
-        };
+            sink.success(resp).compat().map_err(Error::from).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .remove_lock_observer
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "remove_lock_observer",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.remove_lock_observer.inc();
+        });
 
-        ctx.spawn(Compat::new(task.unit_error().boxed()));
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn physical_scan_lock(
@@ -484,31 +470,28 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         );
 
         let task = async move {
-            let result = async move {
-                res.map_err(Error::from)?;
-                let res = f.await.map_err(Error::from)?;
-                let mut resp = PhysicalScanLockResponse::default();
-                match res {
-                    Ok(locks) => resp.set_locks(locks.into()),
-                    Err(e) => resp.set_error(format!("{}", e)),
-                }
-                sink.success(resp).compat().map_err(Error::from).await
-            };
-            match result.await {
-                Ok(_) => GRPC_MSG_HISTOGRAM_STATIC
-                    .physical_scan_lock
-                    .observe(duration_to_sec(begin_instant.elapsed())),
-                Err(e) => {
-                    debug!("kv rpc failed";
-                        "request" => "physical_scan_lock",
-                        "err" => ?e
-                    );
-                    GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
-                }
+            res.map_err(Error::from)?;
+            let res = f.await.map_err(Error::from)?;
+            let mut resp = PhysicalScanLockResponse::default();
+            match res {
+                Ok(locks) => resp.set_locks(locks.into()),
+                Err(e) => resp.set_error(format!("{}", e)),
             }
-        };
+            sink.success(resp).compat().map_err(Error::from).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .physical_scan_lock
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "physical_scan_lock",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
+        });
 
-        ctx.spawn(Compat::new(task.unit_error().boxed()));
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn unsafe_destroy_range(
@@ -536,31 +519,28 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         );
 
         let task = async move {
-            let result = async move {
-                res.map_err(Error::from)?;
-                let res = f.await.map_err(Error::from)?;
-                let mut resp = UnsafeDestroyRangeResponse::default();
-                // Region error is impossible here.
-                if let Err(e) = res {
-                    resp.set_error(format!("{}", e));
-                }
-                sink.success(resp).compat().map_err(Error::from).await
-            };
-            match result.await {
-                Ok(_) => GRPC_MSG_HISTOGRAM_STATIC
-                    .physical_scan_lock
-                    .observe(duration_to_sec(begin_instant.elapsed())),
-                Err(e) => {
-                    debug!("kv rpc failed";
-                        "request" => "physical_scan_lock",
-                        "err" => ?e
-                    );
-                    GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
-                }
+            res.map_err(Error::from)?;
+            let res = f.await.map_err(Error::from)?;
+            let mut resp = UnsafeDestroyRangeResponse::default();
+            // Region error is impossible here.
+            if let Err(e) = res {
+                resp.set_error(format!("{}", e));
             }
-        };
+            sink.success(resp).compat().map_err(Error::from).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .physical_scan_lock
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "physical_scan_lock",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
+        });
 
-        ctx.spawn(Compat::new(task.unit_error().boxed()));
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn coprocessor_stream(
@@ -730,49 +710,46 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         }
 
         let task = async move {
-            let result = async move {
-                let mut res = f.await.map_err(Error::from)?;
-                let mut resp = SplitRegionResponse::default();
-                if res.response.get_header().has_error() {
-                    resp.set_region_error(res.response.mut_header().take_error());
-                } else {
-                    let admin_resp = res.response.mut_admin_response();
-                    let regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
-                    if regions.len() < 2 {
-                        error!(
-                            "invalid split response";
-                            "region_id" => region_id,
-                            "resp" => ?admin_resp
-                        );
-                        resp.mut_region_error().set_message(format!(
-                            "Internal Error: invalid response: {:?}",
-                            admin_resp
-                        ));
-                    } else {
-                        if regions.len() == 2 {
-                            resp.set_left(regions[0].clone());
-                            resp.set_right(regions[1].clone());
-                        }
-                        resp.set_regions(regions.into());
-                    }
-                }
-                sink.success(resp).compat().map_err(Error::from).await
-            };
-            match result.await {
-                Ok(_) => GRPC_MSG_HISTOGRAM_STATIC
-                    .split_region
-                    .observe(duration_to_sec(begin_instant.elapsed())),
-                Err(e) => {
-                    debug!("kv rpc failed";
-                        "request" => "split_region",
-                        "err" => ?e
+            let mut res = f.await.map_err(Error::from)?;
+            let mut resp = SplitRegionResponse::default();
+            if res.response.get_header().has_error() {
+                resp.set_region_error(res.response.mut_header().take_error());
+            } else {
+                let admin_resp = res.response.mut_admin_response();
+                let regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
+                if regions.len() < 2 {
+                    error!(
+                        "invalid split response";
+                        "region_id" => region_id,
+                        "resp" => ?admin_resp
                     );
-                    GRPC_MSG_FAIL_COUNTER.split_region.inc();
+                    resp.mut_region_error().set_message(format!(
+                        "Internal Error: invalid response: {:?}",
+                        admin_resp
+                    ));
+                } else {
+                    if regions.len() == 2 {
+                        resp.set_left(regions[0].clone());
+                        resp.set_right(regions[1].clone());
+                    }
+                    resp.set_regions(regions.into());
                 }
             }
-        };
+            sink.success(resp).compat().map_err(Error::from).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .split_region
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "split_region",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.split_region.inc();
+        });
 
-        ctx.spawn(Compat::new(task.unit_error().boxed()));
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn read_index(
@@ -811,45 +788,42 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         }
 
         let task = async move {
-            let result = async move {
-                let mut res = f.await.map_err(Error::from)?;
-                let mut resp = ReadIndexResponse::default();
-                if res.response.get_header().has_error() {
-                    resp.set_region_error(res.response.mut_header().take_error());
-                } else {
-                    let raft_resps = res.response.get_responses();
-                    if raft_resps.len() != 1 {
-                        error!(
-                            "invalid read index response";
-                            "region_id" => region_id,
-                            "response" => ?raft_resps
-                        );
-                        resp.mut_region_error().set_message(format!(
-                            "Internal Error: invalid response: {:?}",
-                            raft_resps
-                        ));
-                    } else {
-                        let read_index = raft_resps[0].get_read_index().get_read_index();
-                        resp.set_read_index(read_index);
-                    }
-                }
-                sink.success(resp).compat().map_err(Error::from).await
-            };
-            match result.await {
-                Ok(_) => GRPC_MSG_HISTOGRAM_STATIC
-                    .read_index
-                    .observe(begin_instant.elapsed_secs()),
-                Err(e) => {
-                    debug!("kv rpc failed";
-                        "request" => "read_index",
-                        "err" => ?e
+            let mut res = f.await.map_err(Error::from)?;
+            let mut resp = ReadIndexResponse::default();
+            if res.response.get_header().has_error() {
+                resp.set_region_error(res.response.mut_header().take_error());
+            } else {
+                let raft_resps = res.response.get_responses();
+                if raft_resps.len() != 1 {
+                    error!(
+                        "invalid read index response";
+                        "region_id" => region_id,
+                        "response" => ?raft_resps
                     );
-                    GRPC_MSG_FAIL_COUNTER.read_index.inc();
+                    resp.mut_region_error().set_message(format!(
+                        "Internal Error: invalid response: {:?}",
+                        raft_resps
+                    ));
+                } else {
+                    let read_index = raft_resps[0].get_read_index().get_read_index();
+                    resp.set_read_index(read_index);
                 }
             }
-        };
+            sink.success(resp).compat().map_err(Error::from).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .read_index
+                .observe(begin_instant.elapsed_secs());
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "read_index",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.read_index.inc();
+        });
 
-        ctx.spawn(Compat::new(task.unit_error().boxed()));
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn batch_commands(

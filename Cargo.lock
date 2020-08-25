@@ -3905,6 +3905,7 @@ dependencies = [
  "error_code",
  "external_storage",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-cpupool",
  "futures-executor",
  "futures-util",
@@ -3925,7 +3926,6 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio 0.2.13",
- "tokio-sync",
  "txn_types",
  "uuid",
 ]
@@ -4796,7 +4796,6 @@ dependencies = [
  "tokio 0.2.13",
  "tokio-core",
  "tokio-executor",
- "tokio-sync",
  "tokio-timer",
  "toml",
  "url",

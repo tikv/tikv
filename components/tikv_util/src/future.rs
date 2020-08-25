@@ -5,25 +5,10 @@ use futures03::channel::mpsc;
 use futures03::channel::oneshot as futures_oneshot;
 use futures03::future::{self, Future, FutureExt, TryFutureExt};
 use futures03::stream::{Stream, StreamExt};
-use tokio::sync::oneshot;
 
 /// Generates a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.
-pub fn paired_future_callback<T>() -> (Box<dyn FnOnce(T) + Send>, oneshot::Receiver<T>)
-where
-    T: Send + 'static,
-{
-    let (tx, future) = oneshot::channel::<T>();
-    let callback = Box::new(move |result| {
-        let r = tx.send(result);
-        if r.is_err() {
-            warn!("paired_future_callback: Failed to send result to the future rx, discarded.");
-        }
-    });
-    (callback, future)
-}
-
-pub fn paired_std_future_callback<T>() -> (Box<dyn FnOnce(T) + Send>, futures_oneshot::Receiver<T>)
+pub fn paired_future_callback<T>() -> (Box<dyn FnOnce(T) + Send>, futures_oneshot::Receiver<T>)
 where
     T: Send + 'static,
 {
@@ -37,7 +22,7 @@ where
     (callback, future)
 }
 
-pub fn paired_must_called_std_future_callback<T>(
+pub fn paired_must_called_future_callback<T>(
     arg_on_drop: impl FnOnce() -> T + Send + 'static,
 ) -> (Box<dyn FnOnce(T) + Send>, futures_oneshot::Receiver<T>)
 where

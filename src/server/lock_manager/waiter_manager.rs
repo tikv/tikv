@@ -699,7 +699,7 @@ pub mod tests {
     pub(crate) type WaiterCtx = (
         Waiter,
         LockInfo,
-        tokio::sync::oneshot::Receiver<
+        futures03::channel::oneshot::Receiver<
             Result<Result<PessimisticLockRes, StorageError>, StorageError>,
         >,
     );
