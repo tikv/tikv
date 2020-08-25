@@ -162,20 +162,22 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<E, S> where E: KvEngine {
+pub struct Runner<E, S>
+where
+    E: KvEngine,
+{
     engine: E,
     router: S,
     coprocessor: CoprocessorHost<E>,
     cfg: Config,
 }
 
-impl<E, S> Runner<E, S> where E: KvEngine, S: CasualRouter<E> {
-    pub fn new(
-        engine: E,
-        router: S,
-        coprocessor: CoprocessorHost<E>,
-        cfg: Config,
-    ) -> Runner<E, S> {
+impl<E, S> Runner<E, S>
+where
+    E: KvEngine,
+    S: CasualRouter<E>,
+{
+    pub fn new(engine: E, router: S, coprocessor: CoprocessorHost<E>, cfg: Config) -> Runner<E, S> {
         Runner {
             engine,
             router,
@@ -319,7 +321,11 @@ impl<E, S> Runner<E, S> where E: KvEngine, S: CasualRouter<E> {
     }
 }
 
-impl<E, S> Runnable<Task> for Runner<E, S> where E: KvEngine, S: CasualRouter<E> {
+impl<E, S> Runnable<Task> for Runner<E, S>
+where
+    E: KvEngine,
+    S: CasualRouter<E>,
+{
     fn run(&mut self, task: Task) {
         match task {
             Task::SplitCheckTask {
@@ -334,10 +340,10 @@ impl<E, S> Runnable<Task> for Runner<E, S> where E: KvEngine, S: CasualRouter<E>
     }
 }
 
-fn new_split_region<E>(
-    region_epoch: RegionEpoch,
-    split_keys: Vec<Vec<u8>>,
-) -> CasualMessage<E> where E: KvEngine {
+fn new_split_region<E>(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage<E>
+where
+    E: KvEngine,
+{
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,

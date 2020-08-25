@@ -5,7 +5,7 @@ use super::peer_storage::{
 };
 use super::util::new_peer;
 use crate::Result;
-use engine_traits::{Engines, Mutable, KvEngine};
+use engine_traits::{Engines, KvEngine, Mutable};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
 use raft_engine::RaftEngine;
 
@@ -47,7 +47,10 @@ pub fn bootstrap_store<ER>(
     engines: &Engines<impl KvEngine, ER>,
     cluster_id: u64,
     store_id: u64,
-) -> Result<()> where ER: KvEngine + RaftEngine {
+) -> Result<()>
+where
+    ER: KvEngine + RaftEngine,
+{
     let mut ident = StoreIdent::default();
 
     if !is_range_empty(&engines.kv, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
@@ -113,7 +116,9 @@ pub fn clear_prepare_bootstrap_cluster(
 }
 
 // Clear prepare key
-pub fn clear_prepare_bootstrap_key(engines: &Engines<impl KvEngine, impl RaftEngine>) -> Result<()> {
+pub fn clear_prepare_bootstrap_key(
+    engines: &Engines<impl KvEngine, impl RaftEngine>,
+) -> Result<()> {
     box_try!(engines.kv.delete(keys::PREPARE_BOOTSTRAP_KEY));
     engines.sync_kv()?;
     Ok(())

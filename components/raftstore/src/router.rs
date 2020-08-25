@@ -10,8 +10,8 @@ use crate::store::{
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use engine_traits::KvEngine;
-use raft_engine::RaftEngine;
 use raft::SnapshotStatus;
+use raft_engine::RaftEngine;
 use std::cell::RefCell;
 use tikv_util::time::ThreadReadId;
 use txn_types::TxnExtra;

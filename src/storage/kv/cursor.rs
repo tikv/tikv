@@ -506,8 +506,8 @@ mod tests {
     use txn_types::Key;
 
     use crate::storage::{CfStatistics, Cursor, ScanMode};
-    use raftstore::store::{RegionSnapshot};
     use engine_rocks::util::new_temp_engine;
+    use raftstore::store::RegionSnapshot;
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 

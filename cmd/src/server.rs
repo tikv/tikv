@@ -444,7 +444,9 @@ impl TiKVServer {
         });
     }
 
-    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>> {
+    fn init_gc_worker(
+        &mut self,
+    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),

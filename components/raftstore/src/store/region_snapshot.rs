@@ -13,8 +13,8 @@ use crate::{Error, Result};
 use engine_traits::util::check_key_in_range;
 use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
-use raft_engine::RaftEngine;
 use keys::DATA_PREFIX_KEY;
+use raft_engine::RaftEngine;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -36,11 +36,17 @@ where
     S: Snapshot,
 {
     #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
-    pub fn new<EK>(ps: &PeerStorage<EK, impl RaftEngine>) -> RegionSnapshot<EK::Snapshot> where EK: KvEngine {
+    pub fn new<EK>(ps: &PeerStorage<EK, impl RaftEngine>) -> RegionSnapshot<EK::Snapshot>
+    where
+        EK: KvEngine,
+    {
         RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), Arc::new(ps.region().clone()))
     }
 
-    pub fn from_raw<EK>(db: EK, region: Region) -> RegionSnapshot<EK::Snapshot> where EK: KvEngine {
+    pub fn from_raw<EK>(db: EK, region: Region) -> RegionSnapshot<EK::Snapshot>
+    where
+        EK: KvEngine,
+    {
         RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), Arc::new(region))
     }
 
@@ -376,8 +382,8 @@ mod tests {
     use crate::store::PeerStorage;
     use crate::Result;
 
-    use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_rocks::util::new_temp_engine;
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::{CompactExt, Engines, MiscExt, Peekable, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
