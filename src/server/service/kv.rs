@@ -344,7 +344,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let res = self.gc_worker.start_collecting(req.get_max_ts().into(), cb);
 
         let task = async move {
-            res.map_err(Error::from)?;
+            res?;
             let res = f.await.map_err(Error::from)?;
             let mut resp = RegisterLockObserverResponse::default();
             if let Err(e) = res {
@@ -384,7 +384,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             .get_collected_locks(req.get_max_ts().into(), cb);
 
         let task = async move {
-            res.map_err(Error::from)?;
+            res?;
             let res = f.await.map_err(Error::from)?;
             let mut resp = CheckLockObserverResponse::default();
             match res {
@@ -426,7 +426,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let res = self.gc_worker.stop_collecting(req.get_max_ts().into(), cb);
 
         let task = async move {
-            res.map_err(Error::from)?;
+            res?;
             let res = f.await.map_err(Error::from)?;
             let mut resp = RemoveLockObserverResponse::default();
             if let Err(e) = res {
@@ -470,7 +470,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         );
 
         let task = async move {
-            res.map_err(Error::from)?;
+            res?;
             let res = f.await.map_err(Error::from)?;
             let mut resp = PhysicalScanLockResponse::default();
             match res {
@@ -519,7 +519,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         );
 
         let task = async move {
-            res.map_err(Error::from)?;
+            res?;
             let res = f.await.map_err(Error::from)?;
             let mut resp = UnsafeDestroyRangeResponse::default();
             // Region error is impossible here.
@@ -1230,7 +1230,7 @@ fn future_delete_range<E: Engine, L: LockManager>(
     );
 
     async move {
-        res.map_err(Error::from)?;
+        res?;
         let v = f.await.map_err(Error::from)?;
         let mut resp = DeleteRangeResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1301,7 +1301,7 @@ fn future_raw_put<E: Engine, L: LockManager>(
     );
 
     async move {
-        res.map_err(Error::from)?;
+        res?;
         let v = f.await.map_err(Error::from)?;
         let mut resp = RawPutResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1328,7 +1328,7 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
     let res = storage.raw_batch_put(req.take_context(), cf, pairs, cb);
 
     async move {
-        res.map_err(Error::from)?;
+        res?;
         let v = f.await.map_err(Error::from)?;
         let mut resp = RawBatchPutResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1348,7 +1348,7 @@ fn future_raw_delete<E: Engine, L: LockManager>(
     let res = storage.raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
 
     async move {
-        res.map_err(Error::from)?;
+        res?;
         let v = f.await.map_err(Error::from)?;
         let mut resp = RawDeleteResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1370,7 +1370,7 @@ fn future_raw_batch_delete<E: Engine, L: LockManager>(
     let res = storage.raw_batch_delete(req.take_context(), cf, keys, cb);
 
     async move {
-        res.map_err(Error::from)?;
+        res?;
         let v = f.await.map_err(Error::from)?;
         let mut resp = RawBatchDeleteResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1456,7 +1456,7 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
     );
 
     async move {
-        res.map_err(Error::from)?;
+        res?;
         let v = f.await.map_err(Error::from)?;
         let mut resp = RawDeleteRangeResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1543,7 +1543,7 @@ macro_rules! txn_command_future {
             let res = storage.sched_txn_command($req.into(), cb);
 
             async move {
-                res.map_err(Error::from)?;
+                res?;
                 let $v = f.await.map_err(Error::from)?;
                 let mut $resp = $resp_ty::default();
                 if let Some(err) = extract_region_error(&$v) {
