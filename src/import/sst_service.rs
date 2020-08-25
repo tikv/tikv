@@ -7,7 +7,6 @@ use engine_traits::{name_to_cf, CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures03::compat::Compat;
-use futures03::future::FutureExt;
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::errorpb;
@@ -282,7 +281,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         }
 
         ctx.spawn(
-            Compat::new(future.boxed())
+            Compat::new(future)
                 .map_err(Error::from)
                 .then(|res| match res {
                     Ok(mut res) => {

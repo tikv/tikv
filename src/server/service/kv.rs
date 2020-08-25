@@ -23,12 +23,8 @@ use crate::storage::{
 use engine_rocks::RocksEngine;
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
-use futures03::compat::Compat;
-use futures03::compat::Future01CompatExt;
-use futures03::future as future03;
-use futures03::future::Future as Future03;
-use futures03::future::FutureExt;
-use futures03::future::TryFutureExt;
+use futures03::compat::{Compat, Future01CompatExt};
+use futures03::future::{self as future03, Future as Future03, FutureExt, TryFutureExt};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
     RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,

@@ -10,7 +10,6 @@ use crate::storage::lock_manager::Lock;
 use engine_rocks::RocksEngine;
 use futures::{Future, Sink, Stream};
 use futures03::compat::Compat;
-use futures03::future::FutureExt;
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
     WriteFlags,
@@ -893,7 +892,7 @@ impl Deadlock for Service {
             ctx.spawn(sink.fail(status).map_err(|_| ()))
         } else {
             ctx.spawn(
-                Compat::new(f.boxed())
+                Compat::new(f)
                     .map_err(Error::from)
                     .map(|v| {
                         let mut resp = WaitForEntriesResponse::default();
