@@ -63,11 +63,13 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
         REGION_HASH_COUNTER.compute.all.inc();
 
         let timer = REGION_HASH_HISTOGRAM.start_coarse_timer();
-        let sum = match self
+
+        // Now only 1 consistency check can be performed once.
+        let hashes = self
             .coprocessor_host
-            .get_consistency_checker_host()
-            .compute_hash(&region, &context, snap)
-        {
+            .on_compute_hash(&region, &context, snap);
+        assert_eq!(hashes.len(), 1);
+        let sum = match hashes.into_iter().next().unwrap() {
             Ok(hash) => hash,
             Err(e) => {
                 error!("calculate hash"; "region_id" => region.get_id(), "err" => ?e);

@@ -19,9 +19,7 @@ mod split_check;
 pub mod split_observer;
 
 pub use self::config::{Config, ConsistencyCheckMethod};
-pub use self::consistency_check::{
-    ConsistencyCheckObserver, ConsistencyChecker, RawConsistencyChecker,
-};
+pub use self::consistency_check::{ConsistencyCheckObserver, RawConsistencyCheckObserver};
 pub use self::dispatcher::{
     BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxQueryObserver,
     BoxRegionChangeObserver, BoxRoleObserver, BoxSplitCheckObserver, CoprocessorHost, Registry,

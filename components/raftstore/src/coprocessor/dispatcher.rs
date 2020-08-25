@@ -3,7 +3,7 @@
 use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::RaftCmdRequest;
+use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
 use std::marker::PhantomData;
 use txn_types::TxnExtra;
 
@@ -81,8 +81,8 @@ macro_rules! impl_box_observer {
 // This is the same as impl_box_observer_g except $ob has a typaram
 macro_rules! impl_box_observer_g {
     ($name:ident, $ob: ident, $wrapper: ident) => {
-        pub struct $name<E>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
-        impl<E: 'static + Send> $name<E> {
+        pub struct $name<E: KvEngine>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
+        impl<E: KvEngine + 'static + Send> $name<E> {
             pub fn new<T: 'static + $ob<E> + Clone>(observer: T) -> $name<E> {
                 $name(Box::new($wrapper {
                     inner: observer,
@@ -90,12 +90,12 @@ macro_rules! impl_box_observer_g {
                 }))
             }
         }
-        impl<E: 'static> Clone for $name<E> {
+        impl<E: KvEngine + 'static> Clone for $name<E> {
             fn clone(&self) -> $name<E> {
                 $name((**self).box_clone())
             }
         }
-        impl<E> Deref for $name<E> {
+        impl<E: KvEngine> Deref for $name<E> {
             type Target = Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>;
 
             fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send> {
@@ -103,11 +103,13 @@ macro_rules! impl_box_observer_g {
             }
         }
 
-        struct $wrapper<E, T: $ob<E> + Clone> {
+        struct $wrapper<E: KvEngine, T: $ob<E> + Clone> {
             inner: T,
             _phantom: PhantomData<E>,
         }
-        impl<E: 'static + Send, T: 'static + $ob<E> + Clone> ClonableObserver for $wrapper<E, T> {
+        impl<E: KvEngine + 'static + Send, T: 'static + $ob<E> + Clone> ClonableObserver
+            for $wrapper<E, T>
+        {
             type Ob = dyn $ob<E>;
             fn inner(&self) -> &Self::Ob {
                 &self.inner as _
@@ -146,30 +148,37 @@ impl_box_observer!(
     WrappedRegionChangeObserver
 );
 impl_box_observer_g!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
+impl_box_observer_g!(
+    BoxConsistencyCheckObserver,
+    ConsistencyCheckObserver,
+    WrappedConsistencyCheckObserver
+);
 
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
 pub struct Registry<E>
 where
-    E: 'static,
+    E: KvEngine + 'static,
 {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
     apply_snapshot_observers: Vec<Entry<BoxApplySnapshotObserver>>,
     split_check_observers: Vec<Entry<BoxSplitCheckObserver<E>>>,
+    consistency_check_observers: Vec<Entry<BoxConsistencyCheckObserver<E>>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver<E>>>,
     // TODO: add endpoint
 }
 
-impl<E> Default for Registry<E> {
+impl<E: KvEngine> Default for Registry<E> {
     fn default() -> Registry<E> {
         Registry {
             admin_observers: Default::default(),
             query_observers: Default::default(),
             apply_snapshot_observers: Default::default(),
             split_check_observers: Default::default(),
+            consistency_check_observers: Default::default(),
             role_observers: Default::default(),
             region_change_observers: Default::default(),
             cmd_observers: Default::default(),
@@ -190,7 +199,7 @@ macro_rules! push {
     };
 }
 
-impl<E> Registry<E> {
+impl<E: KvEngine> Registry<E> {
     pub fn register_admin_observer(&mut self, priority: u32, ao: BoxAdminObserver) {
         push!(priority, ao, self.admin_observers);
     }
@@ -209,6 +218,14 @@ impl<E> Registry<E> {
 
     pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver<E>) {
         push!(priority, sco, self.split_check_observers);
+    }
+
+    pub fn register_consistency_check_observer(
+        &mut self,
+        priority: u32,
+        cco: BoxConsistencyCheckObserver<E>,
+    ) {
+        push!(priority, cco, self.consistency_check_observers);
     }
 
     pub fn register_role_observer(&mut self, priority: u32, ro: BoxRoleObserver) {
@@ -275,7 +292,6 @@ where
     E: 'static,
 {
     pub registry: Registry<E>,
-    consistency_check_observer: ConsistencyCheckObserver<E>,
 }
 
 impl<E: KvEngine> Default for CoprocessorHost<E>
@@ -285,7 +301,6 @@ where
     fn default() -> Self {
         CoprocessorHost {
             registry: Default::default(),
-            consistency_check_observer: ConsistencyCheckObserver::<E>::new(),
         }
     }
 }
@@ -307,11 +322,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
             400,
             BoxSplitCheckObserver::new(TableCheckObserver::default()),
         );
-        let consistency_check_observer = ConsistencyCheckObserver::new();
-        CoprocessorHost {
-            registry,
-            consistency_check_observer,
-        }
+        CoprocessorHost { registry }
     }
 
     /// Call all propose hooks until bypass is set to true.
@@ -423,8 +434,27 @@ impl<E: KvEngine> CoprocessorHost<E> {
         host
     }
 
-    pub fn get_consistency_checker_host(&self) -> &ConsistencyCheckObserver<E> {
-        &self.consistency_check_observer
+    pub fn on_prepropose_compute_hash(&self, req: &mut ComputeHashRequest) {
+        for observer in &self.registry.consistency_check_observers {
+            let observer = observer.observer.inner();
+            if observer.update_context(req.mut_context()) {
+                break;
+            }
+        }
+    }
+
+    pub fn on_compute_hash(
+        &self,
+        region: &Region,
+        mut context: &[u8],
+        snap: E::Snapshot,
+    ) -> Vec<crate::Result<u32>> {
+        let mut hashes = Vec::new();
+        for observer in &self.registry.consistency_check_observers {
+            let observer = observer.observer.inner();
+            hashes.push(observer.compute_hash(region, &mut context, &snap));
+        }
+        hashes
     }
 
     pub fn on_role_change(&self, region: &Region, role: StateRole) {

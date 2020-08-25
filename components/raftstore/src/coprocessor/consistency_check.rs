@@ -1,81 +1,52 @@
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 use engine_traits::{KvEngine, Snapshot, CF_RAFT};
 use kvproto::metapb::Region;
 
+use crate::coprocessor::{ConsistencyCheckMethod, Coprocessor};
 use crate::Result;
 
-pub struct ConsistencyCheckObserver<E: KvEngine> {
-    _engine: PhantomData<E>,
-    checker: Arc<dyn ConsistencyChecker<Snap = E::Snapshot>>,
+pub trait ConsistencyCheckObserver<E: KvEngine>: Coprocessor {
+    /// Update context. Return `true` if later observers should be skiped.
+    fn update_context(&self, context: &mut Vec<u8>) -> bool;
+
+    /// Compute hash for `region`. Return `0` if the observer is skiped.
+    fn compute_hash(&self, region: &Region, context: &mut &[u8], snap: &E::Snapshot)
+        -> Result<u32>;
 }
 
-impl<E: KvEngine> Clone for ConsistencyCheckObserver<E> {
-    fn clone(&self) -> ConsistencyCheckObserver<E> {
-        ConsistencyCheckObserver {
-            _engine: PhantomData::default(),
-            checker: self.checker.clone(),
-        }
-    }
-}
+pub struct RawConsistencyCheckObserver<E: KvEngine>(PhantomData<E>);
 
-impl<E: KvEngine> ConsistencyCheckObserver<E> {
-    pub fn new() -> ConsistencyCheckObserver<E> {
-        ConsistencyCheckObserver {
-            _engine: PhantomData::default(),
-            checker: Arc::new(RawConsistencyChecker::<E>::default()),
-        }
-    }
+impl<E: KvEngine> Coprocessor for RawConsistencyCheckObserver<E> {}
 
-    pub fn set_mvcc_consistency_checker<C>(&mut self, checker: C)
-    where
-        C: ConsistencyChecker<Snap = E::Snapshot> + 'static,
-    {
-        self.checker = Arc::new(checker) as Arc<dyn ConsistencyChecker<Snap = E::Snapshot>>;
-    }
-
-    pub fn gen_context(&self) -> Vec<u8> {
-        self.checker.gen_context()
-    }
-
-    pub fn compute_hash(&self, region: &Region, context: &[u8], snap: E::Snapshot) -> Result<u32> {
-        self.checker.compute_hash(region, context, snap)
+impl<E: KvEngine> Default for RawConsistencyCheckObserver<E> {
+    fn default() -> RawConsistencyCheckObserver<E> {
+        RawConsistencyCheckObserver(Default::default())
     }
 }
 
-pub trait ConsistencyChecker: Sync + Send {
-    type Snap: engine_traits::Snapshot;
-    fn gen_context(&self) -> Vec<u8>;
-    fn compute_hash(&self, region: &Region, context: &[u8], snap: Self::Snap) -> Result<u32>;
-}
-
-pub struct RawConsistencyChecker<E: KvEngine>(PhantomData<E>);
-
-impl<E: KvEngine> Default for RawConsistencyChecker<E> {
-    fn default() -> RawConsistencyChecker<E> {
-        RawConsistencyChecker(Default::default())
-    }
-}
-
-impl<E: KvEngine> ConsistencyChecker for RawConsistencyChecker<E> {
-    type Snap = E::Snapshot;
-
-    fn gen_context(&self) -> Vec<u8> {
-        vec![]
+impl<E: KvEngine> ConsistencyCheckObserver<E> for RawConsistencyCheckObserver<E> {
+    fn update_context(&self, context: &mut Vec<u8>) -> bool {
+        context.push(ConsistencyCheckMethod::Raw as u8);
+        // Raw consistency check is the most heavy and strong one.
+        // So all others can be skiped.
+        true
     }
 
     fn compute_hash(
         &self,
         region: &kvproto::metapb::Region,
-        _context: &[u8],
-        snap: Self::Snap,
+        context: &mut &[u8],
+        snap: &E::Snapshot,
     ) -> Result<u32> {
+        assert!(!context.is_empty());
+        assert_eq!(context[0], ConsistencyCheckMethod::Raw as u8);
+        *context = &context[1..];
         compute_hash_on_raw(region, snap)
     }
 }
 
-fn compute_hash_on_raw<S: Snapshot>(region: &Region, snap: S) -> Result<u32> {
+fn compute_hash_on_raw<S: Snapshot>(region: &Region, snap: &S) -> Result<u32> {
     let region_id = region.get_id();
     let mut digest = crc32fast::Hasher::new();
     let mut cf_names = snap.cf_names();
