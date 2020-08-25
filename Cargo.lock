@@ -4793,6 +4793,7 @@ dependencies = [
  "tikv_alloc",
  "time 0.1.42",
  "tipb",
+ "tokio 0.2.13",
  "tokio-core",
  "tokio-executor",
  "tokio-sync",

@@ -805,6 +805,7 @@ mod tests {
     use engine_rocks::RocksSnapshot;
     use engine_traits::KvEngine;
     use futures::Future;
+    use futures03::executor::block_on;
     use kvproto::{kvrpcpb::Op, metapb};
     use raftstore::store::RegionSnapshot;
     use tikv_util::codec::number::NumberEncoder;
@@ -1141,7 +1142,7 @@ mod tests {
             gc_worker
                 .physical_scan_lock(Context::default(), max_ts.into(), start_key, limit, cb)
                 .unwrap();
-            f.wait().unwrap()
+            block_on(f).unwrap()
         };
 
         let mut expected_lock_info = Vec::new();

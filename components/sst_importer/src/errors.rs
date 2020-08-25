@@ -11,7 +11,7 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use grpcio::Error as GrpcError;
 use kvproto::import_sstpb;
 use tikv_util::codec::Error as CodecError;
-use tokio_sync::oneshot::error::RecvError;
+use tokio::sync::oneshot::error::RecvError;
 use uuid::Error as UuidError;
 
 use crate::metrics::*;
