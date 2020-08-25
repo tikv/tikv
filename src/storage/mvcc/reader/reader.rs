@@ -504,10 +504,8 @@ mod tests {
     use super::*;
 
     use crate::storage::kv::Modify;
-    use crate::storage::{
-        concurrency_manager::ConcurrencyManager,
-        mvcc::{MvccReader, MvccTxn},
-    };
+    use crate::storage::mvcc::{MvccReader, MvccTxn};
+    use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::raw::DB;
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};

@@ -12,6 +12,7 @@ use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
 use super::*;
+use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt, Peekable};
@@ -263,6 +264,7 @@ impl Simulator for NodeCluster {
             importer,
             split_check_worker,
             AutoSplitController::default(),
+            ConcurrencyManager::new(1.into()),
         )?;
         assert!(engines
             .kv

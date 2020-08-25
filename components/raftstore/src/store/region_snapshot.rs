@@ -27,6 +27,8 @@ pub struct RegionSnapshot<S: Snapshot> {
     snap: Arc<S>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
+    // `None` means the snapshot does not care about max_ts
+    pub max_ts_sync_status: Option<Arc<AtomicU64>>,
 }
 
 impl<S> RegionSnapshot<S>
@@ -49,6 +51,7 @@ where
             // Use 0 to indicate that the apply index is missing and we need to KvGet it,
             // since apply index must be >= RAFT_INIT_LOG_INDEX.
             apply_index: Arc::new(AtomicU64::new(0)),
+            max_ts_sync_status: None,
         }
     }
 
@@ -160,6 +163,7 @@ where
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
             apply_index: Arc::clone(&self.apply_index),
+            max_ts_sync_status: self.max_ts_sync_status.clone(),
         }
     }
 }
