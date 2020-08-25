@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    Engines, IterOptions, KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot,
+    IterOptions, KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot,
 };
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use crate::store::{util, PeerStorage};
 use crate::{Error, Result};
-use engine_rocks::{RocksEngine};
 use engine_traits::util::check_key_in_range;
 use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
@@ -372,34 +371,13 @@ fn handle_check_key_in_region_error(e: crate::Error) -> Result<()> {
     }
 }
 
-pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
-    let raft_path = path.path().join(std::path::Path::new("raft"));
-    let shared_block_cache = false;
-    Engines::new(
-        engine_rocks::util::new_engine(
-            path.path().to_str().unwrap(),
-            None,
-            engine_traits::ALL_CFS,
-            None,
-        )
-        .unwrap(),
-        engine_rocks::util::new_engine(
-            raft_path.to_str().unwrap(),
-            None,
-            &[engine_traits::CF_DEFAULT],
-            None,
-        )
-        .unwrap(),
-        shared_block_cache,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use crate::store::PeerStorage;
     use crate::Result;
 
     use engine_rocks::{RocksEngine, RocksSnapshot};
+    use engine_rocks::util::new_temp_engine;
     use engine_traits::{CompactExt, Engines, MiscExt, Peekable, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};

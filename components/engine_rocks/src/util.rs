@@ -10,10 +10,33 @@ use crate::rocks_metrics_defs::*;
 use engine_traits::Range;
 use engine_traits::CF_DEFAULT;
 use engine_traits::{Error, Result};
+use engine_traits::Engines;
 use rocksdb::Range as RocksRange;
 use rocksdb::{CFHandle, SliceTransform, DB};
 use std::str::FromStr;
 use std::sync::Arc;
+
+pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
+    let raft_path = path.path().join(std::path::Path::new("raft"));
+    let shared_block_cache = false;
+    Engines::new(
+        new_engine(
+            path.path().to_str().unwrap(),
+            None,
+            engine_traits::ALL_CFS,
+            None,
+        )
+        .unwrap(),
+        new_engine(
+            raft_path.to_str().unwrap(),
+            None,
+            &[engine_traits::CF_DEFAULT],
+            None,
+        )
+        .unwrap(),
+        shared_block_cache,
+    )
+}
 
 pub fn new_default_engine(path: &str) -> Result<RocksEngine> {
     let engine =
