@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
@@ -47,7 +47,7 @@ use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
-use tikv_util::worker::Scheduler;
+use tikv_util::worker::{FutureScheduler, Scheduler};
 use tikv_util::Either;
 
 use super::cmd_resp;
@@ -433,6 +433,17 @@ where
     pub local_first_replicate: bool,
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+
+    /// The max timestamp recorded in the concurrency manager is only updated at leader.
+    /// So if a peer becomes leader from a follower, the max timestamp can be outdated.
+    /// We need to update the max timestamp with a latest timestamp from PD before this
+    /// peer can work.
+    /// From the least significant to the most, 1 bit marks whether the timestamp is
+    /// updated, 31 bits for the current epoch version, 32 bits for the current term.
+    /// The version and term are stored to prevent stale UpdateMaxTimestamp task from
+    /// marking the lowest bit.
+    pub max_ts_sync_status: Arc<AtomicU64>,
+
     /// Check whether this proposal can be proposed based on its epoch
     cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
 }
@@ -524,6 +535,7 @@ where
             check_stale_peers: vec![],
             local_first_replicate: false,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
+            max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
         };
 
@@ -1245,6 +1257,10 @@ where
                     // prewrites or commits will be just a waste.
                     self.last_urgent_proposal_idx = self.raft_group.raft.raft_log.last_index();
                     self.raft_group.skip_bcast_commit(false);
+
+                    // A more recent read may happen on the old leader. So max ts should
+                    // be updated after a peer becomes leader.
+                    self.require_updating_max_ts(&ctx.pd_scheduler);
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -2860,6 +2876,9 @@ where
             }
         }
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
+        if let Some(snap) = resp.snapshot.as_mut() {
+            snap.max_ts_sync_status = Some(self.max_ts_sync_status.clone());
+        }
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -3172,6 +3191,30 @@ where
             );
         } else {
             ctx.need_flush_trans = true;
+        }
+    }
+
+    pub fn require_updating_max_ts(&self, pd_scheduler: &FutureScheduler<PdTask<EK>>) {
+        let epoch = self.region().get_region_epoch();
+        let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
+        let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits
+        let initial_status = (term_low_bits << 32) | (version_lot_bits << 1);
+        self.max_ts_sync_status
+            .store(initial_status, Ordering::SeqCst);
+        info!(
+            "require updating max ts";
+            "region_id" => self.region_id,
+            "initial_status" => initial_status,
+        );
+        if let Err(e) = pd_scheduler.schedule(PdTask::UpdateMaxTimestamp {
+            region_id: self.region_id,
+            initial_status,
+            max_ts_sync_status: self.max_ts_sync_status.clone(),
+        }) {
+            error!(
+                "failed to update max ts";
+                "err" => ?e,
+            );
         }
     }
 }

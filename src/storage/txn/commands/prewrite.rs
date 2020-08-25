@@ -248,6 +248,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
 mod tests {
     use kvproto::kvrpcpb::{Context, ExtraOp};
 
+    use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
     use txn_types::TimeStamp;
     use txn_types::{Key, Mutation};
@@ -261,8 +262,7 @@ mod tests {
     use crate::storage::txn::{Error, ErrorInner, Result};
     use crate::storage::DummyLockManager;
     use crate::storage::{
-        concurrency_manager::ConcurrencyManager, Engine, PrewriteResult, ProcessResult, Snapshot,
-        Statistics, TestEngineBuilder,
+        Engine, PrewriteResult, ProcessResult, Snapshot, Statistics, TestEngineBuilder,
     };
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
