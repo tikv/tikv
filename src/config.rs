@@ -51,7 +51,7 @@ use security::SecurityConfig;
 use tikv_util::config::{
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
 };
-use tikv_util::future_pool;
+use tikv_util::read_pool;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
 
@@ -1493,7 +1493,11 @@ const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 impl Default for UnifiedReadPoolConfig {
     fn default() -> UnifiedReadPoolConfig {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num * 0.8) as usize;
+        let mut concurrency = if cpu_num >= 16.0 {
+            (cpu_num * 0.5) as usize
+        } else {
+            4
+        };
         concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             min_thread_count: 1,
@@ -1563,19 +1567,19 @@ macro_rules! readpool_config {
 
         impl $struct_name {
             /// Builds configurations for low, normal and high priority pools.
-            pub fn to_future_pool_configs(&self) -> Vec<future_pool::Config> {
+            pub fn to_future_pool_configs(&self) -> Vec<read_pool::Config> {
                 vec![
-                    future_pool::Config {
+                    read_pool::Config {
                         workers: self.low_concurrency,
                         max_tasks_per_worker: self.max_tasks_per_worker_low,
                         stack_size: self.stack_size.0 as usize,
                     },
-                    future_pool::Config {
+                    read_pool::Config {
                         workers: self.normal_concurrency,
                         max_tasks_per_worker: self.max_tasks_per_worker_normal,
                         stack_size: self.stack_size.0 as usize,
                     },
-                    future_pool::Config {
+                    read_pool::Config {
                         workers: self.high_concurrency,
                         max_tasks_per_worker: self.max_tasks_per_worker_high,
                         stack_size: self.stack_size.0 as usize,
@@ -1812,18 +1816,22 @@ impl CoprReadPoolConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub unified: UnifiedReadPoolConfig,
-    pub storage: StorageReadPoolConfig,
     pub coprocessor: CoprReadPoolConfig,
+    pub storage: StorageReadPoolConfig,
+    pub scheduler: CoprReadPoolConfig,
 }
 
 impl ReadPoolConfig {
     pub fn is_unified_pool_enabled(&self) -> bool {
-        self.storage.use_unified_pool() || self.coprocessor.use_unified_pool()
+        self.storage.use_unified_pool()
+            || self.coprocessor.use_unified_pool()
+            || self.scheduler.use_unified_pool()
     }
 
     pub fn adjust_use_unified_pool(&mut self) {
         self.storage.adjust_use_unified_pool();
         self.coprocessor.adjust_use_unified_pool();
+        self.scheduler.adjust_use_unified_pool();
     }
 
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
@@ -1832,6 +1840,7 @@ impl ReadPoolConfig {
         }
         self.storage.validate()?;
         self.coprocessor.validate()?;
+        self.scheduler.validate()?;
         Ok(())
     }
 }
@@ -1854,6 +1863,10 @@ mod readpool_tests {
             use_unified_pool: Some(false),
             ..Default::default()
         };
+        let scheduler = CoprReadPoolConfig {
+            use_unified_pool: Some(false),
+            ..Default::default()
+        };
         assert!(storage.validate().is_ok());
         let coprocessor = CoprReadPoolConfig {
             use_unified_pool: Some(false),
@@ -1864,6 +1877,7 @@ mod readpool_tests {
             unified,
             storage,
             coprocessor,
+            scheduler,
         };
         assert!(!cfg.is_unified_pool_enabled());
         assert!(cfg.validate().is_ok());
@@ -1885,6 +1899,7 @@ mod readpool_tests {
             unified,
             storage,
             coprocessor,
+            scheduler,
         };
         assert!(!invalid_cfg.is_unified_pool_enabled());
         assert!(invalid_cfg.validate().is_err());
@@ -1904,12 +1919,16 @@ mod readpool_tests {
             ..Default::default()
         };
         assert!(storage.validate().is_ok());
+        let scheduler = CoprReadPoolConfig::default();
+        assert!(scheduler.validate().is_ok());
+
         let coprocessor = CoprReadPoolConfig::default();
         assert!(coprocessor.validate().is_ok());
         let mut cfg = ReadPoolConfig {
             unified,
             storage,
             coprocessor,
+            scheduler,
         };
         cfg.adjust_use_unified_pool();
         assert!(cfg.is_unified_pool_enabled());
@@ -1931,6 +1950,7 @@ mod readpool_tests {
         assert!(cfg.is_unified_pool_enabled());
 
         cfg.coprocessor.use_unified_pool = Some(false);
+        cfg.scheduler.use_unified_pool = Some(false);
         assert!(!cfg.is_unified_pool_enabled());
     }
 

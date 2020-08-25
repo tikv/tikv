@@ -27,7 +27,7 @@ pub use self::{
         CbContext, CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
         RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
     },
-    read_pool::{build_read_pool, build_read_pool_for_test},
+    read_pool::{build_read_pool, build_read_pool_for_test, FuturePoolTicker},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
@@ -164,6 +164,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         engine: E,
         config: &Config,
         read_pool: ReadPoolHandle,
+        worker_pool: ReadPoolHandle,
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
         pipelined_pessimistic_lock: bool,
@@ -171,9 +172,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let sched = TxnScheduler::new(
             engine.clone(),
             lock_mgr,
+            worker_pool,
             concurrency_manager.clone(),
             config.scheduler_concurrency,
-            config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
             pipelined_pessimistic_lock,
             config.enable_async_commit,
@@ -1461,10 +1462,12 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             self.engine.clone(),
         );
 
+        let handle = ReadPool::from(read_pool).handle();
         Storage::from_engine(
             self.engine,
             &self.config,
-            ReadPool::from(read_pool).handle(),
+            handle.clone(),
+            handle,
             self.lock_mgr,
             ConcurrencyManager::new(1.into()),
             self.pipelined_pessimistic_lock,

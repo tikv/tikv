@@ -41,7 +41,6 @@ pub mod collections;
 pub mod config;
 pub mod file;
 pub mod future;
-pub mod future_pool;
 #[macro_use]
 pub mod macros;
 pub mod callback;
@@ -51,6 +50,7 @@ pub mod logger;
 pub mod lru;
 pub mod metrics;
 pub mod mpsc;
+pub mod read_pool;
 pub mod sys;
 pub mod threadpool;
 pub mod time;

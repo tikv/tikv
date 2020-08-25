@@ -653,6 +653,7 @@ mod tests {
     use crate::storage::kv::RocksEngine;
     use crate::storage::TestEngineBuilder;
     use protobuf::Message;
+    use tikv_util::read_pool::DefaultTicker;
     use txn_types::{Key, LockType};
 
     /// A unary `RequestHandler` that always produces a fixture.
@@ -918,7 +919,7 @@ mod tests {
     fn test_full() {
         use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
         use std::sync::Mutex;
-        use tikv_util::future_pool::Builder;
+        use tikv_util::read_pool::ReadPoolBuilder as Builder;
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
@@ -932,12 +933,13 @@ mod tests {
             .into_iter()
             .map(|config| {
                 let engine = Arc::new(Mutex::new(engine.clone()));
-                Builder::from_config(config)
+                Builder::new(DefaultTicker {})
+                    .config(config)
                     .name_prefix("coprocessor_endpoint_test_full")
                     .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                     // Safety: we call `set_` and `destroy_` with the same engine type.
                     .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
-                    .build()
+                    .build_future_pool()
             })
             .collect::<Vec<_>>(),
         );

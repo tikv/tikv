@@ -46,7 +46,7 @@ use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
-    read_pool::{build_yatp_read_pool, ReadPool},
+    read_pool::build_yatp_read_pool,
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
@@ -63,6 +63,7 @@ use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
+    read_pool::ReadPool,
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureWorker, Worker},
@@ -465,7 +466,7 @@ impl TiKVServer {
         &mut self,
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
     ) -> Arc<ServerConfig> {
-        let cfg_controller = self.cfg_controller.as_mut().unwrap();
+        let cfg_controller = self.cfg_controller.as_ref().unwrap().clone();
         cfg_controller.register(
             tikv::config::Module::Gc,
             Box::new(gc_worker.get_config_manager()),
@@ -506,11 +507,22 @@ impl TiKVServer {
             ));
             storage_read_pools.handle()
         };
+        let sched_read_pool_handle = if self.config.readpool.scheduler.use_unified_pool() {
+            unified_read_pool.as_ref().unwrap().handle()
+        } else {
+            let storage_read_pools = ReadPool::from(coprocessor::readpool_impl::build_read_pool(
+                &self.config.readpool.scheduler,
+                pd_sender.clone(),
+                engines.engine.clone(),
+            ));
+            storage_read_pools.handle()
+        };
 
         let storage = create_raft_storage(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
+            sched_read_pool_handle,
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
             self.config.pessimistic_txn.pipelined,

@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::config::CoprReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
-use crate::storage::{Engine, FlowStatsReporter};
-use tikv_util::future_pool::{Builder, Config, FuturePool};
+use crate::storage::{Engine, FlowStatsReporter, FuturePoolTicker};
+use tikv_util::read_pool::{Config, DefaultTicker, FuturePool, ReadPoolBuilder};
 
 use super::metrics::*;
 
@@ -21,13 +21,13 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
     configs
         .into_iter()
         .zip(names)
-        .map(|(config, name)| {
+        .map(|(cfg, name)| {
             let reporter = reporter.clone();
             let reporter2 = reporter.clone();
             let engine = Arc::new(Mutex::new(engine.clone()));
-            Builder::from_config(config)
+            ReadPoolBuilder::new(FuturePoolTicker::new(reporter))
                 .name_prefix(name)
-                .on_tick(move || tls_flush(&reporter))
+                .config(cfg)
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                 .before_stop(move || {
                     // Safety: we call `set_` and `destroy_` with the same engine type.
@@ -36,7 +36,7 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
                     }
                     tls_flush(&reporter2)
                 })
-                .build()
+                .build_future_pool()
         })
         .collect()
 }
@@ -50,13 +50,15 @@ pub fn build_read_pool_for_test<E: Engine>(
 
     configs
         .into_iter()
-        .map(|config| {
+        .map(|cfg| {
             let engine = Arc::new(Mutex::new(engine.clone()));
-            Builder::from_config(config)
+            ReadPoolBuilder::new(DefaultTicker::default())
+                .config(cfg)
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                // Safety: we call `set_` and `destroy_` with the same engine type.
-                .before_stop(|| unsafe { destroy_tls_engine::<E>() })
-                .build()
+                .before_stop(|| unsafe {
+                    destroy_tls_engine::<E>();
+                })
+                .build_future_pool()
         })
         .collect()
 }

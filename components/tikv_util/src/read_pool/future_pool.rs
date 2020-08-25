@@ -3,15 +3,9 @@
 //! This mod implemented a wrapped future pool that supports `on_tick()` which
 //! is invoked no less than the specific interval.
 
-mod builder;
-mod metrics;
-
-pub use self::builder::{Builder, Config};
-
 use std::cell::Cell;
 use std::future::Future as StdFuture;
 use std::sync::Arc;
-use std::time::Duration;
 
 use futures03::channel::oneshot::{self, Canceled};
 use prometheus::{Histogram, IntCounter, IntGauge};
@@ -19,10 +13,8 @@ use yatp::task::future;
 
 type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
+use super::errors::Full;
 use crate::time::Instant;
-use yatp::pool::Local;
-
-const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
 thread_local! {
     static THREAD_LAST_TICK_TIME: Cell<Instant> = Cell::new(Instant::now_coarse());
@@ -33,53 +25,6 @@ struct Env {
     metrics_running_task_count: IntGauge,
     metrics_handled_task_count: IntCounter,
     metrics_pool_schedule_duration: Histogram,
-}
-
-#[derive(Clone)]
-struct FuturePoolRunner {
-    inner: future::Runner,
-    before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
-    after_start: Option<Arc<dyn Fn() + Send + Sync>>,
-    on_tick: Option<Arc<dyn Fn() + Send + Sync>>,
-    env: Env,
-}
-
-impl yatp::pool::Runner for FuturePoolRunner {
-    type TaskCell = future::TaskCell;
-
-    fn start(&mut self, local: &mut Local<Self::TaskCell>) {
-        self.inner.start(local);
-        if let Some(after_start) = &self.after_start {
-            after_start();
-        }
-        tikv_alloc::add_thread_memory_accessor();
-    }
-
-    fn handle(&mut self, local: &mut Local<Self::TaskCell>, task_cell: Self::TaskCell) -> bool {
-        let finished = self.inner.handle(local, task_cell);
-        if finished {
-            self.env.metrics_handled_task_count.inc();
-            self.env.metrics_running_task_count.dec();
-            try_tick_thread(&self.on_tick);
-        }
-        finished
-    }
-
-    fn pause(&mut self, local: &mut Local<Self::TaskCell>) -> bool {
-        self.inner.pause(local)
-    }
-
-    fn resume(&mut self, local: &mut Local<Self::TaskCell>) {
-        self.inner.resume(local)
-    }
-
-    fn end(&mut self, local: &mut Local<Self::TaskCell>) {
-        if let Some(before_stop) = &self.before_stop {
-            before_stop();
-        }
-        self.inner.end(local);
-        tikv_alloc::remove_thread_memory_accessor();
-    }
 }
 
 #[derive(Clone)]
@@ -101,6 +46,23 @@ impl crate::AssertSend for FuturePool {}
 impl crate::AssertSync for FuturePool {}
 
 impl FuturePool {
+    pub fn from_pool(pool: ThreadPool, name: &str, pool_size: usize, max_tasks: usize) -> Self {
+        let env = Env {
+            metrics_running_task_count: metrics::FUTUREPOOL_RUNNING_TASK_VEC
+                .with_label_values(&[name]),
+            metrics_handled_task_count: metrics::FUTUREPOOL_HANDLED_TASK_VEC
+                .with_label_values(&[name]),
+            metrics_pool_schedule_duration: metrics::FUTUREPOOL_SCHEDULE_DURATION_VEC
+                .with_label_values(&[name]),
+        };
+        FuturePool {
+            pool: Arc::new(pool),
+            env,
+            pool_size,
+            max_tasks,
+        }
+    }
+
     /// Gets inner thread pool size.
     #[inline]
     pub fn get_pool_size(&self) -> usize {
@@ -143,13 +105,17 @@ impl FuturePool {
     {
         let timer = Instant::now_coarse();
         let h_schedule = self.env.metrics_pool_schedule_duration.clone();
+        let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
+        let metrics_running_task_count = self.env.metrics_running_task_count.clone();
 
         self.gate_spawn()?;
 
-        self.env.metrics_running_task_count.inc();
+        metrics_running_task_count.inc();
         self.pool.spawn(async move {
             h_schedule.observe(timer.elapsed_secs());
             let _ = future.await;
+            metrics_handled_task_count.inc();
+            metrics_running_task_count.dec();
         });
         Ok(())
     }
@@ -166,55 +132,47 @@ impl FuturePool {
         F::Output: Send,
     {
         let timer = Instant::now_coarse();
-        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
 
         self.gate_spawn()?;
+        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
+        let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
+        let metrics_running_task_count = self.env.metrics_running_task_count.clone();
 
         let (tx, rx) = oneshot::channel();
-        self.env.metrics_running_task_count.inc();
+        metrics_running_task_count.inc();
         self.pool.spawn(async move {
             h_schedule.observe(timer.elapsed_secs());
             let res = future.await;
             let _ = tx.send(res);
+            metrics_handled_task_count.inc();
+            metrics_running_task_count.dec();
         });
         Ok(rx)
     }
 }
+mod metrics {
+    use prometheus::*;
 
-/// Tries to trigger a tick in current thread.
-///
-/// This function is effective only when it is called in thread pool worker
-/// thread.
-#[inline]
-fn try_tick_thread(on_tick: &Option<Arc<dyn Fn() + Send + Sync>>) {
-    THREAD_LAST_TICK_TIME.with(|tls_last_tick| {
-        let now = Instant::now_coarse();
-        let last_tick = tls_last_tick.get();
-        if now.duration_since(last_tick) < TICK_INTERVAL {
-            return;
-        }
-        tls_last_tick.set(now);
-        if let Some(f) = on_tick {
-            f();
-        }
-    })
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Full {
-    pub current_tasks: usize,
-    pub max_tasks: usize,
-}
-
-impl std::fmt::Display for Full {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(fmt, "future pool is full")
-    }
-}
-
-impl std::error::Error for Full {
-    fn description(&self) -> &str {
-        "future pool is full"
+    lazy_static! {
+        pub static ref FUTUREPOOL_RUNNING_TASK_VEC: IntGaugeVec = register_int_gauge_vec!(
+            "tikv_futurepool_pending_task_total",
+            "Current future_pool pending + running tasks.",
+            &["name"]
+        )
+        .unwrap();
+        pub static ref FUTUREPOOL_HANDLED_TASK_VEC: IntCounterVec = register_int_counter_vec!(
+            "tikv_futurepool_handled_task_total",
+            "Total number of future_pool handled tasks.",
+            &["name"]
+        )
+        .unwrap();
+        pub static ref FUTUREPOOL_SCHEDULE_DURATION_VEC: HistogramVec = register_histogram_vec!(
+            "tikv_futurepool_schedule_duration",
+            "Histogram of future_pool handle duration.",
+            &["name"],
+            exponential_buckets(0.0005, 2.0, 15).unwrap()
+        )
+        .unwrap();
     }
 }
 
@@ -222,6 +180,8 @@ impl std::error::Error for Full {
 mod tests {
     use super::*;
 
+    use super::super::{DefaultTicker, PoolTicker, ReadPoolBuilder as Builder};
+    use crate::time::Duration;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::thread;
@@ -245,19 +205,48 @@ mod tests {
         .unwrap();
     }
 
+    #[derive(Clone)]
+    pub struct SequenceTicker {
+        last_tick: Instant,
+        tick: Arc<dyn Fn() + Send + Sync>,
+    }
+
+    const TICK_INTERVAL: Duration = Duration::from_secs(1);
+
+    impl SequenceTicker {
+        pub fn new<F>(tick: F) -> SequenceTicker
+        where
+            F: Fn() + Send + Sync + 'static,
+        {
+            SequenceTicker {
+                last_tick: Instant::now_coarse(),
+                tick: Arc::new(tick),
+            }
+        }
+    }
+
+    impl PoolTicker for SequenceTicker {
+        fn on_tick(&mut self) {
+            let now = Instant::now_coarse();
+            if now.duration_since(self.last_tick) < TICK_INTERVAL {
+                return;
+            }
+            self.last_tick = now;
+            let tick = self.tick.clone();
+            tick();
+        }
+    }
+
     #[test]
     fn test_tick() {
         let tick_sequence = Arc::new(AtomicUsize::new(0));
-
         let (tx, rx) = mpsc::sync_channel(1000);
 
-        let pool = Builder::new()
-            .pool_size(1)
-            .on_tick(move || {
-                let seq = tick_sequence.fetch_add(1, Ordering::SeqCst);
-                tx.send(seq).unwrap();
-            })
-            .build();
+        let ticker = SequenceTicker::new(move || {
+            let seq = tick_sequence.fetch_add(1, Ordering::SeqCst);
+            tx.send(seq).unwrap();
+        });
+        let pool = Builder::new(ticker).pool_size(1).build_future_pool();
 
         assert!(rx.try_recv().is_err());
 
@@ -303,16 +292,13 @@ mod tests {
     #[test]
     fn test_tick_multi_thread() {
         let tick_sequence = Arc::new(AtomicUsize::new(0));
-
         let (tx, rx) = mpsc::sync_channel(1000);
+        let ticker = SequenceTicker::new(move || {
+            let seq = tick_sequence.fetch_add(1, Ordering::SeqCst);
+            tx.send(seq).unwrap();
+        });
 
-        let pool = Builder::new()
-            .pool_size(2)
-            .on_tick(move || {
-                let seq = tick_sequence.fetch_add(1, Ordering::SeqCst);
-                tx.send(seq).unwrap();
-            })
-            .build();
+        let pool = Builder::new(ticker).pool_size(2).build_future_pool();
 
         assert!(rx.try_recv().is_err());
 
@@ -341,7 +327,9 @@ mod tests {
 
     #[test]
     fn test_handle_result() {
-        let pool = Builder::new().pool_size(1).build();
+        let pool = Builder::new(DefaultTicker {})
+            .pool_size(1)
+            .build_future_pool();
 
         let handle = pool.spawn_handle(async { 42 });
 
@@ -350,10 +338,10 @@ mod tests {
 
     #[test]
     fn test_running_task_count() {
-        let pool = Builder::new()
+        let pool = Builder::new(DefaultTicker {})
             .name_prefix("future_pool_for_running_task_test") // The name is important
             .pool_size(2)
-            .build();
+            .build_future_pool();
 
         assert_eq!(pool.get_running_task_count(), 0);
 
@@ -401,12 +389,11 @@ mod tests {
     #[test]
     fn test_full() {
         let (tx, rx) = mpsc::channel();
-
-        let read_pool = Builder::new()
+        let read_pool = Builder::new(DefaultTicker {})
             .name_prefix("future_pool_test_full")
             .pool_size(2)
             .max_tasks(4)
-            .build();
+            .build_future_pool();
 
         wait_on_new_thread(
             tx.clone(),

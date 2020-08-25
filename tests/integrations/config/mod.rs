@@ -122,6 +122,16 @@ fn test_serde_custom_tikv_config() {
             max_tasks_per_worker_low: 3000,
             stack_size: ReadableSize::mb(12),
         },
+        scheduler: CoprReadPoolConfig {
+            use_unified_pool: Some(false),
+            high_concurrency: 2,
+            normal_concurrency: 4,
+            low_concurrency: 6,
+            max_tasks_per_worker_high: 2000,
+            max_tasks_per_worker_normal: 1000,
+            max_tasks_per_worker_low: 3000,
+            stack_size: ReadableSize::mb(12),
+        },
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
@@ -727,6 +737,9 @@ fn test_do_not_use_unified_readpool_with_legacy_config() {
         normal-concurrency = 1
 
         [readpool.coprocessor]
+        normal-concurrency = 1
+
+        [readpool.scheduler]
         normal-concurrency = 1
     "#;
     let cfg: TiKvConfig = toml::from_str(content).unwrap();

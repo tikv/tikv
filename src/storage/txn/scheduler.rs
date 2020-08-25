@@ -20,16 +20,18 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use futures::future;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
-use kvproto::kvrpcpb::{CommandPri, ExtraOp};
+use kvproto::kvrpcpb::ExtraOp;
+use rand::prelude::{thread_rng, RngCore};
+use tikv_util::read_pool::ReadPoolHandle;
 use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
 use txn_types::TimeStamp;
 
+use crate::read_pool::{tls_collect_read_duration, tls_collect_scan_details};
 use crate::storage::kv::{
     drop_snapshot_callback, with_tls_engine, Engine, Result as EngineResult, Statistics,
 };
@@ -43,7 +45,6 @@ use crate::storage::txn::commands::{WriteContext, WriteResult};
 use crate::storage::txn::{
     commands::Command,
     latch::{Latches, Lock},
-    sched_pool::{tls_collect_read_duration, tls_collect_scan_details, SchedPool},
     Error, ProcessResult,
 };
 use crate::storage::{
@@ -149,10 +150,7 @@ struct SchedulerInner<L: LockManager> {
     sched_pending_write_threshold: usize,
 
     // worker pool
-    worker_pool: SchedPool,
-
-    // high priority commands and system commands will be delivered to this pool
-    high_priority_pool: SchedPool,
+    worker_pool: ReadPoolHandle,
 
     // used to control write flow
     running_write_bytes: AtomicUsize,
@@ -257,10 +255,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     pub(in crate::storage) fn new(
         engine: E,
         lock_mgr: L,
-
+        worker_pool: ReadPoolHandle,
         concurrency_manager: ConcurrencyManager,
         concurrency: usize,
-        worker_pool_size: usize,
         sched_pending_write_threshold: usize,
         pipelined_pessimistic_lock: bool,
         enable_async_commit: bool,
@@ -279,12 +276,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             latches: Latches::new(concurrency),
             running_write_bytes: AtomicUsize::new(0),
             sched_pending_write_threshold,
-            worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
-            high_priority_pool: SchedPool::new(
-                engine.clone(),
-                std::cmp::max(1, worker_pool_size / 2),
-                "sched-high-pri-pool",
-            ),
+            worker_pool,
             lock_mgr,
             concurrency_manager,
             pipelined_pessimistic_lock,
@@ -344,12 +336,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn get_sched_pool(&self, priority: CommandPri) -> &SchedPool {
-        if priority == CommandPri::High {
-            &self.inner.high_priority_pool
-        } else {
-            &self.inner.worker_pool
-        }
+    fn get_sched_pool(&self) -> &ReadPoolHandle {
+        &self.inner.worker_pool
     }
 
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
@@ -366,7 +354,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     "receive snapshot finish msg";
                     "cid" => task.cid, "cb_ctx" => ?cb_ctx
                 );
-
                 match snapshot {
                     Ok(snapshot) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
@@ -383,16 +370,21 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         sched.process_by_worker(snapshot, task);
                     }
                     Err(err) => {
+                        let priority = task.cmd.priority();
+                        let task_id = thread_rng().next_u64();
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
 
                         info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                         sched
-                            .get_sched_pool(task.cmd.priority())
+                            .get_sched_pool()
                             .clone()
-                            .pool
-                            .spawn(async move {
-                                sched.finish_with_err(task.cid, Error::from(err));
-                            })
+                            .spawn(
+                                async move {
+                                    sched.finish_with_err(task.cid, Error::from(err));
+                                },
+                                priority,
+                                task_id,
+                            )
                             .unwrap();
                     }
                 }
@@ -537,41 +529,46 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     fn process_by_worker(self, snapshot: E::Snap, task: Task) {
         let tag = task.cmd.tag();
         SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
+        let priority = task.cmd.priority();
+        let task_id = thread_rng().next_u64();
 
-        self.get_sched_pool(task.cmd.priority())
+        self.get_sched_pool()
             .clone()
-            .pool
-            .spawn(async move {
-                fail_point!("scheduler_async_snapshot_finish");
+            .spawn(
+                async move {
+                    fail_point!("scheduler_async_snapshot_finish");
 
-                let read_duration = Instant::now_coarse();
+                    let read_duration = Instant::now_coarse();
 
-                let region_id = task.cmd.ctx().get_region_id();
-                let ts = task.cmd.ts();
-                let timer = Instant::now_coarse();
-                let mut statistics = Statistics::default();
+                    let region_id = task.cmd.ctx().get_region_id();
+                    let ts = task.cmd.ts();
+                    let timer = Instant::now_coarse();
+                    let mut statistics = Statistics::default();
 
-                if task.cmd.readonly() {
-                    self.process_read(snapshot, task, &mut statistics);
-                } else {
-                    // Safety: `self.sched_pool` ensures a TLS engine exists.
-                    unsafe {
-                        with_tls_engine(|engine| {
-                            self.process_write(engine, snapshot, task, &mut statistics)
-                        });
-                    }
-                };
-                tls_collect_scan_details(tag.get_str(), &statistics);
-                slow_log!(
-                    timer.elapsed(),
-                    "[region {}] scheduler handle command: {}, ts: {}",
-                    region_id,
-                    tag,
-                    ts
-                );
+                    if task.cmd.readonly() {
+                        self.process_read(snapshot, task, &mut statistics);
+                    } else {
+                        // Safety: `self.sched_pool` ensures a TLS engine exists.
+                        unsafe {
+                            with_tls_engine(|engine| {
+                                self.process_write(engine, snapshot, task, &mut statistics)
+                            });
+                        }
+                    };
+                    tls_collect_scan_details(tag.get_str(), &statistics);
+                    slow_log!(
+                        timer.elapsed(),
+                        "[region {}] scheduler handle command: {}, ts: {}",
+                        region_id,
+                        tag,
+                        ts
+                    );
 
-                tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
-            })
+                    tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
+                },
+                priority,
+                task_id,
+            )
             .unwrap();
     }
 
@@ -596,7 +593,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();
         let cid = task.cid;
-        let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
         let pipelined = self.inner.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
@@ -609,6 +605,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             pipelined_pessimistic_lock: self.inner.pipelined_pessimistic_lock,
             enable_async_commit: self.inner.enable_async_commit,
         };
+        let priority = task.cmd.priority();
 
         match task.cmd.process_write(snapshot, context) {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
@@ -644,26 +641,27 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
                         sched
-                            .get_sched_pool(priority)
+                            .get_sched_pool()
                             .clone()
-                            .pool
-                            .spawn(async move {
-                                fail_point!("scheduler_async_write_finish");
-
-                                sched.on_write_finished(
-                                    cid,
-                                    write_finished_pr,
-                                    result,
-                                    lock_guards,
-                                    pipelined,
-                                    tag,
-                                );
-                                KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                                    .get(tag)
-                                    .observe(rows as f64);
-                                future::ok::<_, ()>(())
-                            })
-                            .unwrap()
+                            .spawn(
+                                async move {
+                                    fail_point!("scheduler_async_write_finish");
+                                    sched.on_write_finished(
+                                        cid,
+                                        write_finished_pr,
+                                        result,
+                                        lock_guards,
+                                        pipelined,
+                                        tag,
+                                    );
+                                },
+                                priority,
+                                0,
+                            )
+                            .unwrap();
+                        KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                            .get(tag)
+                            .observe(rows as f64);
                     });
 
                     if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
