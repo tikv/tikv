@@ -95,7 +95,8 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::{WriteCommand, WriteContext};
-    use crate::storage::{concurrency_manager::ConcurrencyManager, TestEngineBuilder};
+    use crate::storage::TestEngineBuilder;
+    use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use txn_types::Key;
 

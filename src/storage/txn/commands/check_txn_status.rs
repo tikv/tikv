@@ -166,9 +166,8 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::{pessimistic_rollback, WriteCommand, WriteContext};
-    use crate::storage::{
-        concurrency_manager::ConcurrencyManager, types::TxnStatus, ProcessResult, TestEngineBuilder,
-    };
+    use crate::storage::{types::TxnStatus, ProcessResult, TestEngineBuilder};
+    use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use txn_types::WriteType;
     use txn_types::{Key, Mutation};

@@ -120,12 +120,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::storage::concurrency_manager::ConcurrencyManager;
     use crate::storage::kv::TestEngineBuilder;
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::WriteCommand;
     use crate::storage::Engine;
+    use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
 
     pub fn must_success<E: Engine>(
