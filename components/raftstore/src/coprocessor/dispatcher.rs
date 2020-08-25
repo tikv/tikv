@@ -10,6 +10,7 @@ use txn_types::TxnExtra;
 use std::mem;
 use std::ops::Deref;
 
+use crate::coprocessor::RawConsistencyCheckObserver;
 use crate::store::CasualRouter;
 
 use super::*;
@@ -322,6 +323,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
             400,
             BoxSplitCheckObserver::new(TableCheckObserver::default()),
         );
+        registry.register_consistency_check_observer(
+            100,
+            BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
+        );
         CoprocessorHost { registry }
     }
 
@@ -446,13 +451,18 @@ impl<E: KvEngine> CoprocessorHost<E> {
     pub fn on_compute_hash(
         &self,
         region: &Region,
-        mut context: &[u8],
+        context: &[u8],
         snap: E::Snapshot,
-    ) -> Vec<crate::Result<u32>> {
+    ) -> Vec<(crate::Result<u32>, Vec<u8>)> {
         let mut hashes = Vec::new();
+        let (mut reader, context_len) = (context, context.len());
         for observer in &self.registry.consistency_check_observers {
             let observer = observer.observer.inner();
-            hashes.push(observer.compute_hash(region, &mut context, &snap));
+            let old_len = reader.len();
+            let hash = observer.compute_hash(region, &mut reader, &snap);
+            let new_len = reader.len();
+            let ctx = context[context_len - old_len..context_len - new_len].to_vec();
+            hashes.push((hash, ctx));
         }
         hashes
     }

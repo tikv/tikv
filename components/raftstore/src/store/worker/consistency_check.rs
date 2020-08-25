@@ -7,7 +7,7 @@ use engine_traits::{KvEngine, Snapshot};
 use kvproto::metapb::Region;
 use tikv_util::worker::Runnable;
 
-use crate::coprocessor::CoprocessorHost;
+use crate::coprocessor::{ConsistencyCheckMethod, CoprocessorHost};
 use crate::store::metrics::*;
 use crate::store::{CasualMessage, CasualRouter};
 
@@ -58,41 +58,54 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash(&mut self, region: Region, index: u64, context: Vec<u8>, snap: EK::Snapshot) {
+    fn compute_hash(
+        &mut self,
+        region: Region,
+        index: u64,
+        mut context: Vec<u8>,
+        snap: EK::Snapshot,
+    ) {
+        println!("computing hash...");
+        if context.is_empty() {
+            // For backward compatibility.
+            context.push(ConsistencyCheckMethod::Raw as u8);
+        }
+
         info!("computing hash"; "region_id" => region.get_id(), "index" => index);
         REGION_HASH_COUNTER.compute.all.inc();
 
         let timer = REGION_HASH_HISTOGRAM.start_coarse_timer();
 
         // Now only 1 consistency check can be performed once.
-        let hashes = self
+        for (hash, ctx) in self
             .coprocessor_host
-            .on_compute_hash(&region, &context, snap);
-        assert_eq!(hashes.len(), 1);
-        let sum = match hashes.into_iter().next().unwrap() {
-            Ok(hash) => hash,
-            Err(e) => {
-                error!("calculate hash"; "region_id" => region.get_id(), "err" => ?e);
-                REGION_HASH_COUNTER.compute.failed.inc();
-                return;
+            .on_compute_hash(&region, &context, snap)
+        {
+            let sum = match hash {
+                Ok(hash) => hash,
+                Err(e) => {
+                    error!("calculate hash"; "region_id" => region.get_id(), "err" => ?e);
+                    REGION_HASH_COUNTER.compute.failed.inc();
+                    continue;
+                }
+            };
+            let mut checksum = Vec::with_capacity(4);
+            checksum.write_u32::<BigEndian>(sum).unwrap();
+            let msg = CasualMessage::ComputeHashResult {
+                index,
+                context: ctx,
+                hash: checksum,
+            };
+            if let Err(e) = self.router.send(region.get_id(), msg) {
+                warn!(
+                    "failed to send hash compute result";
+                    "region_id" => region.get_id(),
+                    "err" => %e,
+                );
             }
-        };
-        timer.observe_duration();
-
-        let mut checksum = Vec::with_capacity(4);
-        checksum.write_u32::<BigEndian>(sum).unwrap();
-        let msg = CasualMessage::ComputeHashResult {
-            index,
-            context,
-            hash: checksum,
-        };
-        if let Err(e) = self.router.send(region.get_id(), msg) {
-            warn!(
-                "failed to send hash compute result";
-                "region_id" => region.get_id(),
-                "err" => %e,
-            );
         }
+
+        timer.observe_duration();
     }
 }
 
@@ -141,7 +154,8 @@ mod tests {
         region.mut_peers().push(Peer::default());
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut runner = Runner::new(tx, CoprocessorHost::<RocksEngine>::default());
+        let host = CoprocessorHost::<RocksEngine>::new(tx.clone());
+        let mut runner = Runner::new(tx, host);
         let mut digest = crc32fast::Hasher::new();
         let kvs = vec![(b"k1", b"v1"), (b"k2", b"v2")];
         for (k, v) in kvs {
@@ -176,7 +190,7 @@ mod tests {
             ) => {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(index, 10);
-                assert_eq!(context, Vec::<u8>::default());
+                assert_eq!(context, vec![0]);
                 assert_eq!(hash, checksum_bytes);
             }
             e => panic!("unexpected {:?}", e),

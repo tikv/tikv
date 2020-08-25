@@ -15,6 +15,7 @@ pub trait ConsistencyCheckObserver<E: KvEngine>: Coprocessor {
         -> Result<u32>;
 }
 
+#[derive(Clone)]
 pub struct RawConsistencyCheckObserver<E: KvEngine>(PhantomData<E>);
 
 impl<E: KvEngine> Coprocessor for RawConsistencyCheckObserver<E> {}
