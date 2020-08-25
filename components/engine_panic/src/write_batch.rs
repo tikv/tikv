@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::PanicEngine;
-use engine_traits::{Mutable, Result, WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions};
+use engine_traits::{Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions};
 
 impl WriteBatchExt for PanicEngine {
     type WriteBatch = PanicWriteBatch;
