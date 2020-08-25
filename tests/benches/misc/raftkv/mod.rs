@@ -24,6 +24,7 @@ use tikv::storage::kv::{
     Callback as EngineCallback, CbContext, Modify, Result as EngineResult, WriteData,
 };
 use tikv::storage::Engine;
+use tikv_util::callback::Callback as UtilCallback;
 use txn_types::{Key, TxnExtra};
 
 #[derive(Clone)]
