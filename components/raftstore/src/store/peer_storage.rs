@@ -1081,7 +1081,7 @@ where
             return;
         }
         let stats = self.engines.raft.flush_stats();
-        RAFT_ENTRIES_CACHES_GAUGE.add(stats.mem_size_change as i64);
+        RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
         RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as i64);
         RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as i64);
     }

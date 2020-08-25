@@ -521,6 +521,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
             StoreTick::CompactCheck => self.on_compact_check_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
+            StoreTick::RaftEnginePurge => self.on_raft_engine_purge_tick(),
         }
         let elapsed = t.elapsed();
         RAFT_EVENT_DURATION
@@ -581,6 +582,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
+        self.register_raft_engine_purge_tick();
     }
 }
 
@@ -2343,6 +2345,23 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         state.set_status(status);
         drop(state);
         self.ctx.router.report_status_update()
+    }
+
+    fn register_raft_engine_purge_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::RaftEnginePurge,
+            self.ctx.cfg.raft_engine_purge_interval.0,
+        )
+    }
+
+    fn on_raft_engine_purge_tick(&self) {
+        let raft_engine = &self.ctx.engines.raft;
+        if let Ok(regions) = raft_engine.purge_expired_files() {
+            for region_id in regions {
+                let msg = PeerMsg::CasualMessage(CasualMessage::ForceCompactRaftLogs);
+                self.ctx.router.notify_one(region_id, msg);
+            }
+        }
     }
 }
 

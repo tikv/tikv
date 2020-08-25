@@ -568,6 +568,9 @@ where
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
+            CasualMessage::ForceCompactRaftLogs => {
+                self.on_raft_gc_log_tick(true);
+            }
             CasualMessage::AccessPeer(cb) => cb(&mut self.fsm.peer as &mut dyn AbstractPeer),
         }
     }
@@ -585,7 +588,7 @@ where
         self.fsm.tick_registry.remove(tick);
         match tick {
             PeerTicks::RAFT => self.on_raft_base_tick(),
-            PeerTicks::RAFT_LOG_GC => self.on_raft_gc_log_tick(),
+            PeerTicks::RAFT_LOG_GC => self.on_raft_gc_log_tick(false),
             PeerTicks::PD_HEARTBEAT => self.on_pd_heartbeat_tick(),
             PeerTicks::SPLIT_REGION_CHECK => self.on_split_region_check_tick(),
             PeerTicks::CHECK_MERGE => self.on_check_merge(),
@@ -3149,7 +3152,7 @@ where
     }
 
     #[allow(clippy::if_same_then_else)]
-    fn on_raft_gc_log_tick(&mut self) {
+    fn on_raft_gc_log_tick(&mut self, force_compact: bool) {
         if !self.fsm.peer.get_store().is_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
@@ -3216,40 +3219,31 @@ where
             .mut_store()
             .maybe_gc_cache(alive_cache_idx, applied_idx);
         let first_idx = self.fsm.peer.get_store().first_index();
-        let mut compact_idx;
-        if applied_idx > first_idx
-            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit
-        {
-            compact_idx = applied_idx;
-        } else if self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0 {
-            compact_idx = applied_idx;
-        } else if replicated_idx < first_idx
-            || replicated_idx - first_idx <= self.ctx.cfg.raft_log_gc_threshold
-        {
+
+        if replicated_idx < first_idx {
             return;
+        }
+
+        let compact_idx = if force_compact
+            // Too many logs between applied index and first index.
+            || (applied_idx > first_idx && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit)
+            // Raft log size ecceeds the limit.
+            || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0)
+        {
+            applied_idx
         } else {
-            compact_idx = replicated_idx;
-        }
-
-        // Have no idea why subtract 1 here, but original code did this by magic.
+            replicated_idx
+        };
         assert!(compact_idx > 0);
-        compact_idx -= 1;
-        if compact_idx < first_idx {
-            // In case compact_idx == first_idx before subtraction.
-            return;
-        }
-
         total_gc_logs += compact_idx - first_idx;
-
-        let term = self.fsm.peer.get_index_term(compact_idx);
 
         // Create a compact log request and notify directly.
         let region_id = self.fsm.peer.region().get_id();
-        let request =
-            new_compact_log_request(region_id, self.fsm.peer.peer.clone(), compact_idx, term);
+        let peer = self.fsm.peer.peer.clone();
+        let term = self.fsm.peer.get_index_term(compact_idx);
+        let request = new_compact_log_request(region_id, peer, compact_idx, term);
         self.propose_raft_command(request, Callback::None, TxnExtra::default());
 
-        self.register_raft_gc_log_tick();
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
     }
 
