@@ -30,6 +30,7 @@ use tikv_util::worker::Scheduler;
 
 // When merge raft messages into a batch message, leave a buffer.
 const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
+const QUEUE_CAPACITY: usize = 4096;
 
 const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
 
@@ -38,6 +39,7 @@ static CONN_ID: AtomicI32 = AtomicI32::new(0);
 /// A quick queue for sending raft messages.
 struct Queue {
     buf: ArrayQueue<RaftMessage>,
+    /// A flag indicates whether the queue can still accept messages.
     connected: AtomicBool,
     task: Mutex<Option<Task>>,
 }
@@ -769,7 +771,7 @@ where
                 pool.connections
                     .entry((store_id, conn_id))
                     .or_insert_with(|| {
-                        let queue = Arc::new(Queue::with_capacity(4096));
+                        let queue = Arc::new(Queue::with_capacity(QUEUE_CAPACITY));
                         let back_end = StreamBackEnd {
                             store_id,
                             queue: queue.clone(),
