@@ -2,7 +2,10 @@
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Sender};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
 use std::{cmp, io};
@@ -32,6 +35,7 @@ use crate::store::Callback;
 use crate::store::StoreInfo;
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 
+use concurrency_manager::ConcurrencyManager;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
@@ -128,6 +132,11 @@ where
         cpu_usages: RecordPairVec,
         read_io_rates: RecordPairVec,
         write_io_rates: RecordPairVec,
+    },
+    UpdateMaxTimestamp {
+        region_id: u64,
+        initial_status: u64,
+        max_ts_sync_status: Arc<AtomicU64>,
     },
 }
 
@@ -251,6 +260,11 @@ where
                 f,
                 "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
                 cpu_usages, read_io_rates, write_io_rates,
+            ),
+            Task::UpdateMaxTimestamp { region_id, ..} => write!(
+                f,
+                "update the max timestamp for region {} in the concurrency manager",
+                region_id
             ),
         }
     }
@@ -410,7 +424,7 @@ pub struct Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient,
+    T: PdClient + 'static,
 {
     store_id: u64,
     pd_client: Arc<T>,
@@ -427,13 +441,15 @@ where
     // calls Runner's run() on Task received.
     scheduler: Scheduler<Task<EK>>,
     stats_monitor: StatsMonitor<EK>,
+
+    concurrency_manager: ConcurrencyManager,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient,
+    T: PdClient + 'static,
 {
     const INTERVAL_DIVISOR: u32 = 2;
 
@@ -445,6 +461,7 @@ where
         scheduler: Scheduler<Task<EK>>,
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
+        concurrency_manager: ConcurrencyManager,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
@@ -463,6 +480,7 @@ where
             start_ts: UnixSecs::now(),
             scheduler,
             stats_monitor,
+            concurrency_manager,
         }
     }
 
@@ -927,6 +945,52 @@ where
         self.store_stat.store_read_io_rates = read_io_rates;
         self.store_stat.store_write_io_rates = write_io_rates;
     }
+
+    fn handle_update_max_timestamp(
+        &mut self,
+        region_id: u64,
+        initial_status: u64,
+        max_ts_sync_status: Arc<AtomicU64>,
+        handle: &Handle,
+    ) {
+        let pd_client = self.pd_client.clone();
+        let concurrency_manager = self.concurrency_manager.clone();
+        let f = async move {
+            let mut success = false;
+            while max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
+                match pd_client.get_tso().await {
+                    Ok(ts) => {
+                        concurrency_manager.update_max_read_ts(ts);
+                        // Set the least significant bit to 1 to mark it as synced.
+                        let old_value = max_ts_sync_status.compare_and_swap(
+                            initial_status,
+                            initial_status | 1,
+                            Ordering::SeqCst,
+                        );
+                        success = old_value == initial_status;
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "failed to update max timestamp for region {}: {:?}",
+                            region_id, e
+                        );
+                    }
+                }
+            }
+            if success {
+                info!("succeed to update max timestamp"; "region_id" => region_id);
+            } else {
+                info!(
+                    "updating max timestamp is stale";
+                    "region_id" => region_id,
+                    "initial_status" => initial_status,
+                );
+            }
+            Ok(())
+        };
+        handle.spawn(Compat::new(Box::pin(f)));
+    }
 }
 
 impl<EK, ER, T> Runnable<Task<EK>> for Runner<EK, ER, T>
@@ -1073,6 +1137,16 @@ where
                 read_io_rates,
                 write_io_rates,
             } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
+            Task::UpdateMaxTimestamp {
+                region_id,
+                initial_status,
+                max_ts_sync_status,
+            } => self.handle_update_max_timestamp(
+                region_id,
+                initial_status,
+                max_ts_sync_status,
+                handle,
+            ),
         };
     }
 
