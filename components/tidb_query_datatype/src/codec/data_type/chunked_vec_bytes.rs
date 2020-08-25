@@ -393,21 +393,6 @@ mod tests {
     }
 }
 
-#[bench]
-fn bench_bytes_append(b: &mut test::Bencher) {
-    let mut bytes_vec: Vec<u8> = vec![];
-    for _i in 0..10 {
-        bytes_vec.append(&mut b"2333333333".to_vec());
-    }
-    b.iter(|| {
-        let mut chunked_vec_bytes = Vec::with_capacity(10000);
-        for _i in 0..5000 {
-            chunked_vec_bytes.push(Some(bytes_vec.clone()));
-            chunked_vec_bytes.push(None);
-        }
-    });
-}
-
 #[cfg(test)]
 mod benches {
     use super::*;
