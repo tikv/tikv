@@ -4,10 +4,8 @@ use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::mvcc::{
     metrics::*, reader::MvccReader, reader::TxnCommitRecord, ErrorInner, Result,
 };
-use crate::storage::{
-    concurrency_manager::{ConcurrencyManager, KeyHandleGuard},
-    types::TxnStatus,
-};
+use crate::storage::types::TxnStatus;
+use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use std::{cmp, fmt};
