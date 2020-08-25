@@ -190,6 +190,46 @@ fn test_request_in_joint_state() {
     must_get_equal(&cluster.get_engine(3), b"k5", b"v5");
 }
 
+/// test_replace_peer_joint_state testing that when replace peer, request can
+/// be handled as usual, even two nodes crashed
+#[test]
+fn test_replace_peer_joint_state() {
+    let mut cluster = new_node_cluster(0, 4);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    // Enter joint, now we have C_old(1, 2, 3) and C_new(1, 2, 4)
+    pd_client.must_joint_confchange(
+        region_id,
+        vec![
+            (ConfChangeType::AddLearnerNode, new_learner_peer(3, 3)),
+            (ConfChangeType::AddNode, new_peer(4, 4)),
+        ],
+    );
+    must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
+
+    // Isolated node 3 and node 4
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    cluster.add_send_filter(IsolationFilterFactory::new(4));
+
+    // Request can be handle as usual
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_none(&cluster.get_engine(3), b"k2");
+    must_get_none(&cluster.get_engine(4), b"k2");
+
+    // Leave joint
+    pd_client.must_leave_joint(region_id);
+}
+
 /// test_valid_confchange_request testing that invalid confchange request should be rejected
 #[test]
 fn test_invalid_confchange_request() {
@@ -334,7 +374,7 @@ fn test_leader_down_in_joint_state() {
     sleep_ms(500);
 
     // Peer from both configuration can become leader
-    for learder_id in vec![2, 4] {
+    for learder_id in vec![3, 4] {
         let (k, v) = (format!("k{}", learder_id), format!("v{}", learder_id));
         cluster.must_transfer_leader(region_id, new_peer(learder_id, learder_id));
         cluster.must_put(k.as_bytes(), v.as_bytes());

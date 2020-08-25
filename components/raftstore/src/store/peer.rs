@@ -1923,18 +1923,12 @@ where
         self.proposals.push(p);
     }
 
-    /// Validate the `ConfChange` request and check whether it's safe to
-    /// propose the specified conf change request.
+    /// Validate the `ConfChange` requests and check whether it's safe to
+    /// propose these conf change requests.
     /// It's safe iff at least the quorum of the Raft group is still healthy
-    /// right after that conf change is applied.
-    /// Define the total number of nodes in current Raft cluster to be `total`.
-    /// To ensure the above safety, if the cmd is
-    /// 1. A `AddNode` request
-    ///    Then at least '(total + 1)/2 + 1' nodes need to be up to date for now.
-    /// 2. A `RemoveNode` request
-    ///    Then at least '(total - 1)/2 + 1' other nodes (the node about to be removed is excluded)
-    ///    need to be up to date for now. If 'allow_remove_leader' is false then
-    ///    the peer to be removed should not be the leader.
+    /// right after all conf change is applied.
+    /// If 'allow_remove_leader' is false then the peer to be removed should
+    /// not be the leader.
     fn check_conf_change<T, C>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T, C>,
