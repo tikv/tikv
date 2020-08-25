@@ -1876,7 +1876,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#6157337686b1654f0bfb55920faf95b3d3e34d87"
+source = "git+https://github.com/sticnarf/kvproto.git?branch=prewrite-unsync-error#8609ec656db86156f6dcf8aed49d8e30305c9095"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -4241,6 +4241,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_traits",
+ "fail",
  "futures 0.1.29",
  "futures 0.3.4",
  "futures-cpupool",
