@@ -94,7 +94,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
                     )?;
                 }
                 RpnStackNode::Vector { value, .. } => {
-                    let eval_result_logical_rows = value.logical_rows();
+                    let eval_result_logical_rows = value.logical_rows_struct();
                     match_template_evaluable! {
                         TT, match value.as_ref() {
                             VectorValue::TT(eval_result) => {
@@ -134,7 +134,7 @@ fn update_logical_rows_by_vector_value<'a, TT: EvaluableRef<'a>, T: 'a + ChunkRe
     logical_rows: &mut Vec<usize>,
     ctx: &mut EvalContext,
     eval_result: T,
-    eval_result_logical_rows: &[usize],
+    eval_result_logical_rows: LogicalRows,
 ) -> tidb_query_common::error::Result<()>
 where
     Option<TT>: AsMySQLBool,
@@ -146,7 +146,7 @@ where
         // does not affect the filtering. Instead, the eval result in corresponding logical index
         // matters.
 
-        let eval_result_physical_index = eval_result_logical_rows[logical_index];
+        let eval_result_physical_index = eval_result_logical_rows.get_idx(logical_index);
         logical_index += 1;
 
         match eval_result

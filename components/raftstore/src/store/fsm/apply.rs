@@ -54,6 +54,7 @@ use crate::store::peer_storage::{
 };
 use crate::store::util::{
     check_region_epoch, compare_region_epoch, is_learner, KeysInfoFormatter, PerfContextStatistics,
+    ADMIN_CMD_EPOCH_MAP,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
 use crate::{observe_perf_context_type, report_perf_context, Error, Result};
@@ -1135,9 +1136,13 @@ where
 
         ctx.exec_ctx = Some(self.new_ctx(index, term));
         ctx.kv_wb_mut().set_save_point();
+        let mut origin_epoch = None;
         let (resp, exec_result) = match self.exec_raft_cmd(ctx, &req) {
             Ok(a) => {
                 ctx.kv_wb_mut().pop_save_point().unwrap();
+                if req.has_admin_request() {
+                    origin_epoch = Some(self.region.get_region_epoch().clone());
+                }
                 a
             }
             Err(e) => {
@@ -1198,6 +1203,19 @@ where
                     self.region = region.clone();
                     self.is_merging = false;
                 }
+            }
+        }
+        if let Some(epoch) = origin_epoch {
+            let cmd_type = req.get_admin_request().get_cmd_type();
+            let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+            // The chenge-epoch behavior **MUST BE** equal to the settings in `ADMIN_CMD_EPOCH_MAP`
+            if (epoch_state.change_ver
+                && epoch.get_version() == self.region.get_region_epoch().get_version())
+                || (epoch_state.change_conf_ver
+                    && epoch.get_conf_ver() == self.region.get_region_epoch().get_conf_ver())
+            {
+                panic!("{} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
+                        self.tag, req, epoch_state, epoch, self.region.get_region_epoch());
             }
         }
 
@@ -2512,7 +2530,6 @@ where
 
 pub struct Destroy {
     region_id: u64,
-    async_remove: bool,
     merge_from_snapshot: bool,
 }
 
@@ -2663,10 +2680,9 @@ where
         Msg::Registration(Registration::new(peer))
     }
 
-    pub fn destroy(region_id: u64, async_remove: bool, merge_from_snapshot: bool) -> Msg<EK> {
+    pub fn destroy(region_id: u64, merge_from_snapshot: bool) -> Msg<EK> {
         Msg::Destroy(Destroy {
             region_id,
-            async_remove,
             merge_from_snapshot,
         })
     }
@@ -2904,18 +2920,16 @@ where
         }
         if !self.delegate.stopped {
             self.destroy(ctx);
-            if d.async_remove {
-                ctx.notifier.notify(
-                    self.delegate.region_id(),
-                    PeerMsg::ApplyRes {
-                        res: TaskRes::Destroy {
-                            region_id: self.delegate.region_id(),
-                            peer_id: self.delegate.id,
-                            merge_from_snapshot: d.merge_from_snapshot,
-                        },
+            ctx.notifier.notify(
+                self.delegate.region_id(),
+                PeerMsg::ApplyRes {
+                    res: TaskRes::Destroy {
+                        region_id: self.delegate.region_id(),
+                        peer_id: self.delegate.id,
+                        merge_from_snapshot: d.merge_from_snapshot,
                     },
-                );
-            }
+                },
+            );
         }
     }
 
@@ -3286,6 +3300,9 @@ where
             }
             expected_msg_count = None;
         }
+        fail_point!("before_handle_normal_3", normal.delegate.id() == 3, |_| {
+            None
+        });
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => self.msg_buf.push(msg),
@@ -3876,7 +3893,7 @@ mod tests {
             );
         });
 
-        router.schedule_task(2, Msg::destroy(2, true, false));
+        router.schedule_task(2, Msg::destroy(2, false));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Destroy {
