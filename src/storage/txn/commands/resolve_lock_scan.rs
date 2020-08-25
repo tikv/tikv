@@ -115,7 +115,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockScan {
                 break;
             }
         }
-        reader.statistics.lock.processed += released_locks.len();
+        reader.statistics.lock.processed_keys += released_locks.len();
         released_locks
             .into_iter()
             .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
@@ -128,7 +128,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockScan {
                     next_first_scan_key.map(|it| it.0).take(),
                     ctx.clone(),
                 )
-                    .into(),
+                .into(),
             }
         };
 

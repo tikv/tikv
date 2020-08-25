@@ -22,10 +22,7 @@ impl<'a, S: Snapshot> Iterator for ScanLocksIter<'a, S> {
     type Item = Result<(Key, Lock)>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.cursor.is_none() {
-            return None;
-        }
-        let cursor = self.cursor.as_mut().unwrap();
+        let cursor = self.cursor.as_mut()?;
         let valid = cursor.valid();
         if valid.is_err() || !valid.unwrap() {
             return None;
@@ -387,8 +384,8 @@ impl<S: Snapshot> MvccReader<S> {
         filter: F,
         limit: usize,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
-        where
-            F: Fn(&Lock) -> bool,
+    where
+        F: Fn(&Lock) -> bool,
     {
         self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
@@ -423,11 +420,7 @@ impl<S: Snapshot> MvccReader<S> {
             Some(ref x) => cursor.seek(x, &mut self.statistics.lock)?,
             None => cursor.seek_to_first(&mut self.statistics.lock),
         };
-        let cursor = if ok {
-            Some(cursor)
-        } else {
-            None
-        };
+        let cursor = if ok { Some(cursor) } else { None };
         Ok(ScanLocksIter {
             lock: &mut self.statistics.lock,
             cursor,
@@ -654,7 +647,7 @@ mod tests {
                 TimeStamp::default(),
                 false,
             )
-                .unwrap();
+            .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -1519,23 +1512,23 @@ mod tests {
                 12.into(),
             ),
         ]
-            .into_iter()
-            .map(|(k, lock_type, short_value, ts, for_update_ts)| {
-                (
-                    Key::from_raw(&k),
-                    Lock::new(
-                        lock_type,
-                        b"k1".to_vec(),
-                        ts,
-                        0,
-                        short_value,
-                        for_update_ts,
-                        0,
-                        TimeStamp::zero(),
-                    ),
-                )
-            })
-            .collect();
+        .into_iter()
+        .map(|(k, lock_type, short_value, ts, for_update_ts)| {
+            (
+                Key::from_raw(&k),
+                Lock::new(
+                    lock_type,
+                    b"k1".to_vec(),
+                    ts,
+                    0,
+                    short_value,
+                    for_update_ts,
+                    0,
+                    TimeStamp::zero(),
+                ),
+            )
+        })
+        .collect();
 
         // Creates a reader and scan locks,
         let check_scan_lock =
