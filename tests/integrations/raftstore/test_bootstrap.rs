@@ -8,6 +8,7 @@ use tempfile::Builder;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{Engines, Peekable, ALL_CFS, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
@@ -107,6 +108,7 @@ fn test_node_bootstrap_with_prepared_data() {
         importer,
         Worker::new("split"),
         AutoSplitController::default(),
+        ConcurrencyManager::new(1.into()),
     )
     .unwrap();
     assert!(Arc::clone(&engine)

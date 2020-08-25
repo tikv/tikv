@@ -229,6 +229,17 @@ where
             None => None,
         }
     }
+
+    #[inline]
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        match self.map.get_mut(key) {
+            Some(v) => {
+                self.trace.maybe_promote(v.record);
+                Some(&mut v.value)
+            }
+            None => None,
+        }
+    }
 }
 
 unsafe impl<K: Send, V: Send> Send for LruCache<K, V> {}
