@@ -619,19 +619,25 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             move |tso: pd_client::Result<(TimeStamp, ())>| {
                 // Ignore get tso errors since we will retry every `min_ts_interval`.
                 let (min_ts, _) = tso.unwrap_or((TimeStamp::default(), ()));
-                let (tx, rx) = mpsc::channel(region_count);
+                let (tx, rx) = mpsc::channel(128);
                 // TODO: send a message to raftstore would consume too much cpu time,
                 // try to handle it outside raftstore.
                 for (region_id, observe_id) in regions {
                     let tx_clone = tx.clone();
+                    let tso_worker_clone = tso_worker.clone();
                     if let Err(e) = raft_router.significant_send(
                         region_id,
                         SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
-                            if !resp.response.get_header().has_error() {
-                                tx_clone.send(Either::Left(region_id)).wait().unwrap();
+                            let resp = if !resp.response.get_header().has_error() {
+                                Either::Left(region_id)
                             } else {
-                                tx_clone.send(Either::Right(region_id)).wait().unwrap();
-                            }
+                                Either::Right(region_id)
+                            };
+                            tso_worker_clone.spawn(
+                                tx_clone.clone().send(resp).map(|_| ()).map_err(
+                                    |e| error!("cdc send tso response failed"; "err" => ?e),
+                                ),
+                            );
                         }))),
                     ) {
                         warn!(
@@ -644,7 +650,12 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                             region_id,
                             err: Error::Request(e.into()),
                         };
-                        tx.clone().send(Either::Right(region_id)).wait().unwrap();
+                        tso_worker.spawn(
+                            tx.clone()
+                                .send(Either::Right(region_id))
+                                .map(|_| ())
+                                .map_err(|e| error!("cdc send tso response failed"; "err" => ?e)),
+                        );
                         if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                             error!("schedule cdc task failed"; "error" => ?e);
                         }
