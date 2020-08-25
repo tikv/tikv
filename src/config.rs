@@ -2795,7 +2795,7 @@ mod tests {
         assert_eq!(last_cfg_metadata.modified().unwrap(), first_modified);
 
         // write to file when config is the inequivalent of last one.
-        cfg.cfg_path = store_path.join(TMP_CONFIG_FILE).display().to_string();
+        cfg.log_level = slog::Level::Warning;
         assert!(persist_config(&cfg).is_ok());
         last_cfg_metadata = last_cfg_path.metadata().unwrap();
         assert_ne!(last_cfg_metadata.modified().unwrap(), first_modified);
