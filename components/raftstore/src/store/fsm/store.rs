@@ -1245,7 +1245,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None, engines.clone());
         let timer = raftlog_gc_runner.new_timer();
-        box_try!(workers.raftlog_gc_worker.start_with_timer(raftlog_gc_runner, timer));
+        box_try!(workers
+            .raftlog_gc_worker
+            .start_with_timer(raftlog_gc_runner, timer));
 
         let compact_runner = CompactRunner::new(engines.kv.clone());
         let cleanup_sst_runner = CleanupSSTRunner::new(

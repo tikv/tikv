@@ -6,9 +6,9 @@ use std::sync::mpsc::Sender;
 
 use engine_traits::{Engines, KvEngine};
 use raft_engine::RaftEngine;
-use tikv_util::worker::{Runnable, RunnableWithTimer};
-use tikv_util::timer::Timer;
 use tikv_util::time::Duration;
+use tikv_util::timer::Timer;
+use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 const MAX_GC_REGION_BATCH: usize = 128;
 const COMPACT_LOG_INTERVAL: Duration = Duration::from_secs(60);
@@ -106,7 +106,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         }
     }
 
-
     pub fn new_timer(&self) -> Timer<()> {
         let mut timer = Timer::new(1);
         timer.add_task(COMPACT_LOG_INTERVAL, ());
@@ -129,9 +128,9 @@ impl<EK: KvEngine, ER: RaftEngine> Runnable<Task> for Runner<EK, ER> {
 }
 
 impl<EK, ER> RunnableWithTimer<Task, ()> for Runner<EK, ER>
-    where
-        EK: KvEngine,
-        ER: RaftEngine,
+where
+    EK: KvEngine,
+    ER: RaftEngine,
 {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         self.flush();
