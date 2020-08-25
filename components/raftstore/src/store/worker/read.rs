@@ -846,8 +846,6 @@ mod tests {
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
 
-        // TODO: test max ts unsynced
-
         // Let's read.
         let region = region1;
         let task = RaftCommand::<RocksSnapshot>::new(
