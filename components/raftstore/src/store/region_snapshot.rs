@@ -14,6 +14,7 @@ use engine_rocks::{RocksEngine};
 use engine_traits::util::check_key_in_range;
 use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
+use raft_engine::RaftEngine;
 use keys::DATA_PREFIX_KEY;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
@@ -36,7 +37,7 @@ where
     S: Snapshot,
 {
     #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
-    pub fn new<EK>(ps: &PeerStorage<EK, RocksEngine>) -> RegionSnapshot<EK::Snapshot> where EK: KvEngine {
+    pub fn new<EK>(ps: &PeerStorage<EK, impl RaftEngine>) -> RegionSnapshot<EK::Snapshot> where EK: KvEngine {
         RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), Arc::new(ps.region().clone()))
     }
 
