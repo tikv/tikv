@@ -6,7 +6,12 @@ use std::sync::mpsc::Sender;
 
 use engine_traits::{Engines, KvEngine};
 use raft_engine::RaftEngine;
-use tikv_util::worker::Runnable;
+use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::timer::Timer;
+use tikv_util::time::Duration;
+
+const MAX_GC_REGION_BATCH: usize = 128;
+const COMPACT_LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 pub struct Task {
     pub region_id: u64,
@@ -75,50 +80,62 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             .send(TaskRes { collected })
             .unwrap();
     }
+
+    fn flush(&mut self) {
+        // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
+        self.engines.kv.sync().unwrap_or_else(|e| {
+            panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
+        });
+        let tasks = std::mem::replace(&mut self.tasks, vec![]);
+        for t in tasks {
+            debug!(
+                "execute gc log";
+                "region_id" => t.region_id,
+                "end_index" => t.end_idx,
+            );
+            match self.gc_raft_log(t.region_id, t.start_idx, t.end_idx) {
+                Err(e) => {
+                    error!("failed to gc"; "region_id" => t.region_id, "err" => %e);
+                    self.report_collected(0 as u64);
+                }
+                Ok(n) => {
+                    debug!("collected log entries"; "region_id" => t.region_id, "entry_count" => n);
+                    self.report_collected(n as u64);
+                }
+            }
+        }
+    }
+
+
+    pub fn new_timer(&self) -> Timer<()> {
+        let mut timer = Timer::new(1);
+        timer.add_task(COMPACT_LOG_INTERVAL, ());
+        timer
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Runnable<Task> for Runner<EK, ER> {
     fn run(&mut self, task: Task) {
-        debug!(
-            "execute gc log";
-            "region_id" => task.region_id,
-            "end_index" => task.end_idx,
-        );
-        match self.gc_raft_log(task.region_id, task.start_idx, task.end_idx) {
-            Err(e) => {
-                error!("failed to gc"; "region_id" => task.region_id, "err" => %e);
-                self.report_collected(0 as u64);
-            }
-            Ok(n) => {
-                debug!("collected log entries"; "region_id" => task.region_id, "entry_count" => n);
-                self.report_collected(n as u64);
-            }
-        }
-    }
-
-    fn run_batch(&mut self, tasks: &mut Vec<Task>) {
-        // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
-        self.tasks.append(tasks);
-        if self.tasks.len() < 100 {
+        self.tasks.push(task);
+        if self.tasks.len() < MAX_GC_REGION_BATCH {
             return;
         }
-        self.engines.kv.sync().unwrap_or_else(|e| {
-            panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
-        });
-        let tasks = std::mem::replace(&mut self.tasks, vec![]);
-        for t in tasks {
-            self.run(t);
-        }
+        self.flush();
     }
 
     fn shutdown(&mut self) {
-        self.engines.kv.sync().unwrap_or_else(|e| {
-            panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
-        });
-        let tasks = std::mem::replace(&mut self.tasks, vec![]);
-        for t in tasks {
-            self.run(t);
-        }
+        self.flush();
+    }
+}
+
+impl<EK, ER> RunnableWithTimer<Task, ()> for Runner<EK, ER>
+    where
+        EK: KvEngine,
+        ER: RaftEngine,
+{
+    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+        self.flush();
+        timer.add_task(COMPACT_LOG_INTERVAL, ());
     }
 }
 
@@ -197,6 +214,7 @@ mod tests {
 
         for (task, expected_collectd, not_exist_range, exist_range) in tbls {
             runner.run(task);
+            runner.flush();
             let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
             assert_eq!(res.collected, expected_collectd);
             raft_log_must_not_exist(&raft_db, 1, not_exist_range.0, not_exist_range.1);

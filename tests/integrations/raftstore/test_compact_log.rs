@@ -261,10 +261,11 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Size exceed max limit, every peer must have compacted logs,
     // so the truncate log state index/term must > than before.
-    for (&id, engines) in &cluster.engines {
+    for (id, engines) in cluster.engines.clone() {
         if id == 1 {
             continue;
         }
+        cluster.stop_node(id);
         let mut state: RaftApplyState =
             get_raft_msg_or_default(&engines, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
