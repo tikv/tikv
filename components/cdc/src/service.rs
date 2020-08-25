@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use futures::{stream, Future, Sink, Stream};
 use grpcio::*;
-use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest};
+use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event, ResolvedTs};
+use protobuf::Message;
 use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
@@ -31,14 +32,31 @@ impl ConnID {
     }
 }
 
+pub enum CdcEvent {
+    ResolvedTs(ResolvedTs),
+    Event(Event),
+}
+
+impl CdcEvent {
+    pub fn size(&self) -> usize {
+        match self {
+            CdcEvent::ResolvedTs(_) => {
+                // Ingore the size of resolved ts
+                0
+            }
+            CdcEvent::Event(ref e) => e.compute_size() as usize,
+        }
+    }
+}
+
 pub struct Conn {
     id: ConnID,
-    sink: BatchSender<(usize, ChangeDataEvent)>,
+    sink: BatchSender<CdcEvent>,
     downstreams: HashMap<u64, DownstreamID>,
 }
 
 impl Conn {
-    pub fn new(sink: BatchSender<(usize, ChangeDataEvent)>) -> Conn {
+    pub fn new(sink: BatchSender<CdcEvent>) -> Conn {
         Conn {
             id: ConnID::new(),
             sink,
@@ -54,7 +72,7 @@ impl Conn {
         self.downstreams
     }
 
-    pub fn get_sink(&self) -> BatchSender<(usize, ChangeDataEvent)> {
+    pub fn get_sink(&self) -> BatchSender<CdcEvent> {
         self.sink.clone()
     }
 
@@ -162,18 +180,20 @@ impl ChangeData for Service {
                 let mut resp_vecs = Vec::with_capacity(events_len);
                 resp_vecs.push(ChangeDataEvent::default());
                 let mut current_events_size = 0;
-                for (size, event) in events {
+                for event in events {
                     if current_events_size >= CDC_MAX_RESP_SIZE {
                         resp_vecs.push(ChangeDataEvent::default());
                         current_events_size = 0;
                     }
-                    current_events_size += size;
-                    if event.resolved_ts.is_some() {
-                        resp_vecs.last_mut().unwrap().resolved_ts = event.resolved_ts.clone();
+                    current_events_size += event.size() as usize;
+                    match event {
+                        CdcEvent::Event(e) => {
+                            resp_vecs.last_mut().unwrap().mut_events().push(e);
+                        }
+                        CdcEvent::ResolvedTs(r) => {
+                            resp_vecs.last_mut().unwrap().set_resolved_ts(r);
+                        }
                     }
-                    event.events.into_iter().for_each(|e| {
-                        resp_vecs.last_mut().unwrap().mut_events().push(e);
-                    });
                 }
                 let resps = resp_vecs
                     .into_iter()

@@ -35,7 +35,7 @@ use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
-use crate::service::{Conn, ConnID};
+use crate::service::{CdcEvent, Conn, ConnID};
 use crate::{CdcObserver, Error, Result};
 
 pub enum Deregister {
@@ -591,12 +591,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let mut resolved_ts = ResolvedTs::default();
         resolved_ts.regions = regions;
         resolved_ts.ts = self.min_resolved_ts.into_inner();
-        let mut change_data_event = ChangeDataEvent::default();
-        change_data_event.set_resolved_ts(resolved_ts);
         for (id, conn) in &self.connections {
             if conn
                 .get_sink()
-                .send((0, change_data_event.clone()))
+                .send(CdcEvent::ResolvedTs(resolved_ts.clone()))
                 .is_err()
             {
                 error!("send event failed"; "conn" => ?id);
@@ -1196,11 +1194,18 @@ mod tests {
             err: Some(Error::Request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
-        let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
-        let event = change_data_event.events[0].event.take().unwrap();
-        match event {
-            Event_oneof_event::Error(err) => assert!(err.has_not_leader()),
-            _ => panic!("unknown event"),
+        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        loop {
+            if let CdcEvent::Event(mut e) = cdc_event {
+                let event = e.event.take().unwrap();
+                match event {
+                    Event_oneof_event::Error(err) => {
+                        assert!(err.has_not_leader());
+                        break;
+                    }
+                    _ => panic!("unknown event"),
+                }
+            }
         }
         assert_eq!(ep.capture_regions.len(), 0);
 
@@ -1230,11 +1235,18 @@ mod tests {
             err: Some(Error::Request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
-        let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
-        let event = change_data_event.events[0].event.take().unwrap();
-        match event {
-            Event_oneof_event::Error(err) => assert!(err.has_not_leader()),
-            _ => panic!("unknown event"),
+        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        loop {
+            if let CdcEvent::Event(mut e) = cdc_event {
+                let event = e.event.take().unwrap();
+                match event {
+                    Event_oneof_event::Error(err) => {
+                        assert!(err.has_not_leader());
+                        break;
+                    }
+                    _ => panic!("unknown event"),
+                }
+            }
         }
         assert_eq!(ep.capture_regions.len(), 0);
 
