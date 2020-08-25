@@ -3204,12 +3204,19 @@ where
     }
 
     pub fn require_updating_max_ts(&self, pd_scheduler: &FutureScheduler<PdTask<EK>>) {
+        let epoch = self.region().get_region_epoch();
         let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
-        let version_lot_bits = self.region().get_region_epoch().get_version() & ((1 << 31) - 1); // 31 bits
+        let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits
         let initial_status = (term_low_bits << 32) | (version_lot_bits << 1);
         self.max_ts_sync_status
             .store(initial_status, Ordering::SeqCst);
+        info!(
+            "require updating max ts";
+            "region_id" => self.region_id,
+            "initial_status" => initial_status,
+        );
         if let Err(e) = pd_scheduler.schedule(PdTask::UpdateMaxTimestamp {
+            region_id: self.region_id,
             initial_status,
             max_ts_sync_status: self.max_ts_sync_status.clone(),
         }) {

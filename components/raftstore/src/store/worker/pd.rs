@@ -134,6 +134,7 @@ where
         write_io_rates: RecordPairVec,
     },
     UpdateMaxTimestamp {
+        region_id: u64,
         initial_status: u64,
         max_ts_sync_status: Arc<AtomicU64>,
     },
@@ -260,9 +261,10 @@ where
                 "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
                 cpu_usages, read_io_rates, write_io_rates,
             ),
-            Task::UpdateMaxTimestamp {..} => write!(
+            Task::UpdateMaxTimestamp { region_id, ..} => write!(
                 f,
-                "update the max timestamp in the concurrency manager",
+                "update the max timestamp for region {} in the concurrency manager",
+                region_id
             ),
         }
     }
@@ -946,6 +948,7 @@ where
 
     fn handle_update_max_timestamp(
         &mut self,
+        region_id: u64,
         initial_status: u64,
         max_ts_sync_status: Arc<AtomicU64>,
         handle: &Handle,
@@ -953,22 +956,36 @@ where
         let pd_client = self.pd_client.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let f = async move {
+            let mut success = false;
             while max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
                 match pd_client.get_tso().await {
                     Ok(ts) => {
                         concurrency_manager.update_max_read_ts(ts);
                         // Set the least significant bit to 1 to mark it as synced.
-                        max_ts_sync_status.compare_and_swap(
+                        let old_value = max_ts_sync_status.compare_and_swap(
                             initial_status,
                             initial_status | 1,
                             Ordering::SeqCst,
                         );
+                        success = old_value == initial_status;
                         break;
                     }
                     Err(e) => {
-                        warn!("update max timestamp failed: {:?}", e);
+                        warn!(
+                            "failed to update max timestamp for region {}: {:?}",
+                            region_id, e
+                        );
                     }
                 }
+            }
+            if success {
+                info!("succeed to update max timestamp"; "region_id" => region_id);
+            } else {
+                info!(
+                    "updating max timestamp is stale";
+                    "region_id" => region_id,
+                    "initial_status" => initial_status,
+                );
             }
             Ok(())
         };
@@ -1121,9 +1138,15 @@ where
                 write_io_rates,
             } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
             Task::UpdateMaxTimestamp {
+                region_id,
                 initial_status,
                 max_ts_sync_status,
-            } => self.handle_update_max_timestamp(initial_status, max_ts_sync_status, handle),
+            } => self.handle_update_max_timestamp(
+                region_id,
+                initial_status,
+                max_ts_sync_status,
+                handle,
+            ),
         };
     }
 
