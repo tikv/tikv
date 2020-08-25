@@ -9,7 +9,7 @@ use std::time::Instant;
 use std::{cmp, error, u64};
 
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, Mutable, Peekable, WriteBatch};
+use engine_traits::{Engines, KvEngine, Mutable, Peekable};
 use error_code::ErrorCodeExt;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
@@ -307,7 +307,7 @@ impl Drop for EntryCache {
 
 pub trait HandleRaftReadyContext<WK, WR>
 where
-    WK: WriteBatch,
+    WK: Mutable,
     WR: RaftLogBatch,
 {
     /// Returns the mutable references of WriteBatch for both KvDB and RaftDB in one interface.
@@ -380,7 +380,7 @@ impl InvokeContext {
     pub fn save_snapshot_raft_state_to(
         &self,
         snapshot_index: u64,
-        kv_wb: &mut impl WriteBatch,
+        kv_wb: &mut impl Mutable,
     ) -> Result<()> {
         let mut snapshot_raft_state = self.raft_state.clone();
         snapshot_raft_state
@@ -397,7 +397,7 @@ impl InvokeContext {
     }
 
     #[inline]
-    pub fn save_apply_state_to(&self, kv_wb: &mut impl WriteBatch) -> Result<()> {
+    pub fn save_apply_state_to(&self, kv_wb: &mut impl Mutable) -> Result<()> {
         kv_wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region_id),
