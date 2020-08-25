@@ -9,9 +9,7 @@ use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
 use kvproto::tikvpb::TikvClient;
 
 use errors::extract_region_error;
-use test_raftstore::{
-    must_get_equal, must_get_none, new_peer, new_server_cluster, Cluster, ServerCluster,
-};
+use test_raftstore::{must_get_equal, must_get_none, new_peer, new_server_cluster};
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
