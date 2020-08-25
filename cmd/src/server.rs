@@ -9,6 +9,7 @@
 //! We keep these components in the `TiKVServer` struct.
 
 use crate::{setup::*, signal_handler};
+use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, MetricsFlusher};
@@ -60,7 +61,7 @@ use tikv::{
         status_server::StatusServer,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
     },
-    storage::{self, concurrency_manager::ConcurrencyManager, config::StorageConfigManger},
+    storage::{self, config::StorageConfigManger},
 };
 use tikv_util::config::VersionTrack;
 use tikv_util::{
@@ -632,6 +633,7 @@ impl TiKVServer {
             importer.clone(),
             split_check_worker,
             auto_split_controller,
+            self.concurrency_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

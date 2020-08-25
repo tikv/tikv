@@ -194,6 +194,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "concurrency_manager",
  "configuration",
  "crc64fast",
  "engine_rocks",
@@ -573,6 +574,7 @@ dependencies = [
  "cdc",
  "chrono",
  "clap",
+ "concurrency_manager",
  "encryption",
  "engine_rocks",
  "engine_traits",
@@ -632,6 +634,15 @@ dependencies = [
  "rand",
  "static_assertions",
  "tikv_alloc",
+]
+
+[[package]]
+name = "concurrency_manager"
+version = "0.0.1"
+dependencies = [
+ "parking_lot 0.10.0",
+ "tokio 0.2.13",
+ "txn_types",
 ]
 
 [[package]]
@@ -3058,6 +3069,7 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
+ "concurrency_manager",
  "configuration",
  "crc32fast",
  "crossbeam",
@@ -4196,6 +4208,7 @@ dependencies = [
 name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
+ "concurrency_manager",
  "futures 0.1.29",
  "kvproto",
  "protobuf",
@@ -4224,6 +4237,7 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
+ "concurrency_manager",
  "encryption",
  "engine_rocks",
  "engine_traits",
@@ -4302,6 +4316,7 @@ dependencies = [
  "batch-system",
  "byteorder",
  "cdc",
+ "concurrency_manager",
  "configuration",
  "crc64fast",
  "criterion",
@@ -4596,6 +4611,7 @@ dependencies = [
  "cache-size",
  "chrono",
  "codec",
+ "concurrency_manager",
  "configuration",
  "crc32fast",
  "crc64fast",
