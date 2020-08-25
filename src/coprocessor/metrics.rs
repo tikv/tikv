@@ -13,6 +13,83 @@ use prometheus::local::*;
 use prometheus::*;
 use prometheus_static_metric::*;
 
+<<<<<<< HEAD
+=======
+make_auto_flush_static_metric! {
+    pub label_enum ReqTag {
+        select,
+        index,
+        analyze_table,
+        analyze_index,
+        checksum_table,
+        checksum_index,
+        test,
+    }
+
+    pub label_enum CF {
+        default,
+        lock,
+        write,
+    }
+
+    pub label_enum ScanKeysKind {
+        processed_keys,
+        total,
+    }
+
+    pub label_enum ScanKind {
+        processed_keys,
+        get,
+        next,
+        prev,
+        seek,
+        seek_for_prev,
+        over_seek_bound,
+    }
+
+    pub label_enum WaitType {
+        all,
+        schedule,
+        snapshot,
+    }
+
+    pub label_enum PerfMetric {
+        internal_key_skipped_count,
+        internal_delete_skipped_count,
+        block_cache_hit_count,
+        block_read_count,
+        block_read_byte,
+        encrypt_data_nanos,
+        decrypt_data_nanos,
+    }
+
+    pub struct CoprReqHistogram: LocalHistogram {
+        "req" => ReqTag,
+    }
+
+    pub struct ReqWaitHistogram: LocalHistogram {
+        "req" => ReqTag,
+        "type" => WaitType,
+    }
+
+    pub struct PerfCounter: LocalIntCounter {
+        "req" => ReqTag,
+        "metric" => PerfMetric,
+    }
+
+    pub struct CoprScanKeysHistogram: LocalHistogram {
+        "req" => ReqTag,
+        "kind" => ScanKeysKind,
+    }
+
+    pub struct CoprScanDetails : LocalIntCounter {
+        "req" => ReqTag,
+        "cf" => CF,
+        "tag" => ScanKind,
+    }
+}
+
+>>>>>>> 790f53e... Fix incorrect processed / total keys counter (#7563)
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_duration_seconds",
@@ -51,10 +128,15 @@ lazy_static! {
     pub static ref COPR_SCAN_KEYS: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_scan_keys",
         "Bucketed histogram of coprocessor per request scan keys",
-        &["req"],
+        &["req", "kind"],
         exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();
+<<<<<<< HEAD
+=======
+    pub static ref COPR_SCAN_KEYS_STATIC: CoprScanKeysHistogram =
+        auto_flush_from!(COPR_SCAN_KEYS, CoprScanKeysHistogram);
+>>>>>>> 790f53e... Fix incorrect processed / total keys counter (#7563)
     pub static ref COPR_SCAN_DETAILS: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_scan_details",
         "Bucketed counter of coprocessor scan details for each CF",
@@ -138,6 +220,33 @@ thread_local! {
     );
 }
 
+<<<<<<< HEAD
+=======
+impl Into<CF> for GcKeysCF {
+    fn into(self) -> CF {
+        match self {
+            GcKeysCF::default => CF::default,
+            GcKeysCF::lock => CF::lock,
+            GcKeysCF::write => CF::write,
+        }
+    }
+}
+
+impl Into<ScanKind> for GcKeysDetail {
+    fn into(self) -> ScanKind {
+        match self {
+            GcKeysDetail::processed_keys => ScanKind::processed_keys,
+            GcKeysDetail::get => ScanKind::get,
+            GcKeysDetail::next => ScanKind::next,
+            GcKeysDetail::prev => ScanKind::prev,
+            GcKeysDetail::seek => ScanKind::seek,
+            GcKeysDetail::seek_for_prev => ScanKind::seek_for_prev,
+            GcKeysDetail::over_seek_bound => ScanKind::over_seek_bound,
+        }
+    }
+}
+
+>>>>>>> 790f53e... Fix incorrect processed / total keys counter (#7563)
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     TLS_COP_METRICS.with(|m| {
         // Flush Prometheus metrics

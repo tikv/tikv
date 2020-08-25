@@ -53,6 +53,47 @@ make_static_metric! {
         gc,
         unsafe_destroy_range,
         physical_scan_lock,
+<<<<<<< HEAD
+=======
+        validate_config,
+    }
+
+    pub label_enum SnapTask {
+        send,
+        recv,
+    }
+
+    pub label_enum ResolveStore {
+        resolving,
+        resolve,
+        failed,
+        success,
+        tombstone,
+    }
+
+    pub label_enum GcKeysCF {
+        default,
+        lock,
+        write,
+    }
+
+    pub label_enum GcKeysDetail {
+        processed_keys,
+        get,
+        next,
+        prev,
+        seek,
+        seek_for_prev,
+        over_seek_bound,
+    }
+
+    pub struct GcCommandCounterVec: LocalIntCounter {
+        "type" => GcCommandKind,
+    }
+
+    pub struct SnapTaskCounterVec: LocalIntCounter {
+        "type" => SnapTask,
+>>>>>>> 790f53e... Fix incorrect processed / total keys counter (#7563)
     }
 
     pub struct GrpcMsgHistogramVec: Histogram {

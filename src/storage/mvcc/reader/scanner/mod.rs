@@ -318,7 +318,7 @@ where
             "near_load_data_by_write",
         ));
     }
-    statistics.data.processed += 1;
+    statistics.data.processed_keys += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 
@@ -343,7 +343,7 @@ where
             "near_reverse_load_data_by_write",
         ));
     }
-    statistics.data.processed += 1;
+    statistics.data.processed_keys += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 

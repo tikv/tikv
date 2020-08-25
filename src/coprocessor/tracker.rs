@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::kvrpcpb;
+use kvproto::kvrpcpb::ScanDetailV2;
 
 use crate::storage::kv::{PerfStatisticsDelta, PerfStatisticsInstant};
 
@@ -53,7 +54,7 @@ pub struct Tracker {
     schedule_wait_time: Duration, // Wait time spent on waiting for scheduling
     snapshot_wait_time: Duration, // Wait time spent on waiting for a snapshot
     handler_build_time: Duration, // Time spent on building the handler (not included in total wait time)
-    req_time: Duration,
+    req_lifetime: Duration,
     item_process_time: Duration,
     total_process_time: Duration,
     total_storage_stats: Statistics,
@@ -79,7 +80,7 @@ impl Tracker {
             schedule_wait_time: Duration::default(),
             snapshot_wait_time: Duration::default(),
             handler_build_time: Duration::default(),
-            req_time: Duration::default(),
+            req_lifetime: Duration::default(),
             item_process_time: Duration::default(),
             total_process_time: Duration::default(),
             total_storage_stats: Statistics::default(),
@@ -140,6 +141,7 @@ impl Tracker {
             self.total_perf_stats += perf_stats.delta();
         }
         self.current_stage = TrackerState::ItemFinished;
+        // TODO: Need to record time between Finish -> Begin Next?
     }
 
     pub fn collect_storage_statistics(&mut self, storage_stats: Statistics) {
@@ -148,6 +150,7 @@ impl Tracker {
 
     /// Get current item's ExecDetail according to previous collected metrics.
     /// TiDB asks for ExecDetail to be printed in its log.
+    /// WARN: TRY BEST NOT TO USE THIS FUNCTION.
     pub fn get_item_exec_details(&self) -> kvrpcpb::ExecDetails {
         assert_eq!(self.current_stage, TrackerState::ItemFinished);
         self.exec_details(self.item_process_time)
@@ -162,16 +165,32 @@ impl Tracker {
 
     fn exec_details(&self, measure: Duration) -> kvrpcpb::ExecDetails {
         let mut exec_details = kvrpcpb::ExecDetails::default();
-        if self.req_ctx.context.get_handle_time() {
-            let mut handle = kvrpcpb::HandleTime::default();
-            handle.set_process_ms((time::duration_to_sec(measure) * 1000.0) as i64);
-            handle.set_wait_ms((time::duration_to_sec(self.wait_time) * 1000.0) as i64);
-            exec_details.set_handle_time(handle);
-        }
-        if self.req_ctx.context.get_scan_detail() {
-            let detail = self.total_storage_stats.scan_detail();
-            exec_details.set_scan_detail(detail);
-        }
+
+        let mut handle = kvrpcpb::HandleTime::default();
+        handle.set_process_ms((time::duration_to_sec(measure) * 1000.0) as i64);
+        handle.set_wait_ms((time::duration_to_sec(self.wait_time) * 1000.0) as i64);
+        exec_details.set_handle_time(handle);
+
+        let detail = self.total_storage_stats.scan_detail();
+
+        let mut detail_v2 = ScanDetailV2::default();
+        detail_v2.set_processed_versions(self.total_storage_stats.write.processed_keys as u64);
+        detail_v2.set_total_versions(self.total_storage_stats.write.total_op_count() as u64);
+        detail_v2.set_rocksdb_delete_skipped_count(
+            self.total_perf_stats.0.internal_delete_skipped_count as u64,
+        );
+        detail_v2.set_rocksdb_key_skipped_count(
+            self.total_perf_stats.0.internal_key_skipped_count as u64,
+        );
+        detail_v2.set_rocksdb_block_cache_hit_count(
+            self.total_perf_stats.0.block_cache_hit_count as u64,
+        );
+        detail_v2.set_rocksdb_block_read_count(self.total_perf_stats.0.block_read_count as u64);
+        detail_v2.set_rocksdb_block_read_byte(self.total_perf_stats.0.block_read_byte as u64);
+
+        exec_details.set_use_scan_detail_v2(true);
+        exec_details.set_scan_detail(detail);
+        exec_details.set_scan_detail_v2(detail_v2);
         exec_details
     }
 
@@ -180,7 +199,7 @@ impl Tracker {
             self.current_stage == TrackerState::AllItemsBegan
                 || self.current_stage == TrackerState::ItemFinished
         );
-        self.req_time = Instant::now_coarse() - self.request_begin_at;
+        self.req_lifetime = Instant::now_coarse() - self.request_begin_at;
         self.current_stage = TrackerState::AllItemFinished;
         self.track();
     }
@@ -190,8 +209,9 @@ impl Tracker {
             return;
         }
 
-        // Print slow log if *process* time is long.
-        if time::duration_to_sec(self.total_process_time) > SLOW_QUERY_LOWER_BOUND {
+        let total_storage_stats = std::mem::take(&mut self.total_storage_stats);
+
+        if time::duration_to_sec(self.req_lifetime) > SLOW_QUERY_LOWER_BOUND {
             let some_table_id = self.req_ctx.first_range.as_ref().map(|range| {
                 tidb_query::codec::table::decode_table_id(range.get_start()).unwrap_or_default()
             });
@@ -199,24 +219,39 @@ impl Tracker {
             info!(#"slow_log", "slow-query";
                 "region_id" => self.req_ctx.context.get_region_id(),
                 "remote_host" => &self.req_ctx.peer,
+<<<<<<< HEAD
                 "req_time" => ?self.req_time,
                 "total_process_time" => ?self.total_process_time,
+=======
+                "total_lifetime" => ?self.req_lifetime,
+>>>>>>> 790f53e... Fix incorrect processed / total keys counter (#7563)
                 "wait_time" => ?self.wait_time,
-                "schedule_wait_time" => ?self.schedule_wait_time,
-                "snapshot_wait_time" => ?self.snapshot_wait_time,
+                "wait_time.schedule" => ?self.schedule_wait_time,
+                "wait_time.snapshot" => ?self.snapshot_wait_time,
                 "handler_build_time" => ?self.handler_build_time,
+                "total_process_time" => ?self.total_process_time,
                 "txn_start_ts" => self.req_ctx.txn_start_ts,
                 "table_id" => some_table_id,
+<<<<<<< HEAD
                 "tag" => self.req_ctx.tag,
                 "scan_is_desc" => self.req_ctx.is_desc_scan,
                 "scan_iter_ops" => self.total_storage_stats.total_op_count(),
                 "scan_iter_processed" => self.total_storage_stats.total_processed(),
                 "scan_ranges" => self.req_ctx.ranges_len,
                 "scan_first_range" => ?self.req_ctx.first_range,
+=======
+                "tag" => self.req_ctx.tag.get_str(),
+                "scan.is_desc" => self.req_ctx.is_desc_scan,
+                "scan.processed" => total_storage_stats.write.processed_keys,
+                "scan.total" => total_storage_stats.write.total_op_count(),
+                "scan.ranges" => self.req_ctx.ranges_len,
+                "scan.range.first" => ?self.req_ctx.first_range,
+>>>>>>> 790f53e... Fix incorrect processed / total keys counter (#7563)
                 self.total_perf_stats,
             );
         }
 
+<<<<<<< HEAD
         let total_storage_stats =
             std::mem::replace(&mut self.total_storage_stats, Statistics::default());
 
@@ -301,6 +336,86 @@ impl Tracker {
                 .with_label_values(&[self.req_ctx.tag, "decrypt_data_nanos"])
                 .inc_by(self.total_perf_stats.0.decrypt_data_nanos as i64);
         });
+=======
+        // req time
+        COPR_REQ_HISTOGRAM_STATIC
+            .get(self.req_ctx.tag)
+            .observe(time::duration_to_sec(self.req_lifetime));
+
+        // wait time
+        COPR_REQ_WAIT_TIME_STATIC
+            .get(self.req_ctx.tag)
+            .all
+            .observe(time::duration_to_sec(self.wait_time));
+
+        // schedule wait time
+        COPR_REQ_WAIT_TIME_STATIC
+            .get(self.req_ctx.tag)
+            .schedule
+            .observe(time::duration_to_sec(self.schedule_wait_time));
+
+        // snapshot wait time
+        COPR_REQ_WAIT_TIME_STATIC
+            .get(self.req_ctx.tag)
+            .snapshot
+            .observe(time::duration_to_sec(self.snapshot_wait_time));
+
+        // handler build time
+        COPR_REQ_HANDLER_BUILD_TIME_STATIC
+            .get(self.req_ctx.tag)
+            .observe(time::duration_to_sec(self.handler_build_time));
+
+        // handle time
+        COPR_REQ_HANDLE_TIME_STATIC
+            .get(self.req_ctx.tag)
+            .observe(time::duration_to_sec(self.total_process_time));
+
+        // scan keys
+        COPR_SCAN_KEYS_STATIC
+            .get(self.req_ctx.tag)
+            .total
+            .observe(total_storage_stats.write.total_op_count() as f64);
+        COPR_SCAN_KEYS_STATIC
+            .get(self.req_ctx.tag)
+            .processed_keys
+            .observe(total_storage_stats.write.processed_keys as f64);
+
+        // RocksDB perf stats
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .internal_key_skipped_count
+            .inc_by(self.total_perf_stats.0.internal_key_skipped_count as i64);
+
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .internal_delete_skipped_count
+            .inc_by(self.total_perf_stats.0.internal_delete_skipped_count as i64);
+
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .block_cache_hit_count
+            .inc_by(self.total_perf_stats.0.block_cache_hit_count as i64);
+
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .block_read_count
+            .inc_by(self.total_perf_stats.0.block_read_count as i64);
+
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .block_read_byte
+            .inc_by(self.total_perf_stats.0.block_read_byte as i64);
+
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .encrypt_data_nanos
+            .inc_by(self.total_perf_stats.0.encrypt_data_nanos as i64);
+
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .decrypt_data_nanos
+            .inc_by(self.total_perf_stats.0.decrypt_data_nanos as i64);
+>>>>>>> 790f53e... Fix incorrect processed / total keys counter (#7563)
 
         tls_collect_scan_details(self.req_ctx.tag, &total_storage_stats);
         tls_collect_read_flow(self.req_ctx.context.get_region_id(), &total_storage_stats);

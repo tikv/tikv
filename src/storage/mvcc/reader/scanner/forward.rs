@@ -274,6 +274,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                         &mut self.cursors,
                         &mut self.statistics,
                     )? {
+                        self.statistics.write.processed_keys += 1;
                         return Ok(Some(output));
                     }
                 }
@@ -364,7 +365,6 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     ) -> Result<HandleRes<Self::Output>> {
         let value: Option<Value> = loop {
             let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
-            statistics.write.processed += 1;
 
             match write.write_type {
                 WriteType::Put => {
@@ -465,7 +465,6 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
             }
             let write_value = cursors.write.value(&mut statistics.write);
             let write = WriteRef::parse(write_value)?;
-            statistics.write.processed += 1;
 
             match write.write_type {
                 WriteType::Put => {
@@ -547,6 +546,7 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
     // Even if there is a lock error, we still need to step the cursor for future
     // calls.
     if result.is_err() {
+        statistics.lock.processed_keys += 1;
         cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
     }
     result
