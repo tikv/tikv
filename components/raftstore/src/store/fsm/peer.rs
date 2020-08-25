@@ -2594,7 +2594,9 @@ where
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after
         // a region merge.
-        self.fsm.peer.require_updating_max_ts(&self.ctx.pd_scheduler);
+        self.fsm
+            .peer
+            .require_updating_max_ts(&self.ctx.pd_scheduler);
 
         drop(meta);
 

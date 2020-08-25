@@ -958,7 +958,11 @@ where
                     Ok(ts) => {
                         concurrency_manager.update_max_read_ts(ts);
                         // Set the least significant bit to 1 to mark it as synced.
-                        max_ts_sync_status.compare_and_swap(initial_status, initial_status | 1, Ordering::SeqCst);
+                        max_ts_sync_status.compare_and_swap(
+                            initial_status,
+                            initial_status | 1,
+                            Ordering::SeqCst,
+                        );
                         break;
                     }
                     Err(e) => {

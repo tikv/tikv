@@ -1,10 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::iter::*;
+use std::sync::atomic::Ordering;
 use std::sync::*;
 use std::thread;
 use std::time::*;
-use std::sync::atomic::Ordering;
 
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::CmdType;
