@@ -9,8 +9,8 @@ use crate::store::{
     Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
+use raft_engine::RaftEngine;
 use raft::SnapshotStatus;
 use std::cell::RefCell;
 use tikv_util::time::ThreadReadId;
@@ -124,17 +124,19 @@ where
 }
 
 /// A router that routes messages to the raftstore
-pub struct ServerRaftStoreRouter<EK>
+pub struct ServerRaftStoreRouter<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
-    router: RaftRouter<EK, RocksEngine>,
-    local_reader: RefCell<LocalReader<RaftRouter<EK, RocksEngine>, EK>>,
+    router: RaftRouter<EK, ER>,
+    local_reader: RefCell<LocalReader<RaftRouter<EK, ER>, EK>>,
 }
 
-impl<EK> Clone for ServerRaftStoreRouter<EK>
+impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     fn clone(&self) -> Self {
         ServerRaftStoreRouter {
@@ -144,15 +146,16 @@ where
     }
 }
 
-impl<EK> ServerRaftStoreRouter<EK>
+impl<EK, ER> ServerRaftStoreRouter<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     /// Creates a new router.
     pub fn new(
-        router: RaftRouter<EK, RocksEngine>,
-        reader: LocalReader<RaftRouter<EK, RocksEngine>, EK>,
-    ) -> ServerRaftStoreRouter<EK> {
+        router: RaftRouter<EK, ER>,
+        reader: LocalReader<RaftRouter<EK, ER>, EK>,
+    ) -> ServerRaftStoreRouter<EK, ER> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
@@ -178,9 +181,10 @@ pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreErro
     }
 }
 
-impl<EK> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK>
+impl<EK, ER> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let region_id = msg.get_region_id();
