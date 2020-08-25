@@ -128,7 +128,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockScan {
                     next_first_scan_key.map(|it| it.0).take(),
                     ctx.clone(),
                 )
-                .into(),
+                    .into(),
             }
         };
 

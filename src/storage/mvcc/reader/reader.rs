@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::ErrorInner;
 use crate::storage::mvcc::{default_not_found_error, Result};
 use crate::storage::CfStatistics;
 use engine_rocks::properties::MvccProperties;
@@ -16,24 +15,28 @@ const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
 pub struct ScanLocksIter<'a, S: Snapshot> {
     lock: &'a mut CfStatistics,
-    cursor: &'a mut Cursor<S::Iter>,
+    cursor: Option<&'a mut Cursor<S::Iter>>,
 }
 
 impl<'a, S: Snapshot> Iterator for ScanLocksIter<'a, S> {
     type Item = Result<(Key, Lock)>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let valid = self.cursor.valid();
+        if self.cursor.is_none() {
+            return None;
+        }
+        let cursor = self.cursor.as_mut().unwrap();
+        let valid = cursor.valid();
         if valid.is_err() || !valid.unwrap() {
             return None;
         }
-        let key = Key::from_encoded_slice(self.cursor.key(&mut self.lock));
-        let lock = Lock::parse(self.cursor.value(&mut self.lock));
+        let key = Key::from_encoded_slice(cursor.key(&mut self.lock));
+        let lock = Lock::parse(cursor.value(&mut self.lock));
         if let Err(e) = lock {
             return Some(Err(e.into()));
         }
         let lock = lock.unwrap();
-        self.cursor.next(&mut self.lock);
+        cursor.next(&mut self.lock);
         Some(Ok((key, lock)))
     }
 }
@@ -384,8 +387,8 @@ impl<S: Snapshot> MvccReader<S> {
         filter: F,
         limit: usize,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
-    where
-        F: Fn(&Lock) -> bool,
+        where
+            F: Fn(&Lock) -> bool,
     {
         self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
@@ -420,15 +423,11 @@ impl<S: Snapshot> MvccReader<S> {
             Some(ref x) => cursor.seek(x, &mut self.statistics.lock)?,
             None => cursor.seek_to_first(&mut self.statistics.lock),
         };
-        if !ok {
-            return Err(ErrorInner::DefaultNotFound {
-                key: start
-                    .cloned()
-                    .map(|it| it.into_raw().unwrap())
-                    .unwrap_or_else(Vec::default),
-            }
-            .into());
-        }
+        let cursor = if ok {
+            Some(cursor)
+        } else {
+            None
+        };
         Ok(ScanLocksIter {
             lock: &mut self.statistics.lock,
             cursor,
@@ -655,7 +654,7 @@ mod tests {
                 TimeStamp::default(),
                 false,
             )
-            .unwrap();
+                .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -1520,23 +1519,23 @@ mod tests {
                 12.into(),
             ),
         ]
-        .into_iter()
-        .map(|(k, lock_type, short_value, ts, for_update_ts)| {
-            (
-                Key::from_raw(&k),
-                Lock::new(
-                    lock_type,
-                    b"k1".to_vec(),
-                    ts,
-                    0,
-                    short_value,
-                    for_update_ts,
-                    0,
-                    TimeStamp::zero(),
-                ),
-            )
-        })
-        .collect();
+            .into_iter()
+            .map(|(k, lock_type, short_value, ts, for_update_ts)| {
+                (
+                    Key::from_raw(&k),
+                    Lock::new(
+                        lock_type,
+                        b"k1".to_vec(),
+                        ts,
+                        0,
+                        short_value,
+                        for_update_ts,
+                        0,
+                        TimeStamp::zero(),
+                    ),
+                )
+            })
+            .collect();
 
         // Creates a reader and scan locks,
         let check_scan_lock =
