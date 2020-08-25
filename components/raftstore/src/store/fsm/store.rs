@@ -73,6 +73,7 @@ use crate::store::{
     SignificantMsg, SnapManager, StoreMsg, StoreTick,
 };
 use crate::Result;
+use concurrency_manager::ConcurrencyManager;
 
 type Key = Vec<u8>;
 
@@ -1108,6 +1109,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
+        concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1162,6 +1164,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 region_peers,
                 builder,
                 auto_split_controller,
+                concurrency_manager,
             )?;
         } else {
             self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
@@ -1169,6 +1172,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 region_peers,
                 builder,
                 auto_split_controller,
+                concurrency_manager,
             )?;
         }
         Ok(())
@@ -1184,6 +1188,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         region_peers: Vec<SenderFsmPair<EK, ER>>,
         builder: RaftPollerBuilder<EK, ER, T, C>,
         auto_split_controller: AutoSplitController,
+        concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1274,6 +1279,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
+            concurrency_manager,
         );
         box_try!(workers.pd_worker.start(pd_runner));
 

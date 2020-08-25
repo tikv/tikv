@@ -2,7 +2,7 @@
 
 use std::cell::Cell;
 use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -149,6 +149,7 @@ pub struct ReadDelegate {
     tag: String,
     invalid: Arc<AtomicBool>,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    max_ts_sync_status: Arc<AtomicU64>,
 }
 
 impl ReadDelegate {
@@ -166,6 +167,7 @@ impl ReadDelegate {
             tag: format!("[region {}] {}", region_id, peer_id),
             invalid: Arc::new(AtomicBool::new(false)),
             txn_extra_op: peer.txn_extra_op.clone(),
+            max_ts_sync_status: peer.max_ts_sync_status.clone(),
         }
     }
 
@@ -450,6 +452,9 @@ where
                         let mut response = self.execute(&req, &delegate.region, None, read_id);
                         // Leader can read local if and only if it is in lease.
                         cmd_resp::bind_term(&mut response.response, delegate.term);
+                        if let Some(snap) = response.snapshot.as_mut() {
+                            snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
+                        }
                         response.txn_extra_op = delegate.txn_extra_op.load();
                         cb.invoke_read(response);
                         self.delegates.insert(region_id, Some(delegate));
@@ -819,6 +824,7 @@ mod tests {
                 last_valid_ts: Timespec::new(0, 0),
                 invalid: Arc::new(AtomicBool::new(false)),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
+                max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             };
             meta.readers.insert(1, read_delegate);
         }
