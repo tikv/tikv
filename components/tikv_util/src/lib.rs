@@ -7,8 +7,6 @@
 #[macro_use(fail_point)]
 extern crate fail;
 #[macro_use]
-extern crate futures;
-#[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate quick_error;
