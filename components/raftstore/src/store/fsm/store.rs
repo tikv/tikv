@@ -12,7 +12,7 @@ use std::{mem, thread, u64};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
+use engine_traits::{Engines, KvEngine, Mutable, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -51,8 +51,7 @@ use crate::store::fsm::peer::{
 };
 
 use crate::store::fsm::{create_apply_batch_system, ApplyBatchSystem, ApplyNotifier, Registration};
-use crate::store::fsm::ApplyNotifier;
-use crate::store::fsm::ApplyTaskRes;
+use crate::store::fsm::{ApplyRes, ApplyTaskRes};
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
@@ -1151,26 +1150,26 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let region_scheduler = workers.region_worker.scheduler();
         let apply_system = if engines.kv.support_write_batch_vec() {
-            create_apply_batch_system::<EK, ER, EK::WriteBatchVec>(
+            create_apply_batch_system::<EK, EK::WriteBatchVec>(
                 meta.get_id(),
                 format!("[store {}]", meta.get_id()),
                 workers.coprocessor_host.clone(),
                 importer.clone(),
                 region_scheduler.clone(),
                 engines.kv.clone(),
-                ApplyNotifier::Router(self.router.clone()),
+                Box::new(self.router.clone()),
                 pending_create_peers.clone(),
                 &cfg.value(),
             )
         } else {
-            create_apply_batch_system::<EK, ER, EK::WriteBatch>(
+            create_apply_batch_system::<EK, EK::WriteBatch>(
                 meta.get_id(),
                 format!("[store {}]", meta.get_id()),
                 workers.coprocessor_host.clone(),
                 importer.clone(),
                 region_scheduler.clone(),
                 engines.kv.clone(),
-                ApplyNotifier::Router(self.router.clone()),
+                Box::new(self.router.clone()),
                 pending_create_peers.clone(),
                 &cfg.value(),
             )
@@ -1201,7 +1200,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         };
         self.apply_system = Some(apply_system);
         let region_peers = builder.init()?;
-        self.start_system::<T, C>(workers, region_peers, builder, auto_split_controller)?;
+        self.start_system::<T, C>(
+            workers,
+            region_peers,
+            builder,
+            auto_split_controller,
+            concurrency_manager,
+        )?;
         Ok(())
     }
 

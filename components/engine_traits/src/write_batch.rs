@@ -3,7 +3,6 @@
 use crate::errors::Result;
 use crate::options::WriteOptions;
 
-
 pub trait WriteBatchExt: Sized {
     type WriteBatch: WriteBatch<Self>;
     /// `WriteBatchVec` is used for `multi_batch_write` of RocksEngine and other Engine could also

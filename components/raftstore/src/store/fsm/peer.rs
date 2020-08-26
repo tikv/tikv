@@ -1759,7 +1759,10 @@ where
         // The initialized flag implicitly means whether apply fsm exists or not.
         if job.initialized {
             // Destroy the apply fsm first, wait for the reply msg from apply fsm
-            self.fsm.peer.apply_router.schedule(ApplyTask::destroy(job.region_id, false));
+            self.fsm
+                .peer
+                .apply_router
+                .schedule(ApplyTask::destroy(job.region_id, false));
             false
         } else {
             // Destroy the peer fsm directly
@@ -2743,9 +2746,10 @@ where
                 );
                 self.fsm.peer.pending_remove = true;
                 // Destroy apply fsm at first
-                self.fsm.peer.apply_router.schedule(
-                    ApplyTask::destroy(self.fsm.region_id(), true),
-                );
+                self.fsm
+                    .peer
+                    .apply_router
+                    .schedule(ApplyTask::destroy(self.fsm.region_id(), true));
             }
             MergeResultKind::FromTargetSnapshotStep2 => {
                 // `merge_by_target` is true because this region's range already belongs to

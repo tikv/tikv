@@ -171,6 +171,7 @@ impl std::error::Error for ErrorPtr {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+pub type ResultPtr<T> = std::result::Result<T, ErrorPtr>;
 
 impl From<Error> for errorpb::Error {
     fn from(err: Error) -> errorpb::Error {

@@ -40,7 +40,6 @@ use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
 use crate::store::config::Config;
-use crate::store::fsm::RaftRouter;
 use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
@@ -54,12 +53,10 @@ use crate::store::util::{
 use crate::store::util::{KeysInfoFormatter, PerfContextStatistics};
 
 use crate::store::{cmd_resp, util, RegionSnapshot};
-use crate::{observe_perf_context_type, report_perf_context, Error, ErrorPtr, Result};
+use crate::{observe_perf_context_type, report_perf_context, Error, ErrorPtr, Result, ResultPtr};
 use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 use tokio::sync::mpsc::{channel, Receiver, Sender as FutureSender};
 use txn_types::TxnExtra;
-
-type ResultPtr<T> = std::result::Result<T, ErrorPtr>;
 
 use super::metrics::*;
 
@@ -381,7 +378,7 @@ where
     /// Otherwise create `RocksWriteBatch`.
     pub fn prepare_write_batch(&mut self) {
         if self.kv_wb.is_none() {
-            let kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
+            let kv_wb = W::with_capacity(&self.core.engine, DEFAULT_APPLY_WB_SIZE);
             self.kv_wb = Some(kv_wb);
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
@@ -430,7 +427,7 @@ where
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
-                let kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = W::with_capacity(&self.core.engine, DEFAULT_APPLY_WB_SIZE);
                 self.kv_wb = Some(kv_wb);
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
@@ -452,14 +449,8 @@ where
             cbs.invoke_all(&self.core.host);
         }
         if !self.apply_res.is_empty() {
-            for res in self.apply_res.drain(..) {
-                self.core.notifier.notify(
-                    res.region_id,
-                    PeerMsg::ApplyRes {
-                        res: TaskRes::Apply(res),
-                    },
-                );
-            }
+            let apply_res = std::mem::replace(&mut self.apply_res, vec![]);
+            self.core.notifier.notify(apply_res);
         }
         if !self.flush_notifier.is_empty() {
             for cb in self.flush_notifier.drain(..) {
@@ -798,7 +789,6 @@ where
         });
     }
 
-
     async fn handle_raft_entry_normal<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -842,7 +832,6 @@ where
         }
         ApplyResult::None
     }
-
 
     async fn handle_raft_entry_conf_change<W: WriteBatch<EK>>(
         &mut self,
@@ -913,7 +902,6 @@ where
         }
         (None, TxnExtra::default())
     }
-
 
     async fn process_raft_cmd<W: WriteBatch<EK>>(
         &mut self,
@@ -1215,7 +1203,7 @@ impl<EK> ApplyFsm<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
+    fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> ResultPtr<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region).map_err(|e| ErrorPtr::from(e))?;
@@ -1256,7 +1244,11 @@ where
         Ok(resp)
     }
 
-    fn handle_delete<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
+    fn handle_delete<W: WriteBatch<EK>>(
+        &mut self,
+        wb: &mut W,
+        req: &Request,
+    ) -> ResultPtr<Response> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region).map_err(|e| ErrorPtr::from(e))?;
@@ -1951,7 +1943,7 @@ where
         });
         ctx.core
             .notifier
-            .notify(source_region_id, PeerMsg::SignificantMsg(msg));
+            .notify_one(source_region_id, PeerMsg::SignificantMsg(msg));
 
         // We must notify other fsm to avoid them block when this fsm is waiting for source region
         if !ctx.flush_notifier.is_empty() || !ctx.cbs.is_empty() {
@@ -2717,7 +2709,7 @@ where
             self.destroy(ctx);
 
             ctx.core.notifier.notify_one(
-                self.delegate.region_id(),
+                self.region_id(),
                 PeerMsg::ApplyRes {
                     res: TaskRes::Destroy {
                         region_id: self.region_id(),
@@ -2877,7 +2869,6 @@ where
         cb.invoke_read(resp);
     }
 
-
     async fn handle_task<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -2926,7 +2917,7 @@ pub struct ApplyContextCore<EK: KvEngine> {
     /// Used for handling race between splitting and creating new peer.
     /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    notifier: Notifier<EK>,
+    notifier: Box<dyn Notifier<EK>>,
     engine: EK,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
@@ -2943,7 +2934,7 @@ impl<EK: KvEngine> Clone for ApplyContextCore<EK> {
             importer: self.importer.clone(),
             region_scheduler: self.region_scheduler.clone(),
             pending_create_peers: self.pending_create_peers.clone(),
-            notifier: self.notifier.clone(),
+            notifier: self.notifier.clone_box(),
             engine: self.engine.clone(),
             use_delete_range: self.use_delete_range,
             store_id: self.store_id,
@@ -2989,7 +2980,7 @@ where
 fn take_tls_ctx<EK, W>() -> Option<ApplyContext<EK, W>>
 where
     EK: KvEngine,
-    W: WriteBatch + WriteBatch<EK>,
+    W: WriteBatch<EK>,
 {
     TLS_APPLY_CONTEXT.with(|e| unsafe {
         if (*e.get()).is_null() {
@@ -3019,7 +3010,6 @@ where
     })
 }
 
-
 async fn handle_normal<EK, W>(
     mut fsm: Box<ApplyFsm<EK>>,
     mut receiver: Receiver<Msg<EK>>,
@@ -3029,8 +3019,8 @@ async fn handle_normal<EK, W>(
     W: WriteBatch<EK>,
 {
     fsm.handle_start = Instant::now_coarse();
-    let mut apply_ctx = take_tls_ctx()
-        .or_else(|| Some(ApplyContext::<EK, ER, W>::new(core.lock().unwrap().clone())));
+    let mut apply_ctx =
+        take_tls_ctx().or_else(|| Some(ApplyContext::<EK, W>::new(core.lock().unwrap().clone())));
     loop {
         let msg = match receiver.try_recv() {
             Ok(msg) => msg,
@@ -3059,7 +3049,7 @@ async fn handle_normal<EK, W>(
                     if let Some(msg) = msg {
                         fsm.handle_start = Instant::now_coarse();
                         apply_ctx = take_tls_ctx().or_else(|| {
-                            Some(ApplyContext::<EK, ER, W>::new(core.lock().unwrap().clone()))
+                            Some(ApplyContext::<EK, W>::new(core.lock().unwrap().clone()))
                         });
                         msg
                     } else {
@@ -3162,17 +3152,14 @@ where
     }
 }
 
-pub fn create_apply_batch_system<
-    EK: KvEngine,
-    W: WriteBatch<EK> + 'static,
->(
+pub fn create_apply_batch_system<EK: KvEngine, W: WriteBatch<EK> + 'static>(
     store_id: u64,
     tag: String,
     host: CoprocessorHost<EK>,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     engine: EK,
-    notifier: Notifier<EK>,
+    notifier: Box<dyn Notifier<EK>>,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     cfg: &Config,
 ) -> Box<dyn ApplyBatchSystem<EK>> {
@@ -3201,9 +3188,8 @@ pub fn create_apply_batch_system<
         use_delete_range: cfg.use_delete_range,
         perf_level: cfg.perf_level,
     };
-    let _phatom = Arc::new(Mutex::new(W::write_batch_vec(
+    let _phatom = Arc::new(Mutex::new(W::with_capacity(
         &core.engine,
-        WRITE_BATCH_LIMIT,
         DEFAULT_APPLY_WB_SIZE,
     )));
     let system = ApplyBatchSystemImpl::<EK, W> {
@@ -3433,7 +3419,7 @@ mod tests {
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let (sender, receiver) = channel(1024);
         let mut router = ApplyRouter::new(sender);
-        let system = create_apply_batch_system::<RocksEngine, RocksEngine, RocksWriteBatch>(
+        let system = create_apply_batch_system::<RocksEngine, RocksWriteBatch>(
             1,
             "test-store".to_owned(),
             CoprocessorHost::<RocksEngine>::default(),
@@ -3444,10 +3430,6 @@ mod tests {
             pending_create_peers,
             &cfg.value(),
         );
-        println!("size: {}", std::mem::size_of::<RaftCmdRequest>());
-        println!("size: {}", std::mem::size_of::<RaftCmdResponse>());
-        println!("size: {}", std::mem::size_of::<ExecResult<RocksSnapshot>>());
-        println!("size: {}", std::mem::size_of::<ExecContext>());
         let mut reg = Registration::default();
         reg.id = 1;
         reg.region.set_id(2);
@@ -3539,7 +3521,7 @@ mod tests {
             assert_eq!(fsm.apply_state.get_applied_index(), 5);
         });
 
-        router.schedule(Msg::destroy(2, true, false));
+        router.schedule(Msg::destroy(2, false));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Destroy {
@@ -3740,7 +3722,7 @@ mod tests {
         let (sender, receiver) = channel(1024);
         let mut router = ApplyRouter::new(sender);
 
-        let system = create_apply_batch_system::<_, _, RocksWriteBatch>(
+        let system = create_apply_batch_system::<_, RocksWriteBatch>(
             1,
             "test-store".to_owned(),
             CoprocessorHost::<RocksEngine>::default(),
@@ -4067,14 +4049,14 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
-        let notifer = Box::new(TestNotifier { tx });
+        let notifier = Box::new(TestNotifier { tx });
         let cfg = Config::default();
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
 
         let (sender, receiver) = channel(1024);
         let mut router = ApplyRouter::new(sender);
 
-        let system = create_apply_batch_system::<RocksEngine, RocksEngine, RocksWriteBatch>(
+        let system = create_apply_batch_system::<RocksEngine, RocksWriteBatch>(
             1,
             "test-store".to_owned(),
             host,
@@ -4355,7 +4337,7 @@ mod tests {
         let (sender, receiver) = channel(1024);
         let mut router = ApplyRouter::new(sender);
 
-        let system = create_apply_batch_system::<RocksEngine, RocksEngine, RocksWriteBatch>(
+        let system = create_apply_batch_system::<RocksEngine, RocksWriteBatch>(
             2,
             "test-store".to_owned(),
             host,
