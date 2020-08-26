@@ -502,7 +502,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             deregister_downstream(Error::Request(e.into()));
             return;
         }
-        self.workers.spawn(fut.then(move |res| {
+        self.workers.spawn(Compat::new(fut).then(move |res| {
             match res {
                 Ok(resp) => init.on_change_cmd(resp),
                 Err(e) => deregister_downstream(Error::Other(box_err!(e))),
