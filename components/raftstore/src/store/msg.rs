@@ -25,7 +25,6 @@ use tikv_util::escape;
 use tikv_util::minitrace::{self, Event};
 
 use super::{AbstractPeer, RegionSnapshot};
-use bitflags::_core::fmt::Formatter;
 
 #[derive(Debug)]
 pub struct ReadResponse<S: Snapshot> {
@@ -440,7 +439,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMessage<EK> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.msg.fmt(f)
     }
 }
@@ -519,7 +518,7 @@ impl fmt::Debug for StoreMsg {
 }
 
 impl fmt::Debug for StoreMessage {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.msg.fmt(f)
     }
 }

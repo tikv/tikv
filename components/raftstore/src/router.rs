@@ -6,7 +6,8 @@ use kvproto::raft_serverpb::RaftMessage;
 
 use crate::store::fsm::RaftRouter;
 use crate::store::{
-    Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
+    Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMessage,
+    StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use engine_rocks::RocksEngine;
@@ -161,8 +162,8 @@ where
         }
     }
 
-    pub fn send_store(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        self.router.send_control(msg.into()).map_err(|e| {
+    pub fn send_store(&self, msg: StoreMessage) -> RaftStoreResult<()> {
+        self.router.send_control(msg).map_err(|e| {
             RaftStoreError::Transport(match e {
                 TrySendError::Full(_) => DiscardReason::Full,
                 TrySendError::Disconnected(_) => DiscardReason::Disconnected,

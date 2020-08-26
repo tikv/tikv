@@ -336,10 +336,13 @@ impl<E: Engine> GcRunner<E> {
 
         if let Some(router) = self.raft_store_router.as_ref() {
             router
-                .send_store(StoreMsg::ClearRegionSizeInRange {
-                    start_key: start_key.as_encoded().to_vec(),
-                    end_key: end_key.as_encoded().to_vec(),
-                })
+                .send_store(
+                    StoreMsg::ClearRegionSizeInRange {
+                        start_key: start_key.as_encoded().to_vec(),
+                        end_key: end_key.as_encoded().to_vec(),
+                    }
+                    .into(),
+                )
                 .unwrap_or_else(|e| {
                     // Warn and ignore it.
                     warn!(
