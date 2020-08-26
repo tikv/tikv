@@ -652,6 +652,7 @@ impl TiKVServer {
             raft_router,
             cdc_ob,
             engines.store_meta.clone(),
+            self.concurrency_manager.clone(),
         );
         let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker

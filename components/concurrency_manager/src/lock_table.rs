@@ -91,13 +91,8 @@ impl LockTable {
         end_key: Option<&Key>,
         mut pred: impl FnMut(Arc<KeyHandle>) -> Option<T>,
     ) -> Option<T> {
-        let lower_bound = start_key
-            .map(|k| Bound::Included(k))
-            .unwrap_or(Bound::Unbounded);
-        let upper_bound = end_key
-            .map(|k| Bound::Excluded(k))
-            .unwrap_or(Bound::Unbounded);
-        for (_, handle) in self.0.lock().range::<Key, _>((lower_bound, upper_bound)) {
+        let bound = Self::key_range_to_bound(start_key, end_key);
+        for (_, handle) in self.0.lock().range::<Key, _>(bound) {
             if let Some(v) = handle.upgrade().and_then(&mut pred) {
                 return Some(v);
             }
@@ -105,9 +100,37 @@ impl LockTable {
         None
     }
 
+    /// Iterates all handles and call a specified function on each of them.
+    pub fn for_each(
+        &self,
+        start_key: Option<&Key>,
+        end_key: Option<&Key>,
+        mut f: impl FnMut(Arc<KeyHandle>),
+    ) {
+        let bound = Self::key_range_to_bound(start_key, end_key);
+        for (_, handle) in self.0.lock().range::<Key, _>(bound) {
+            if let Some(handle) = handle.upgrade() {
+                f(handle);
+            }
+        }
+    }
+
     /// Removes the key and its key handle from the map.
     pub fn remove(&self, key: &Key) {
         self.0.lock().remove(key);
+    }
+
+    fn key_range_to_bound<'a, 'b>(
+        start_key: Option<&'a Key>,
+        end_key: Option<&'b Key>,
+    ) -> (Bound<&'a Key>, Bound<&'b Key>) {
+        let lower_bound = start_key
+            .map(|k| Bound::Included(k))
+            .unwrap_or(Bound::Unbounded);
+        let upper_bound = end_key
+            .map(|k| Bound::Excluded(k))
+            .unwrap_or(Bound::Unbounded);
+        (lower_bound, upper_bound)
     }
 }
 

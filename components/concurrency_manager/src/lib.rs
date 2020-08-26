@@ -107,6 +107,18 @@ impl ConcurrencyManager {
     ) -> Result<(), E> {
         self.lock_table.check_range(start_key, end_key, check_fn)
     }
+
+    pub fn global_min_lock_ts(&self) -> Option<TimeStamp> {
+        let mut min_lock_ts = None;
+        self.lock_table.for_each(None, None, |handle| {
+            if let Some(curr_ts) = handle.with_lock(|lock| lock.as_ref().map(|l| l.ts)) {
+                if min_lock_ts.map(|ts| ts > curr_ts).unwrap_or(true) {
+                    min_lock_ts = Some(curr_ts);
+                }
+            }
+        });
+        min_lock_ts
+    }
 }
 
 #[cfg(test)]
