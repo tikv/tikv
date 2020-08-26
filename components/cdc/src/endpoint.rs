@@ -9,6 +9,7 @@ use std::time::Duration;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::future::Future;
+use futures::stream::Stream;
 use futures03::compat::Compat;
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -26,6 +27,7 @@ use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
 use tikv_util::collections::HashMap;
 use tikv_util::lru::LruCache;
+use tikv_util::mpsc;
 use tikv_util::time::Instant;
 use tikv_util::timer::{SteadyTimer, Timer};
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
@@ -225,8 +227,10 @@ pub struct Endpoint<T> {
     timer: SteadyTimer,
     min_ts_interval: Duration,
     scan_batch_size: usize,
-    tso_worker: ThreadPool,
     store_meta: Arc<Mutex<StoreMeta>>,
+
+    // Worker for doing misc works like getting tso from pd and receiving old value from txn
+    misc_worker: ThreadPool,
 
     workers: ThreadPool,
 
@@ -243,15 +247,23 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         raft_router: T,
         observer: CdcObserver,
         store_meta: Arc<Mutex<StoreMeta>>,
+        txn_extra_receiver: mpsc::Receiver<TxnExtra>,
     ) -> Endpoint<T> {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
-        let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
+        let misc_worker = Builder::new().name_prefix("tso").pool_size(1).build();
+        let scheduler_clone = scheduler.clone();
+        misc_worker.spawn(txn_extra_receiver.for_each(move |txn_extra| {
+            if let Err(e) = scheduler_clone.schedule(Task::TxnExtra(txn_extra)) {
+                error!("schedule TxnExra failed"; "err" => ?e);
+            }
+            Ok(())
+        }));
         let ep = Endpoint {
             capture_regions: HashMap::default(),
             connections: HashMap::default(),
             scheduler,
             pd_client,
-            tso_worker,
+            misc_worker,
             timer: SteadyTimer::default(),
             workers,
             raft_router,
@@ -653,7 +665,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 Ok(())
             },
         );
-        self.tso_worker.spawn(fut);
+        self.misc_worker.spawn(fut);
     }
 
     fn on_open_conn(&mut self, conn: Conn) {
@@ -1072,6 +1084,7 @@ mod tests {
         let raft_router = MockRaftStoreRouter::new();
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));
+        let (_, txn_extra_rx) = mpsc::unbounded();
         let mut ep = Endpoint::new(
             &CdcConfig::default(),
             pd_client,
@@ -1079,6 +1092,7 @@ mod tests {
             raft_router.clone(),
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
+            txn_extra_rx,
         );
         let (tx, _rx) = batch::unbounded(1);
 
@@ -1130,6 +1144,7 @@ mod tests {
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));
+        let (_, txn_extra_rx) = mpsc::unbounded();
         let mut ep = Endpoint::new(
             &CdcConfig::default(),
             pd_client,
@@ -1137,6 +1152,7 @@ mod tests {
             raft_router,
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
+            txn_extra_rx,
         );
         let (tx, rx) = batch::unbounded(1);
 

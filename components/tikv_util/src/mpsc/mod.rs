@@ -12,6 +12,7 @@ pub mod batch;
 use crossbeam::channel::{
     self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
 };
+use futures::{Async, Poll, Stream};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Arc;
@@ -167,6 +168,19 @@ impl<T> Drop for Receiver<T> {
     #[inline]
     fn drop(&mut self) {
         self.state.connected.store(false, Ordering::Release);
+    }
+}
+
+impl<T> Stream for Receiver<T> {
+    type Error = ();
+    type Item = T;
+
+    fn poll(&mut self) -> Poll<Option<T>, ()> {
+        match self.try_recv() {
+            Ok(m) => Ok(Async::Ready(Some(m))),
+            Err(TryRecvError::Empty) => Ok(Async::NotReady),
+            Err(TryRecvError::Disconnected) => Ok(Async::Ready(None)),
+        }
     }
 }
 

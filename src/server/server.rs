@@ -289,7 +289,6 @@ mod tests {
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use security::SecurityConfig;
-    use txn_types::TxnExtra;
 
     #[derive(Clone)]
     struct MockResolver {
@@ -329,10 +328,6 @@ mod tests {
             _: Callback<RocksSnapshot>,
         ) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
-            Ok(())
-        }
-
-        fn send_txn_extra(&self, _: TxnExtra) -> RaftStoreResult<()> {
             Ok(())
         }
 

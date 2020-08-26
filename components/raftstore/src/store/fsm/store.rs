@@ -71,7 +71,6 @@ use crate::store::{
 };
 use crate::Result;
 use concurrency_manager::ConcurrencyManager;
-use txn_types::TxnExtra;
 
 type Key = Vec<u8>;
 
@@ -246,23 +245,6 @@ where
             Err(TrySendError::Full(PeerMsg::RaftCommand(cmd))) => Err(TrySendError::Full(cmd)),
             Err(TrySendError::Disconnected(PeerMsg::RaftCommand(cmd))) => {
                 Err(TrySendError::Disconnected(cmd))
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    #[inline]
-    pub fn send_txn_extra(
-        &self,
-        txn_extra: TxnExtra,
-    ) -> std::result::Result<(), TrySendError<TxnExtra>> {
-        match self.send_control(StoreMsg::TxnExtra(txn_extra)) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(StoreMsg::TxnExtra(txn_extra))) => {
-                Err(TrySendError::Full(txn_extra))
-            }
-            Err(TrySendError::Disconnected(StoreMsg::TxnExtra(txn_extra))) => {
-                Err(TrySendError::Disconnected(txn_extra))
             }
             _ => unreachable!(),
         }

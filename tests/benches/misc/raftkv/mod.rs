@@ -24,7 +24,7 @@ use tikv::storage::kv::{
     Callback as EngineCallback, CbContext, Modify, Result as EngineResult, WriteData,
 };
 use tikv::storage::Engine;
-use txn_types::{Key, TxnExtra};
+use txn_types::Key;
 
 #[derive(Clone)]
 struct SyncBenchRouter {
@@ -71,10 +71,6 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) -> Result<()> {
         self.invoke(RaftCommand::new(req, cb));
-        Ok(())
-    }
-
-    fn send_txn_extra(&self, _: TxnExtra) -> Result<()> {
         Ok(())
     }
 

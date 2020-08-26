@@ -50,6 +50,7 @@ use tikv::server::{
 use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
+use tikv_util::mpsc;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 use tikv_util::HandyRwLock;
@@ -86,6 +87,7 @@ pub struct ServerCluster {
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<RaftStoreBlackHole>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
+    pub txn_extra_rx: HashMap<u64, mpsc::Receiver<txn_types::TxnExtra>>,
 }
 
 impl ServerCluster {
@@ -117,6 +119,7 @@ impl ServerCluster {
             coprocessor_hooks: HashMap::default(),
             raft_client,
             concurrency_managers: HashMap::default(),
+            txn_extra_rx: HashMap::default(),
         }
     }
 
@@ -171,7 +174,9 @@ impl Simulator for ServerCluster {
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
 
-        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+        let (txn_extra_tx, txn_extra_rx) = mpsc::unbounded();
+        let mut raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+        raft_engine.txn_extra_tx = Some(txn_extra_tx);
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone());
@@ -218,6 +223,7 @@ impl Simulator for ServerCluster {
             false,
         )?;
         self.storages.insert(node_id, raft_engine);
+        self.txn_extra_rx.insert(node_id, txn_extra_rx);
 
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         // Create import service.

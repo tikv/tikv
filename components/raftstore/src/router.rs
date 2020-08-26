@@ -14,7 +14,6 @@ use engine_traits::KvEngine;
 use raft::SnapshotStatus;
 use std::cell::RefCell;
 use tikv_util::time::ThreadReadId;
-use txn_types::TxnExtra;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<EK>: Send + Clone
@@ -26,9 +25,6 @@ where
 
     /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()>;
-
-    /// Sends TxnExtra to local store.
-    fn send_txn_extra(&self, txn_extra: TxnExtra) -> RaftStoreResult<()>;
 
     /// Sends Snapshot to local store.
     fn read(
@@ -96,11 +92,6 @@ where
 
     /// Sends RaftCmdRequest to local store.
     fn send_command(&self, _: RaftCmdRequest, _: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
-        Ok(())
-    }
-
-    /// Sends TxnExtra to local store.
-    fn send_txn_extra(&self, _: TxnExtra) -> RaftStoreResult<()> {
         Ok(())
     }
 
@@ -204,10 +195,6 @@ where
     fn release_snapshot_cache(&self) {
         let mut local_reader = self.local_reader.borrow_mut();
         local_reader.release_snapshot_cache();
-    }
-
-    fn send_txn_extra(&self, _: TxnExtra) -> RaftStoreResult<()> {
-        Ok(())
     }
 
     fn significant_send(

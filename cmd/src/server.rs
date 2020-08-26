@@ -64,6 +64,7 @@ use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
+    mpsc,
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureWorker, Worker},
@@ -472,6 +473,9 @@ impl TiKVServer {
             Box::new(gc_worker.get_config_manager()),
         );
 
+        let (txn_extra_tx, txn_extra_rx) = mpsc::unbounded();
+        self.engines.as_mut().unwrap().engine.txn_extra_tx = Some(txn_extra_tx);
+
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
 
@@ -644,7 +648,7 @@ impl TiKVServer {
         }
 
         // Start CDC.
-        let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
+        let raft_router = engines.raft_router.clone();
         let cdc_endpoint = cdc::Endpoint::new(
             &self.config.cdc,
             self.pd_client.clone(),
@@ -652,6 +656,7 @@ impl TiKVServer {
             raft_router,
             cdc_ob,
             engines.store_meta.clone(),
+            txn_extra_rx,
         );
         let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker

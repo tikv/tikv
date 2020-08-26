@@ -27,6 +27,7 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
+use tikv_util::mpsc::Sender;
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
 
@@ -108,6 +109,7 @@ impl From<RaftServerError> for KvError {
 pub struct RaftKv<S: RaftStoreRouter<RocksEngine> + 'static> {
     router: S,
     engine: RocksEngine,
+    pub txn_extra_tx: Option<Sender<TxnExtra>>,
 }
 
 pub enum CmdRes {
@@ -165,7 +167,11 @@ fn on_read_result(
 impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
     /// Create a RaftKv using specified configuration.
     pub fn new(router: S, engine: RocksEngine) -> RaftKv<S> {
-        RaftKv { router, engine }
+        RaftKv {
+            router,
+            engine,
+            txn_extra_tx: None,
+        }
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
@@ -208,7 +214,6 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
-        txn_extra: TxnExtra,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
@@ -238,8 +243,6 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
-
-        self.router.send_txn_extra(txn_extra)?;
 
         self.router
             .send_command(
@@ -359,10 +362,15 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
+        if let Some(tx) = self.txn_extra_tx.as_ref() {
+            if let Err(e) = tx.send(batch.extra) {
+                error!("send txn extra failed"; "err" => ?e);
+            }
+        }
+
         self.exec_write_requests(
             ctx,
             reqs,
-            batch.extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
