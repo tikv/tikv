@@ -11,7 +11,7 @@ use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use txn_types::{Key, TimeStamp};
 
-use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
+use crate::storage::kv::{CfStatistics, PerfStatisticsInstant, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
 
 pub struct Cursor<I: Iterator> {
     iter: I,
@@ -298,21 +298,30 @@ impl<I: Iterator> Cursor<I> {
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
-        self.iter.seek_to_first().expect("Invalid Iterator")
+        let perf = PerfStatisticsInstant::new();
+        let res = self.iter.seek_to_first().expect("Invalid Iterator");
+        statistics.seek_tombstone += perf.delta().0.internal_delete_skipped_count;
+        res
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
-        self.iter.seek_to_last().expect("Invalid Iterator")
+        let perf = PerfStatisticsInstant::new();
+        let res = self.iter.seek_to_last().expect("Invalid Iterator");
+        statistics.seek_tombstone += perf.delta().0.internal_delete_skipped_count;
+        res
     }
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         statistics.seek += 1;
         self.mark_unread();
-        self.iter.seek(key)
+        let perf = PerfStatisticsInstant::new();
+        let res = self.iter.seek(key);
+        statistics.seek_tombstone += perf.delta().0.internal_delete_skipped_count;
+        res
     }
 
     #[inline]
@@ -323,21 +332,30 @@ impl<I: Iterator> Cursor<I> {
     ) -> Result<bool> {
         statistics.seek_for_prev += 1;
         self.mark_unread();
-        self.iter.seek_for_prev(key)
+        let perf = PerfStatisticsInstant::new();
+        let res = self.iter.seek_for_prev(key);
+        statistics.seek_for_prev_tombstone += perf.delta().0.internal_delete_skipped_count;
+        res
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.next += 1;
         self.mark_unread();
-        self.iter.next().expect("Invalid Iterator")
+        let perf = PerfStatisticsInstant::new();
+        let res = self.iter.next().expect("Invalid Iterator");
+        statistics.next_tombstone += perf.delta().0.internal_delete_skipped_count;
+        res
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.prev += 1;
         self.mark_unread();
-        self.iter.prev().expect("Invalid Iterator")
+        let perf = PerfStatisticsInstant::new();
+        let res = self.iter.prev().expect("Invalid Iterator");
+        statistics.prev_tombstone += perf.delta().0.internal_delete_skipped_count;
+        res
     }
 
     #[inline]
