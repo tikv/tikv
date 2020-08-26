@@ -363,8 +363,10 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         let begin_instant = Instant::now_coarse();
 
         if let Some(tx) = self.txn_extra_tx.as_ref() {
-            if let Err(e) = tx.send(batch.extra) {
-                error!("send txn extra failed"; "err" => ?e);
+            if !batch.extra.is_empty() {
+                if let Err(e) = tx.send(batch.extra) {
+                    error!("send txn extra failed"; "err" => ?e);
+                }
             }
         }
 
