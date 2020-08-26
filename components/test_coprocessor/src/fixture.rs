@@ -2,6 +2,7 @@
 
 use super::*;
 
+use concurrency_manager::ConcurrencyManager;
 use kvproto::kvrpcpb::Context;
 
 use tidb_query_datatype::codec::Datum;
@@ -10,7 +11,7 @@ use tikv::coprocessor::{readpool_impl, Endpoint};
 use tikv::read_pool::ReadPool;
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
-use tikv::storage::{concurrency_manager::ConcurrencyManager, Engine, TestEngineBuilder};
+use tikv::storage::{Engine, TestEngineBuilder};
 
 #[derive(Clone)]
 pub struct ProductTable(Table);
