@@ -69,7 +69,6 @@ use yatp::task::future::{reschedule, TaskCell};
 use yatp::Remote;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
-const WRITE_BATCH_LIMIT: usize = 16;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
@@ -305,44 +304,10 @@ where
     }
 }
 
-pub enum Notifier<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    Router(RaftRouter<EK, ER>),
-    #[cfg(test)]
-    Sender(Sender<PeerMsg<EK>>),
-}
-
-impl<EK, ER> Clone for Notifier<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    fn clone(&self) -> Self {
-        match self {
-            Notifier::Router(v) => Notifier::Router(v.clone()),
-            #[cfg(test)]
-            Notifier::Sender(v) => Notifier::Sender(v.clone()),
-        }
-    }
-}
-
-impl<EK, ER> Notifier<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    fn notify(&self, region_id: u64, msg: PeerMsg<EK>) {
-        match *self {
-            Notifier::Router(ref r) => {
-                let _ = r.try_send(region_id, msg);
-            }
-            #[cfg(test)]
-            Notifier::Sender(ref s) => s.send(msg).unwrap(),
-        }
-    }
+pub trait Notifier<EK: KvEngine>: Send {
+    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
+    fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>);
+    fn clone_box(&self) -> Box<dyn Notifier<EK>>;
 }
 
 struct ApplyContext<EK, W>
@@ -416,8 +381,7 @@ where
     /// Otherwise create `RocksWriteBatch`.
     pub fn prepare_write_batch(&mut self) {
         if self.kv_wb.is_none() {
-            let kv_wb =
-                W::write_batch_vec(&self.core.engine, WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE);
+            let kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
             self.kv_wb = Some(kv_wb);
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
@@ -466,8 +430,7 @@ where
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
-                let kv_wb =
-                    W::write_batch_vec(&self.core.engine, WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
                 self.kv_wb = Some(kv_wb);
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
@@ -816,10 +779,7 @@ where
         }
     }
 
-    fn update_metrics<W: WriteBatch<EK>>(
-        &mut self,
-        apply_ctx: &ApplyContext<EK, W>,
-    ) {
+    fn update_metrics<W: WriteBatch<EK>>(&mut self, apply_ctx: &ApplyContext<EK, W>) {
         self.metrics.written_bytes += apply_ctx.delta_bytes();
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
@@ -838,9 +798,10 @@ where
         });
     }
 
+
     async fn handle_raft_entry_normal<W: WriteBatch<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        apply_ctx: &mut ApplyContext<EK, W>,
         entry: Entry,
     ) -> ApplyResult<EK::Snapshot> {
         let index = entry.get_index();
@@ -882,9 +843,10 @@ where
         ApplyResult::None
     }
 
+
     async fn handle_raft_entry_conf_change<W: WriteBatch<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        apply_ctx: &mut ApplyContext<EK, W>,
         entry: Entry,
     ) -> ApplyResult<EK::Snapshot> {
         let index = entry.get_index();
@@ -951,6 +913,7 @@ where
         }
         (None, TxnExtra::default())
     }
+
 
     async fn process_raft_cmd<W: WriteBatch<EK>>(
         &mut self,
@@ -1252,7 +1215,7 @@ impl<EK> ApplyFsm<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> ResultPtr<Response> {
+    fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region).map_err(|e| ErrorPtr::from(e))?;
@@ -1293,7 +1256,7 @@ where
         Ok(resp)
     }
 
-    fn handle_delete<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> ResultPtr<Response> {
+    fn handle_delete<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region).map_err(|e| ErrorPtr::from(e))?;
@@ -2401,7 +2364,6 @@ where
 
 pub struct Destroy {
     region_id: u64,
-    async_remove: bool,
     merge_from_snapshot: bool,
 }
 
@@ -2557,10 +2519,9 @@ where
         }
     }
 
-    pub fn destroy(region_id: u64, async_remove: bool, merge_from_snapshot: bool) -> Msg<EK> {
+    pub fn destroy(region_id: u64, merge_from_snapshot: bool) -> Msg<EK> {
         Msg::Destroy(Destroy {
             region_id,
-            async_remove,
             merge_from_snapshot,
         })
     }
@@ -2725,10 +2686,7 @@ where
         APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
-    fn destroy<W: WriteBatch<EK>>(
-        &mut self,
-        ctx: &mut ApplyContext<EK, W>,
-    ) {
+    fn destroy<W: WriteBatch<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>) {
         let region_id = self.region_id();
         if ctx.apply_res.iter().any(|res| res.region_id == region_id) {
             // Flush before destroying to avoid reordering messages.
@@ -2750,29 +2708,24 @@ where
     }
 
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
-    fn handle_destroy<W: WriteBatch<EK>>(
-        &mut self,
-        ctx: &mut ApplyContext<EK, W>,
-        d: Destroy,
-    ) {
+    fn handle_destroy<W: WriteBatch<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>, d: Destroy) {
         assert_eq!(d.region_id, self.region_id());
         if d.merge_from_snapshot {
             assert_eq!(self.stopped, false);
         }
         if !self.stopped {
             self.destroy(ctx);
-            if d.async_remove {
-                ctx.core.notifier.notify(
-                    self.region_id(),
-                    PeerMsg::ApplyRes {
-                        res: TaskRes::Destroy {
-                            region_id: self.region_id(),
-                            peer_id: self.id,
-                            merge_from_snapshot: d.merge_from_snapshot,
-                        },
+
+            ctx.core.notifier.notify_one(
+                self.delegate.region_id(),
+                PeerMsg::ApplyRes {
+                    res: TaskRes::Destroy {
+                        region_id: self.region_id(),
+                        peer_id: self.id,
+                        merge_from_snapshot: d.merge_from_snapshot,
                     },
-                );
-            }
+                },
+            );
         }
     }
 
@@ -2781,6 +2734,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         callback: Box<dyn FnOnce(u64)>,
     ) {
+        fail_point!("after_handle_catch_up_logs_for_merge");
         fail_point!(
             "after_handle_catch_up_logs_for_merge_1003",
             self.id() == 1003,
@@ -2923,6 +2877,7 @@ where
         cb.invoke_read(resp);
     }
 
+
     async fn handle_task<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -3031,10 +2986,9 @@ where
     });
 }
 
-fn take_tls_ctx<EK, ER, W>() -> Option<ApplyContext<EK, W>>
+fn take_tls_ctx<EK, W>() -> Option<ApplyContext<EK, W>>
 where
     EK: KvEngine,
-    ER: RaftEngine,
     W: WriteBatch + WriteBatch<EK>,
 {
     TLS_APPLY_CONTEXT.with(|e| unsafe {
@@ -3064,6 +3018,7 @@ where
         }
     })
 }
+
 
 async fn handle_normal<EK, W>(
     mut fsm: Box<ApplyFsm<EK>>,
@@ -3323,6 +3278,26 @@ mod tests {
         e
     }
 
+    #[derive(Clone)]
+    pub struct TestNotifier<EK: KvEngine> {
+        tx: Sender<PeerMsg<EK>>,
+    }
+
+    impl<EK: KvEngine> Notifier<EK> for TestNotifier<EK> {
+        fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+            for r in apply_res {
+                let res = TaskRes::Apply(r);
+                let _ = self.tx.send(PeerMsg::ApplyRes { res });
+            }
+        }
+        fn notify_one(&self, _: u64, msg: PeerMsg<EK>) {
+            let _ = self.tx.send(msg);
+        }
+        fn clone_box(&self) -> Box<dyn Notifier<EK>> {
+            Box::new(self.clone())
+        }
+    }
+
     #[test]
     fn test_should_sync_log() {
         // Admin command
@@ -3450,7 +3425,7 @@ mod tests {
     #[test]
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
-        let notifier: Notifier<RocksEngine, RocksEngine> = Notifier::Sender(tx);
+        let notifier = Box::new(TestNotifier { tx });
         let (_tmp, engine) = create_tmp_engine("apply-basic");
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
@@ -3757,7 +3732,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
-        let notifier: Notifier<RocksEngine, RocksEngine> = Notifier::Sender(tx);
+        let notifier = Box::new(TestNotifier { tx });
         let mut cfg = Config::default();
         cfg.apply_yield_duration = ReadableDuration::millis(150);
         let cfg = Arc::new(VersionTrack::new(cfg));
@@ -4092,9 +4067,10 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
-        let notifier = Notifier::Sender(tx);
+        let notifer = Box::new(TestNotifier { tx });
         let cfg = Config::default();
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+
         let (sender, receiver) = channel(1024);
         let mut router = ApplyRouter::new(sender);
 
@@ -4366,8 +4342,8 @@ mod tests {
         let peers = vec![new_peer(2, 3), new_peer(4, 5), new_learner_peer(6, 7)];
         reg.region.set_peers(peers.clone().into());
         let (tx, _rx) = mpsc::channel();
-        let notifier = Notifier::Sender(tx);
-        let mut host = CoprocessorHost::default();
+        let notifier = Box::new(TestNotifier { tx });
+        let mut host = CoprocessorHost::<RocksEngine>::default();
         let mut obs = ApplyObserver::default();
         let (sink, cmdbatch_rx) = mpsc::channel();
         obs.cmd_sink = Some(Arc::new(Mutex::new(sink)));

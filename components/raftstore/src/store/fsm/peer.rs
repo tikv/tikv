@@ -69,7 +69,6 @@ const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
-    pub async_remove: bool,
     pub region_id: u64,
     pub peer: metapb::Peer,
 }
@@ -1757,25 +1756,13 @@ where
     }
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
+        // The initialized flag implicitly means whether apply fsm exists or not.
         if job.initialized {
-            // When initialized is true and async_remove is false, apply fsm doesn't need to
-            // send destroy msg to peer fsm because peer fsm has already destroyed.
-            // In this case, if apply fsm sends destroy msg, peer fsm may be destroyed twice
-            // because there are some msgs in channel so peer fsm still need to handle them (e.g. callback)
-            self.fsm.peer.apply_router.schedule(ApplyTask::destroy(
-                job.region_id,
-                job.async_remove,
-                false,
-            ));
-        }
-        if job.async_remove {
-            info!(
-                "peer is destroyed asynchronously";
-                "region_id" => job.region_id,
-                "peer_id" => job.peer.get_id(),
-            );
+            // Destroy the apply fsm first, wait for the reply msg from apply fsm
+            self.fsm.peer.apply_router.schedule(ApplyTask::destroy(job.region_id, false));
             false
         } else {
+            // Destroy the peer fsm directly
             self.destroy_peer(false);
             true
         }
@@ -2614,6 +2601,13 @@ where
         let reader = meta.readers.remove(&source.get_id()).unwrap();
         reader.mark_invalid();
 
+        // If a follower merges into a leader, a more recent read may happen
+        // on the leader of the follower. So max ts should be updated after
+        // a region merge.
+        self.fsm
+            .peer
+            .require_updating_max_ts(&self.ctx.pd_scheduler);
+
         drop(meta);
 
         // make approximate size and keys updated in time.
@@ -2749,11 +2743,9 @@ where
                 );
                 self.fsm.peer.pending_remove = true;
                 // Destroy apply fsm at first
-                self.fsm.peer.apply_router.schedule(ApplyTask::destroy(
-                    self.fsm.region_id(),
-                    true,
-                    true,
-                ));
+                self.fsm.peer.apply_router.schedule(
+                    ApplyTask::destroy(self.fsm.region_id(), true),
+                );
             }
             MergeResultKind::FromTargetSnapshotStep2 => {
                 // `merge_by_target` is true because this region's range already belongs to
