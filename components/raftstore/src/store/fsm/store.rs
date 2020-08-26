@@ -12,9 +12,7 @@ use std::{mem, thread, u64};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{
-    Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
-};
+use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -52,10 +50,9 @@ use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
 };
 use crate::store::fsm::ApplyNotifier;
-#[cfg(feature = "failpoints")]
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
-    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter,
+    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter,
 };
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
@@ -179,6 +176,30 @@ where
 
     fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm> {
         &self.router
+    }
+}
+
+impl<EK, ER> ApplyNotifier<EK> for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+        for r in apply_res {
+            self.router.try_send(
+                r.region_id,
+                PeerMsg::ApplyRes {
+                    res: ApplyTaskRes::Apply(r),
+                },
+            );
+        }
+    }
+    fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>) {
+        self.router.try_send(region_id, msg);
+    }
+
+    fn clone_box(&self) -> Box<dyn ApplyNotifier<EK>> {
+        Box::new(self.clone())
     }
 }
 
@@ -1180,11 +1201,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         Ok(())
     }
 
-    fn start_system<
-        T: Transport + 'static,
-        C: PdClient + 'static,
-        W: WriteBatch + WriteBatchVecExt<EK> + 'static,
-    >(
+    fn start_system<T: Transport + 'static, C: PdClient + 'static, W: WriteBatch<EK> + 'static>(
         &mut self,
         mut workers: Workers<EK, ER>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
@@ -1202,9 +1219,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let pd_client = builder.pd_client.clone();
         let importer = builder.importer.clone();
 
-        let apply_poller_builder = ApplyPollerBuilder::<_, _, W>::new(
+        let apply_poller_builder = ApplyPollerBuilder::<EK, W>::new(
             &builder,
-            ApplyNotifier::Router(self.router.clone()),
+            Box::new(self.router.clone()),
             self.apply_router.clone(),
         );
         self.apply_system
