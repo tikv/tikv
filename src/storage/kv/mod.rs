@@ -196,6 +196,12 @@ pub trait Snapshot: Sync + Send + Clone {
     fn get_data_version(&self) -> Option<u64> {
         None
     }
+
+    fn is_max_ts_synced(&self) -> bool {
+        // If the snapshot does not come from a multi-raft engine, max ts
+        // needn't be updated.
+        true
+    }
 }
 
 pub trait Iterator: Send {

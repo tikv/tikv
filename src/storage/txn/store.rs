@@ -589,10 +589,8 @@ mod tests {
         Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
         TestEngineBuilder, WriteData,
     };
-    use crate::storage::{
-        concurrency_manager::ConcurrencyManager,
-        mvcc::{Mutation, MvccTxn},
-    };
+    use crate::storage::mvcc::{Mutation, MvccTxn};
+    use concurrency_manager::ConcurrencyManager;
     use engine_traits::CfName;
     use engine_traits::{IterOptions, ReadOptions};
     use kvproto::kvrpcpb::Context;
