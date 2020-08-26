@@ -1,4 +1,5 @@
 mod fresh;
+#[allow(unused)]
 mod legacy;
 
 use grpcio::{RpcStatus, RpcStatusCode};
@@ -11,4 +12,5 @@ fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
     false
 }
 
-pub use legacy::RaftClient;
+pub use fresh::ConnectionBuilder;
+pub use fresh::RaftClient;

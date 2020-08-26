@@ -3,7 +3,7 @@
 use std::i32;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{Future, Stream};
@@ -27,7 +27,7 @@ use tikv_util::worker::Worker;
 use tikv_util::Either;
 
 use super::load_statistics::*;
-use super::raft_client::RaftClient;
+use super::raft_client::{ConnectionBuilder, RaftClient};
 use super::resolve::StoreAddrResolver;
 use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
@@ -137,21 +137,17 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
             Either::Left(sb)
         };
 
-        let raft_client = Arc::new(RwLock::new(RaftClient::new(
-            Arc::clone(&env),
-            Arc::clone(cfg),
-            Arc::clone(security_mgr),
-            raft_router.clone(),
-            Arc::clone(&grpc_thread_load),
-            stats_pool.as_ref().map(|p| p.sender().clone()),
-        )));
-
-        let trans = ServerTransport::new(
-            raft_client,
-            snap_worker.scheduler(),
-            raft_router.clone(),
+        let conn_builder = ConnectionBuilder::new(
+            env.clone(),
+            cfg.clone(),
+            security_mgr.clone(),
             resolver,
+            raft_router.clone(),
+            snap_worker.scheduler(),
         );
+        let raft_client = RaftClient::new(conn_builder);
+
+        let trans = ServerTransport::new(raft_client);
 
         let svr = Server {
             env: Arc::clone(&env),
@@ -421,7 +417,7 @@ mod tests {
             &security_mgr,
             storage,
             cop,
-            router,
+            router.clone(),
             MockResolver {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
@@ -436,7 +432,7 @@ mod tests {
         server.start(cfg, security_mgr).unwrap();
 
         let mut trans = server.transport();
-        trans.report_unreachable(RaftMessage::default());
+        router.report_unreachable(0, 0).unwrap();
         let mut resp = significant_msg_receiver.try_recv().unwrap();
         assert!(is_unreachable_to(&resp, 0, 0), "{:?}", resp);
 

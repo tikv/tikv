@@ -473,7 +473,6 @@ pub struct ConnectionBuilder<S, R> {
 }
 
 impl<S, R> ConnectionBuilder<S, R> {
-    #[allow(unused)]
     pub fn new(
         env: Arc<Environment>,
         cfg: Arc<Config>,
@@ -586,6 +585,7 @@ where
             store_id: self.store_id,
             addr,
         };
+        // TODO: verify it will be notified if client is dropped while env still alive.
         client.spawn(call);
         rx
     }
@@ -741,7 +741,6 @@ where
     S: StoreAddrResolver + Send + 'static,
     R: RaftStoreRouter<RocksEngine> + Send + 'static,
 {
-    #[allow(unused)]
     pub fn new(builder: ConnectionBuilder<S, R>) -> RaftClient<S, R> {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
@@ -801,8 +800,7 @@ where
     /// If the message fails to be sent, false is returned. Returning true means the message is
     /// enqueued to buffer. Caller is expected to call `flush` to ensure all buffered messages
     /// are sent out.
-    #[allow(unused)]
-    pub fn send(&mut self, msg: RaftMessage) -> bool {
+    pub fn send(&mut self, msg: RaftMessage) -> Option<DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
         let conn_id = (msg.region_id % self.builder.cfg.grpc_raft_conn_num as u64) as usize;
         loop {
@@ -813,27 +811,26 @@ where
                             s.dirty = true;
                             self.need_flush.push((store_id, conn_id));
                         }
-                        return true;
+                        return None;
                     }
                     Err(DiscardReason::Full) => {
                         s.queue.notify();
                         s.dirty = false;
-                        return false;
+                        return Some(DiscardReason::Full);
                     }
                     Err(DiscardReason::Disconnected) => break,
-                    Err(DiscardReason::Filtered) => return false,
+                    Err(DiscardReason::Filtered) => return Some(DiscardReason::Filtered),
                 }
             }
             if !self.load_stream(store_id, conn_id) {
-                return false;
+                return Some(DiscardReason::Disconnected);
             }
         }
         self.cache.remove(&(store_id, conn_id));
-        false
+        Some(DiscardReason::Disconnected)
     }
 
     /// Flushes all buffered messages.
-    #[allow(unused)]
     pub fn flush(&mut self) {
         if self.need_flush.is_empty() {
             return;

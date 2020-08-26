@@ -46,7 +46,7 @@ fn new_cluster_and_tikv_import_client(
     let ch = {
         let env = Arc::new(Environment::new(1));
         let node = ctx.get_peer().get_store_id();
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(node))
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(node))
     };
     let tikv = TikvClient::new(ch.clone());
     let import = ImportSstClient::new(ch);
