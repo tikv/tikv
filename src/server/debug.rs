@@ -13,7 +13,7 @@ use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable,
     RangePropertiesExt, SeekKey, TableProperties, TablePropertiesCollection, TablePropertiesExt,
-    WriteBatch, WriteOptions,
+    WriteOptions,
 };
 use engine_traits::{Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};

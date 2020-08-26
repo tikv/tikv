@@ -9,10 +9,9 @@ use crate::cf_defs::CF_LOCK;
 use crate::cf_names::CFNamesExt;
 use crate::errors::Result;
 use crate::iterable::{Iterable, Iterator};
-use crate::mutable::Mutable;
 use crate::options::IterOptions;
 use crate::range::Range;
-use crate::write_batch::{WriteBatch, WriteBatchExt};
+use crate::write_batch::{Mutable, WriteBatchExt};
 
 use tikv_util::keybuilder::KeyBuilder;
 
