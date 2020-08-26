@@ -148,7 +148,7 @@ macro_rules! handle_request {
             let resp = $future_name(&self.storage, req);
             let task = async move {
                 let resp = resp.await?;
-                sink.success(resp).compat().map_err(Error::from).await?;
+                sink.success(resp).compat().await?;
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
                     .observe(duration_to_sec(begin_instant.elapsed()));
@@ -312,7 +312,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let future = future_cop(&self.cop, Some(ctx.peer()), req);
         let task = async move {
             let resp = future.await?;
-            sink.success(resp).compat().map_err(Error::from).await?;
+            sink.success(resp).compat().await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
                 .observe(duration_to_sec(begin_instant.elapsed()));
@@ -354,7 +354,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             if let Err(e) = res {
                 resp.set_error(format!("{}", e));
             }
-            sink.success(resp).compat().map_err(Error::from).await?;
+            sink.success(resp).compat().await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .register_lock_observer
                 .observe(duration_to_sec(begin_instant.elapsed()));
@@ -400,7 +400,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 }
                 Err(e) => resp.set_error(format!("{}", e)),
             }
-            sink.success(resp).compat().map_err(Error::from).await?;
+            sink.success(resp).compat().await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .check_lock_observer
                 .observe(duration_to_sec(begin_instant.elapsed()));
@@ -440,7 +440,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             if let Err(e) = res {
                 resp.set_error(format!("{}", e));
             }
-            sink.success(resp).compat().map_err(Error::from).await?;
+            sink.success(resp).compat().await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .remove_lock_observer
                 .observe(duration_to_sec(begin_instant.elapsed()));
@@ -487,7 +487,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 Ok(locks) => resp.set_locks(locks.into()),
                 Err(e) => resp.set_error(format!("{}", e)),
             }
-            sink.success(resp).compat().map_err(Error::from).await?;
+            sink.success(resp).compat().await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .physical_scan_lock
                 .observe(duration_to_sec(begin_instant.elapsed()));
@@ -538,7 +538,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             if let Err(e) = res {
                 resp.set_error(format!("{}", e));
             }
-            sink.success(resp).compat().map_err(Error::from).await?;
+            sink.success(resp).compat().await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .physical_scan_lock
                 .observe(duration_to_sec(begin_instant.elapsed()));
@@ -722,7 +722,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         }
 
         let task = async move {
-            let mut res = f.await.map_err(Error::from)?;
+            let mut res = f.await?;
             let mut resp = SplitRegionResponse::default();
             if res.response.get_header().has_error() {
                 resp.set_region_error(res.response.mut_header().take_error());
@@ -747,7 +747,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                     resp.set_regions(regions.into());
                 }
             }
-            sink.success(resp).compat().map_err(Error::from).await?;
+            sink.success(resp).compat().await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .split_region
                 .observe(duration_to_sec(begin_instant.elapsed()));
@@ -800,7 +800,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         }
 
         let task = async move {
-            let mut res = f.await.map_err(Error::from)?;
+            let mut res = f.await?;
             let mut resp = ReadIndexResponse::default();
             if res.response.get_header().has_error() {
                 resp.set_region_error(res.response.mut_header().take_error());
@@ -821,7 +821,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                     resp.set_read_index(read_index);
                 }
             }
-            sink.success(resp).compat().map_err(Error::from).await?;
+            sink.success(resp).compat().await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .read_index
                 .observe(begin_instant.elapsed_secs());
