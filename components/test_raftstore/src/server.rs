@@ -176,7 +176,7 @@ impl Simulator for ServerCluster {
 
         let (txn_extra_tx, txn_extra_rx) = mpsc::unbounded();
         let mut raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
-        raft_engine.txn_extra_tx = Some(txn_extra_tx);
+        raft_engine.set_txn_extra_sender(txn_extra_tx);
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone());

@@ -109,7 +109,7 @@ impl From<RaftServerError> for KvError {
 pub struct RaftKv<S: RaftStoreRouter<RocksEngine> + 'static> {
     router: S,
     engine: RocksEngine,
-    pub txn_extra_tx: Option<Sender<TxnExtra>>,
+    txn_extra_tx: Option<Sender<TxnExtra>>,
 }
 
 pub enum CmdRes {
@@ -172,6 +172,10 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
             engine,
             txn_extra_tx: None,
         }
+    }
+
+    pub fn set_txn_extra_sender(&mut self, txn_extra_tx: Sender<TxnExtra>) {
+        self.txn_extra_tx = Some(txn_extra_tx);
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {

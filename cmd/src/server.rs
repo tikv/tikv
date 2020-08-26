@@ -476,7 +476,11 @@ impl TiKVServer {
         );
 
         let (txn_extra_tx, txn_extra_rx) = mpsc::unbounded();
-        self.engines.as_mut().unwrap().engine.txn_extra_tx = Some(txn_extra_tx);
+        self.engines
+            .as_mut()
+            .unwrap()
+            .engine
+            .set_txn_extra_sender(txn_extra_tx);
 
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
