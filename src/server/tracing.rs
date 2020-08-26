@@ -73,6 +73,8 @@ impl JaegerReporter {
         .parse()?;
         let mut udp_socket = UdpSocket::bind(local_addr).await?;
 
+        Self::id_remap(&mut trace_details);
+
         // Check if len of spans reaches `spans_max_length`
         if trace_details.spans.len() > spans_max_length {
             trace_details.spans.sort_unstable_by_key(|s| s.begin_cycles);
@@ -84,6 +86,8 @@ impl JaegerReporter {
         thrift_compact_encode(
             &mut buf,
             "TiKV",
+            rand::random(),
+            rand::random(),
             &trace_details,
             // transform numerical event to string
             |event| {
@@ -119,6 +123,8 @@ impl JaegerReporter {
         udp_socket.send_to(&buf, agent).await?;
         Ok(())
     }
+
+    fn id_remap(_trace_details: &mut TraceDetails) {}
 }
 
 impl Reporter for JaegerReporter {

@@ -47,7 +47,7 @@ use uuid::Builder as UuidBuilder;
 use crate::coprocessor::{Cmd, CoprocessorHost};
 use crate::store::fsm::RaftPollerBuilder;
 use crate::store::metrics::*;
-use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
+use crate::store::msg::{Callback, PeerMessage, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{
     self, write_initial_apply_state, write_peer_state, ENTRY_MEM_SIZE,
@@ -298,7 +298,7 @@ where
 
 pub trait Notifier<EK: KvEngine>: Send {
     fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
-    fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>);
+    fn notify_one(&self, region_id: u64, msg: PeerMessage<EK>);
     fn clone_box(&self) -> Box<dyn Notifier<EK>>;
 }
 
@@ -2079,7 +2079,7 @@ where
                 logs_up_to_date: logs_up_to_date.clone(),
             });
             ctx.notifier
-                .notify_one(source_region_id, PeerMsg::SignificantMsg(msg));
+                .notify_one(source_region_id, PeerMsg::SignificantMsg(msg).into());
             return Ok((
                 AdminResponse::default(),
                 ApplyResult::WaitMergeSource(logs_up_to_date),
@@ -2871,7 +2871,8 @@ where
                         peer_id: self.delegate.id,
                         merge_from_snapshot: d.merge_from_snapshot,
                     },
-                },
+                }
+                .into(),
             );
         }
     }
@@ -3553,17 +3554,17 @@ mod tests {
 
     #[derive(Clone)]
     pub struct TestNotifier<EK: KvEngine> {
-        tx: Sender<PeerMsg<EK>>,
+        tx: Sender<PeerMessage<EK>>,
     }
 
     impl<EK: KvEngine> Notifier<EK> for TestNotifier<EK> {
         fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
             for r in apply_res {
                 let res = TaskRes::Apply(r);
-                let _ = self.tx.send(PeerMsg::ApplyRes { res });
+                let _ = self.tx.send(PeerMsg::ApplyRes { res }.into());
             }
         }
-        fn notify_one(&self, _: u64, msg: PeerMsg<EK>) {
+        fn notify_one(&self, _: u64, msg: PeerMessage<EK>) {
             let _ = self.tx.send(msg);
         }
         fn clone_box(&self) -> Box<dyn Notifier<EK>> {
@@ -3657,10 +3658,13 @@ mod tests {
     }
 
     fn fetch_apply_res(
-        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>,
+        receiver: &::std::sync::mpsc::Receiver<PeerMessage<RocksEngine>>,
     ) -> ApplyRes<RocksSnapshot> {
         match receiver.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes { res, .. }) => match res {
+            Ok(PeerMessage {
+                msg: PeerMsg::ApplyRes { res, .. },
+                ..
+            }) => match res {
                 TaskRes::Apply(res) => res,
                 e => panic!("unexpected res {:?}", e),
             },
@@ -3819,7 +3823,10 @@ mod tests {
             ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes { res, .. }) => match res {
+            Ok(PeerMessage {
+                msg: PeerMsg::ApplyRes { res, .. },
+                ..
+            }) => match res {
                 TaskRes::Apply(res) => res,
                 e => panic!("unexpected apply result: {:?}", e),
             },
@@ -3852,7 +3859,10 @@ mod tests {
 
         router.schedule_task(2, Msg::destroy(2, false));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes { res, .. }) => match res {
+            Ok(PeerMessage {
+                msg: PeerMsg::ApplyRes { res, .. },
+                ..
+            }) => match res {
                 TaskRes::Destroy {
                     region_id, peer_id, ..
                 } => (region_id, peer_id),

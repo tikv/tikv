@@ -77,8 +77,8 @@ where
     S: Snapshot,
 {
     #[inline]
-    pub fn tracing_instrument(self, event: Event) -> Self {
-        let handle = minitrace::trace_crossthread();
+    pub fn trace_instrument(self, event: Event) -> Self {
+        let handle = minitrace::trace_binder();
         match self {
             Callback::None => self,
             Callback::Read(cb) => Callback::Read(Box::new(move |r| {
@@ -369,7 +369,7 @@ impl<S: Snapshot> RaftCommand<S> {
 }
 
 pub struct Context {
-    pub tracing_handle: minitrace::CrossthreadTrace,
+    pub trace_handle: minitrace::TraceHandle,
 }
 
 /// Message that can be sent to a peer.
@@ -412,7 +412,7 @@ impl<EK: KvEngine> From<PeerMsg<EK>> for PeerMessage<EK> {
         Self {
             msg,
             context: Context {
-                tracing_handle: minitrace::trace_crossthread(),
+                trace_handle: minitrace::trace_binder(),
             },
         }
     }
@@ -486,7 +486,7 @@ impl From<StoreMsg> for StoreMessage {
         Self {
             msg,
             context: Context {
-                tracing_handle: minitrace::trace_crossthread(),
+                trace_handle: minitrace::trace_binder(),
             },
         }
     }

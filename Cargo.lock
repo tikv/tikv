@@ -2150,7 +2150,7 @@ dependencies = [
 [[package]]
 name = "minitrace"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#53269789a828b0105491f74db6c39901b7540b70"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#db16b04266dfb28e69a0f6f9bba2ad4f3268bd40"
 dependencies = [
  "crossbeam",
  "futures 0.1.29",
@@ -2159,13 +2159,12 @@ dependencies = [
  "minitrace-attribute",
  "minstant",
  "pin-project",
- "rand 0.7.3",
 ]
 
 [[package]]
 name = "minitrace-attribute"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#53269789a828b0105491f74db6c39901b7540b70"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#db16b04266dfb28e69a0f6f9bba2ad4f3268bd40"
 dependencies = [
  "proc-macro-error 1.0.2",
  "quote",
@@ -2186,7 +2185,7 @@ name = "minstant"
 version = "0.0.0"
 source = "git+https://github.com/zhongzc/minstant.git#48a631c19532d05e32420262779a51621b509021"
 dependencies = [
- "lazy_static 1.4.0",
+ "lazy_static",
  "libc",
  "wasi 0.10.0+wasi-snapshot-preview1",
 ]
@@ -4658,7 +4657,6 @@ dependencies = [
  "log_wrappers",
  "match_template",
  "mime",
- "minitrace",
  "more-asserts",
  "murmur3",
  "nom 5.1.0",
@@ -4892,7 +4890,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/zhongzc/tipb.git?branch=tracing#fbbf1d14bae40a4b4d34054f0672eeaedd7511c4"
+source = "git+https://github.com/zhongzc/tipb.git?branch=tracing#fde6714c365593fd840fac451f4d6bf25fe21a30"
 dependencies = [
  "lazy_static",
  "prost",

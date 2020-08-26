@@ -125,10 +125,13 @@ where
 {
     let (tx, rx) = mpsc::channel();
     router
-        .send_control(StoreMsg::Validate(Box::new(move |cfg: &Config| {
-            f(cfg);
-            tx.send(()).unwrap();
-        })).into())
+        .send_control(
+            StoreMsg::Validate(Box::new(move |cfg: &Config| {
+                f(cfg);
+                tx.send(()).unwrap();
+            }))
+            .into(),
+        )
         .unwrap();
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 }
