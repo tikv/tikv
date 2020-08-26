@@ -28,6 +28,7 @@ pub use self::store::{
 };
 
 /// Process result of a command.
+#[derive(Debug)]
 pub enum ProcessResult {
     Res,
     MultiRes {

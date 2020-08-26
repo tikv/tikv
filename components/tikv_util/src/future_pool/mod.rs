@@ -17,7 +17,7 @@ use futures03::channel::oneshot::{self, Canceled};
 use prometheus::{Histogram, IntCounter, IntGauge};
 use yatp::task::future;
 
-type ThreadPool = yatp::ThreadPool<future::TaskCell>;
+pub type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
 use crate::time::Instant;
 use yatp::pool::Local;
