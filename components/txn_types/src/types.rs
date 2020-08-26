@@ -340,7 +340,7 @@ impl TxnExtra {
         self.old_values.insert(key, (value, mutation_type));
     }
 
-    pub fn is_empty(&mut self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.old_values.is_empty()
     }
 
