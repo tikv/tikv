@@ -31,7 +31,6 @@ use std::time::Duration;
 use std::{env, thread, u64};
 
 use fs2::FileExt;
-use futures03::future::Either as FutureEither;
 use rand::rngs::ThreadRng;
 
 pub mod buffer_vec;
@@ -348,15 +347,6 @@ impl<L, R> Either<L, R> {
         match self {
             Either::Right(r) => Some(r),
             _ => None,
-        }
-    }
-}
-
-impl<L, R> From<FutureEither<L, R>> for Either<L, R> {
-    fn from(e: FutureEither<L, R>) -> Self {
-        match e {
-            FutureEither::Left(l) => Either::Left(l),
-            FutureEither::Right(r) => Either::Right(r),
         }
     }
 }
