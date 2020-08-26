@@ -39,7 +39,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::paired_future_callback;
-use tikv_util::minitrace::{self, prelude::*, Event};
+use tikv_util::minitrace::{self, Event};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
 use txn_types::{self, Key};
