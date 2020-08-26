@@ -1209,7 +1209,7 @@ fn test_sync_max_ts_after_region_merge() {
         .read()
         .unwrap()
         .storages
-        .get(&right.get_id())
+        .get(&1)
         .unwrap()
         .clone();
     let wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
