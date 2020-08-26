@@ -1320,3 +1320,163 @@ mod tests {
         profiler::stop();
     }
 }
+
+#[cfg(test)]
+mod benches {
+    use super::*;
+
+    use crate::RpnExpressionBuilder;
+    use tidb_query_codegen::rpn_fn;
+    use tidb_query_common::Result;
+    use tidb_query_datatype::codec::batch::LazyBatchColumn;
+    use tidb_query_datatype::codec::data_type::*;
+    use tidb_query_datatype::expr::EvalContext;
+    use tidb_query_datatype::{EvalType, FieldTypeTp};
+
+    #[bench]
+    fn bench_int_eval(b: &mut test::Bencher) {
+        /// Expects real argument, receives 3 real arguments.
+        #[rpn_fn]
+        fn foo(u: &Real, v: &Real, w: &Real) -> Result<Option<Real>> {
+            Ok(Some(*u * 2.5 + *v * 2.5 + *w * 2.5))
+        }
+
+        let mut columns = LazyBatchColumnVec::from(vec![
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Real);
+                for _i in 0..256 {
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                }
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Real);
+                for _i in 0..256 {
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(None);
+                }
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Real);
+                for _i in 0..256 {
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(None);
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(None);
+                }
+                col
+            },
+        ]);
+
+        let input_logical_rows: Vec<usize> = (0..1024).collect();
+
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_column_ref_for_test(1)
+            .push_column_ref_for_test(2)
+            .push_fn_call_for_test(foo_fn_meta(), 3, FieldTypeTp::Double)
+            .build_for_test();
+
+        let schema = &[
+            FieldTypeTp::Double.into(),
+            FieldTypeTp::Double.into(),
+            FieldTypeTp::Double.into(),
+        ];
+
+        b.iter(|| {
+            let mut ctx = EvalContext::default();
+            exp.eval(
+                &mut ctx,
+                schema,
+                &mut columns,
+                input_logical_rows.as_slice(),
+                input_logical_rows.len(),
+            )
+            .unwrap();
+        });
+    }
+
+    #[bench]
+    fn bench_bytes_eval(b: &mut test::Bencher) {
+        /// Expects real argument, receives 3 real arguments.
+        #[rpn_fn(writer)]
+        fn foo(u: BytesRef, v: BytesRef, w: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+            let mut partial = writer.begin();
+            partial.partial_write(u);
+            partial.partial_write(v);
+            partial.partial_write(w);
+            Ok(partial.finish())
+        }
+
+        let mut bytes_vec: Vec<u8> = vec![];
+        for _i in 0..10 {
+            bytes_vec.append(&mut b"2333333333".to_vec());
+        }
+
+        let mut columns = LazyBatchColumnVec::from(vec![
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Bytes);
+                for _i in 0..256 {
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                }
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Bytes);
+                for _i in 0..256 {
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(None);
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                }
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Bytes);
+                for _i in 0..256 {
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(None);
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(None);
+                }
+                col
+            },
+        ]);
+
+        let input_logical_rows: Vec<usize> = (0..1024).collect();
+
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_column_ref_for_test(1)
+            .push_column_ref_for_test(2)
+            .push_fn_call_for_test(foo_fn_meta(), 3, FieldTypeTp::String)
+            .build_for_test();
+
+        let schema = &[
+            FieldTypeTp::String.into(),
+            FieldTypeTp::String.into(),
+            FieldTypeTp::String.into(),
+        ];
+
+        b.iter(|| {
+            let mut ctx = EvalContext::default();
+            exp.eval(
+                &mut ctx,
+                schema,
+                &mut columns,
+                input_logical_rows.as_slice(),
+                input_logical_rows.len(),
+            )
+            .unwrap();
+        });
+    }
+}
