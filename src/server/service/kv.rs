@@ -348,7 +348,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             // other errors will be returned as the successful response of rpc.
             let res = match res {
                 Err(e) => Err(e),
-                Ok(_) => f.await.map_err(Error::from)?,
+                Ok(_) => f.await?,
             };
             let mut resp = RegisterLockObserverResponse::default();
             if let Err(e) = res {
@@ -390,7 +390,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let task = async move {
             let res = match res {
                 Err(e) => Err(e),
-                Ok(_) => f.await.map_err(Error::from)?,
+                Ok(_) => f.await?,
             };
             let mut resp = CheckLockObserverResponse::default();
             match res {
@@ -434,7 +434,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let task = async move {
             let res = match res {
                 Err(e) => Err(e),
-                Ok(_) => f.await.map_err(Error::from)?,
+                Ok(_) => f.await?,
             };
             let mut resp = RemoveLockObserverResponse::default();
             if let Err(e) = res {
@@ -480,7 +480,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let task = async move {
             let res = match res {
                 Err(e) => Err(e),
-                Ok(_) => f.await.map_err(Error::from)?,
+                Ok(_) => f.await?,
             };
             let mut resp = PhysicalScanLockResponse::default();
             match res {
@@ -531,7 +531,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let task = async move {
             let res = match res {
                 Err(e) => Err(e),
-                Ok(_) => f.await.map_err(Error::from)?,
+                Ok(_) => f.await?,
             };
             let mut resp = UnsafeDestroyRangeResponse::default();
             // Region error is impossible here.
@@ -1244,7 +1244,7 @@ fn future_delete_range<E: Engine, L: LockManager>(
     async move {
         let v = match res {
             Err(e) => Err(e),
-            Ok(_) => f.await.map_err(Error::from)?,
+            Ok(_) => f.await?,
         };
         let mut resp = DeleteRangeResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1317,7 +1317,7 @@ fn future_raw_put<E: Engine, L: LockManager>(
     async move {
         let v = match res {
             Err(e) => Err(e),
-            Ok(_) => f.await.map_err(Error::from)?,
+            Ok(_) => f.await?,
         };
         let mut resp = RawPutResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1346,7 +1346,7 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
     async move {
         let v = match res {
             Err(e) => Err(e),
-            Ok(_) => f.await.map_err(Error::from)?,
+            Ok(_) => f.await?,
         };
         let mut resp = RawBatchPutResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1368,7 +1368,7 @@ fn future_raw_delete<E: Engine, L: LockManager>(
     async move {
         let v = match res {
             Err(e) => Err(e),
-            Ok(_) => f.await.map_err(Error::from)?,
+            Ok(_) => f.await?,
         };
         let mut resp = RawDeleteResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1392,7 +1392,7 @@ fn future_raw_batch_delete<E: Engine, L: LockManager>(
     async move {
         let v = match res {
             Err(e) => Err(e),
-            Ok(_) => f.await.map_err(Error::from)?,
+            Ok(_) => f.await?,
         };
         let mut resp = RawBatchDeleteResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1480,7 +1480,7 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
     async move {
         let v = match res {
             Err(e) => Err(e),
-            Ok(_) => f.await.map_err(Error::from)?,
+            Ok(_) => f.await?,
         };
         let mut resp = RawDeleteRangeResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1569,7 +1569,7 @@ macro_rules! txn_command_future {
             async move {
                 let $v = match res {
                     Err(e) => Err(e),
-                    Ok(_) => f.await.map_err(Error::from)?
+                    Ok(_) => f.await?,
                 };
                 let mut $resp = $resp_ty::default();
                 if let Some(err) = extract_region_error(&$v) {
