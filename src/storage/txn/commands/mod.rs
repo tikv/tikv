@@ -61,8 +61,7 @@ use crate::storage::types::{
     TxnStatus,
 };
 use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
-use pd_client::PdClient;
-use std::sync::Arc;
+use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use tikv_util::collections::HashMap;
 
 /// Store Transaction scheduler commands.
@@ -116,6 +115,11 @@ impl<T> From<TypedCommand<T>> for Command {
 impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
     fn from(mut req: PrewriteRequest) -> Self {
         let for_update_ts = req.get_for_update_ts();
+        let secondary_keys = if req.get_use_async_commit() {
+            Some(req.get_secondaries().into())
+        } else {
+            None
+        };
         if for_update_ts == 0 {
             Prewrite::new(
                 req.take_mutations().into_iter().map(Into::into).collect(),
@@ -125,11 +129,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_skip_constraint_check(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
-                if req.get_use_async_commit() {
-                    Some(req.get_secondaries().into())
-                } else {
-                    None
-                },
+                secondary_keys,
                 req.take_context(),
             )
         } else {
@@ -148,6 +148,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 for_update_ts.into(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
+                secondary_keys,
                 req.take_context(),
             )
         }
@@ -339,6 +340,7 @@ pub(super) struct WriteResult {
     pub pr: ProcessResult,
     // (lock, is_first_lock, wait_timeout)
     pub lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
+    pub lock_guards: Vec<KeyHandleGuard>,
 }
 
 impl ReleasedLocks {
@@ -425,12 +427,13 @@ pub trait CommandExt: Display {
     fn gen_lock(&self, _latches: &Latches) -> latch::Lock;
 }
 
-pub struct WriteContext<'a, L: LockManager, P: PdClient + 'static> {
+pub struct WriteContext<'a, L: LockManager> {
     pub lock_mgr: &'a L,
-    pub pd_client: Arc<P>,
+    pub concurrency_manager: ConcurrencyManager,
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub pipelined_pessimistic_lock: bool,
+    pub enable_async_commit: bool,
 }
 
 impl Command {
@@ -494,10 +497,10 @@ impl Command {
         }
     }
 
-    pub(super) fn process_write<S: Snapshot, L: LockManager, P: PdClient + 'static>(
+    pub(super) fn process_write<S: Snapshot, L: LockManager>(
         self,
         snapshot: S,
-        context: WriteContext<'_, L, P>,
+        context: WriteContext<'_, L>,
     ) -> Result<WriteResult> {
         match self {
             Command::Prewrite(t) => t.process_write(snapshot, context),
@@ -581,8 +584,6 @@ pub trait ReadCommand<S: Snapshot>: CommandExt {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult>;
 }
 
-pub(super) trait WriteCommand<S: Snapshot, L: LockManager, P: PdClient + 'static>:
-    CommandExt
-{
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult>;
+pub(super) trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult>;
 }

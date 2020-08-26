@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use pd_client::PdClient;
-use txn_types::{Mutation, TimeStamp};
+use txn_types::{Key, Mutation, TimeStamp};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
@@ -34,6 +33,9 @@ command! {
             /// How many keys this transaction involved.
             txn_size: u64,
             min_commit_ts: TimeStamp,
+            /// All secondary keys in the whole transaction (i.e., as sent to all nodes, not only
+            /// this node). Only present if using async commit.
+            secondary_keys: Option<Vec<Vec<u8>>>,
         }
 }
 
@@ -62,26 +64,43 @@ impl CommandExt for PrewritePessimistic {
     gen_lock!(mutations: multiple(|(x, _)| x.key()));
 }
 
-impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
-    for PrewritePessimistic
-{
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
+    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            context.pd_client,
+            context.concurrency_manager,
         );
         // Althrough pessimistic prewrite doesn't read the write record for checking conflict, we still set extra op here
         // for getting the written keys.
         txn.extra_op = context.extra_op;
 
+        // If async commit is disabled in TiKV, set the secondary_keys in the request to None
+        // so we won't do anything for async commit.
+        if !context.enable_async_commit {
+            self.secondary_keys = None;
+        }
+
+        let async_commit_pk: Option<Key> = self
+            .secondary_keys
+            .as_ref()
+            .filter(|keys| !keys.is_empty())
+            .map(|_| Key::from_raw(&self.primary));
+
         let mut locks = vec![];
+        let mut async_commit_ts = TimeStamp::zero();
         for (m, is_pessimistic_lock) in self.mutations.clone().into_iter() {
+            let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
+
+            if Some(m.key()) == async_commit_pk.as_ref() {
+                secondaries = &self.secondary_keys;
+            }
             match txn.pessimistic_prewrite(
                 m,
                 &self.primary,
+                secondaries,
                 is_pessimistic_lock,
                 self.lock_ttl,
                 self.for_update_ts,
@@ -89,33 +108,44 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
                 self.min_commit_ts,
                 context.pipelined_pessimistic_lock,
             ) {
-                Ok(_) => {}
+                Ok(ts) => {
+                    if secondaries.is_some() {
+                        async_commit_ts = ts;
+                    }
+                }
                 e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
-                    locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                    locks.push(
+                        e.map(|_| ())
+                            .map_err(Error::from)
+                            .map_err(StorageError::from),
+                    );
                 }
                 Err(e) => return Err(Error::from(e)),
             }
         }
         context.statistics.add(&txn.take_statistics());
-        let (pr, to_be_write, rows, ctx, lock_info) = if locks.is_empty() {
+        let (pr, to_be_write, rows, ctx, lock_info, lock_guards) = if locks.is_empty() {
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks: vec![],
-                    min_commit_ts: TimeStamp::zero(),
+                    min_commit_ts: async_commit_ts,
                 },
             };
             let txn_extra = txn.take_extra();
+            // Here the lock guards are taken and will be released after the write finishes.
+            // If an error occurs before, these lock guards are dropped along with `txn` automatically.
+            let lock_guards = txn.take_guards();
             let write_data = WriteData::new(txn.into_modifies(), txn_extra);
-            (pr, write_data, rows, self.ctx, None)
+            (pr, write_data, rows, self.ctx, None, lock_guards)
         } else {
             // Skip write stage if some keys are locked.
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks,
-                    min_commit_ts: TimeStamp::zero(),
+                    min_commit_ts: async_commit_ts,
                 },
             };
-            (pr, WriteData::default(), 0, self.ctx, None)
+            (pr, WriteData::default(), 0, self.ctx, None, vec![])
         };
         Ok(WriteResult {
             ctx,
@@ -123,6 +153,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
             rows,
             pr,
             lock_info,
+            lock_guards,
         })
     }
 }

@@ -8,7 +8,6 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
-use pd_client::PdClient;
 use txn_types::{Key, TimeStamp};
 
 command! {
@@ -39,14 +38,14 @@ impl CommandExt for TxnHeartBeat {
     gen_lock!(primary_key);
 }
 
-impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for TxnHeartBeat {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         // TxnHeartBeat never remove locks. No need to wake up waiters.
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            context.pd_client,
+            context.concurrency_manager,
         );
         let lock_ttl = txn.txn_heart_beat(self.primary_key, self.advise_ttl)?;
 
@@ -61,6 +60,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             rows: 1,
             pr,
             lock_info: None,
+            lock_guards: vec![],
         })
     }
 }

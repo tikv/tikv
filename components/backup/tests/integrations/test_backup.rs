@@ -13,6 +13,7 @@ use futures_util::io::AsyncReadExt;
 use grpcio::{ChannelBuilder, Environment};
 
 use backup::Task;
+use concurrency_manager::ConcurrencyManager;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
@@ -21,6 +22,7 @@ use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use kvproto::tikvpb::TikvClient;
+use pd_client::PdClient;
 use tempfile::Builder;
 use test_raftstore::*;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
@@ -73,6 +75,8 @@ impl TestSuite {
         configure_for_lease_read(&mut cluster, Some(100), None);
         cluster.run();
 
+        let concurrency_manager =
+            ConcurrencyManager::new(block_on(cluster.pd_client.get_tso()).unwrap());
         let mut endpoints = HashMap::default();
         for (id, engines) in &cluster.engines {
             // Create and run backup endpoints.
@@ -83,6 +87,7 @@ impl TestSuite {
                 sim.region_info_accessors[&id].clone(),
                 engines.kv.as_inner().clone(),
                 BackupConfig { num_threads: 4 },
+                concurrency_manager.clone(),
             );
             let mut worker = Worker::new(format!("backup-{}", id));
             worker.start(backup_endpoint).unwrap();

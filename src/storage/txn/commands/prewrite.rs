@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::CF_WRITE;
-use pd_client::PdClient;
 use txn_types::{Key, Mutation, TimeStamp};
 
 use crate::storage::kv::WriteData;
@@ -14,7 +13,7 @@ use crate::storage::txn::{Error, Result};
 use crate::storage::{
     txn::commands::{Command, CommandExt, TypedCommand},
     types::PrewriteResult,
-    Context, Error as StorageError, ProcessResult, ScanMode, Snapshot,
+    Context, Error as StorageError, ProcessResult, Snapshot,
 };
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
@@ -130,13 +129,8 @@ impl Prewrite {
     }
 }
 
-impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Prewrite {
-    fn process_write(
-        mut self,
-        snapshot: S,
-        context: WriteContext<'_, L, P>,
-    ) -> Result<WriteResult> {
-        let mut scan_mode = None;
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
+    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
         if rows > FORWARD_MIN_MUTATIONS_NUM {
             self.mutations.sort_by(|a, b| a.key().cmp(b.key()));
@@ -155,40 +149,38 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                 &right_key,
                 &mut context.statistics.write,
             )? {
-                // If there is no data in range, we could skip constraint check, and use Forward seek for CF_LOCK.
-                // Because in most instances, there won't be more than one transaction write the same key. Seek
-                // operation could skip nonexistent key in CF_LOCK.
+                // If there is no data in range, we could skip constraint check.
                 self.skip_constraint_check = true;
-                scan_mode = Some(ScanMode::Forward)
             }
         }
-        let mut txn = if scan_mode.is_some() {
-            MvccTxn::for_scan(
-                snapshot,
-                scan_mode,
-                self.start_ts,
-                !self.ctx.get_not_fill_cache(),
-                context.pd_client,
-            )
-        } else {
-            MvccTxn::new(
-                snapshot,
-                self.start_ts,
-                !self.ctx.get_not_fill_cache(),
-                context.pd_client,
-            )
-        };
+        let mut txn = MvccTxn::new(
+            snapshot,
+            self.start_ts,
+            !self.ctx.get_not_fill_cache(),
+            context.concurrency_manager,
+        );
 
         // Set extra op here for getting the write record when check write conflict in prewrite.
         txn.extra_op = context.extra_op;
 
-        let primary_key = Key::from_raw(&self.primary);
+        // If async commit is disabled in TiKV, set the secondary_keys in the request to None
+        // so we won't do anything for async commit.
+        if !context.enable_async_commit {
+            self.secondary_keys = None;
+        }
+
+        let async_commit_pk: Option<Key> = self
+            .secondary_keys
+            .as_ref()
+            .filter(|keys| !keys.is_empty())
+            .map(|_| Key::from_raw(&self.primary));
+
         let mut locks = vec![];
         let mut async_commit_ts = TimeStamp::zero();
         for m in self.mutations {
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
 
-            if m.key() == &primary_key {
+            if Some(m.key()) == async_commit_pk.as_ref() {
                 secondaries = &self.secondary_keys;
             }
             match txn.prewrite(
@@ -217,7 +209,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         }
 
         context.statistics.add(&txn.take_statistics());
-        let (pr, to_be_write, rows, ctx, lock_info) = if locks.is_empty() {
+        let (pr, to_be_write, rows, ctx, lock_info, lock_guards) = if locks.is_empty() {
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks: vec![],
@@ -225,8 +217,12 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                 },
             };
             let txn_extra = txn.take_extra();
+            // Here the lock guards are taken and will be released after the write finishes.
+            // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
+            // are dropped along with `txn` automatically.
+            let lock_guards = txn.take_guards();
             let write_data = WriteData::new(txn.into_modifies(), txn_extra);
-            (pr, write_data, rows, self.ctx, None)
+            (pr, write_data, rows, self.ctx, None, lock_guards)
         } else {
             // Skip write stage if some keys are locked.
             let pr = ProcessResult::PrewriteResult {
@@ -235,7 +231,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                     min_commit_ts: async_commit_ts,
                 },
             };
-            (pr, WriteData::default(), 0, self.ctx, None)
+            (pr, WriteData::default(), 0, self.ctx, None, vec![])
         };
         Ok(WriteResult {
             ctx,
@@ -243,24 +239,23 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             rows,
             pr,
             lock_info,
+            lock_guards,
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use kvproto::kvrpcpb::{Context, ExtraOp};
 
+    use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
-    use pd_client::DummyPdClient;
     use txn_types::TimeStamp;
     use txn_types::{Key, Mutation};
 
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
     use crate::storage::txn::commands::{
-        Commit, Prewrite, WriteContext, FORWARD_MIN_MUTATIONS_NUM,
+        Commit, Prewrite, Rollback, WriteContext, FORWARD_MIN_MUTATIONS_NUM,
     };
     use crate::storage::txn::LockInfo;
     use crate::storage::txn::{Error, ErrorInner, Result};
@@ -382,6 +377,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_prewrite_skip_too_many_tombstone() {
+        use crate::server::gc_worker::gc_by_compact;
+        use crate::storage::kv::PerfStatisticsInstant;
+        use engine_rocks::{set_perf_level, PerfLevel};
+        let mut mutations = Vec::default();
+        let pri_key_number = 0;
+        let pri_key = &[pri_key_number];
+        for i in 0..40 {
+            mutations.push(Mutation::Insert((
+                Key::from_raw(&[i as u8]),
+                b"100".to_vec(),
+            )));
+        }
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
+        let mut statistic = Statistics::default();
+        prewrite(
+            &engine,
+            &mut statistic,
+            mutations.clone(),
+            pri_key.to_vec(),
+            100,
+        )
+        .unwrap();
+        // Rollback to make tombstones in lock-cf.
+        rollback(&engine, &mut statistic, keys, 100).unwrap();
+        // Gc rollback flags store in write-cf to make sure the next prewrite operation will skip
+        // seek write cf.
+        gc_by_compact(&engine, pri_key, 101);
+        set_perf_level(PerfLevel::EnableTimeExceptForMutex);
+        let perf = PerfStatisticsInstant::new();
+        let mut statistic = Statistics::default();
+        while mutations.len() > FORWARD_MIN_MUTATIONS_NUM + 1 {
+            mutations.pop();
+        }
+        prewrite(&engine, &mut statistic, mutations, pri_key.to_vec(), 110).unwrap();
+        let d = perf.delta();
+        assert_eq!(1, statistic.write.seek);
+        assert_eq!(d.0.internal_delete_skipped_count, 0);
+    }
+
     fn prewrite<E: Engine>(
         engine: &E,
         statistics: &mut Statistics,
@@ -391,13 +428,15 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
+        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts));
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
-            pd_client: Arc::new(DummyPdClient::new()),
+            concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            enable_async_commit: true,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         if let ProcessResult::PrewriteResult {
@@ -425,6 +464,7 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
+        let concurrency_manager = ConcurrencyManager::new(lock_ts.into());
         let cmd = Commit::new(
             keys,
             TimeStamp::from(lock_ts),
@@ -434,10 +474,36 @@ mod tests {
 
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
-            pd_client: Arc::new(DummyPdClient::new()),
+            concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            enable_async_commit: true,
+        };
+
+        let ret = cmd.cmd.process_write(snap, context)?;
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
+    }
+
+    fn rollback<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        keys: Vec<Key>,
+        start_ts: u64,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snap = engine.snapshot(&ctx)?;
+        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
+        let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager,
+            extra_op: ExtraOp::Noop,
+            statistics,
+            pipelined_pessimistic_lock: false,
+            enable_async_commit: true,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;

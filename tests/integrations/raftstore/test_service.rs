@@ -11,6 +11,7 @@ use kvproto::raft_serverpb::*;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::Writable;
 use engine_rocks::Compat;
 use engine_traits::Peekable;
@@ -754,7 +755,7 @@ fn test_double_run_node() {
     let pd_worker = FutureWorker::new("test-pd-worker");
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
-    let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), None);
+    let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
     let coprocessor_host = CoprocessorHost::new(router);
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
@@ -773,6 +774,7 @@ fn test_double_run_node() {
             importer,
             Worker::new("split"),
             AutoSplitController::default(),
+            ConcurrencyManager::new(1.into()),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
