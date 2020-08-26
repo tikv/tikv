@@ -346,11 +346,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let task = async move {
             // Here except for the receiving error of `futures::channel::oneshot`,
             // other errors will be returned as the successful response of rpc.
-            let res = if res.is_err() {
-                Ok(Err(res.unwrap_err()))
-            } else {
-                f.await.map_err(Error::from)
-            }?;
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await.map_err(Error::from)?,
+            };
             let mut resp = RegisterLockObserverResponse::default();
             if let Err(e) = res {
                 resp.set_error(format!("{}", e));
@@ -389,11 +388,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             .get_collected_locks(req.get_max_ts().into(), cb);
 
         let task = async move {
-            let res = if res.is_err() {
-                Ok(Err(res.unwrap_err()))
-            } else {
-                f.await.map_err(Error::from)
-            }?;
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await.map_err(Error::from)?,
+            };
             let mut resp = CheckLockObserverResponse::default();
             match res {
                 Ok((locks, is_clean)) => {
@@ -434,11 +432,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let res = self.gc_worker.stop_collecting(req.get_max_ts().into(), cb);
 
         let task = async move {
-            let res = if res.is_err() {
-                Ok(Err(res.unwrap_err()))
-            } else {
-                f.await.map_err(Error::from)
-            }?;
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await.map_err(Error::from)?,
+            };
             let mut resp = RemoveLockObserverResponse::default();
             if let Err(e) = res {
                 resp.set_error(format!("{}", e));
@@ -481,11 +478,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         );
 
         let task = async move {
-            let res = if res.is_err() {
-                Ok(Err(res.unwrap_err()))
-            } else {
-                f.await.map_err(Error::from)
-            }?;
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await.map_err(Error::from)?,
+            };
             let mut resp = PhysicalScanLockResponse::default();
             match res {
                 Ok(locks) => resp.set_locks(locks.into()),
@@ -533,11 +529,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         );
 
         let task = async move {
-            let res = if res.is_err() {
-                Ok(Err(res.unwrap_err()))
-            } else {
-                f.await.map_err(Error::from)
-            }?;
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await.map_err(Error::from)?,
+            };
             let mut resp = UnsafeDestroyRangeResponse::default();
             // Region error is impossible here.
             if let Err(e) = res {
@@ -1247,11 +1242,10 @@ fn future_delete_range<E: Engine, L: LockManager>(
     );
 
     async move {
-        let v = if res.is_err() {
-            Ok(Err(res.unwrap_err()))
-        } else {
-            f.await.map_err(Error::from)
-        }?;
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await.map_err(Error::from)?,
+        };
         let mut resp = DeleteRangeResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1321,11 +1315,10 @@ fn future_raw_put<E: Engine, L: LockManager>(
     );
 
     async move {
-        let v = if res.is_err() {
-            Ok(Err(res.unwrap_err()))
-        } else {
-            f.await.map_err(Error::from)
-        }?;
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await.map_err(Error::from)?,
+        };
         let mut resp = RawPutResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1351,11 +1344,10 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
     let res = storage.raw_batch_put(req.take_context(), cf, pairs, cb);
 
     async move {
-        let v = if res.is_err() {
-            Ok(Err(res.unwrap_err()))
-        } else {
-            f.await.map_err(Error::from)
-        }?;
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await.map_err(Error::from)?,
+        };
         let mut resp = RawBatchPutResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1374,11 +1366,10 @@ fn future_raw_delete<E: Engine, L: LockManager>(
     let res = storage.raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
 
     async move {
-        let v = if res.is_err() {
-            Ok(Err(res.unwrap_err()))
-        } else {
-            f.await.map_err(Error::from)
-        }?;
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await.map_err(Error::from)?,
+        };
         let mut resp = RawDeleteResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1399,11 +1390,10 @@ fn future_raw_batch_delete<E: Engine, L: LockManager>(
     let res = storage.raw_batch_delete(req.take_context(), cf, keys, cb);
 
     async move {
-        let v = if res.is_err() {
-            Ok(Err(res.unwrap_err()))
-        } else {
-            f.await.map_err(Error::from)
-        }?;
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await.map_err(Error::from)?,
+        };
         let mut resp = RawBatchDeleteResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1488,11 +1478,10 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
     );
 
     async move {
-        let v = if res.is_err() {
-            Ok(Err(res.unwrap_err()))
-        } else {
-            f.await.map_err(Error::from)
-        }?;
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await.map_err(Error::from)?,
+        };
         let mut resp = RawDeleteRangeResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1578,11 +1567,10 @@ macro_rules! txn_command_future {
             let res = storage.sched_txn_command($req.into(), cb);
 
             async move {
-                let $v = if res.is_err() {
-                    Ok(Err(res.unwrap_err()))
-                } else {
-                    f.await.map_err(Error::from)
-                }?;
+                let $v = match res {
+                    Err(e) => Err(e),
+                    Ok(_) => f.await.map_err(Error::from)?
+                };
                 let mut $resp = $resp_ty::default();
                 if let Some(err) = extract_region_error(&$v) {
                     $resp.set_region_error(err);
