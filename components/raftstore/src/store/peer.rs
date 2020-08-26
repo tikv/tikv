@@ -89,13 +89,13 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
-    fn find_propose_time(&self, index: u64, term: u64) -> Option<Timespec> {
-        for p in self.queue.iter() {
-            if p.index == index && p.term == term {
-                return Some(p.renew_lease_time.unwrap());
-            }
-        }
-        None
+    fn find_propose_time(&self, key: (u64, u64)) -> Option<Timespec> {
+        let (front, back) = self.queue.as_slices();
+        let map = |p: &Proposal<_>| (p.term, p.index);
+        let idx = front
+            .binary_search_by_key(&key, map)
+            .or_else(|_| back.binary_search_by_key(&key, map));
+        idx.ok().map(|i| self.queue[i].renew_lease_time).flatten()
     }
 
     // Return all proposals that before (and included) the proposal
@@ -118,6 +118,11 @@ impl<S: Snapshot> ProposalQueue<S> {
     }
 
     fn push(&mut self, p: Proposal<S>) {
+        if let Some(f) = self.queue.front() {
+            // The term must be increasing among all log entries and the index
+            // must be increasing inside a given term
+            assert!((p.term, p.index) > (f.term, f.index));
+        }
         self.queue.push_back(p);
     }
 
@@ -1671,7 +1676,7 @@ where
                 if lease_to_be_updated {
                     let propose_time = self
                         .proposals
-                        .find_propose_time(entry.get_index(), entry.get_term());
+                        .find_propose_time((entry.get_term(), entry.get_index()));
                     if let Some(propose_time) = propose_time {
                         ctx.raft_metrics.commit_log.observe(duration_to_sec(
                             (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
@@ -3618,6 +3623,34 @@ mod tests {
                 lease_state: LeaseState::Valid,
             };
             assert!(inspector.inspect(&req).is_err());
+        }
+    }
+
+    #[test]
+    fn test_propose_queue_find_propose_time() {
+        let mut pq: ProposalQueue<engine_panic::PanicSnapshot> = ProposalQueue::new();
+        let t = monotonic_raw_now();
+        for index in 1..=100 {
+            let renew_lease_time = if index % 3 == 1 { None } else { Some(t) };
+            pq.push(Proposal {
+                is_conf_change: false,
+                index,
+                term: (index / 10) + 1,
+                cb: Callback::None,
+                txn_extra: TxnExtra::default(),
+                renew_lease_time,
+            });
+        }
+        for remove_i in &[0, 65, 98] {
+            let _ = pq.take(*remove_i, (*remove_i / 10) + 1);
+            for i in 1..=100 {
+                let pt = pq.find_propose_time(((i / 10) + 1, i));
+                if i <= *remove_i || i % 3 == 1 {
+                    assert!(pt.is_none())
+                } else {
+                    assert!(pt.is_some())
+                };
+            }
         }
     }
 
