@@ -56,42 +56,27 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             .into()
         ));
 
-        let lock_ttl: MvccResult<_> =
-            if let Some(mut lock) = txn.reader.load_lock(&self.primary_key)? {
-                if lock.ts == self.start_ts {
-                    if lock.ttl < self.advise_ttl {
-                        lock.ttl = self.advise_ttl;
-                        txn.put_lock(self.primary_key.clone(), &lock);
-                    } else {
-                        debug!(
-                            "txn_heart_beat with advise_ttl not large than current ttl";
-                            "primary_key" => %self.primary_key,
-                            "start_ts" => self.start_ts,
-                            "advise_ttl" => self.advise_ttl,
-                            "current_ttl" => lock.ttl,
-                        );
-                    }
-                    Ok(lock.ttl)
+        let lock: MvccResult<_> = if let Some(mut lock) = txn.reader.load_lock(&self.primary_key)? {
+            if lock.ts == self.start_ts {
+                if lock.ttl < self.advise_ttl {
+                    lock.ttl = self.advise_ttl;
+                    txn.put_lock(self.primary_key.clone(), &lock);
                 } else {
                     debug!(
-                        "txn_heart_beat invoked but lock is absent";
+                        "txn_heart_beat with advise_ttl not large than current ttl";
                         "primary_key" => %self.primary_key,
                         "start_ts" => self.start_ts,
                         "advise_ttl" => self.advise_ttl,
+                        "current_ttl" => lock.ttl,
                     );
-                    Err(MvccErrorInner::TxnLockNotFound {
-                        start_ts: self.start_ts,
-                        commit_ts: TimeStamp::zero(),
-                        key: self.primary_key.clone().into_raw()?,
-                    }
-                    .into())
                 }
+                Ok(lock)
             } else {
                 debug!(
-                "txn_heart_beat invoked but lock is absent";
-                "primary_key" => %self.primary_key,
-                "start_ts" => self.start_ts,
-                "advise_ttl" => self.advise_ttl,
+                    "txn_heart_beat invoked but lock is absent";
+                    "primary_key" => %self.primary_key,
+                    "start_ts" => self.start_ts,
+                    "advise_ttl" => self.advise_ttl,
                 );
                 Err(MvccErrorInner::TxnLockNotFound {
                     start_ts: self.start_ts,
@@ -99,11 +84,25 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
                     key: self.primary_key.clone().into_raw()?,
                 }
                 .into())
-            };
+            }
+        } else {
+            debug!(
+            "txn_heart_beat invoked but lock is absent";
+            "primary_key" => %self.primary_key,
+            "start_ts" => self.start_ts,
+            "advise_ttl" => self.advise_ttl,
+            );
+            Err(MvccErrorInner::TxnLockNotFound {
+                start_ts: self.start_ts,
+                commit_ts: TimeStamp::zero(),
+                key: self.primary_key.clone().into_raw()?,
+            }
+            .into())
+        };
 
         context.statistics.add(&txn.take_statistics());
         let pr = ProcessResult::TxnStatus {
-            txn_status: TxnStatus::uncommitted(lock_ttl?, TimeStamp::zero(), false, vec![]),
+            txn_status: TxnStatus::uncommitted(lock?),
         };
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
@@ -159,17 +158,11 @@ pub mod tests {
             )
             .unwrap();
         if let ProcessResult::TxnStatus {
-            txn_status:
-                TxnStatus::Uncommitted {
-                    lock_ttl,
-                    min_commit_ts: _,
-                    use_async_commit: _,
-                    secondaries: _,
-                },
+            txn_status: TxnStatus::Uncommitted { lock },
         } = result.pr
         {
             write(engine, &ctx, result.to_be_write.modifies);
-            assert_eq!(lock_ttl, expect_ttl);
+            assert_eq!(lock.ttl, expect_ttl);
         } else {
             unreachable!();
         }
