@@ -3220,7 +3220,10 @@ where
             .maybe_gc_cache(alive_cache_idx, applied_idx);
         let first_idx = self.fsm.peer.get_store().first_index();
 
-        if replicated_idx < first_idx {
+        if !force_compact
+            && (replicated_idx < first_idx
+                || replicated_idx - first_idx <= self.ctx.cfg.raft_log_gc_threshold)
+        {
             return;
         }
 
@@ -3234,7 +3237,7 @@ where
         } else {
             replicated_idx
         };
-        assert!(compact_idx > 0);
+        assert!(compact_idx >= first_idx);
         total_gc_logs += compact_idx - first_idx;
 
         // Create a compact log request and notify directly.
