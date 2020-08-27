@@ -205,10 +205,13 @@ mod tests {
 
     impl Runnable<u64> for StepRunner {
         fn run(&mut self, step: u64, handle: &Handle) {
-            self.ch.send(step).unwrap();
+            let tx = self.ch.clone();
             let f = self
                 .timer
                 .delay(Instant::now() + Duration::from_millis(step))
+                .map(move |_| {
+                    tx.send(step).unwrap();
+                })
                 .map_err(|_| ());
             handle.spawn(f);
         }
@@ -238,6 +241,7 @@ mod tests {
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 1000);
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 1500);
         // above three tasks are executed concurrently, should be less then 2s.
+        assert!(start.elapsed() > Duration::from_millis(500));
         assert!(start.elapsed() < Duration::from_secs(2));
         worker.stop().unwrap().join().unwrap();
         // now worker can't handle any task
