@@ -1195,6 +1195,9 @@ fn test_sync_max_ts_after_region_merge() {
     configure_for_merge(&mut cluster);
     cluster.run();
 
+    // Transfer leader to node 1 first to ensure all operations happen on node 1
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
 
