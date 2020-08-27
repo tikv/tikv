@@ -17,7 +17,9 @@ prost-codec = [
 ]
 
 [dependencies]
+error_code = { path = "../error_code" }
 futures = "0.1"
+futures03 = { package = "futures", version = "0.3" }
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }

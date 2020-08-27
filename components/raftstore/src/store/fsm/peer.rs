@@ -33,6 +33,7 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{escape, is_zero_duration};
+use txn_types::TxnExtra;
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
@@ -109,6 +110,7 @@ pub struct BatchRaftCmdRequestBuilder {
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
     callbacks: Vec<(Callback<RocksEngine>, usize)>,
+    txn_extra: TxnExtra,
 }
 
 impl<E: KvEngine> Drop for PeerFsm<E> {
@@ -257,6 +259,7 @@ impl BatchRaftCmdRequestBuilder {
             request: None,
             batch_req_size: 0,
             callbacks: vec![],
+            txn_extra: TxnExtra::default(),
         }
     }
 
@@ -284,18 +287,25 @@ impl BatchRaftCmdRequestBuilder {
         true
     }
 
-    fn add(&mut self, mut req: RaftCmdRequest, req_size: u32, cb: Callback<RocksEngine>) {
-        let req_num = req.get_requests().len();
+    fn add(&mut self, cmd: RaftCommand<RocksEngine>, req_size: u32) {
+        let req_num = cmd.request.get_requests().len();
+        let RaftCommand {
+            mut request,
+            callback,
+            mut txn_extra,
+            ..
+        } = cmd;
         if let Some(batch_req) = self.request.as_mut() {
-            let requests: Vec<_> = req.take_requests().into();
+            let requests: Vec<_> = request.take_requests().into();
             for q in requests {
                 batch_req.mut_requests().push(q);
             }
         } else {
-            self.request = Some(req);
+            self.request = Some(request);
         };
-        self.callbacks.push((cb, req_num));
+        self.callbacks.push((callback, req_num));
         self.batch_req_size += req_size;
+        self.txn_extra.extend(&mut txn_extra);
     }
 
     fn should_finish(&self) -> bool {
@@ -312,15 +322,16 @@ impl BatchRaftCmdRequestBuilder {
         false
     }
 
-    fn build(
-        &mut self,
-        metric: &mut RaftProposeMetrics,
-    ) -> Option<(RaftCmdRequest, Callback<RocksEngine>)> {
+    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<RocksEngine>> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
                 let (cb, _) = self.callbacks.pop().unwrap();
-                return Some((req, cb));
+                return Some(RaftCommand::with_txn_extra(
+                    req,
+                    cb,
+                    std::mem::take(&mut self.txn_extra),
+                ));
             }
             metric.batch += self.callbacks.len() - 1;
             let cbs = std::mem::replace(&mut self.callbacks, vec![]);
@@ -340,7 +351,11 @@ impl BatchRaftCmdRequestBuilder {
                     last_index = next_index;
                 }
             }));
-            return Some((req, cb));
+            return Some(RaftCommand::with_txn_extra(
+                req,
+                cb,
+                std::mem::take(&mut self.txn_extra),
+            ));
         }
         None
     }
@@ -408,15 +423,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
                     let req_size = cmd.request.compute_size();
                     if self.fsm.batch_req_builder.can_batch(&cmd.request, req_size) {
-                        self.fsm
-                            .batch_req_builder
-                            .add(cmd.request, req_size, cmd.callback);
+                        self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish() {
                             self.propose_batch_raft_command();
                         }
                     } else {
                         self.propose_batch_raft_command();
-                        self.propose_raft_command(cmd.request, cmd.callback)
+                        self.propose_raft_command(cmd.request, cmd.callback, cmd.txn_extra)
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -439,12 +452,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn propose_batch_raft_command(&mut self) {
-        if let Some((req, cb)) = self
+        if let Some(cmd) = self
             .fsm
             .batch_req_builder
             .build(&mut self.ctx.raft_metrics.propose)
         {
-            self.propose_raft_command(req, cb)
+            self.propose_raft_command(cmd.request, cmd.callback, cmd.txn_extra)
         }
     }
 
@@ -661,6 +674,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     },
                 )
             })),
+            TxnExtra::default(),
         );
     }
 
@@ -739,7 +753,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.region().get_region_epoch().clone(),
             self.fsm.peer.peer.clone(),
         );
-        self.propose_raft_command(msg, cb);
+        self.propose_raft_command(msg, cb, TxnExtra::default());
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {
@@ -930,7 +944,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if self.fsm.group_state == GroupState::Idle {
                 // missing_ticks should be less than election timeout ticks otherwise
                 // follower may tick more than an election timeout in chaos state.
-                if self.fsm.missing_ticks + 1 < self.ctx.cfg.raft_election_timeout_ticks {
+                // Before stopping tick, `missing_tick` should be `raft_election_timeout_ticks` - 2
+                // - `raft_heartbeat_ticks` (default 10 - 2 - 2 = 6)
+                // and the follwer's `election_elapsed` in raft-rs is 1.
+                // After the group state becomes Chaos, the next tick will call `raft_group.tick`
+                // `missing_tick` + 1 times(default 7).
+                // Then the follower's `election_elapsed` will be 1 + `missing_tick` + 1
+                // (default 1 + 6 + 1 = 8) which is less than the min election timeout.
+                // The reason is that we don't want let all followers become (pre)candidate if one
+                // follower may receive a request, then becomes (pre)candidate and sends (pre)vote msg
+                // to others. As long as the leader can wake up and broadcast hearbeats in one `raft_heartbeat_ticks`
+                // time(default 2s), no more followers will wake up and sends vote msg again.
+                if self.fsm.missing_ticks + 2 + self.ctx.cfg.raft_heartbeat_ticks
+                    < self.ctx.cfg.raft_election_timeout_ticks
+                {
                     self.register_raft_base_tick();
                     self.fsm.missing_ticks += 1;
                 }
@@ -1058,7 +1085,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if util::is_vote_msg(&msg.get_message())
             || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
         {
-            self.reset_raft_tick(GroupState::Chaos);
+            if self.fsm.group_state != GroupState::Chaos {
+                self.fsm.group_state = GroupState::Chaos;
+                self.register_raft_base_tick();
+            }
         } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
             self.reset_raft_tick(GroupState::Ordered);
         }
@@ -2077,7 +2107,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             request.set_admin_request(admin);
             request
         };
-        self.propose_raft_command(req, Callback::None);
+        self.propose_raft_command(req, Callback::None, TxnExtra::default());
     }
 
     fn on_check_merge(&mut self) {
@@ -2601,7 +2631,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<RocksEngine>) {
+    fn propose_raft_command(
+        &mut self,
+        mut msg: RaftCmdRequest,
+        cb: Callback<RocksEngine>,
+        txn_extra: TxnExtra,
+    ) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -2646,7 +2681,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
+        if self.fsm.peer.propose(self.ctx, cb, msg, resp, txn_extra) {
             self.fsm.has_ready = true;
         }
 
@@ -2779,7 +2814,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let region_id = self.fsm.peer.region().get_id();
         let request =
             new_compact_log_request(region_id, self.fsm.peer.peer.clone(), compact_idx, term);
-        self.propose_raft_command(request, Callback::None);
+        self.propose_raft_command(request, Callback::None, TxnExtra::default());
 
         self.register_raft_gc_log_tick();
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
@@ -3145,7 +3180,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.fsm.peer.peer.clone(),
             &self.fsm.peer.consistency_state,
         );
-        self.propose_raft_command(req, Callback::None);
+        self.propose_raft_command(req, Callback::None, TxnExtra::default());
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SstMeta>) {

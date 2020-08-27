@@ -200,6 +200,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "configuration",
  "crc64fast",
  "engine",
  "engine_rocks",
@@ -460,6 +461,7 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
+ "crossbeam",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -627,6 +629,7 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "bytes 0.4.12",
+ "error_code",
  "failure",
  "libc",
  "panic_hook",
@@ -723,7 +726,7 @@ dependencies = [
  "clap",
  "criterion-plot",
  "csv",
- "itertools",
+ "itertools 0.8.2",
  "lazy_static",
  "num-traits",
  "rand_core 0.5.1",
@@ -765,7 +768,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eccdc6ce8bbe352ca89025bee672aa6d24f4eb8c53e3a8b5d1bc58011da072a2"
 dependencies = [
  "cast",
- "itertools",
+ "itertools 0.8.2",
 ]
 
 [[package]]
@@ -1007,6 +1010,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "engine_traits",
+ "error_code",
  "failure",
  "futures 0.3.4",
  "futures-util",
@@ -1103,6 +1107,7 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
+ "error_code",
  "hex 0.4.2",
  "protobuf",
  "quick-error",
@@ -1131,6 +1136,15 @@ checksum = "3ab49e9dcb602294bc42f9a7dfc9bc6e936fca4418ea300dbfb84fe16de0b7d9"
 dependencies = [
  "backtrace",
  "version_check 0.1.5",
+]
+
+[[package]]
+name = "error_code"
+version = "0.0.1"
+dependencies = [
+ "kvproto",
+ "raft",
+ "tikv_alloc",
 ]
 
 [[package]]
@@ -1800,6 +1814,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "284f18f85651fe11e8a991b2adb42cb078325c996ed026d994719efcfca1d54b"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1882,7 +1905,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#44301fcea60837d5abb823f9e44271e48d21db3c"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#b37d46ebd056e97a8ff7cb9aac1fd5cd2921cd6b"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2556,7 +2579,9 @@ dependencies = [
 name = "pd_client"
 version = "0.1.0"
 dependencies = [
+ "error_code",
  "futures 0.1.29",
+ "futures 0.3.4",
  "grpcio",
  "hex 0.4.2",
  "kvproto",
@@ -2835,7 +2860,7 @@ checksum = "02b10678c913ecbd69350e8535c3aef91a8676c0773fc1d7b95cdd196d7f2f26"
 dependencies = [
  "bytes 0.5.3",
  "heck",
- "itertools",
+ "itertools 0.8.2",
  "log",
  "multimap",
  "petgraph",
@@ -2852,7 +2877,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "537aa19b95acde10a12fec4301466386f757403de4cd4e5b4fa78fb5ecb18f72"
 dependencies = [
  "anyhow",
- "itertools",
+ "itertools 0.8.2",
  "proc-macro2",
  "quote",
  "syn",
@@ -2965,6 +2990,7 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "fail",
  "fs2",
  "futures 0.1.29",
@@ -3908,6 +3934,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "external_storage",
  "futures 0.1.29",
  "futures-executor",
@@ -4391,6 +4418,7 @@ dependencies = [
  "chrono-tz",
  "codec",
  "derive_more",
+ "error_code",
  "failure",
  "flate2",
  "futures 0.3.4",
@@ -4448,6 +4476,7 @@ name = "tidb_query_datatype"
 version = "0.0.1"
 dependencies = [
  "bitflags",
+ "error_code",
  "failure",
  "tikv_alloc",
  "tipb",
@@ -4455,7 +4484,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.0.2"
+version = "4.0.4"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4475,6 +4504,7 @@ dependencies = [
  "engine_panic",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "fail",
  "failure",
  "fs2",
@@ -4490,7 +4520,7 @@ dependencies = [
  "hyper-openssl",
  "hyper-tls",
  "into_other",
- "itertools",
+ "itertools 0.8.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4582,6 +4612,7 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "derive_more",
+ "error_code",
  "fail",
  "fs2",
  "futures 0.1.29",
@@ -5017,6 +5048,7 @@ dependencies = [
  "byteorder",
  "codec",
  "derive-new",
+ "error_code",
  "farmhash",
  "hex 0.4.2",
  "kvproto",
@@ -5399,11 +5431,12 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.4.15+zstd.1.4.4"
+version = "1.4.17+zstd.1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89719b034dc22d240d5b407fb0a3fe6d29952c181cff9a9f95c0bd40b4f8f7d8"
+checksum = "b89249644df056b522696b1bb9e7c18c87e8ffa3e2f0dc3b0155875d6498f01b"
 dependencies = [
  "cc",
  "glob",
+ "itertools 0.9.0",
  "libc",
 ]

@@ -18,7 +18,7 @@ use encryption::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{EncryptionKeyManager, KvEngine, Snapshot as EngineSnapshot};
+use engine_traits::{EncryptionKeyManager, KvEngine, Snapshot as SnapshotTrait};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -29,8 +29,9 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use crate::errors::Error as RaftStoreError;
-use crate::store::{RaftRouter, StoreMsg};
+use crate::store::RaftRouter;
 use crate::Result as RaftStoreResult;
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{
@@ -88,6 +89,16 @@ quick_error! {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::Abort => error_code::raftstore::SNAP_ABORT,
+            Error::TooManySnapshots => error_code::raftstore::SNAP_TOO_MANY,
+            Error::Other(_) => error_code::raftstore::SNAP_UNKNOWN,
+        }
+    }
+}
 
 // CF_LOCK is relatively small, so we use plain file for performance issue.
 #[inline]
@@ -1092,17 +1103,6 @@ struct SnapManagerCore {
     encryption_key_manager: Option<Arc<DataKeyManager>>,
 }
 
-fn notify_stats(ch: Option<&RaftRouter<RocksEngine>>) {
-    if let Some(ch) = ch {
-        if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
-            error!(
-                "failed to notify snapshot stats";
-                "err" => ?e,
-            )
-        }
-    }
-}
-
 /// `SnapManagerCore` trace all current processing snapshots.
 #[derive(Clone)]
 pub struct SnapManager {
@@ -1344,8 +1344,6 @@ impl SnapManager {
                 e.insert(vec![entry]);
             }
         }
-
-        notify_stats(self.router.as_ref());
     }
 
     pub fn deregister(&self, key: &SnapKey, entry: &SnapEntry) {
@@ -1367,7 +1365,6 @@ impl SnapManager {
             registry.remove(key);
         }
         if handled {
-            notify_stats(self.router.as_ref());
             return;
         }
         warn!(
