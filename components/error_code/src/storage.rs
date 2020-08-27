@@ -16,7 +16,8 @@ define_error_codes!(
     INVALID_REQ_RANGE => ("InvalidReqRange", "", ""),
     BAD_FORMAT_LOCK => ("BadFormatLock", "", ""),
     BAD_FORMAT_WRITE => ("BadFormatWrite", "",""),
-    KEY_IS_LOCKED=> ("KeyIsLocked", "", ""),
+    KEY_IS_LOCKED => ("KeyIsLocked", "", ""),
+    MAX_TIMESTAMP_NOT_SYNCED => ("MaxTimestampNotSynced", "", ""),
 
     COMMITTED => ("Committed", "", ""),
     PESSIMISTIC_LOCK_ROLLED_BACK => ("PessimisticLockRolledBack", "", ""),
