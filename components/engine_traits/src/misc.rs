@@ -16,7 +16,7 @@ use crate::write_batch::{Mutable, WriteBatchExt};
 use tikv_util::keybuilder::KeyBuilder;
 
 // FIXME: Find somewhere else to put this?
-pub const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
+pub const MAX_DELETE_BATCH_SIZE: usize = 512;
 
 pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
     fn is_titan(&self) -> bool {
