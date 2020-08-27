@@ -4,6 +4,7 @@ use std::sync::*;
 use std::time::Duration;
 
 use crate::{new_event_feed, TestSuite};
+use concurrency_manager::ConcurrencyManager;
 use futures::sink::Sink;
 use futures::Future;
 use futures03::executor::block_on;
@@ -13,11 +14,12 @@ use kvproto::cdcpb::*;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
     event::{row::OpType as EventRowOpType, Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataRequest,
+    ChangeDataRequest, Event,
 };
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::sleep_ms;
+use txn_types::{Key, Lock, LockType};
 
 use cdc::Task;
 
@@ -889,6 +891,70 @@ fn test_old_value_basic() {
             break;
         }
     }
+
+    event_feed_wrap.as_ref().replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_resolve_ts_checking_concurrency_manager() {
+    let mut suite: super::super::TestSuite = TestSuite::new(1);
+    let cm: ConcurrencyManager = suite.get_txn_concurrency_manager(1).unwrap();
+    let lock_key = |key: &[u8], ts: u64| {
+        let guard = block_on(cm.lock_key(&Key::from_raw(key)));
+        guard.with_lock(|l| {
+            *l = Some(Lock::new(
+                LockType::Put,
+                key.to_vec(),
+                ts.into(),
+                0,
+                None,
+                0.into(),
+                1,
+                ts.into(),
+            ))
+        });
+        guard
+    };
+
+    cm.update_max_read_ts(20.into());
+
+    let _guard = lock_key(b"a", 80);
+    suite.set_tso(100);
+
+    let mut req = ChangeDataRequest::default();
+    req.region_id = 1;
+    req.set_region_epoch(suite.get_context(1).take_region_epoch());
+    req.set_checkpoint_ts(100);
+    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    // Make sure region 1 is registered.
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        // Even if there is no write,
+        // it should always outputs an Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        _ => panic!("unknown event"),
+    }
+
+    fn check_resolved_ts(events: Vec<Event>, check_fn: impl Fn(u64)) {
+        assert!(events.len() > 0);
+        for event in events {
+            match event.event.unwrap() {
+                Event_oneof_event::ResolvedTs(ts) => check_fn(ts),
+                _ => panic!("unexpected event"),
+            }
+        }
+    };
+
+    check_resolved_ts(receive_event(true), |ts| assert_eq!(ts, 80));
+
+    // More tests WIP...
 
     event_feed_wrap.as_ref().replace(None);
     suite.stop();
