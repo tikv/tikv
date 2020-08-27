@@ -10,23 +10,24 @@ pub trait ConsistencyCheckObserver<E: KvEngine>: Coprocessor {
     /// Update context. Return `true` if later observers should be skiped.
     fn update_context(&self, context: &mut Vec<u8>) -> bool;
 
-    /// Compute hash for `region`. Return `0` if the observer is skiped.
+    /// Compute hash for `region`. The policy is extracted from `context`,
+    /// which shouldn't be empty.
     fn compute_hash(&self, region: &Region, context: &mut &[u8], snap: &E::Snapshot)
         -> Result<u32>;
 }
 
 #[derive(Clone)]
-pub struct RawConsistencyCheckObserver<E: KvEngine>(PhantomData<E>);
+pub struct Raw<E: KvEngine>(PhantomData<E>);
 
-impl<E: KvEngine> Coprocessor for RawConsistencyCheckObserver<E> {}
+impl<E: KvEngine> Coprocessor for Raw<E> {}
 
-impl<E: KvEngine> Default for RawConsistencyCheckObserver<E> {
-    fn default() -> RawConsistencyCheckObserver<E> {
-        RawConsistencyCheckObserver(Default::default())
+impl<E: KvEngine> Default for Raw<E> {
+    fn default() -> Raw<E> {
+        Raw(Default::default())
     }
 }
 
-impl<E: KvEngine> ConsistencyCheckObserver<E> for RawConsistencyCheckObserver<E> {
+impl<E: KvEngine> ConsistencyCheckObserver<E> for Raw<E> {
     fn update_context(&self, context: &mut Vec<u8>) -> bool {
         context.push(ConsistencyCheckMethod::Raw as u8);
         // Raw consistency check is the most heavy and strong one.

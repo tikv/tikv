@@ -76,19 +76,19 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
 
         let timer = REGION_HASH_HISTOGRAM.start_coarse_timer();
 
-        // Now only 1 consistency check can be performed once.
-        for (hash, ctx) in self
+        let hashes = match self
             .coprocessor_host
             .on_compute_hash(&region, &context, snap)
         {
-            let sum = match hash {
-                Ok(hash) => hash,
-                Err(e) => {
-                    error!("calculate hash"; "region_id" => region.get_id(), "err" => ?e);
-                    REGION_HASH_COUNTER.compute.failed.inc();
-                    continue;
-                }
-            };
+            Ok(hashes) => hashes,
+            Err(e) => {
+                error!("calculate hash"; "region_id" => region.get_id(), "err" => ?e);
+                REGION_HASH_COUNTER.compute.failed.inc();
+                return;
+            }
+        };
+
+        for (sum, ctx) in hashes {
             let mut checksum = Vec::with_capacity(4);
             checksum.write_u32::<BigEndian>(sum).unwrap();
             let msg = CasualMessage::ComputeHashResult {
@@ -129,6 +129,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coprocessor::{BoxConsistencyCheckObserver, RawConsistencyCheckObserver};
     use byteorder::{BigEndian, WriteBytesExt};
     use engine_rocks::util::new_engine;
     use engine_rocks::{RocksEngine, RocksSnapshot};
@@ -154,7 +155,11 @@ mod tests {
         region.mut_peers().push(Peer::default());
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let host = CoprocessorHost::<RocksEngine>::new(tx.clone());
+        let mut host = CoprocessorHost::<RocksEngine>::new(tx.clone());
+        host.registry.register_consistency_check_observer(
+            100,
+            BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
+        );
         let mut runner = Runner::new(tx, host);
         let mut digest = crc32fast::Hasher::new();
         let kvs = vec![(b"k1", b"v1"), (b"k2", b"v2")];

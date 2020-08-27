@@ -24,8 +24,8 @@ use kvproto::{
 use pd_client::{PdClient, RpcClient};
 use raftstore::{
     coprocessor::{
-        config::SplitCheckConfigManager, ConsistencyCheckMethod, CoprocessorHost,
-        RegionInfoAccessor,
+        config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
+        CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
     },
     router::ServerRaftStoreRouter,
     store::{
@@ -174,8 +174,28 @@ impl TiKVServer {
                 .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
-        if let ConsistencyCheckMethod::Mvcc = config.coprocessor.consistency_check_method {
-            // TODO: use mvcc consistency checker.
+        match config.coprocessor.consistency_check_method {
+            ConsistencyCheckMethod::Mvcc => {
+                // TODO: use mvcc consistency checker.
+                coprocessor_host
+                    .as_mut()
+                    .unwrap()
+                    .registry
+                    .register_consistency_check_observer(
+                        100,
+                        BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
+                    );
+            }
+            ConsistencyCheckMethod::Raw => {
+                coprocessor_host
+                    .as_mut()
+                    .unwrap()
+                    .registry
+                    .register_consistency_check_observer(
+                        100,
+                        BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
+                    );
+            }
         }
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();

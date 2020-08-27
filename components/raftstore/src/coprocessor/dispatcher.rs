@@ -1,19 +1,17 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::marker::PhantomData;
+use std::mem;
+use std::ops::Deref;
+
 use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
-use std::marker::PhantomData;
 use txn_types::TxnExtra;
 
-use std::mem;
-use std::ops::Deref;
-
-use crate::coprocessor::RawConsistencyCheckObserver;
-use crate::store::CasualRouter;
-
 use super::*;
+use crate::store::CasualRouter;
 
 struct Entry<T> {
     priority: u32,
@@ -288,9 +286,9 @@ macro_rules! loop_ob {
 
 /// Admin and invoke all coprocessors.
 #[derive(Clone)]
-pub struct CoprocessorHost<E: KvEngine>
+pub struct CoprocessorHost<E>
 where
-    E: 'static,
+    E: KvEngine + 'static,
 {
     pub registry: Registry<E>,
 }
@@ -322,10 +320,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
         registry.register_split_check_observer(
             400,
             BoxSplitCheckObserver::new(TableCheckObserver::default()),
-        );
-        registry.register_consistency_check_observer(
-            100,
-            BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
         );
         CoprocessorHost { registry }
     }
@@ -453,18 +447,18 @@ impl<E: KvEngine> CoprocessorHost<E> {
         region: &Region,
         context: &[u8],
         snap: E::Snapshot,
-    ) -> Vec<(crate::Result<u32>, Vec<u8>)> {
+    ) -> Result<Vec<(u32, Vec<u8>)>> {
         let mut hashes = Vec::new();
         let (mut reader, context_len) = (context, context.len());
         for observer in &self.registry.consistency_check_observers {
             let observer = observer.observer.inner();
             let old_len = reader.len();
-            let hash = observer.compute_hash(region, &mut reader, &snap);
+            let hash = box_try!(observer.compute_hash(region, &mut reader, &snap));
             let new_len = reader.len();
             let ctx = context[context_len - old_len..context_len - new_len].to_vec();
             hashes.push((hash, ctx));
         }
-        hashes
+        Ok(hashes)
     }
 
     pub fn on_role_change(&self, region: &Region, role: StateRole) {
