@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use engine_rocks::raw::{IngestExternalFileOptions, Writable};
 use engine_rocks::util::get_cf_handle;
+use engine_rocks::util::new_temp_engine;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
 use engine_traits::{
@@ -16,8 +17,8 @@ use engine_traits::{
 };
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
+use raftstore::store::RegionSnapshot;
 use raftstore::store::{apply_sst_cf_file, build_sst_cf_file};
-use raftstore::store::{new_temp_engine, RegionSnapshot};
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv::config::TiKvConfig;

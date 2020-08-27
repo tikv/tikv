@@ -52,3 +52,5 @@ tokio-threadpool = "0.1"
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types" }
 encryption = { path = "../encryption" }
+concurrency_manager = { path = "../concurrency_manager" }
+fail = "0.3"
