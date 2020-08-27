@@ -1923,6 +1923,8 @@ where
         self.proposals.push(p);
     }
 
+    // TODO: check AddLearnerNode on leader
+    // TODO: set higher election priority of voter/incoming voter than demoting voter
     /// Validate the `ConfChange` requests and check whether it's safe to
     /// propose these conf change requests.
     /// It's safe iff at least the quorum of the Raft group is still healthy
