@@ -15,7 +15,6 @@ use raft::eraftpb::MessageType;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
 use raftstore::{DiscardReason, Error, Result};
-use tikv_util::callback::Callback as UtilCallback;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::ThreadReadId;
 use tikv_util::{Either, HandyRwLock};
@@ -207,15 +206,13 @@ impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateT
         self.ch.read(read_id, req, cb)
     }
 
-    fn send_command_pw_cb_and_txn_extra(
+    fn send_command_txn_extra(
         &self,
         req: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
-        pw_cb: Option<UtilCallback<()>>,
         txn_extra: TxnExtra,
+        cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
-        self.ch
-            .send_command_pw_cb_and_txn_extra(req, cb, pw_cb, txn_extra)
+        self.ch.send_command_txn_extra(req, txn_extra, cb)
     }
 
     fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> Result<()> {

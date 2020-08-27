@@ -351,7 +351,7 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, mpsc::Receiver
             let _ = tx.send(resp.response);
         }))
     } else {
-        Callback::Write(Box::new(move |resp: WriteResponse| {
+        Callback::write(Box::new(move |resp: WriteResponse| {
             // we don't care error actually.
             let _ = tx.send(resp.response);
         }))

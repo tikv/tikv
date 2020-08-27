@@ -289,7 +289,6 @@ mod tests {
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use security::SecurityConfig;
-    use tikv_util::callback::Callback as UtilCallback;
     use txn_types::TxnExtra;
 
     #[derive(Clone)]
@@ -333,12 +332,11 @@ mod tests {
             Ok(())
         }
 
-        fn send_command_pw_cb_and_txn_extra(
+        fn send_command_txn_extra(
             &self,
             _: RaftCmdRequest,
-            _: Callback<RocksSnapshot>,
-            _: Option<UtilCallback<()>>,
             _: TxnExtra,
+            _: Callback<RocksSnapshot>,
         ) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())

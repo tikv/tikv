@@ -690,7 +690,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let req = CasualMessage::SplitRegion {
             region_epoch: req.take_context().take_region_epoch(),
             split_keys,
-            callback: Callback::Write(cb),
+            callback: Callback::write(cb),
         };
 
         if let Err(e) = self.ch.casual_send(region_id, req) {

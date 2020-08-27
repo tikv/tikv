@@ -573,7 +573,7 @@ compaction-filter-skip-version-check = true
 enabled = false # test backward compatibility
 wait-for-lock-timeout = "10ms"
 wake-up-delay-duration = 100 # test backward compatibility
-pipelined = true
+pipelined = false
 
 [cdc]
 min-ts-interval = "4s"

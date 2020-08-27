@@ -8,7 +8,6 @@ use kvproto::raft_serverpb::RaftMessage;
 use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};
 use raftstore::router::{handle_send_error, RaftStoreRouter};
 use raftstore::store::msg::{Callback, CasualMessage, PeerMsg, SignificantMsg};
-use tikv_util::callback::Callback as UtilCallback;
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use txn_types::TxnExtra;
@@ -64,12 +63,11 @@ impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
     fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksSnapshot>) -> RaftStoreResult<()> {
         unimplemented!()
     }
-    fn send_command_pw_cb_and_txn_extra(
+    fn send_command_txn_extra(
         &self,
         _: RaftCmdRequest,
-        _: Callback<RocksSnapshot>,
-        _: Option<UtilCallback<()>>,
         _: TxnExtra,
+        _: Callback<RocksSnapshot>,
     ) -> RaftStoreResult<()> {
         unimplemented!()
     }

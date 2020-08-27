@@ -25,8 +25,8 @@ use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    Callback, CbContext, Cursor, Engine, Error, ErrorInner, Iterator as EngineIterator, Modify,
-    Result, ScanMode, Snapshot, WriteData,
+    Callback, CbContext, Cursor, Engine, Error, ErrorInner, ExtCallback,
+    Iterator as EngineIterator, Modify, Result, ScanMode, Snapshot, WriteData,
 };
 
 pub use engine_rocks::RocksSnapshot;
@@ -290,13 +290,26 @@ impl Engine for RocksEngine {
         write_modifies(&self.engines.kv, modifies)
     }
 
-    fn async_write(&self, _: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
+    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
+        self.async_write_ext(ctx, batch, cb, None)
+    }
+
+    fn async_write_ext(
+        &self,
+        _: &Context,
+        batch: WriteData,
+        cb: Callback<()>,
+        proposed_cb: Option<ExtCallback>,
+    ) -> Result<()> {
         fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
 
         if batch.modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
         box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
+        if let Some(cb) = proposed_cb {
+            cb();
+        }
         Ok(())
     }
 

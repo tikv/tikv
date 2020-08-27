@@ -44,7 +44,6 @@ use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask}
 use crate::store::{Callback, Config, GlobalReplicationState, PdTask, ReadResponse};
 use crate::{Error, Result};
 use pd_client::INVALID_ID;
-use tikv_util::callback::Callback as UtilCallback;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
@@ -2008,10 +2007,9 @@ where
     pub fn propose<T: Transport, C>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T, C>,
-        cb: Callback<EK::Snapshot>,
+        mut cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        pw_cb: Option<UtilCallback<()>>,
         txn_extra: TxnExtra,
     ) -> bool {
         if self.pending_remove {
@@ -2034,7 +2032,7 @@ where
                 return false;
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
-            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(ctx, req, pw_cb),
+            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(ctx, req),
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
             }
@@ -2055,6 +2053,12 @@ where
                 false
             }
             Ok(Either::Left(idx)) => {
+                if self.has_applied_to_current_term() {
+                    // After this peer has applied to current term and passed above checking including `cmd_epoch_checker`,
+                    // we can safely guarantee that this proposal will be committed if there is no abnormal leader transfer
+                    // in the near future. Thus proposed callback can be called.
+                    cb.invoke_proposed();
+                }
                 if is_urgent {
                     self.last_urgent_proposal_idx = idx;
                     // Eager flush to make urgent proposal be applied on all nodes as soon as
@@ -2443,7 +2447,7 @@ where
         // update leader lease.
         if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
             let req = RaftCmdRequest::default();
-            if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req, None) {
+            if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req) {
                 let p = Proposal {
                     is_conf_change: false,
                     index,
@@ -2596,7 +2600,6 @@ where
         &mut self,
         poll_ctx: &mut PollContext<EK, ER, T, C>,
         mut req: RaftCmdRequest,
-        pw_cb: Option<UtilCallback<()>>,
     ) -> Result<Either<u64, u64>> {
         if self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
@@ -2609,8 +2612,7 @@ where
 
         poll_ctx.raft_metrics.propose.normal += 1;
 
-        let has_applied_to_current_term = self.has_applied_to_current_term();
-        if has_applied_to_current_term {
+        if self.has_applied_to_current_term() {
             // Only when applied index's term is equal to current leader's term, the information
             // in epoch checker is up to date and can be used to check epoch.
             if let Some(index) = self
@@ -2668,19 +2670,8 @@ where
             return Err(Error::NotLeader(self.region_id, None));
         }
 
-        // Now all checking passed.
-
         if ctx.contains(ProposalContext::PREPARE_MERGE) {
             self.last_proposed_prepare_merge_idx = propose_index;
-        }
-
-        if has_applied_to_current_term {
-            if let Some(pw_cb) = pw_cb {
-                // After this peer has applied to current term and passed above checking including `cmd_epoch_checker`,
-                // we can safely guarantee that this proposal will be committed if there is no abnormal leader transfer
-                // in the near future. Thus pipelined write callback can be called.
-                pw_cb(());
-            }
         }
 
         Ok(Either::Left(propose_index))

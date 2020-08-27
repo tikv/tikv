@@ -3797,7 +3797,7 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
             })),
         );
@@ -3825,7 +3825,7 @@ mod tests {
                 false,
                 4,
                 4,
-                Callback::Write(Box::new(move |write: WriteResponse| {
+                Callback::write(Box::new(move |write: WriteResponse| {
                     cc_tx.send(write.response).unwrap();
                 })),
             ),
@@ -3913,7 +3913,7 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
             })),
         );
@@ -3947,7 +3947,7 @@ mod tests {
             false,
             idx,
             term,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 tx.send(resp.response).unwrap();
             })),
         )
@@ -4404,7 +4404,7 @@ mod tests {
                         false,
                         10,
                         3,
-                        Callback::Write(Box::new(move |resp: WriteResponse| {
+                        Callback::write(Box::new(move |resp: WriteResponse| {
                             // Sleep until yield timeout.
                             thread::sleep(Duration::from_millis(500));
                             capture_tx_clone.send(resp.response).unwrap();

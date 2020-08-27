@@ -24,7 +24,6 @@ use tikv::storage::kv::{
     Callback as EngineCallback, CbContext, Modify, Result as EngineResult, WriteData,
 };
 use tikv::storage::Engine;
-use tikv_util::callback::Callback as UtilCallback;
 use txn_types::{Key, TxnExtra};
 
 #[derive(Clone)]
@@ -53,7 +52,7 @@ impl SyncBenchRouter {
                     txn_extra_op: TxnExtraOp::Noop,
                 })
             }
-            Callback::Write(cb) => {
+            Callback::Write { cb, .. } => {
                 let mut resp = Response::default();
                 let cmd_type = cmd.request.get_requests()[0].get_cmd_type();
                 resp.set_cmd_type(cmd_type);
@@ -75,16 +74,13 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
         Ok(())
     }
 
-    fn send_command_pw_cb_and_txn_extra(
+    fn send_command_txn_extra(
         &self,
         req: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
-        pw_cb: Option<UtilCallback<()>>,
         txn_extra: TxnExtra,
+        cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
-        self.invoke(RaftCommand::with_pw_cb_and_txn_extra(
-            req, cb, pw_cb, txn_extra,
-        ));
+        self.invoke(RaftCommand::with_txn_extra(req, cb, txn_extra));
         Ok(())
     }
 

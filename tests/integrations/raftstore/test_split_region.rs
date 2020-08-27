@@ -132,7 +132,7 @@ fn test_server_split_region_twice() {
         assert_eq!(region2.get_end_key(), right.get_end_key());
         tx.send(right).unwrap();
     });
-    cluster.split_region(&region, split_key, Callback::Write(c));
+    cluster.split_region(&region, split_key, Callback::write(c));
     let region3 = rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     cluster.must_put(split_key, b"v2");
@@ -144,7 +144,7 @@ fn test_server_split_region_twice() {
         assert!(!write_resp.response.has_admin_response());
         tx1.send(()).unwrap();
     });
-    cluster.split_region(&region3, split_key, Callback::Write(c));
+    cluster.split_region(&region3, split_key, Callback::write(c));
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 

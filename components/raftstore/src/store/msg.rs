@@ -21,7 +21,6 @@ use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
-use tikv_util::callback::Callback as UtilCallback;
 use tikv_util::escape;
 
 use super::{AbstractPeer, RegionSnapshot};
@@ -56,6 +55,7 @@ where
 
 pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
+pub type ExtCallback = Box<dyn FnOnce() + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callback for read only requests including `StatusRequest`,
@@ -68,13 +68,27 @@ pub enum Callback<S: Snapshot> {
     /// Read callback.
     Read(ReadCallback<S>),
     /// Write callback.
-    Write(WriteCallback),
+    Write {
+        cb: WriteCallback,
+        /// `proposed_cb` is called after a request is proposed to the raft group successfully.
+        /// It's used to notify the caller to move on early because it's very likely the request
+        /// will be applied to the raftstore.
+        proposed_cb: Option<ExtCallback>,
+    },
 }
 
 impl<S> Callback<S>
 where
     S: Snapshot,
 {
+    pub fn write(cb: WriteCallback) -> Self {
+        Self::write_ext(cb, None)
+    }
+
+    pub fn write_ext(cb: WriteCallback, proposed_cb: Option<ExtCallback>) -> Self {
+        Callback::Write { cb, proposed_cb }
+    }
+
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
             Callback::None => (),
@@ -86,9 +100,17 @@ where
                 };
                 read(resp);
             }
-            Callback::Write(write) => {
+            Callback::Write { cb, .. } => {
                 let resp = WriteResponse { response: resp };
-                write(resp);
+                cb(resp);
+            }
+        }
+    }
+
+    pub fn invoke_proposed(&mut self) {
+        if let Callback::Write { proposed_cb, .. } = self {
+            if let Some(cb) = proposed_cb.take() {
+                cb()
             }
         }
     }
@@ -116,7 +138,7 @@ where
         match *self {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
-            Callback::Write(_) => write!(fmt, "Callback::Write(..)"),
+            Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
         }
     }
 }
@@ -321,46 +343,31 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
 
 /// Raft command is the command that is expected to be proposed by the
 /// leader of the target raft group.
+#[derive(Debug)]
 pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
-    pub pw_callback: Option<UtilCallback<()>>,
     pub txn_extra: TxnExtra,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
     #[inline]
-    pub fn with_pw_cb_and_txn_extra(
+    pub fn with_txn_extra(
         request: RaftCmdRequest,
         callback: Callback<S>,
-        pw_callback: Option<UtilCallback<()>>,
         txn_extra: TxnExtra,
     ) -> RaftCommand<S> {
         RaftCommand {
-            send_time: Instant::now(),
             request,
             callback,
-            pw_callback,
             txn_extra,
+            send_time: Instant::now(),
         }
     }
 
     pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
-        Self::with_pw_cb_and_txn_extra(request, callback, None, TxnExtra::default())
-    }
-}
-
-impl<S> fmt::Debug for RaftCommand<S>
-where
-    S: Snapshot,
-{
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt.debug_struct("RaftCommand")
-            .field("send_time", &self.send_time)
-            .field("request", &self.request)
-            .field("callback", &self.callback)
-            .finish()
+        Self::with_txn_extra(request, callback, TxnExtra::default())
     }
 }
 

@@ -28,13 +28,13 @@ pub use self::stats::{
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
-use tikv_util::callback::Callback as UtilCallback;
 use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 pub type Callback<T> = Box<dyn FnOnce((CbContext, Result<T>)) + Send>;
+pub type ExtCallback = Box<dyn FnOnce() + Send>;
 pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug)]
@@ -112,16 +112,20 @@ pub trait Engine: Send + Clone + 'static {
         cb: Callback<Self::Snap>,
     ) -> Result<()>;
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
+    fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()>;
 
-    fn async_write_with_pipelined_write_cb(
+    /// Writes data to the engine asynchronously with some extensions.
+    ///
+    /// When the write request is proposed successfully, the `proposed_cb` is invoked.
+    /// When the write request is finished, the `write_cb` is invoked.
+    fn async_write_ext(
         &self,
         ctx: &Context,
         batch: WriteData,
-        callback: Callback<()>,
-        _: Option<UtilCallback<()>>,
+        write_cb: Callback<()>,
+        _proposed_cb: Option<ExtCallback>,
     ) -> Result<()> {
-        self.async_write(ctx, batch, callback)
+        self.async_write(ctx, batch, write_cb)
     }
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
