@@ -612,7 +612,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 // resolver must be checked in or after `Task::MinTS`' execution.
                 cm.update_max_read_ts(min_ts);
                 if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
-                    if min_mem_lock_ts > min_ts {
+                    if min_mem_lock_ts < min_ts {
                         min_ts = min_mem_lock_ts;
                     }
                 }
