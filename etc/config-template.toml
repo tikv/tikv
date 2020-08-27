@@ -303,7 +303,7 @@
 
 ## Raft engine is a replaceable component. For some implementations, it's necessary to purge
 ## old log files to recycle disk space ASAP.
-# raft-engine-purge-interval = "10m"
+# raft-engine-purge-interval = "10s"
 
 ## How long the peer will be considered down and reported to PD when it hasn't been active for this
 ## time.

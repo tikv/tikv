@@ -1277,7 +1277,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let timer = region_runner.new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
 
-        let raftlog_gc_runner = RaftlogGcRunner::new(None);
+        let raftlog_gc_runner = RaftlogGcRunner::new(self.router());
         box_try!(workers.raftlog_gc_worker.start(raftlog_gc_runner));
 
         let compact_runner = CompactRunner::new(engines.kv.clone());
@@ -2355,13 +2355,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
     }
 
     fn on_raft_engine_purge_tick(&self) {
-        let raft_engine = &self.ctx.engines.raft;
-        if let Ok(regions) = raft_engine.purge_expired_files() {
-            for region_id in regions {
-                let msg = PeerMsg::CasualMessage(CasualMessage::ForceCompactRaftLogs);
-                self.ctx.router.notify_one(region_id, msg);
-            }
-        }
+        let raft_engine = self.ctx.engines.raft.clone();
+        let scheduler = &self.ctx.raftlog_gc_scheduler;
+        let _ = scheduler.schedule(RaftlogGcTask::Purge { raft_engine });
+        self.register_raft_engine_purge_tick();
     }
 }
 
