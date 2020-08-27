@@ -1083,6 +1083,7 @@ mod tests {
             raft_router.clone(),
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
+            ConcurrencyManager::new(1.into()),
         );
         let (tx, _rx) = batch::unbounded(1);
 
@@ -1141,6 +1142,7 @@ mod tests {
             raft_router,
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
+            ConcurrencyManager::new(1.into()),
         );
         let (tx, rx) = batch::unbounded(1);
 

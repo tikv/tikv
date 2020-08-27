@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::*;
 use std::time::Duration;
 
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
@@ -136,6 +137,7 @@ impl TestSuite {
                 raft_router,
                 cdc_ob,
                 cluster.store_metas[id].clone(),
+                ConcurrencyManager::new(1.into()),
             );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);
