@@ -165,7 +165,7 @@ requests_to_trace!(
 
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
-        fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
+        fn $fn_name(&mut self, ctx: RpcContext<'_>, mut req: $req_ty, sink: UnarySink<$resp_ty>) {
             if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
                 return;
             }
@@ -174,12 +174,13 @@ macro_rules! handle_request {
 
             let (_root_span, collector) = trace_may_enable!($fn_name, !self.tracing_reporter.is_null());
             let reporter = self.tracing_reporter.clone();
+            let req_trace_context = req.mut_context().take_trace_context();
 
             let resp = $future_name(&self.storage, req);
             let task = async move {
                 let resp = resp.await?;
                 sink.success(resp).compat().await?;
-                reporter.report(collector);
+                reporter.report(req_trace_context, collector);
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
                     .observe(duration_to_sec(begin_instant.elapsed()));
@@ -339,7 +340,7 @@ impl<
         );
     }
 
-    fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
+    fn coprocessor(&mut self, ctx: RpcContext<'_>, mut req: Request, sink: UnarySink<Response>) {
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
@@ -348,12 +349,13 @@ impl<
         let (_root_span, collector) =
             trace_may_enable!(coprocessor, !self.tracing_reporter.is_null());
         let reporter = self.tracing_reporter.clone();
+        let req_trace_context = req.mut_context().take_trace_context();
 
         let future = future_cop(&self.cop, Some(ctx.peer()), req);
         let task = async move {
             let resp = future.await?;
             sink.success(resp).compat().await?;
-            reporter.report(collector);
+            reporter.report(req_trace_context, collector);
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
                 .observe(duration_to_sec(begin_instant.elapsed()));

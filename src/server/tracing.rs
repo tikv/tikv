@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::Result;
+use kvproto::kvrpcpb::TraceContext;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::time::Duration;
@@ -13,7 +14,7 @@ use protobuf::ProtobufEnum;
 
 /// Tracing Reporter
 pub trait Reporter: Send + Sync {
-    fn report(&self, collector: Option<Collector>);
+    fn report(&self, trace_context: TraceContext, collector: Option<Collector>);
     fn is_null(&self) -> bool;
 }
 
@@ -22,8 +23,8 @@ where
     R: Reporter + ?Sized,
     D: Deref<Target = R> + Send + Sync,
 {
-    fn report(&self, collector: Option<Collector>) {
-        self.deref().report(collector)
+    fn report(&self, trace_context: TraceContext, collector: Option<Collector>) {
+        self.deref().report(trace_context, collector)
     }
 
     fn is_null(&self) -> bool {
@@ -61,6 +62,7 @@ impl JaegerReporter {
     }
 
     async fn report(
+        trace_context: TraceContext,
         agent: SocketAddr,
         mut trace_details: TraceDetails,
         spans_max_length: usize,
@@ -73,7 +75,9 @@ impl JaegerReporter {
         .parse()?;
         let mut udp_socket = UdpSocket::bind(local_addr).await?;
 
-        Self::id_remap(&mut trace_details);
+        if trace_context.get_is_trace_enabled() {
+            Self::id_remap(&trace_context, &mut trace_details);
+        }
 
         // Check if len of spans reaches `spans_max_length`
         if trace_details.spans.len() > spans_max_length {
@@ -86,8 +90,12 @@ impl JaegerReporter {
         thrift_compact_encode(
             &mut buf,
             "TiKV",
-            rand::random(),
-            rand::random(),
+            0,
+            if trace_context.get_is_trace_enabled() {
+                trace_context.get_trace_id() as _
+            } else {
+                rand::random()
+            },
             &trace_details,
             // transform numerical event to string
             |event| {
@@ -124,11 +132,11 @@ impl JaegerReporter {
         Ok(())
     }
 
-    fn id_remap(_trace_details: &mut TraceDetails) {}
+    fn id_remap(_trace_context: &TraceContext, _trace_details: &mut TraceDetails) {}
 }
 
 impl Reporter for JaegerReporter {
-    fn report(&self, collector: Option<Collector>) {
+    fn report(&self, trace_context: TraceContext, collector: Option<Collector>) {
         if let Some(collector) = collector {
             let trace_details = collector.collect();
 
@@ -138,6 +146,7 @@ impl Reporter for JaegerReporter {
             }
 
             self.runtime.spawn(Self::report(
+                trace_context,
                 self.agent,
                 trace_details,
                 self.spans_max_length,
@@ -161,7 +170,7 @@ impl NullReporter {
 }
 
 impl Reporter for NullReporter {
-    fn report(&self, _collector: Option<Collector>) {}
+    fn report(&self, _trace_context: TraceContext, _collector: Option<Collector>) {}
 
     fn is_null(&self) -> bool {
         true
