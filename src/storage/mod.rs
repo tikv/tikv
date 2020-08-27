@@ -2,12 +2,12 @@
 
 //! Interact with persistent storage.
 //!
-//! The [`Storage`](storage::Storage) structure provides raw and transactional APIs on top of
-//! a lower-level [`Engine`](storage::kv::Engine).
+//! The [`Storage`](Storage) structure provides raw and transactional APIs on top of
+//! a lower-level [`Engine`](kv::Engine).
 //!
-//! There are multiple [`Engine`](storage::kv::Engine) implementations, [`RaftKv`](server::raftkv::RaftKv)
-//! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and
-//! [`RocksEngine`](storage::RocksEngine) are used for testing only.
+//! There are multiple [`Engine`](kv::Engine) implementations, [`RaftKv`](crate::server::raftkv::RaftKv)
+//! is used by the [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
+//! [`RocksEngine`](RocksEngine) are used for testing only.
 
 pub mod config;
 pub mod errors;
@@ -62,21 +62,22 @@ use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
-/// [`Storage`] implements transactional KV APIs and raw KV APIs on a given [`Engine`]. An [`Engine`]
-/// provides low level KV functionality. [`Engine`] has multiple implementations. When a TiKV server
-/// is running, a [`RaftKv`] will be the underlying [`Engine`] of [`Storage`]. The other two types of
-/// engines are for test purpose.
+/// [`Storage`](Storage) implements transactional KV APIs and raw KV APIs on a given [`Engine`].
+/// An [`Engine`] provides low level KV functionality. [`Engine`] has multiple implementations.
+/// When a TiKV server is running, a [`RaftKv`](crate::server::raftkv::RaftKv) will be the
+/// underlying [`Engine`] of [`Storage`]. The other two types of engines are for test purpose.
 ///
 ///[`Storage`] is reference counted and cloning [`Storage`] will just increase the reference counter.
 /// Storage resources (i.e. threads, engine) will be released when all references are dropped.
 ///
 /// Notice that read and write methods may not be performed over full data in most cases, i.e. when
-/// underlying engine is [`RaftKv`], which limits data access in the range of a single region
+/// underlying engine is [`RaftKv`](crate::server::raftkv::RaftKv),
+/// which limits data access in the range of a single region
 /// according to specified `ctx` parameter. However,
-/// [`unsafe_destroy_range`](Storage::unsafe_destroy_range) is the only exception. It's
-/// always performed on the whole TiKV.
+/// [`unsafe_destroy_range`](crate::server::gc_worker::GcTask::UnsafeDestroyRange) is the only exception.
+/// It's always performed on the whole TiKV.
 ///
-/// Operations of [`Storage`] can be divided into two types: MVCC operations and raw operations.
+/// Operations of [`Storage`](Storage) can be divided into two types: MVCC operations and raw operations.
 /// MVCC operations uses MVCC keys, which usually consist of several physical keys in different
 /// CFs. In default CF and write CF, the key will be memcomparable-encoded and append the timestamp
 /// to it, so that multiple versions can be saved at the same time.
@@ -693,7 +694,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// This means that deleted keys will not be retrievable by specifying an older timestamp.
     /// If `notify_only` is set, the data will not be immediately deleted, but the operation will
     /// still be replicated via Raft. This is used to notify that the data will be deleted by
-    /// `unsafe_destroy_range` soon.
+    /// [`unsafe_destroy_range`](crate::server::gc_worker::GcTask::UnsafeDestroyRange) soon.
     pub fn delete_range(
         &self,
         ctx: Context,
