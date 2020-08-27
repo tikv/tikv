@@ -20,6 +20,7 @@ tidb_query_vec_expr = { path = "../tidb_query_vec_expr" }
 tidb_query_vec_aggr = { path = "../tidb_query_vec_aggr" }
 tikv_util = { path = "../tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
+fail = { git = "https://github.com/tikv/fail-rs.git", rev = "2cf1175a1a5cc2c70bd20ebd45313afd69b558fc" }
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"

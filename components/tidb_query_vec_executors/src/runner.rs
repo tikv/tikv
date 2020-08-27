@@ -5,6 +5,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use fail::fail_point;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::deadline::Deadline;
@@ -362,9 +363,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         })
     }
 
+    fn batch_size() -> usize {
+        fail_point!("copr_batch_size", |r| r.map_or(1, |e| e.parse().unwrap()));
+        BATCH_INITIAL_SIZE
+    }
+
     pub async fn handle_request(&mut self) -> Result<SelectResponse> {
         let mut chunks = vec![];
-        let mut batch_size = BATCH_INITIAL_SIZE;
+        let mut batch_size = Self::batch_size();
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
 
