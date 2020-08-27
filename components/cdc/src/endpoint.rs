@@ -1071,14 +1071,14 @@ mod tests {
         let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
         loop {
             if let Err(RaftStoreError::Transport(_)) =
-                raft_router.casual_send(1, CasualMessage::ClearRegionSize)
+                raft_router.send_casual_msg(1, CasualMessage::ClearRegionSize)
             {
                 break;
             }
         }
         // Make sure channel is full.
         raft_router
-            .casual_send(1, CasualMessage::ClearRegionSize)
+            .send_casual_msg(1, CasualMessage::ClearRegionSize)
             .unwrap_err();
 
         let conn = Conn::new(tx);

@@ -4238,6 +4238,7 @@ name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
  "concurrency_manager",
+ "crossbeam",
  "encryption",
  "engine_rocks",
  "engine_traits",

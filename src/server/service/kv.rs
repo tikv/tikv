@@ -716,7 +716,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             callback: Callback::Write(cb),
         };
 
-        if let Err(e) = self.ch.casual_send(region_id, req) {
+        if let Err(e) = self.ch.send_casual_msg(region_id, req) {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
             return;
         }
