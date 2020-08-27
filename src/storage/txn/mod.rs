@@ -122,6 +122,11 @@ quick_error! {
                         lower_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
                         upper_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()))
         }
+        MaxTimestampNotSynced { region_id: u64, start_ts: TimeStamp } {
+            display("Prewrite for async commit fails due to potentially stale max timestamp, start_ts: {}, region_id: {}",
+                        start_ts,
+                        region_id)
+        }
     }
 }
 
@@ -148,6 +153,13 @@ impl ErrorInner {
                 end: end.clone(),
                 lower_bound: lower_bound.clone(),
                 upper_bound: upper_bound.clone(),
+            }),
+            ErrorInner::MaxTimestampNotSynced {
+                region_id,
+                start_ts,
+            } => Some(ErrorInner::MaxTimestampNotSynced {
+                region_id,
+                start_ts,
             }),
             ErrorInner::Other(_) | ErrorInner::ProtoBuf(_) | ErrorInner::Io(_) => None,
         }
@@ -208,6 +220,9 @@ impl ErrorCodeExt for Error {
             ErrorInner::Io(_) => error_code::storage::IO,
             ErrorInner::InvalidTxnTso { .. } => error_code::storage::INVALID_TXN_TSO,
             ErrorInner::InvalidReqRange { .. } => error_code::storage::INVALID_REQ_RANGE,
+            ErrorInner::MaxTimestampNotSynced { .. } => {
+                error_code::storage::MAX_TIMESTAMP_NOT_SYNCED
+            }
         }
     }
 }
