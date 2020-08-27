@@ -2,15 +2,18 @@
 
 use super::Result;
 use kvproto::kvrpcpb::TraceContext;
+use std::cell::Cell;
 use std::net::SocketAddr;
 use std::ops::Deref;
+use std::sync::atomic::AtomicU16;
 use std::time::Duration;
-use tikv_util::minitrace::{jaeger::thrift_compact_encode, Collector, Event, TraceDetails};
+use tikv_util::minitrace::{jaeger::thrift_compact_encode, Collector, Event, State, TraceDetails};
 use tokio::net::UdpSocket;
 use tokio::runtime::{Builder, Runtime};
 
 #[cfg(feature = "protobuf-codec")]
 use protobuf::ProtobufEnum;
+use std::collections::HashMap;
 
 /// Tracing Reporter
 pub trait Reporter: Send + Sync {
@@ -132,7 +135,29 @@ impl JaegerReporter {
         Ok(())
     }
 
-    fn id_remap(_trace_context: &TraceContext, _trace_details: &mut TraceDetails) {}
+    fn id_remap(trace_context: &TraceContext, trace_details: &mut TraceDetails) {
+        let mut id_mapper = HashMap::with_capacity(trace_details.spans.len());
+        let id_prefix = trace_context.get_span_id_prefix();
+        for span in &trace_details.spans {
+            id_mapper.insert(span.id, (id_prefix as u64) << 32 | unique_u32() as u64);
+        }
+
+        // remap self if and parent id
+        for span in &mut trace_details.spans {
+            span.id = id_mapper[&span.id];
+            if span.state != State::Root {
+                span.related_id = id_mapper[&span.related_id];
+            } else {
+                span.state = State::Scheduling;
+                span.related_id = trace_context.get_parent_span_id();
+            }
+        }
+
+        // remap relevant span id of property
+        for span_id in &mut trace_details.properties.span_ids {
+            *span_id = id_mapper[span_id];
+        }
+    }
 }
 
 impl Reporter for JaegerReporter {
@@ -175,4 +200,29 @@ impl Reporter for NullReporter {
     fn is_null(&self) -> bool {
         true
     }
+}
+
+static GLOBAL_ID_COUNTER: AtomicU16 = AtomicU16::new(0);
+
+#[inline]
+fn next_global_id_prefix() -> u16 {
+    GLOBAL_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+}
+
+thread_local! {
+    static ID_PREFIX: Cell<(u16, u16)> = Cell::new((0, 0));
+}
+
+fn unique_u32() -> u32 {
+    ID_PREFIX.with(|c| {
+        let (mut id_prefix, mut id_suffix) = c.get();
+        if id_suffix == std::u16::MAX {
+            id_suffix = 0;
+            id_prefix = next_global_id_prefix();
+        } else {
+            id_suffix += 1;
+        }
+        c.set((id_prefix, id_suffix));
+        (id_prefix as u32) << 16 | id_suffix as u32
+    })
 }
