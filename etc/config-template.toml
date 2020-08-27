@@ -301,6 +301,10 @@
 ## It's recommanded to set it to 3/4 of `region-split-size`.
 # raft-log-gc-size-limit = "72MB"
 
+## Raft engine is a replaceable component. For some implementations, it's necessary to purge
+## old log files to recycle disk space ASAP.
+# raft-engine-purge-interval = "10m"
+
 ## How long the peer will be considered down and reported to PD when it hasn't been active for this
 ## time.
 # max-peer-down-duration = "5m"

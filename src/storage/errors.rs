@@ -187,6 +187,13 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
         | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e))),
         )))))) => Some(e.to_owned()),
+        Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::MaxTimestampNotSynced {
+            ..
+        })))) => {
+            let mut err = errorpb::Error::default();
+            err.set_max_timestamp_not_synced(Default::default());
+            Some(err)
+        }
         Err(Error(box ErrorInner::SchedTooBusy)) => {
             let mut err = errorpb::Error::default();
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
