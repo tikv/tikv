@@ -32,7 +32,7 @@ impl MockRaftStoreRouter {
 }
 
 impl StoreRouter for MockRaftStoreRouter {
-    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+    fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
         unimplemented!();
     }
 }
@@ -40,7 +40,7 @@ impl StoreRouter for MockRaftStoreRouter {
 impl ProposalRouter<RocksSnapshot> for MockRaftStoreRouter {
     fn send(
         &self,
-        cmd: RaftCommand<RocksSnapshot>,
+        _: RaftCommand<RocksSnapshot>,
     ) -> std::result::Result<(), TrySendError<RaftCommand<RocksSnapshot>>> {
         unimplemented!();
     }
