@@ -72,7 +72,10 @@ impl CfStatistics {
             (GcKeysDetail::next_tombstone, self.next_tombstone),
             (GcKeysDetail::prev_tombstone, self.prev_tombstone),
             (GcKeysDetail::seek_tombstone, self.seek_tombstone),
-            (GcKeysDetail::seek_for_prev_tombstone, self.seek_for_prev_tombstone),
+            (
+                GcKeysDetail::seek_for_prev_tombstone,
+                self.seek_for_prev_tombstone,
+            ),
         ]
     }
 

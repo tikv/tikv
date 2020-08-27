@@ -11,7 +11,9 @@ use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use txn_types::{Key, TimeStamp};
 
-use crate::storage::kv::{CfStatistics, PerfStatisticsInstant, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
+use crate::storage::kv::{
+    CfStatistics, Error, Iterator, PerfStatisticsInstant, Result, ScanMode, Snapshot, SEEK_BOUND,
+};
 
 pub struct Cursor<I: Iterator> {
     iter: I,
