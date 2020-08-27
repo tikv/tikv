@@ -204,8 +204,8 @@ fn start_global_steady_timer() -> SteadyTimer {
 mod tests {
     use super::*;
     use crate::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
-    use futures03::compat::Future01CompatExt;
-    use futures03::executor::block_on;
+    use futures::compat::Future01CompatExt;
+    use futures::executor::block_on;
     use std::sync::mpsc::RecvTimeoutError;
     use std::sync::mpsc::{self, Sender};
 

@@ -9,8 +9,8 @@ use std::time::Duration;
 use crossbeam::channel::{
     self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
 };
-use futures03::stream::Stream;
-use futures03::task::{Context, Poll, Waker};
+use futures::stream::Stream;
+use futures::task::{Context, Poll, Waker};
 
 struct State {
     // If the receiver can't get any messages temporarily in `poll` context, it will put its
@@ -340,9 +340,9 @@ mod tests {
     use std::sync::{mpsc, Mutex};
     use std::{thread, time};
 
-    use futures03::future::{self, BoxFuture, FutureExt};
-    use futures03::stream::{self, StreamExt};
-    use futures03::task::{self, ArcWake, Poll};
+    use futures::future::{self, BoxFuture, FutureExt};
+    use futures::stream::{self, StreamExt};
+    use futures::task::{self, ArcWake, Poll};
     use tokio::runtime::Builder;
 
     use super::*;
@@ -360,7 +360,7 @@ mod tests {
             .unwrap();
         let _res = pool.spawn(rx.for_each(move |_| {
             msg_counter1.fetch_add(1, Ordering::AcqRel);
-            futures03::future::ready(())
+            future::ready(())
         }));
 
         // Wait until the receiver is suspended.
