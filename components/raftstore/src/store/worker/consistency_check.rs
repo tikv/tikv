@@ -65,7 +65,6 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
         mut context: Vec<u8>,
         snap: EK::Snapshot,
     ) {
-        println!("computing hash...");
         if context.is_empty() {
             // For backward compatibility.
             context.push(ConsistencyCheckMethod::Raw as u8);
