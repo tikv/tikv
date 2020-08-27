@@ -193,6 +193,7 @@ fn test_serde_custom_tikv_config() {
         store_batch_system,
         future_poll_size: 2,
         hibernate_regions: false,
+        hibernate_timeout: ReadableDuration::hours(1),
         early_apply: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
