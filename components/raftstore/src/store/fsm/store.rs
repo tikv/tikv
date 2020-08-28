@@ -317,7 +317,7 @@ where
     pub need_flush_trans: bool,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
-    pub node_start_time: Option<Instant>,
+    pub node_start_time: Option<TiInstant>,
 }
 
 impl<EK, ER, T, C> HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>
@@ -1069,7 +1069,7 @@ where
             need_flush_trans: false,
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
-            node_start_time: Some(Instant::now()),
+            node_start_time: Some(TiInstant::now_coarse()),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
