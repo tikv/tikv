@@ -69,8 +69,8 @@ use tikv_util::collections::HashMap;
 /// Learn more about our transaction system at
 /// [Deep Dive TiKV: Distributed Transactions](https://tikv.org/docs/deep-dive/distributed-transaction/introduction/)
 ///
-/// These are typically scheduled and used through the [`Storage`](Storage) with functions like
-/// [`Storage::prewrite`](Storage::prewrite) trait and are executed asynchronously.
+/// These are typically scheduled and used through the [`Storage`](crate::storage::Storage) with functions like
+/// [`prewrite`](prewrite::Prewrite) trait and are executed asynchronously.
 // Logic related to these can be found in the `src/storage/txn/proccess.rs::process_write_impl` function.
 pub enum Command {
     Prewrite(Prewrite),
