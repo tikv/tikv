@@ -919,7 +919,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
 
     cm.update_max_read_ts(20.into());
 
-    let _guard = lock_key(b"a", 80);
+    let guard = lock_key(b"a", 80);
     suite.set_tso(100);
 
     let mut req = ChangeDataRequest::default();
@@ -943,7 +943,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
     }
 
     fn check_resolved_ts(events: Vec<Event>, check_fn: impl Fn(u64)) {
-        assert!(events.len() > 0);
+        assert_ne!(events.len(), 0);
         for event in events {
             match event.event.unwrap() {
                 Event_oneof_event::ResolvedTs(ts) => check_fn(ts),
@@ -953,8 +953,56 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
     };
 
     check_resolved_ts(receive_event(true), |ts| assert_eq!(ts, 80));
+    assert!(cm.max_read_ts() >= 100.into());
 
-    // More tests WIP...
+    drop(guard);
+    'outer: for retry in 0.. {
+        let events = receive_event(true);
+        let mut current_rts = 0;
+        for event in events {
+            match event.event.unwrap() {
+                Event_oneof_event::ResolvedTs(ts) => {
+                    current_rts = ts;
+                    if ts >= 100 {
+                        break 'outer;
+                    }
+                }
+                _ => panic!("unexpected event"),
+            }
+        }
+        if retry >= 5 {
+            panic!(
+                "resolved ts didn't push properly after unlocking memlock. current resolved_ts: {}",
+                current_rts
+            );
+        }
+    }
+
+    let _guard = lock_key(b"a", 90);
+    // The resolved_ts should be blocked by the mem lock but it's already greater than 90.
+    // Retry until receiving an unchanged resovled_ts because the first several resolved ts received
+    // might be updated before acquiring the lock.
+    let mut last_resolved_ts = 0;
+    let mut success = false;
+    'outer_2: for _ in 0..5 {
+        let events = receive_event(true);
+        assert_ne!(events.len(), 0);
+        for event in events {
+            match event.event.unwrap() {
+                Event_oneof_event::ResolvedTs(ts) => {
+                    assert!(ts > 100);
+                    if ts == last_resolved_ts {
+                        success = true;
+                        break 'outer_2;
+                    }
+                    assert!(ts > last_resolved_ts);
+                    last_resolved_ts = ts;
+                }
+                _ => panic!("unexpected event"),
+            }
+        }
+    }
+    assert!(success, "resolved_ts not blocked by the memory lock");
 
     event_feed_wrap.as_ref().replace(None);
     suite.stop();
