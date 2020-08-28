@@ -3248,6 +3248,12 @@ where
             replicated_idx
         };
         assert!(compact_idx >= first_idx);
+        // Have no idea why subtract 1 here, but original code did this by magic.
+        compact_idx -= 1;
+        if compact_idx < first_idx {
+            // In case compact_idx == first_idx before subtraction.
+            return;
+        }
         total_gc_logs += compact_idx - first_idx;
 
         // Create a compact log request and notify directly.
