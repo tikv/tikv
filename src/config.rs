@@ -2425,6 +2425,13 @@ pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     let tmp_cfg_path = store_path.join(TMP_CONFIG_FILE);
 
+    let same_as_last_cfg = fs::read_to_string(&last_cfg_path).map_or(false, |last_cfg| {
+        toml::to_string(&config).unwrap() == last_cfg
+    });
+    if same_as_last_cfg {
+        return Ok(());
+    }
+
     // Create parent directory if missing.
     if let Err(e) = fs::create_dir_all(&store_path) {
         return Err(format!(
@@ -2769,6 +2776,29 @@ mod tests {
 
         last_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+    }
+
+    #[test]
+    fn test_last_cfg_modified() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let store_path = Path::new(&cfg.storage.data_dir);
+        let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+
+        cfg.write_to_file(&last_cfg_path).unwrap();
+
+        let mut last_cfg_metadata = last_cfg_path.metadata().unwrap();
+        let first_modified = last_cfg_metadata.modified().unwrap();
+
+        // not write to file when config is the equivalent of last one.
+        assert!(persist_config(&cfg).is_ok());
+        last_cfg_metadata = last_cfg_path.metadata().unwrap();
+        assert_eq!(last_cfg_metadata.modified().unwrap(), first_modified);
+
+        // write to file when config is the inequivalent of last one.
+        cfg.log_level = slog::Level::Warning;
+        assert!(persist_config(&cfg).is_ok());
+        last_cfg_metadata = last_cfg_path.metadata().unwrap();
+        assert_ne!(last_cfg_metadata.modified().unwrap(), first_modified);
     }
 
     #[test]

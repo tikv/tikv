@@ -1877,7 +1877,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#6157337686b1654f0bfb55920faf95b3d3e34d87"
+source = "git+https://github.com/pingcap/kvproto.git#597e3bf93df7ede3de7df8e7fe313f3afa513e96"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -3918,6 +3918,7 @@ dependencies = [
  "error_code",
  "external_storage",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-cpupool",
  "futures-executor",
  "futures-util",
@@ -3938,7 +3939,6 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio 0.2.13",
- "tokio-sync",
  "txn_types",
  "uuid",
 ]
@@ -4242,6 +4242,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_traits",
+ "fail",
  "futures 0.1.29",
  "futures 0.3.4",
  "futures-cpupool",
@@ -4551,6 +4552,7 @@ name = "tidb_query_vec_executors"
 version = "0.0.1"
 dependencies = [
  "codec",
+ "fail",
  "failure",
  "hex 0.3.2",
  "kvproto",
@@ -4810,9 +4812,9 @@ dependencies = [
  "tikv_alloc",
  "time 0.1.42",
  "tipb",
+ "tokio 0.2.13",
  "tokio-core",
  "tokio-executor",
- "tokio-sync",
  "tokio-timer",
  "toml",
  "url",

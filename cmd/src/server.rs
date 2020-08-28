@@ -134,13 +134,13 @@ struct TiKVServer {
 struct TiKVEngines {
     engines: Engines<RocksEngine, RocksEngine>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<ServerRaftStoreRouter<RocksEngine>>,
-    raft_router: ServerRaftStoreRouter<RocksEngine>,
+    engine: RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>,
+    raft_router: ServerRaftStoreRouter<RocksEngine, RocksEngine>,
 }
 
 struct Servers {
     lock_mgr: LockManager,
-    server: Server<ServerRaftStoreRouter<RocksEngine>, resolve::PdStoreAddrResolver>,
+    server: Server<ServerRaftStoreRouter<RocksEngine, RocksEngine>, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
@@ -444,7 +444,9 @@ impl TiKVServer {
         });
     }
 
-    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>> {
+    fn init_gc_worker(
+        &mut self,
+    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -464,7 +466,7 @@ impl TiKVServer {
 
     fn init_servers(
         &mut self,
-        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
+        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>>,
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
