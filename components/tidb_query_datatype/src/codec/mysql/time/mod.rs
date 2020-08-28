@@ -27,7 +27,7 @@ use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::{EvalContext, Flag, SqlMode};
 
 const MIN_TIMESTAMP: i64 = 0;
-const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
+pub const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
 const MICRO_WIDTH: usize = 6;
 const COMPLETE_COMPONENTS_LEN: usize = 7;
 
