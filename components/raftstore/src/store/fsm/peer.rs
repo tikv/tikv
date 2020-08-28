@@ -109,6 +109,8 @@ where
     pub receiver: Receiver<PeerMsg<EK>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
+    /// Sometimes applied raft logs won't be compacted in time, don't keep them too long time.
+    skip_gc_raft_log_count: usize,
 
     // Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
@@ -196,6 +198,7 @@ where
                 mailbox: None,
                 receiver: rx,
                 skip_split_count: 0,
+                skip_gc_raft_log_count: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
@@ -238,6 +241,7 @@ where
                 mailbox: None,
                 receiver: rx,
                 skip_split_count: 0,
+                skip_gc_raft_log_count: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
@@ -3218,13 +3222,19 @@ where
             .peer
             .mut_store()
             .maybe_gc_cache(alive_cache_idx, applied_idx);
+
         let first_idx = self.fsm.peer.get_store().first_index();
 
         if !force_compact
             && (replicated_idx < first_idx
                 || replicated_idx - first_idx <= self.ctx.cfg.raft_log_gc_threshold)
         {
-            return;
+            self.fsm.skip_gc_raft_log_count += 1;
+            if self.fsm.skip_gc_raft_log_count <= 6 {
+                // Logs will only be kept 6 * `raft_log_gc_tick_interval`.
+                self.register_raft_gc_log_tick();
+                return;
+            }
         }
 
         let compact_idx = if force_compact
@@ -3247,6 +3257,7 @@ where
         let request = new_compact_log_request(region_id, peer, compact_idx, term);
         self.propose_raft_command(request, Callback::None, TxnExtra::default());
 
+        self.fsm.skip_gc_raft_log_count = 0;
         self.register_raft_gc_log_tick();
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
     }
