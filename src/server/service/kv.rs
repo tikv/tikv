@@ -21,8 +21,7 @@ use crate::storage::{
     SecondaryLocksStatus, Storage, TxnStatus,
 };
 use engine_rocks::RocksEngine;
-use futures::executor::{self, Notify, Spawn};
-use futures::{future, Async, Future, Sink, Stream};
+use futures::{future, Future, Sink, Stream};
 use futures03::compat::{Compat, Future01CompatExt};
 use futures03::future::{self as future03, Future as Future03, FutureExt, TryFutureExt};
 use grpcio::{
@@ -37,8 +36,7 @@ use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
-use tikv_util::future::poll_future_notify;
-use tikv_util::future::paired_future_callback;
+use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};

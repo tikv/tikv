@@ -70,8 +70,8 @@ use crate::store::{
     SignificantMsg, SnapManager, StoreMsg, StoreTick,
 };
 use crate::Result;
-use tikv_util::future::poll_future_notify;
 use concurrency_manager::ConcurrencyManager;
+use tikv_util::future::poll_future_notify;
 
 type Key = Vec<u8>;
 

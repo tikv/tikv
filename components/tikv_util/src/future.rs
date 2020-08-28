@@ -1,11 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::callback::must_call;
-use crate::Either;
 use futures::executor::{self, Notify, Spawn};
-use futures::{Async, Future, IntoFuture, Poll};
-use std::sync::{Arc, Mutex};
+use futures::{Async, Future};
 use futures03::channel::oneshot as futures_oneshot;
+use std::sync::{Arc, Mutex};
 
 /// Generates a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.
@@ -49,6 +48,7 @@ impl<F> Clone for BatchCommandsNotify<F> {
         BatchCommandsNotify(Arc::clone(&self.0))
     }
 }
+
 impl<F> Notify for BatchCommandsNotify<F>
 where
     F: Future<Item = (), Error = ()> + Send + 'static,
