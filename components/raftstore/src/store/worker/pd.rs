@@ -715,13 +715,16 @@ where
             .set(available as i64);
 
         let router = self.router.clone();
-        let resp = self.pd_client.store_heartbeat(stats).map_err(|e| {
-            error!("store heartbeat failed"; "err" => ?e);
-        });
+        let resp = self.pd_client.store_heartbeat(stats);
         let f = async move {
-            if let Ok(mut resp) = resp.await {
-                if let Some(status) = resp.replication_status.take() {
-                    let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
+            match resp.await {
+                Ok(mut resp) => {
+                    if let Some(status) = resp.replication_status.take() {
+                        let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
+                    }
+                }
+                Err(e) => {
+                    error!("store heartbeat failed"; "err" => ?e);
                 }
             }
         };
@@ -808,7 +811,7 @@ where
         let router = self.router.clone();
         let store_id = self.store_id;
 
-        let resp = self.pd_client
+        let f = self.pd_client
         .handle_region_heartbeat_response(self.store_id, move |mut resp| {
             let region_id = resp.get_region_id();
             let epoch = resp.take_region_epoch();
@@ -877,16 +880,15 @@ where
             } else {
                 PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
             }
-        }).map_err(|e| panic!("unexpected error: {:?}", e));
+        })
+        .map_err(|e| panic!("unexpected error: {:?}", e))
+        .map_ok(move |_| {
+            info!(
+                "region heartbeat response handler exit";
+                "store_id" => store_id,
+            );
+        });
 
-        let f = async move {
-            if resp.await.is_ok() {
-                info!(
-                    "region heartbeat response handler exit";
-                    "store_id" => store_id,
-                )
-            }
-        };
         spawn_local(f);
         self.is_hb_receiver_scheduled = true;
     }
