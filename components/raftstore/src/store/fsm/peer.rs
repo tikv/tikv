@@ -3247,6 +3247,7 @@ where
         let request = new_compact_log_request(region_id, peer, compact_idx, term);
         self.propose_raft_command(request, Callback::None, TxnExtra::default());
 
+        self.register_raft_gc_log_tick();
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
     }
 
