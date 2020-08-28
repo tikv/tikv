@@ -940,7 +940,7 @@ fn cast_duration_as_duration(
 }
 
 macro_rules! cast_as_duration {
-    ($ty:ty, $as_uint_fn:ident, $extra:expr) => {
+    ($ty:ty, $as_uint_fn:ident, $val:ident, $extra:expr) => {
         #[rpn_fn(nullable, capture = [ctx, extra])]
         #[inline]
         fn $as_uint_fn(
@@ -950,7 +950,7 @@ macro_rules! cast_as_duration {
         ) -> Result<Option<Duration>> {
             match val {
                 None => Ok(None),
-                Some(val) => {
+                Some($val) => {
                     let result =
                         Duration::parse(ctx, $extra, extra.ret_field_type.get_decimal() as i8);
                     match result {
@@ -976,15 +976,17 @@ macro_rules! cast_as_duration {
 cast_as_duration!(
     &Real,
     cast_real_as_duration,
+    val,
     val.into_inner().to_string().as_bytes()
 );
-cast_as_duration!(BytesRef, cast_bytes_as_duration, val);
+cast_as_duration!(BytesRef, cast_bytes_as_duration, val, val);
 cast_as_duration!(
     &Decimal,
     cast_decimal_as_duration,
+    val,
     val.to_string().as_bytes()
 );
-cast_as_duration!(JsonRef, cast_json_as_duration, val.unquote()?.as_bytes());
+cast_as_duration!(JsonRef, cast_json_as_duration, val, val.unquote()?.as_bytes());
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
 fn cast_int_as_time(
