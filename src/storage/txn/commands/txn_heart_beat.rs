@@ -63,7 +63,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
                     txn.put_lock(self.primary_key.clone(), &lock);
                 } else {
                     debug!(
-                        "txn_heart_beat with advise_ttl not large than current ttl";
+                        "txn_heart_beat with advise_ttl not larger than current ttl";
                         "primary_key" => %self.primary_key,
                         "start_ts" => self.start_ts,
                         "advise_ttl" => self.advise_ttl,

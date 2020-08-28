@@ -1876,7 +1876,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/sticnarf/kvproto.git?branch=min-commit-ts-check-txn-status#21015ee3f6acd0d994a5d4c1773cdca13416f48c"
+source = "git+https://github.com/sticnarf/kvproto.git?branch=min-commit-ts-check-txn-status#9b5f7f89961ea05c749a85d24dbfe5ed5bed2a03"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
