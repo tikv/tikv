@@ -4,8 +4,10 @@ use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use futures::{stream, Future, Sink, Stream};
-use futures03::stream::{StreamExt, TryStreamExt};
+use futures::{Future, Sink, Stream};
+use futures03::compat::Compat;
+use futures03::stream::{self, StreamExt};
+use grpcio::Result as GrpcResult;
 use grpcio::*;
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event};
 use security::{check_common_name, SecurityManager};
@@ -155,35 +157,31 @@ impl ChangeData for Service {
         });
 
         let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, VecCollector);
-        let send_resp = sink.send_all(
-            rx.map(|events| std::result::Result::<_, ()>::Ok(events))
-                .compat()
-                .map(|events| {
-                    // The size of the response should not exceed CDC_MAX_RESP_SIZE.
-                    // Split the events into multiple responses by CDC_MAX_RESP_SIZE here.
-                    let events_len = events.len();
-                    let mut event_vecs = vec![Vec::with_capacity(events_len)];
-                    let mut current_events_size = 0;
-                    for (size, event) in events {
-                        if current_events_size + size >= CDC_MAX_RESP_SIZE {
-                            event_vecs.push(Vec::with_capacity(events_len));
-                            current_events_size = 0;
-                        }
-                        current_events_size += size;
-                        event_vecs.last_mut().unwrap().push(event);
+        let rx = rx
+            .map(|events| {
+                // The size of the response should not exceed CDC_MAX_RESP_SIZE.
+                // Split the events into multiple responses by CDC_MAX_RESP_SIZE here.
+                let events_len = events.len();
+                let mut event_vecs = vec![Vec::with_capacity(events_len)];
+                let mut current_events_size = 0;
+                for (size, event) in events {
+                    if current_events_size + size >= CDC_MAX_RESP_SIZE {
+                        event_vecs.push(Vec::with_capacity(events_len));
+                        current_events_size = 0;
                     }
-                    let resps = event_vecs.into_iter().map(|events| {
-                        let mut resp = ChangeDataEvent::default();
-                        resp.set_events(events.into());
-                        (resp, WriteFlags::default())
-                    });
-                    stream::iter_ok(resps)
-                })
-                .flatten()
-                .map_err(|_: ()| {
-                    Error::RpcFailure(RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, None))
-                }),
-        );
+                    current_events_size += size;
+                    event_vecs.last_mut().unwrap().push(event);
+                }
+                let resps = event_vecs.into_iter().map(|events| {
+                    let mut resp = ChangeDataEvent::default();
+                    resp.set_events(events.into());
+                    (resp, WriteFlags::default())
+                });
+                stream::iter(resps)
+            })
+            .flatten()
+            .map(|item| GrpcResult::Ok(item));
+        let send_resp = sink.send_all(Compat::new(rx));
 
         let scheduler = self.scheduler.clone();
         ctx.spawn(recv_req.then(move |res| {

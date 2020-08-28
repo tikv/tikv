@@ -763,6 +763,7 @@ where
                         PD_VALIDATE_PEER_COUNTER_VEC
                             .with_label_values(&["region epoch error"])
                             .inc();
+                        return;
                     }
 
                     if pd_region
@@ -811,84 +812,87 @@ where
         let router = self.router.clone();
         let store_id = self.store_id;
 
-        let f = self.pd_client
-        .handle_region_heartbeat_response(self.store_id, move |mut resp| {
-            let region_id = resp.get_region_id();
-            let epoch = resp.take_region_epoch();
-            let peer = resp.take_target_peer();
+        let fut = self.pd_client
+            .handle_region_heartbeat_response(self.store_id, move |mut resp| {
+                let region_id = resp.get_region_id();
+                let epoch = resp.take_region_epoch();
+                let peer = resp.take_target_peer();
 
-            if resp.has_change_peer() {
-                PD_HEARTBEAT_COUNTER_VEC
-                    .with_label_values(&["change peer"])
-                    .inc();
+                if resp.has_change_peer() {
+                    PD_HEARTBEAT_COUNTER_VEC
+                        .with_label_values(&["change peer"])
+                        .inc();
 
-                let mut change_peer = resp.take_change_peer();
-                info!(
-                    "try to change peer";
-                    "region_id" => region_id,
-                    "change_type" => ?change_peer.get_change_type(),
-                    "peer" => ?change_peer.get_peer()
-                );
-                let req = new_change_peer_request(
-                    change_peer.get_change_type(),
-                    change_peer.take_peer(),
-                );
-                send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
-            } else if resp.has_transfer_leader() {
-                PD_HEARTBEAT_COUNTER_VEC
-                    .with_label_values(&["transfer leader"])
-                    .inc();
+                    let mut change_peer = resp.take_change_peer();
+                    info!(
+                        "try to change peer";
+                        "region_id" => region_id,
+                        "change_type" => ?change_peer.get_change_type(),
+                        "peer" => ?change_peer.get_peer()
+                    );
+                    let req = new_change_peer_request(
+                        change_peer.get_change_type(),
+                        change_peer.take_peer(),
+                    );
+                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
+                } else if resp.has_transfer_leader() {
+                    PD_HEARTBEAT_COUNTER_VEC
+                        .with_label_values(&["transfer leader"])
+                        .inc();
 
-                let mut transfer_leader = resp.take_transfer_leader();
-                info!(
-                    "try to transfer leader";
-                    "region_id" => region_id,
-                    "from_peer" => ?peer,
-                    "to_peer" => ?transfer_leader.get_peer()
-                );
-                let req = new_transfer_leader_request(transfer_leader.take_peer());
-                send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
-            } else if resp.has_split_region() {
-                PD_HEARTBEAT_COUNTER_VEC
-                    .with_label_values(&["split region"])
-                    .inc();
+                    let mut transfer_leader = resp.take_transfer_leader();
+                    info!(
+                        "try to transfer leader";
+                        "region_id" => region_id,
+                        "from_peer" => ?peer,
+                        "to_peer" => ?transfer_leader.get_peer()
+                    );
+                    let req = new_transfer_leader_request(transfer_leader.take_peer());
+                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
+                } else if resp.has_split_region() {
+                    PD_HEARTBEAT_COUNTER_VEC
+                        .with_label_values(&["split region"])
+                        .inc();
 
-                let mut split_region = resp.take_split_region();
-                info!("try to split"; "region_id" => region_id, "region_epoch" => ?epoch);
-                let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
-                    CasualMessage::SplitRegion {
-                        region_epoch: epoch,
-                        split_keys: split_region.take_keys().into(),
-                        callback: Callback::None,
+                    let mut split_region = resp.take_split_region();
+                    info!("try to split"; "region_id" => region_id, "region_epoch" => ?epoch);
+                    let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
+                        CasualMessage::SplitRegion {
+                            region_epoch: epoch,
+                            split_keys: split_region.take_keys().into(),
+                            callback: Callback::None,
+                        }
+                    } else {
+                        CasualMessage::HalfSplitRegion {
+                            region_epoch: epoch,
+                            policy: split_region.get_policy(),
+                        }
+                    };
+                    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
+                        error!("send halfsplit request failed"; "region_id" => region_id, "err" => ?e);
                     }
+                } else if resp.has_merge() {
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge"]).inc();
+
+                    let merge = resp.take_merge();
+                    info!("try to merge"; "region_id" => region_id, "merge" => ?merge);
+                    let req = new_merge_request(merge);
+                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None)
                 } else {
-                    CasualMessage::HalfSplitRegion {
-                        region_epoch: epoch,
-                        policy: split_region.get_policy(),
-                    }
-                };
-                if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
-                    error!("send halfsplit request failed"; "region_id" => region_id, "err" => ?e);
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
-            } else if resp.has_merge() {
-                PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge"]).inc();
-
-                let merge = resp.take_merge();
-                info!("try to merge"; "region_id" => region_id, "merge" => ?merge);
-                let req = new_merge_request(merge);
-                send_admin_request(&router, region_id, epoch, peer, req, Callback::None)
-            } else {
-                PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
+            });
+        let f = async move {
+            match fut.await {
+                Ok(_) => {
+                    info!(
+                        "region heartbeat response handler exit";
+                        "store_id" => store_id,
+                    );
+                }
+                Err(e) => panic!("unexpected error: {:?}", e),
             }
-        })
-        .map_err(|e| panic!("unexpected error: {:?}", e))
-        .map_ok(move |_| {
-            info!(
-                "region heartbeat response handler exit";
-                "store_id" => store_id,
-            );
-        });
-
+        };
         spawn_local(f);
         self.is_hb_receiver_scheduled = true;
     }

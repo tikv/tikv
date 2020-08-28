@@ -9,7 +9,6 @@ use std::thread::{self, Builder, JoinHandle};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::executor::block_on;
-use futures::future;
 use futures::stream::StreamExt;
 use tokio::task::LocalSet;
 
@@ -93,7 +92,7 @@ pub struct Worker<T: Display> {
 }
 
 // TODO: add metrics.
-fn poll<R, T>(mut runner: R, rx: UnboundedReceiver<Option<T>>)
+fn poll<R, T>(mut runner: R, mut rx: UnboundedReceiver<Option<T>>)
 where
     R: Runnable<T> + Send + 'static,
     T: Display + Send + 'static,
@@ -106,14 +105,19 @@ where
 
     let handle = LocalSet::new();
     {
-        let f = rx.take_while(|t| future::ready(t.is_some())).for_each(|t| {
-            runner.run(t.unwrap());
-            metrics_pending_task_count.dec();
-            metrics_handled_task_count.inc();
-            future::ready(())
-        });
+        let task = async {
+            while let Some(msg) = rx.next().await {
+                if let Some(t) = msg {
+                    runner.run(t);
+                    metrics_pending_task_count.dec();
+                    metrics_handled_task_count.inc();
+                } else {
+                    break;
+                }
+            }
+        };
         // `UnboundedReceiver` never returns an error.
-        block_on(handle.run_until(f));
+        block_on(handle.run_until(task));
     }
     runner.shutdown();
     tikv_alloc::remove_thread_memory_accessor();
