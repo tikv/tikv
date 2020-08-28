@@ -4399,8 +4399,8 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
-                    vec![Mutation::Put((k.clone(), v))],
-                    k.as_encoded().to_vec(),
+                    vec![Mutation::Put((k.clone(), v.clone()))],
+                    b"k".to_vec(),
                     10.into(),
                     100,
                 ),
@@ -4409,15 +4409,24 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
+        let lock_with_ttl = |ttl| {
+            txn_types::Lock::new(
+                LockType::Put,
+                b"k".to_vec(),
+                10.into(),
+                ttl,
+                Some(v.clone()),
+                0.into(),
+                0,
+                0.into(),
+            )
+        };
+
         // `advise_ttl` = 90, which is less than current ttl 100. The lock's ttl will remains 100.
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 90, Context::default()),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    uncommitted(100, TimeStamp::zero(), false, vec![]),
-                ),
+                expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(100))),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4427,11 +4436,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 110, Context::default()),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    uncommitted(110, TimeStamp::zero(), false, vec![]),
-                ),
+                expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(110))),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4531,7 +4536,7 @@ mod tests {
                     100,
                     false,
                     3,
-                    TimeStamp::zero(),
+                    ts(10, 1),
                     Some(vec![b"k1".to_vec(), b"k2".to_vec()]),
                     Context::default(),
                 ),
@@ -4540,7 +4545,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        // If lock exists and not expired, returns the lock's TTL.
+        // If lock exists and not expired, returns the lock's information.
         storage
             .sched_txn_command(
                 commands::CheckTxnStatus::new(
@@ -4554,7 +4559,19 @@ mod tests {
                 expect_value_callback(
                     tx.clone(),
                     0,
-                    uncommitted(100, ts(10, 1), true, vec![b"k1".to_vec(), b"k2".to_vec()]),
+                    uncommitted(
+                        txn_types::Lock::new(
+                            LockType::Put,
+                            b"k".to_vec(),
+                            ts(10, 0),
+                            100,
+                            Some(v.clone()),
+                            0.into(),
+                            3,
+                            ts(10, 1),
+                        )
+                        .use_async_commit(vec![b"k1".to_vec(), b"k2".to_vec()]),
+                    ),
                 ),
             )
             .unwrap();
@@ -5355,7 +5372,16 @@ mod tests {
                 expect_value_callback(
                     tx.clone(),
                     0,
-                    TxnStatus::uncommitted(100, 0.into(), false, vec![]),
+                    TxnStatus::uncommitted(txn_types::Lock::new(
+                        LockType::Put,
+                        b"k".to_vec(),
+                        start_ts,
+                        100,
+                        Some(b"v".to_vec()),
+                        0.into(),
+                        0,
+                        0.into(),
+                    )),
                 ),
             )
             .unwrap();
