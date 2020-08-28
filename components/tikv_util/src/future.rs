@@ -42,7 +42,7 @@ where
 }
 
 // BatchCommandsNotify is used to make business pool notifiy completion queues directly.
-struct BatchCommandsNotify<F>(Arc<Mutex<Option<Spawn<F>>>>);
+pub(crate) struct BatchCommandsNotify<F>(pub(crate) Arc<Mutex<Option<Spawn<F>>>>);
 impl<F> Clone for BatchCommandsNotify<F> {
     fn clone(&self) -> BatchCommandsNotify<F> {
         BatchCommandsNotify(Arc::clone(&self.0))
