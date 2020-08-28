@@ -1,10 +1,12 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::iter::*;
+use std::sync::atomic::Ordering;
 use std::sync::*;
 use std::thread;
 use std::time::*;
 
+use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
@@ -1183,4 +1185,64 @@ fn test_merge_remove_target_peer_isolated() {
     for i in 1..4 {
         must_get_none(&cluster.get_engine(3), format!("k{}", i).as_bytes());
     }
+}
+
+#[test]
+fn test_sync_max_ts_after_region_merge() {
+    use tikv::storage::{Engine, Snapshot};
+
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.run();
+
+    // Transfer leader to node 1 first to ensure all operations happen on node 1
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
+    let storage = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
+        let region_id = right.get_id();
+        let leader = cluster.leader_of_region(region_id).unwrap();
+        let epoch = cluster.get_region_epoch(region_id);
+        let mut ctx = Context::default();
+        ctx.set_region_id(region_id);
+        ctx.set_peer(leader.clone());
+        ctx.set_region_epoch(epoch);
+
+        let snapshot = storage.snapshot(&ctx).unwrap();
+        let max_ts_sync_status = snapshot.max_ts_sync_status.clone().unwrap();
+        for retry in 0..10 {
+            if max_ts_sync_status.load(Ordering::SeqCst) & 1 == 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1 << retry));
+        }
+        assert!(snapshot.is_max_ts_synced());
+    };
+
+    wait_for_synced(&mut cluster);
+    let max_ts = cm.max_read_ts();
+
+    cluster.pd_client.trigger_tso_failure();
+    // Merge left to right
+    cluster.pd_client.must_merge(left.get_id(), right.get_id());
+
+    wait_for_synced(&mut cluster);
+    let new_max_ts = cm.max_read_ts();
+    assert!(new_max_ts > max_ts);
 }

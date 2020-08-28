@@ -5,7 +5,7 @@ use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::*;
 use std::{result, thread};
 
-use futures::Future;
+use futures03::executor::block_on;
 use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
@@ -20,7 +20,7 @@ use encryption::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CompactExt, Iterable, KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
 };
 use pd_client::PdClient;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
@@ -51,11 +51,11 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -126,10 +126,10 @@ pub struct Cluster<T: Simulator> {
     count: usize,
 
     pub paths: Vec<TempDir>,
-    pub dbs: Vec<KvEngines<RocksEngine, RocksEngine>>,
+    pub dbs: Vec<Engines<RocksEngine, RocksEngine>>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
-    pub engines: HashMap<u64, KvEngines<RocksEngine, RocksEngine>>,
+    pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
 
@@ -302,7 +302,7 @@ impl<T: Simulator> Cluster<T> {
         Arc::clone(&self.engines[&node_id].raft.as_inner())
     }
 
-    pub fn get_all_engines(&self, node_id: u64) -> KvEngines<RocksEngine, RocksEngine> {
+    pub fn get_all_engines(&self, node_id: u64) -> Engines<RocksEngine, RocksEngine> {
         self.engines[&node_id].clone()
     }
 
@@ -410,9 +410,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
-        self.pd_client
-            .get_region_by_id(region_id)
-            .wait()
+        block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .map(|region| region.get_peers().iter().map(Peer::get_store_id).collect())
     }
@@ -847,10 +845,7 @@ impl<T: Simulator> Cluster<T> {
         region_id: u64,
         peer: metapb::Peer,
     ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
-        let region = self
-            .pd_client
-            .get_region_by_id(region_id)
-            .wait()
+        let region = block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .unwrap();
         let remove_peer = new_change_peer_request(ConfChangeType::RemoveNode, peer);
@@ -863,10 +858,7 @@ impl<T: Simulator> Cluster<T> {
         region_id: u64,
         peer: metapb::Peer,
     ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
-        let region = self
-            .pd_client
-            .get_region_by_id(region_id)
-            .wait()
+        let region = block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .unwrap();
         let add_peer = new_change_peer_request(ConfChangeType::AddNode, peer);
@@ -956,9 +948,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
-        self.pd_client
-            .get_region_by_id(region_id)
-            .wait()
+        block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .unwrap()
             .take_region_epoch()
@@ -1182,6 +1172,9 @@ impl<T: Simulator> Cluster<T> {
                         if error.has_epoch_not_match()
                             || error.has_not_leader()
                             || error.has_stale_command()
+                            || error
+                                .get_message()
+                                .contains("peer is not applied to current term")
                         {
                             warn!("fail to split: {:?}, ignore.", error);
                             return;
@@ -1258,17 +1251,11 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
-        let region = self
-            .pd_client
-            .get_region_by_id(target)
-            .wait()
+        let region = block_on(self.pd_client.get_region_by_id(target))
             .unwrap()
             .unwrap();
         let prepare_merge = new_prepare_merge(region);
-        let source = self
-            .pd_client
-            .get_region_by_id(source)
-            .wait()
+        let source = block_on(self.pd_client.get_region_by_id(source))
             .unwrap()
             .unwrap();
         let req = new_admin_request(source.get_id(), source.get_region_epoch(), prepare_merge);

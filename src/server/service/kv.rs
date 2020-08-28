@@ -10,6 +10,7 @@ use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::Error;
+use crate::server::Result as ServerResult;
 use crate::storage::{
     errors::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
@@ -21,8 +22,9 @@ use crate::storage::{
 };
 use engine_rocks::RocksEngine;
 use futures::executor::{self, Notify, Spawn};
-use futures::future::Either;
 use futures::{future, Async, Future, Sink, Stream};
+use futures03::compat::{Compat, Future01CompatExt};
+use futures03::future::{self as future03, Future as Future03, FutureExt, TryFutureExt};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
     RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
@@ -32,11 +34,10 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
-use pd_client::PdClient;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
-use tikv_util::future::{paired_future_callback, AndThenWith};
+use tikv_util::future::paired_future_callback;
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -46,16 +47,11 @@ const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
-pub struct Service<
-    T: RaftStoreRouter<RocksEngine> + 'static,
-    E: Engine,
-    L: LockManager,
-    P: PdClient + 'static,
-> {
+pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> {
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E>,
     // For handling KV requests.
-    storage: Storage<E, L, P>,
+    storage: Storage<E, L>,
     // For handling coprocessor requests.
     cop: Endpoint<E>,
     // For handling raft messages.
@@ -78,8 +74,7 @@ impl<
         T: RaftStoreRouter<RocksEngine> + Clone + 'static,
         E: Engine + Clone,
         L: LockManager + Clone,
-        P: PdClient + 'static,
-    > Clone for Service<T, E, L, P>
+    > Clone for Service<T, E, L>
 {
     fn clone(&self) -> Self {
         Service {
@@ -97,16 +92,10 @@ impl<
     }
 }
 
-impl<
-        T: RaftStoreRouter<RocksEngine> + 'static,
-        E: Engine,
-        L: LockManager,
-        P: PdClient + 'static,
-    > Service<T, E, L, P>
-{
+impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Service<T, E, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
-        storage: Storage<E, L, P>,
+        storage: Storage<E, L>,
         gc_worker: GcWorker<E>,
         cop: Endpoint<E>,
         ch: T,
@@ -155,28 +144,31 @@ macro_rules! handle_request {
                 return;
             }
             let begin_instant = Instant::now_coarse();
-            let future = $future_name(&self.storage, req)
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(move |_| GRPC_MSG_HISTOGRAM_STATIC.$fn_name.observe(duration_to_sec(begin_instant.elapsed())))
-                .map_err(move |e| {
-                    debug!("kv rpc failed";
-                        "request" => stringify!($fn_name),
-                        "err" => ?e
-                    );
-                    GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
-                });
 
-            ctx.spawn(future);
+            let resp = $future_name(&self.storage, req);
+            let task = async move {
+                let resp = resp.await?;
+                sink.success(resp).compat().await?;
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .$fn_name
+                    .observe(duration_to_sec(begin_instant.elapsed()));
+                ServerResult::Ok(())
+            }
+            .map_err(|e| {
+                debug!("kv rpc failed";
+                    "request" => stringify!($fn_name),
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
+            });
+
+            ctx.spawn(Compat::new(task.boxed()));
         }
     }
 }
 
-impl<
-        T: RaftStoreRouter<RocksEngine> + 'static,
-        E: Engine,
-        L: LockManager,
-        P: PdClient + 'static,
-    > Tikv for Service<T, E, L, P>
+impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
+    for Service<T, E, L>
 {
     handle_request!(kv_get, future_get, GetRequest, GetResponse);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
@@ -317,22 +309,24 @@ impl<
             return;
         }
         let begin_instant = Instant::now_coarse();
-        let future = future_cop(&self.cop, Some(ctx.peer()), req)
-            .and_then(|resp| sink.success(resp).map_err(Error::from))
-            .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .coprocessor
-                    .observe(duration_to_sec(begin_instant.elapsed()))
-            })
-            .map_err(move |e| {
-                debug!("kv rpc failed";
-                    "request" => "coprocessor",
-                    "err" => ?e
-                );
-                GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
-            });
+        let future = future_cop(&self.cop, Some(ctx.peer()), req);
+        let task = async move {
+            let resp = future.await?;
+            sink.success(resp).compat().await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .coprocessor
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "coprocessor",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
+        });
 
-        ctx.spawn(future);
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn register_lock_observer(
@@ -349,28 +343,32 @@ impl<
         let (cb, f) = paired_future_callback();
         let res = self.gc_worker.start_collecting(req.get_max_ts().into(), cb);
 
-        let future = AndThenWith::new(res, f.map_err(Error::from))
-            .and_then(|v| {
-                let mut resp = RegisterLockObserverResponse::default();
-                if let Err(e) = v {
-                    resp.set_error(format!("{}", e));
-                }
-                sink.success(resp).map_err(Error::from)
-            })
-            .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .register_lock_observer
-                    .observe(duration_to_sec(begin_instant.elapsed()))
-            })
-            .map_err(move |e| {
-                debug!("kv rpc failed";
-                    "request" => "register_lock_observer",
-                    "err" => ?e
-                );
-                GRPC_MSG_FAIL_COUNTER.register_lock_observer.inc();
-            });
+        let task = async move {
+            // Here except for the receiving error of `futures::channel::oneshot`,
+            // other errors will be returned as the successful response of rpc.
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await?,
+            };
+            let mut resp = RegisterLockObserverResponse::default();
+            if let Err(e) = res {
+                resp.set_error(format!("{}", e));
+            }
+            sink.success(resp).compat().await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .register_lock_observer
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "register_lock_observer",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.register_lock_observer.inc();
+        });
 
-        ctx.spawn(future);
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn check_lock_observer(
@@ -389,32 +387,34 @@ impl<
             .gc_worker
             .get_collected_locks(req.get_max_ts().into(), cb);
 
-        let future = AndThenWith::new(res, f.map_err(Error::from))
-            .and_then(|v| {
-                let mut resp = CheckLockObserverResponse::default();
-                match v {
-                    Ok((locks, is_clean)) => {
-                        resp.set_is_clean(is_clean);
-                        resp.set_locks(locks.into());
-                    }
-                    Err(e) => resp.set_error(format!("{}", e)),
+        let task = async move {
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await?,
+            };
+            let mut resp = CheckLockObserverResponse::default();
+            match res {
+                Ok((locks, is_clean)) => {
+                    resp.set_is_clean(is_clean);
+                    resp.set_locks(locks.into());
                 }
-                sink.success(resp).map_err(Error::from)
-            })
-            .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .check_lock_observer
-                    .observe(duration_to_sec(begin_instant.elapsed()))
-            })
-            .map_err(move |e| {
-                debug!("kv rpc failed";
-                    "request" => "check_lock_observer",
-                    "err" => ?e
-                );
-                GRPC_MSG_FAIL_COUNTER.check_lock_observer.inc();
-            });
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+            sink.success(resp).compat().await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .check_lock_observer
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "check_lock_observer",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.check_lock_observer.inc();
+        });
 
-        ctx.spawn(future);
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn remove_lock_observer(
@@ -431,28 +431,30 @@ impl<
         let (cb, f) = paired_future_callback();
         let res = self.gc_worker.stop_collecting(req.get_max_ts().into(), cb);
 
-        let future = AndThenWith::new(res, f.map_err(Error::from))
-            .and_then(|v| {
-                let mut resp = RemoveLockObserverResponse::default();
-                if let Err(e) = v {
-                    resp.set_error(format!("{}", e));
-                }
-                sink.success(resp).map_err(Error::from)
-            })
-            .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .remove_lock_observer
-                    .observe(duration_to_sec(begin_instant.elapsed()))
-            })
-            .map_err(move |e| {
-                debug!("kv rpc failed";
-                    "request" => "remove_lock_observer",
-                    "err" => ?e
-                );
-                GRPC_MSG_FAIL_COUNTER.remove_lock_observer.inc();
-            });
+        let task = async move {
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await?,
+            };
+            let mut resp = RemoveLockObserverResponse::default();
+            if let Err(e) = res {
+                resp.set_error(format!("{}", e));
+            }
+            sink.success(resp).compat().await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .remove_lock_observer
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "remove_lock_observer",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.remove_lock_observer.inc();
+        });
 
-        ctx.spawn(future);
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn physical_scan_lock(
@@ -475,29 +477,31 @@ impl<
             cb,
         );
 
-        let future = AndThenWith::new(res, f.map_err(Error::from))
-            .and_then(|v| {
-                let mut resp = PhysicalScanLockResponse::default();
-                match v {
-                    Ok(locks) => resp.set_locks(locks.into()),
-                    Err(e) => resp.set_error(format!("{}", e)),
-                }
-                sink.success(resp).map_err(Error::from)
-            })
-            .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .physical_scan_lock
-                    .observe(duration_to_sec(begin_instant.elapsed()))
-            })
-            .map_err(move |e| {
-                debug!("kv rpc failed";
-                    "request" => "physical_scan_lock",
-                    "err" => ?e
-                );
-                GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
-            });
+        let task = async move {
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await?,
+            };
+            let mut resp = PhysicalScanLockResponse::default();
+            match res {
+                Ok(locks) => resp.set_locks(locks.into()),
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+            sink.success(resp).compat().await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .physical_scan_lock
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "physical_scan_lock",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
+        });
 
-        ctx.spawn(future);
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn unsafe_destroy_range(
@@ -524,29 +528,31 @@ impl<
             cb,
         );
 
-        let future = AndThenWith::new(res, f.map_err(Error::from))
-            .and_then(|v| {
-                let mut resp = UnsafeDestroyRangeResponse::default();
-                // Region error is impossible here.
-                if let Err(e) = v {
-                    resp.set_error(format!("{}", e));
-                }
-                sink.success(resp).map_err(Error::from)
-            })
-            .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .unsafe_destroy_range
-                    .observe(duration_to_sec(begin_instant.elapsed()))
-            })
-            .map_err(move |e| {
-                debug!("kv rpc failed";
-                    "request" => "unsafe_destroy_range",
-                    "err" => ?e
-                );
-                GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
-            });
+        let task = async move {
+            let res = match res {
+                Err(e) => Err(e),
+                Ok(_) => f.await?,
+            };
+            let mut resp = UnsafeDestroyRangeResponse::default();
+            // Region error is impossible here.
+            if let Err(e) = res {
+                resp.set_error(format!("{}", e));
+            }
+            sink.success(resp).compat().await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .physical_scan_lock
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "physical_scan_lock",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
+        });
 
-        ctx.spawn(future);
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn coprocessor_stream(
@@ -694,7 +700,7 @@ impl<
         let begin_instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
-        let (cb, future) = paired_future_callback();
+        let (cb, f) = paired_future_callback();
         let mut split_keys = if !req.get_split_key().is_empty() {
             vec![Key::from_raw(req.get_split_key()).into_encoded()]
         } else {
@@ -715,50 +721,47 @@ impl<
             return;
         }
 
-        let future = future
-            .map_err(Error::from)
-            .map(move |mut v| {
-                let mut resp = SplitRegionResponse::default();
-                if v.response.get_header().has_error() {
-                    resp.set_region_error(v.response.mut_header().take_error());
+        let task = async move {
+            let mut res = f.await?;
+            let mut resp = SplitRegionResponse::default();
+            if res.response.get_header().has_error() {
+                resp.set_region_error(res.response.mut_header().take_error());
+            } else {
+                let admin_resp = res.response.mut_admin_response();
+                let regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
+                if regions.len() < 2 {
+                    error!(
+                        "invalid split response";
+                        "region_id" => region_id,
+                        "resp" => ?admin_resp
+                    );
+                    resp.mut_region_error().set_message(format!(
+                        "Internal Error: invalid response: {:?}",
+                        admin_resp
+                    ));
                 } else {
-                    let admin_resp = v.response.mut_admin_response();
-                    let regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
-                    if regions.len() < 2 {
-                        error!(
-                            "invalid split response";
-                            "region_id" => region_id,
-                            "resp" => ?admin_resp
-                        );
-                        resp.mut_region_error().set_message(format!(
-                            "Internal Error: invalid response: {:?}",
-                            admin_resp
-                        ));
-                    } else {
-                        if regions.len() == 2 {
-                            resp.set_left(regions[0].clone());
-                            resp.set_right(regions[1].clone());
-                        }
-                        resp.set_regions(regions.into());
+                    if regions.len() == 2 {
+                        resp.set_left(regions[0].clone());
+                        resp.set_right(regions[1].clone());
                     }
+                    resp.set_regions(regions.into());
                 }
-                resp
-            })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .split_region
-                    .observe(duration_to_sec(begin_instant.elapsed()))
-            })
-            .map_err(move |e| {
-                debug!("kv rpc failed";
-                    "request" => "split_region",
-                    "err" => ?e
-                );
-                GRPC_MSG_FAIL_COUNTER.split_region.inc();
-            });
+            }
+            sink.success(resp).compat().await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .split_region
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "split_region",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.split_region.inc();
+        });
 
-        ctx.spawn(future);
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn read_index(
@@ -788,7 +791,7 @@ impl<
         cmd.set_header(header);
         cmd.set_requests(vec![inner_req].into());
 
-        let (cb, future) = paired_future_callback();
+        let (cb, f) = paired_future_callback();
 
         // We must deal with all requests which acquire read-quorum in raftstore-thread, so just send it as an command.
         if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
@@ -796,46 +799,43 @@ impl<
             return;
         }
 
-        let future = future
-            .map_err(Error::from)
-            .map(move |mut v| {
-                let mut resp = ReadIndexResponse::default();
-                if v.response.get_header().has_error() {
-                    resp.set_region_error(v.response.mut_header().take_error());
+        let task = async move {
+            let mut res = f.await?;
+            let mut resp = ReadIndexResponse::default();
+            if res.response.get_header().has_error() {
+                resp.set_region_error(res.response.mut_header().take_error());
+            } else {
+                let raft_resps = res.response.get_responses();
+                if raft_resps.len() != 1 {
+                    error!(
+                        "invalid read index response";
+                        "region_id" => region_id,
+                        "response" => ?raft_resps
+                    );
+                    resp.mut_region_error().set_message(format!(
+                        "Internal Error: invalid response: {:?}",
+                        raft_resps
+                    ));
                 } else {
-                    let raft_resps = v.response.get_responses();
-                    if raft_resps.len() != 1 {
-                        error!(
-                            "invalid read index response";
-                            "region_id" => region_id,
-                            "response" => ?raft_resps
-                        );
-                        resp.mut_region_error().set_message(format!(
-                            "Internal Error: invalid response: {:?}",
-                            raft_resps
-                        ));
-                    } else {
-                        let read_index = raft_resps[0].get_read_index().get_read_index();
-                        resp.set_read_index(read_index);
-                    }
+                    let read_index = raft_resps[0].get_read_index().get_read_index();
+                    resp.set_read_index(read_index);
                 }
-                resp
-            })
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .read_index
-                    .observe(begin_instant.elapsed_secs())
-            })
-            .map_err(move |e| {
-                debug!("kv rpc failed";
-                    "request" => "read_index",
-                    "err" => ?e
-                );
-                GRPC_MSG_FAIL_COUNTER.read_index.inc();
-            });
+            }
+            sink.success(resp).compat().await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .read_index
+                .observe(begin_instant.elapsed_secs());
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "read_index",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.read_index.inc();
+        });
 
-        ctx.spawn(future);
+        ctx.spawn(Compat::new(task.boxed()));
     }
 
     fn batch_commands(
@@ -972,9 +972,9 @@ fn response_batch_commands_request<F>(
     begin_instant: Instant,
     label_enum: GrpcTypeKind,
 ) where
-    F: Future<Item = batch_commands_response::Response, Error = ()> + Send + 'static,
+    F: Future03<Output = Result<batch_commands_response::Response, ()>> + Send + 'static,
 {
-    let f = resp.and_then(move |resp| {
+    let f = Compat::new(resp.boxed()).and_then(move |resp| {
         if tx.send_and_notify((id, resp)).is_err() {
             error!("KvService response batch commands fail");
             return Err(());
@@ -1014,9 +1014,9 @@ pub fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: 
     notify.notify(0);
 }
 
-fn handle_batch_commands_request<E: Engine, L: LockManager, P: PdClient + 'static>(
+fn handle_batch_commands_request<E: Engine, L: LockManager>(
     batcher: &mut Option<ReqBatcher>,
-    storage: &Storage<E, L, P>,
+    storage: &Storage<E, L>,
     cop: &Endpoint<E>,
     peer: &str,
     id: u64,
@@ -1040,7 +1040,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, P: PdClient + 'stati
                 None => {
                     // For some invalid requests.
                     let begin_instant = Instant::now();
-                    let resp = future::ok(batch_commands_response::Response::default());
+                    let resp = future03::ok(batch_commands_response::Response::default());
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid);
                 },
                 Some(batch_commands_request::request::Cmd::Get(req)) => {
@@ -1052,7 +1052,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, P: PdClient + 'stati
                     } else {
                        let begin_instant = Instant::now();
                        let resp = future_get(storage, req)
-                            .map(oneof!(batch_commands_response::response::Cmd::Get))
+                            .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get);
                     }
@@ -1066,7 +1066,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, P: PdClient + 'stati
                     } else {
                        let begin_instant = Instant::now();
                        let resp = future_raw_get(storage, req)
-                            .map(oneof!(batch_commands_response::response::Cmd::RawGet))
+                            .map_ok(oneof!(batch_commands_response::response::Cmd::RawGet))
                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get);
                     }
@@ -1074,7 +1074,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, P: PdClient + 'stati
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
                     let begin_instant = Instant::now();
                     let resp = $future_fn($($arg,)* req)
-                        .map(oneof!(batch_commands_response::response::Cmd::$cmd))
+                        .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name);
                 })*
@@ -1118,64 +1118,64 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, P: PdClient + 'stati
     }
 }
 
-fn future_handle_empty(
+async fn future_handle_empty(
     req: BatchCommandsEmptyRequest,
-) -> impl Future<Item = BatchCommandsEmptyResponse, Error = Error> {
+) -> ServerResult<BatchCommandsEmptyResponse> {
     let mut res = BatchCommandsEmptyResponse::default();
     res.set_test_id(req.get_test_id());
     // `BatchCommandsNotify` processes futures in notify. If delay_time is too small, notify
     // can be called immediately, so the future is polled recursively and lead to deadlock.
     if req.get_delay_time() < 10 {
-        Either::A(future::result(Ok(res)))
+        Ok(res)
     } else {
-        Either::B(
-            tikv_util::timer::GLOBAL_TIMER_HANDLE
-                .delay(
-                    std::time::Instant::now()
-                        + std::time::Duration::from_millis(req.get_delay_time()),
-                )
-                .map(move |_| res)
-                .map_err(|_| unreachable!()),
-        )
+        let _ = tikv_util::timer::GLOBAL_TIMER_HANDLE
+            .delay(
+                std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()),
+            )
+            .compat()
+            .await;
+        Ok(res)
     }
 }
 
-fn future_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_get<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: GetRequest,
-) -> impl Future<Item = GetResponse, Error = Error> {
-    storage
+) -> impl Future03<Output = ServerResult<GetResponse>> {
+    let v = storage
         .get(
             req.take_context(),
             Key::from_raw(req.get_key()),
             req.get_version().into(),
         )
-        .then(|v| {
-            let mut resp = GetResponse::default();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else {
-                match v {
-                    Ok(Some(val)) => resp.set_value(val),
-                    Ok(None) => resp.set_not_found(true),
-                    Err(e) => resp.set_error(extract_key_error(&e)),
-                }
+        .compat();
+
+    async move {
+        let v = v.await;
+        let mut resp = GetResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(Some(val)) => resp.set_value(val),
+                Ok(None) => resp.set_not_found(true),
+                Err(e) => resp.set_error(extract_key_error(&e)),
             }
-            Ok(resp)
-        })
+        }
+        Ok(resp)
+    }
 }
 
-fn future_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_scan<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: ScanRequest,
-) -> impl Future<Item = ScanResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<ScanResponse>> {
     let end_key = if req.get_end_key().is_empty() {
         None
     } else {
         Some(Key::from_raw(req.get_end_key()))
     };
-
-    storage
+    let v = storage
         .scan(
             req.take_context(),
             Key::from_raw(req.get_start_key()),
@@ -1186,46 +1186,52 @@ fn future_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
             req.get_key_only(),
             req.get_reverse(),
         )
-        .then(|v| {
-            let mut resp = ScanResponse::default();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else {
-                resp.set_pairs(extract_kv_pairs(v).into());
-            }
-            Ok(resp)
-        })
+        .compat();
+
+    async move {
+        let v = v.await;
+        let mut resp = ScanResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            resp.set_pairs(extract_kv_pairs(v).into());
+        }
+        Ok(resp)
+    }
 }
 
-fn future_batch_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_batch_get<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: BatchGetRequest,
-) -> impl Future<Item = BatchGetResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<BatchGetResponse>> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-    storage
+    let v = storage
         .batch_get(req.take_context(), keys, req.get_version().into())
-        .then(|v| {
-            let mut resp = BatchGetResponse::default();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else {
-                resp.set_pairs(extract_kv_pairs(v).into());
-            }
-            Ok(resp)
-        })
+        .compat();
+
+    async move {
+        let v = v.await;
+        let mut resp = BatchGetResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            resp.set_pairs(extract_kv_pairs(v).into());
+        }
+        Ok(resp)
+    }
 }
 
-fn future_gc(_: GcRequest) -> impl Future<Item = GcResponse, Error = Error> {
-    future::err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
+    Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
         RpcStatusCode::UNIMPLEMENTED,
         None,
     ))))
 }
 
-fn future_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_delete_range<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: DeleteRangeRequest,
-) -> impl Future<Item = DeleteRangeResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<DeleteRangeResponse>> {
     let (cb, f) = paired_future_callback();
     let res = storage.delete_range(
         req.take_context(),
@@ -1235,61 +1241,71 @@ fn future_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
         cb,
     );
 
-    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+    async move {
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await?,
+        };
         let mut resp = DeleteRangeResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(format!("{}", e));
         }
-        resp
-    })
+        Ok(resp)
+    }
 }
 
-fn future_raw_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_get<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawGetRequest,
-) -> impl Future<Item = RawGetResponse, Error = Error> {
-    storage
+) -> impl Future03<Output = ServerResult<RawGetResponse>> {
+    let v = storage
         .raw_get(req.take_context(), req.take_cf(), req.take_key())
-        .then(|v| {
-            let mut resp = RawGetResponse::default();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else {
-                match v {
-                    Ok(Some(val)) => resp.set_value(val),
-                    Ok(None) => resp.set_not_found(true),
-                    Err(e) => resp.set_error(format!("{}", e)),
-                }
+        .compat();
+
+    async move {
+        let v = v.await;
+        let mut resp = RawGetResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(Some(val)) => resp.set_value(val),
+                Ok(None) => resp.set_not_found(true),
+                Err(e) => resp.set_error(format!("{}", e)),
             }
-            Ok(resp)
-        })
+        }
+        Ok(resp)
+    }
 }
 
-fn future_raw_batch_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_batch_get<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawBatchGetRequest,
-) -> impl Future<Item = RawBatchGetResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<RawBatchGetResponse>> {
     let keys = req.take_keys().into();
-    storage
+    let v = storage
         .raw_batch_get(req.take_context(), req.take_cf(), keys)
-        .then(|v| {
-            let mut resp = RawBatchGetResponse::default();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else {
-                resp.set_pairs(extract_kv_pairs(v).into());
-            }
-            Ok(resp)
-        })
+        .compat();
+
+    async move {
+        let v = v.await;
+        let mut resp = RawBatchGetResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            resp.set_pairs(extract_kv_pairs(v).into());
+        }
+        Ok(resp)
+    }
 }
 
-fn future_raw_put<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_put<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawPutRequest,
-) -> impl Future<Item = RawPutResponse, Error = Error> {
-    let (cb, future) = paired_future_callback();
+) -> impl Future03<Output = ServerResult<RawPutResponse>> {
+    let (cb, f) = paired_future_callback();
     let res = storage.raw_put(
         req.take_context(),
         req.take_cf(),
@@ -1298,21 +1314,25 @@ fn future_raw_put<E: Engine, L: LockManager, P: PdClient + 'static>(
         cb,
     );
 
-    AndThenWith::new(res, future.map_err(Error::from)).map(|v| {
+    async move {
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await?,
+        };
         let mut resp = RawPutResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(format!("{}", e));
         }
-        resp
-    })
+        Ok(resp)
+    }
 }
 
-fn future_raw_batch_put<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_batch_put<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawBatchPutRequest,
-) -> impl Future<Item = RawBatchPutResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<RawBatchPutResponse>> {
     let cf = req.take_cf();
     let pairs = req
         .take_pairs()
@@ -1323,65 +1343,77 @@ fn future_raw_batch_put<E: Engine, L: LockManager, P: PdClient + 'static>(
     let (cb, f) = paired_future_callback();
     let res = storage.raw_batch_put(req.take_context(), cf, pairs, cb);
 
-    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+    async move {
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await?,
+        };
         let mut resp = RawBatchPutResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(format!("{}", e));
         }
-        resp
-    })
+        Ok(resp)
+    }
 }
 
-fn future_raw_delete<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_delete<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawDeleteRequest,
-) -> impl Future<Item = RawDeleteResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<RawDeleteResponse>> {
     let (cb, f) = paired_future_callback();
     let res = storage.raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
 
-    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+    async move {
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await?,
+        };
         let mut resp = RawDeleteResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(format!("{}", e));
         }
-        resp
-    })
+        Ok(resp)
+    }
 }
 
-fn future_raw_batch_delete<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_batch_delete<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawBatchDeleteRequest,
-) -> impl Future<Item = RawBatchDeleteResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<RawBatchDeleteResponse>> {
     let cf = req.take_cf();
     let keys = req.take_keys().into();
     let (cb, f) = paired_future_callback();
     let res = storage.raw_batch_delete(req.take_context(), cf, keys, cb);
 
-    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+    async move {
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await?,
+        };
         let mut resp = RawBatchDeleteResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(format!("{}", e));
         }
-        resp
-    })
+        Ok(resp)
+    }
 }
 
-fn future_raw_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_scan<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawScanRequest,
-) -> impl Future<Item = RawScanResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<RawScanResponse>> {
     let end_key = if req.get_end_key().is_empty() {
         None
     } else {
         Some(req.take_end_key())
     };
-    storage
+    let v = storage
         .raw_scan(
             req.take_context(),
             req.take_cf(),
@@ -1391,22 +1423,25 @@ fn future_raw_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
             req.get_key_only(),
             req.get_reverse(),
         )
-        .then(|v| {
-            let mut resp = RawScanResponse::default();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else {
-                resp.set_kvs(extract_kv_pairs(v).into());
-            }
-            Ok(resp)
-        })
+        .compat();
+
+    async move {
+        let v = v.await;
+        let mut resp = RawScanResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            resp.set_kvs(extract_kv_pairs(v).into());
+        }
+        Ok(resp)
+    }
 }
 
-fn future_raw_batch_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_batch_scan<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawBatchScanRequest,
-) -> impl Future<Item = RawBatchScanResponse, Error = Error> {
-    storage
+) -> impl Future03<Output = ServerResult<RawBatchScanResponse>> {
+    let v = storage
         .raw_batch_scan(
             req.take_context(),
             req.take_cf(),
@@ -1415,21 +1450,24 @@ fn future_raw_batch_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
             req.get_key_only(),
             req.get_reverse(),
         )
-        .then(|v| {
-            let mut resp = RawBatchScanResponse::default();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else {
-                resp.set_kvs(extract_kv_pairs(v).into());
-            }
-            Ok(resp)
-        })
+        .compat();
+
+    async move {
+        let v = v.await;
+        let mut resp = RawBatchScanResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            resp.set_kvs(extract_kv_pairs(v).into());
+        }
+        Ok(resp)
+    }
 }
 
-fn future_raw_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
-    storage: &Storage<E, L, P>,
+fn future_raw_delete_range<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
     mut req: RawDeleteRangeRequest,
-) -> impl Future<Item = RawDeleteRangeResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<RawDeleteRangeResponse>> {
     let (cb, f) = paired_future_callback();
     let res = storage.raw_delete_range(
         req.take_context(),
@@ -1439,99 +1477,108 @@ fn future_raw_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
         cb,
     );
 
-    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+    async move {
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await?,
+        };
         let mut resp = RawDeleteRangeResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(format!("{}", e));
         }
-        resp
-    })
+        Ok(resp)
+    }
 }
 
 // unimplemented
-fn future_ver_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
+fn future_ver_get<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
     mut _req: VerGetRequest,
-) -> impl Future<Item = VerGetResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<VerGetResponse>> {
     let resp = VerGetResponse::default();
-    future::ok(resp)
+    future03::ok(resp)
 }
 
 // unimplemented
-fn future_ver_batch_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
+fn future_ver_batch_get<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
     mut _req: VerBatchGetRequest,
-) -> impl Future<Item = VerBatchGetResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<VerBatchGetResponse>> {
     let resp = VerBatchGetResponse::default();
-    future::ok(resp)
+    future03::ok(resp)
 }
 
 // unimplemented
-fn future_ver_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
+fn future_ver_mut<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
     mut _req: VerMutRequest,
-) -> impl Future<Item = VerMutResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<VerMutResponse>> {
     let resp = VerMutResponse::default();
-    future::ok(resp)
+    future03::ok(resp)
 }
 
 // unimplemented
-fn future_ver_batch_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
+fn future_ver_batch_mut<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
     mut _req: VerBatchMutRequest,
-) -> impl Future<Item = VerBatchMutResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<VerBatchMutResponse>> {
     let resp = VerBatchMutResponse::default();
-    future::ok(resp)
+    future03::ok(resp)
 }
 
 // unimplemented
-fn future_ver_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
+fn future_ver_scan<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
     mut _req: VerScanRequest,
-) -> impl Future<Item = VerScanResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<VerScanResponse>> {
     let resp = VerScanResponse::default();
-    future::ok(resp)
+    future03::ok(resp)
 }
 
 // unimplemented
-fn future_ver_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
+fn future_ver_delete_range<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
     mut _req: VerDeleteRangeRequest,
-) -> impl Future<Item = VerDeleteRangeResponse, Error = Error> {
+) -> impl Future03<Output = ServerResult<VerDeleteRangeResponse>> {
     let resp = VerDeleteRangeResponse::default();
-    future::ok(resp)
+    future03::ok(resp)
 }
 
 fn future_cop<E: Engine>(
     cop: &Endpoint<E>,
     peer: Option<String>,
     req: Request,
-) -> impl Future<Item = Response, Error = Error> {
+) -> impl Future03<Output = ServerResult<Response>> {
     cop.parse_and_handle_unary_request(req, peer)
         .map_err(|_| unreachable!())
+        .compat()
 }
 
 macro_rules! txn_command_future {
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) $prelude: stmt; ($v: ident, $resp: ident) { $else_branch: expr }) => {
-        fn $fn_name<E: Engine, L: LockManager, P: PdClient + 'static>(
-            storage: &Storage<E, L, P>,
+        fn $fn_name<E: Engine, L: LockManager>(
+            storage: &Storage<E, L>,
             $req: $req_ty,
-        ) -> impl Future<Item = $resp_ty, Error = Error> {
+        ) -> impl Future03<Output = ServerResult<$resp_ty>> {
             $prelude
             let (cb, f) = paired_future_callback();
             let res = storage.sched_txn_command($req.into(), cb);
 
-            AndThenWith::new(res, f.map_err(Error::from)).map(move |$v| {
+            async move {
+                let $v = match res {
+                    Err(e) => Err(e),
+                    Ok(_) => f.await?,
+                };
                 let mut $resp = $resp_ty::default();
                 if let Some(err) = extract_region_error(&$v) {
                     $resp.set_region_error(err);
                 } else {
                     $else_branch;
                 }
-                $resp
-            })
+                Ok($resp)
+            }
         }
     };
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($v: ident, $resp: ident) { $else_branch: expr }) => {

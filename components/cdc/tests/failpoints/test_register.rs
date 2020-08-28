@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::{new_event_feed, TestSuite};
 use futures::sink::Sink;
 use futures::Future;
+use futures03::executor::block_on;
 use grpcio::WriteFlags;
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
@@ -123,7 +124,7 @@ fn test_connections_register() {
     // Region info
     let region = suite.cluster.get_region(&[]);
     // Prewrite
-    let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.key = k.clone().into_bytes();

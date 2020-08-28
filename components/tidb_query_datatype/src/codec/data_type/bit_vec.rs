@@ -21,6 +21,7 @@ impl BitVec {
         }
     }
 
+    #[inline]
     pub fn push(&mut self, value: bool) {
         let idx = self.length >> 3;
         if idx >= self.data.len() {
@@ -67,6 +68,7 @@ impl BitVec {
         other.truncate(0);
     }
 
+    #[inline]
     pub fn get(&self, idx: usize) -> bool {
         assert!(idx < self.length);
         let mask = (1 << (idx & 7)) as u8;
@@ -121,7 +123,7 @@ impl<'a> Iterator for BitAndIterator<'a> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

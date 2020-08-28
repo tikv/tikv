@@ -14,7 +14,8 @@ use raftstore::Result;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 
-use engine_traits::{KvEngines, ALL_CFS};
+use concurrency_manager::ConcurrencyManager;
+use engine_traits::{Engines, ALL_CFS};
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
 use tikv_util::config::VersionTrack;
@@ -31,7 +32,7 @@ impl Transport for MockTransport {
     }
 }
 
-fn create_tmp_engine(dir: &TempDir) -> KvEngines<RocksEngine, RocksEngine> {
+fn create_tmp_engine(dir: &TempDir) -> Engines<RocksEngine, RocksEngine> {
     let db = Arc::new(
         engine_rocks::raw_util::new_engine(
             dir.path().join("db").to_str().unwrap(),
@@ -51,7 +52,7 @@ fn create_tmp_engine(dir: &TempDir) -> KvEngines<RocksEngine, RocksEngine> {
         .unwrap(),
     );
     let shared_block_cache = false;
-    KvEngines::new(
+    Engines::new(
         RocksEngine::from_db(db),
         RocksEngine::from_db(raft_db),
         shared_block_cache,
@@ -65,7 +66,7 @@ fn start_raftstore(
     ConfigController,
     RaftRouter<RocksEngine, RocksEngine>,
     ApplyRouter<RocksEngine>,
-    RaftBatchSystem,
+    RaftBatchSystem<RocksEngine, RocksEngine>,
 ) {
     let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
     let engines = create_tmp_engine(dir);
@@ -86,7 +87,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        SnapManager::new(p, Some(raft_router.clone()))
+        SnapManager::new(p)
     };
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
@@ -112,6 +113,7 @@ fn start_raftstore(
             Worker::new("split"),
             AutoSplitController::default(),
             Arc::default(),
+            ConcurrencyManager::new(1.into()),
         )
         .unwrap();
     (cfg_controller, raft_router, system.apply_router(), system)
