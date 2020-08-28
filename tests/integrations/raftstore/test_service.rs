@@ -11,6 +11,7 @@ use kvproto::raft_serverpb::*;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::Writable;
 use engine_rocks::Compat;
 use engine_traits::Peekable;
@@ -773,6 +774,7 @@ fn test_double_run_node() {
             importer,
             Worker::new("split"),
             AutoSplitController::default(),
+            ConcurrencyManager::new(1.into()),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

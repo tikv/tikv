@@ -18,7 +18,7 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
+use engine_traits::{KvEngine, Snapshot, WriteBatch};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use error_code::ErrorCodeExt;
 use kvproto::import_sstpb::SstMeta;
@@ -45,7 +45,7 @@ use txn_types::TxnExtra;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
-use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
+use crate::store::fsm::RaftPollerBuilder;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
@@ -54,6 +54,7 @@ use crate::store::peer_storage::{
 };
 use crate::store::util::{
     check_region_epoch, compare_region_epoch, is_learner, KeysInfoFormatter, PerfContextStatistics,
+    ADMIN_CMD_EPOCH_MAP,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
 use crate::{observe_perf_context_type, report_perf_context, Error, Result};
@@ -61,7 +62,6 @@ use crate::{observe_perf_context_type, report_perf_context, Error, Result};
 use super::metrics::*;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
-const WRITE_BATCH_LIMIT: usize = 16;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
@@ -296,51 +296,16 @@ where
     }
 }
 
-pub enum Notifier<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    Router(RaftRouter<EK, ER>),
-    #[cfg(test)]
-    Sender(Sender<PeerMsg<EK>>),
+pub trait Notifier<EK: KvEngine>: Send {
+    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
+    fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>);
+    fn clone_box(&self) -> Box<dyn Notifier<EK>>;
 }
 
-impl<EK, ER> Clone for Notifier<EK, ER>
+struct ApplyContext<EK, W>
 where
     EK: KvEngine,
-    ER: RaftEngine,
-{
-    fn clone(&self) -> Self {
-        match self {
-            Notifier::Router(v) => Notifier::Router(v.clone()),
-            #[cfg(test)]
-            Notifier::Sender(v) => Notifier::Sender(v.clone()),
-        }
-    }
-}
-
-impl<EK, ER> Notifier<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    fn notify(&self, region_id: u64, msg: PeerMsg<EK>) {
-        match *self {
-            Notifier::Router(ref r) => {
-                r.force_send(region_id, msg).unwrap();
-            }
-            #[cfg(test)]
-            Notifier::Sender(ref s) => s.send(msg).unwrap(),
-        }
-    }
-}
-
-struct ApplyContext<EK, ER, W>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-    W: WriteBatch + WriteBatchVecExt<EK>,
+    W: WriteBatch<EK>,
 {
     tag: String,
     timer: Option<Instant>,
@@ -348,7 +313,7 @@ where
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     router: ApplyRouter<EK>,
-    notifier: Notifier<EK, ER>,
+    notifier: Box<dyn Notifier<EK>>,
     engine: EK,
     cbs: MustConsumeVec<ApplyCallback<EK>>,
     apply_res: Vec<ApplyRes<EK::Snapshot>>,
@@ -381,11 +346,10 @@ where
     txn_extras: MustConsumeVec<TxnExtra>,
 }
 
-impl<EK, ER, W> ApplyContext<EK, ER, W>
+impl<EK, W> ApplyContext<EK, W>
 where
     EK: KvEngine,
-    ER: RaftEngine,
-    W: WriteBatch + WriteBatchVecExt<EK>,
+    W: WriteBatch<EK>,
 {
     pub fn new(
         tag: String,
@@ -394,11 +358,11 @@ where
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
         engine: EK,
         router: ApplyRouter<EK>,
-        notifier: Notifier<EK, ER>,
+        notifier: Box<dyn Notifier<EK>>,
         cfg: &Config,
         store_id: u64,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    ) -> ApplyContext<EK, ER, W> {
+    ) -> ApplyContext<EK, W> {
         ApplyContext {
             tag,
             timer: None,
@@ -455,7 +419,7 @@ where
     /// Otherwise create `RocksWriteBatch`.
     pub fn prepare_write_batch(&mut self) {
         if self.kv_wb.is_none() {
-            let kv_wb = W::write_batch_vec(&self.engine, WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE);
+            let kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
             self.kv_wb = Some(kv_wb);
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
@@ -505,8 +469,7 @@ where
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
-                let kv_wb =
-                    W::write_batch_vec(&self.engine, WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
                 self.kv_wb = Some(kv_wb);
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
@@ -579,14 +542,8 @@ where
         let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
-            for res in self.apply_res.drain(..) {
-                self.notifier.notify(
-                    res.region_id,
-                    PeerMsg::ApplyRes {
-                        res: TaskRes::Apply(res),
-                    },
-                );
-            }
+            let apply_res = std::mem::replace(&mut self.apply_res, vec![]);
+            self.notifier.notify(apply_res);
         }
 
         let elapsed = t.elapsed();
@@ -852,9 +809,9 @@ where
     }
 
     /// Handles all the committed_entries, namely, applies the committed entries.
-    fn handle_raft_committed_entries<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn handle_raft_committed_entries<W: WriteBatch<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        apply_ctx: &mut ApplyContext<EK, W>,
         mut committed_entries_drainer: Drain<Entry>,
     ) {
         if committed_entries_drainer.len() == 0 {
@@ -919,15 +876,12 @@ where
         }
     }
 
-    fn update_metrics<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
-        &mut self,
-        apply_ctx: &ApplyContext<EK, ER, W>,
-    ) {
+    fn update_metrics<W: WriteBatch<EK>>(&mut self, apply_ctx: &ApplyContext<EK, W>) {
         self.metrics.written_bytes += apply_ctx.delta_bytes();
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state<W: WriteBatch + WriteBatchVecExt<EK>>(&self, wb: &mut W) {
+    fn write_apply_state<W: WriteBatch<EK>>(&self, wb: &mut W) {
         wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
@@ -941,9 +895,9 @@ where
         });
     }
 
-    fn handle_raft_entry_normal<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn handle_raft_entry_normal<W: WriteBatch<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        apply_ctx: &mut ApplyContext<EK, W>,
         entry: &Entry,
     ) -> ApplyResult<EK::Snapshot> {
         fail_point!("yield_apply_1000", self.region_id() == 1000, |_| {
@@ -991,9 +945,9 @@ where
         ApplyResult::None
     }
 
-    fn handle_raft_entry_conf_change<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn handle_raft_entry_conf_change<W: WriteBatch<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        apply_ctx: &mut ApplyContext<EK, W>,
         entry: &Entry,
     ) -> ApplyResult<EK::Snapshot> {
         // Although conf change can't yield in normal case, it is convenient to
@@ -1067,9 +1021,9 @@ where
         (None, TxnExtra::default())
     }
 
-    fn process_raft_cmd<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn process_raft_cmd<W: WriteBatch<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        apply_ctx: &mut ApplyContext<EK, W>,
         index: u64,
         term: u64,
         cmd: RaftCmdRequest,
@@ -1123,9 +1077,9 @@ where
     ///   2. it encounters an error that may not occur on all stores, in this case
     /// we should try to apply the entry again or panic. Considering that this
     /// usually due to disk operation fail, which is rare, so just panic is ok.
-    fn apply_raft_cmd<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn apply_raft_cmd<W: WriteBatch<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
+        ctx: &mut ApplyContext<EK, W>,
         index: u64,
         term: u64,
         req: &RaftCmdRequest,
@@ -1135,9 +1089,13 @@ where
 
         ctx.exec_ctx = Some(self.new_ctx(index, term));
         ctx.kv_wb_mut().set_save_point();
+        let mut origin_epoch = None;
         let (resp, exec_result) = match self.exec_raft_cmd(ctx, &req) {
             Ok(a) => {
                 ctx.kv_wb_mut().pop_save_point().unwrap();
+                if req.has_admin_request() {
+                    origin_epoch = Some(self.region.get_region_epoch().clone());
+                }
                 a
             }
             Err(e) => {
@@ -1200,14 +1158,24 @@ where
                 }
             }
         }
+        if let Some(epoch) = origin_epoch {
+            let cmd_type = req.get_admin_request().get_cmd_type();
+            let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+            // The chenge-epoch behavior **MUST BE** equal to the settings in `ADMIN_CMD_EPOCH_MAP`
+            if (epoch_state.change_ver
+                && epoch.get_version() == self.region.get_region_epoch().get_version())
+                || (epoch_state.change_conf_ver
+                    && epoch.get_conf_ver() == self.region.get_region_epoch().get_conf_ver())
+            {
+                panic!("{} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
+                        self.tag, req, epoch_state, epoch, self.region.get_region_epoch());
+            }
+        }
 
         (resp, exec_result)
     }
 
-    fn destroy<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
-        &mut self,
-        apply_ctx: &mut ApplyContext<EK, ER, W>,
-    ) {
+    fn destroy<W: WriteBatch<EK>>(&mut self, apply_ctx: &mut ApplyContext<EK, W>) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
         for cmd in self.pending_cmds.normals.drain(..) {
@@ -1238,9 +1206,9 @@ where
     EK: KvEngine,
 {
     // Only errors that will also occur on all other stores should be returned.
-    fn exec_raft_cmd<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn exec_raft_cmd<W: WriteBatch<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
+        ctx: &mut ApplyContext<EK, W>,
         req: &RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         // Include region for epoch not match after merge may cause key not in range.
@@ -1254,9 +1222,9 @@ where
         }
     }
 
-    fn exec_admin_cmd<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn exec_admin_cmd<W: WriteBatch<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
+        ctx: &mut ApplyContext<EK, W>,
         req: &RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         let request = req.get_admin_request();
@@ -1298,9 +1266,9 @@ where
         Ok((resp, exec_result))
     }
 
-    fn exec_write_cmd<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn exec_write_cmd<W: WriteBatch<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
+        ctx: &mut ApplyContext<EK, W>,
         req: &RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!(
@@ -1375,7 +1343,7 @@ impl<EK> ApplyDelegate<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
+    fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1416,7 +1384,7 @@ where
         Ok(resp)
     }
 
-    fn handle_delete<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
+    fn handle_delete<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1569,9 +1537,9 @@ impl<EK> ApplyDelegate<EK>
 where
     EK: KvEngine,
 {
-    fn exec_change_peer<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn exec_change_peer<W: WriteBatch<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
+        ctx: &mut ApplyContext<EK, W>,
         request: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         let request = request.get_change_peer();
@@ -1768,9 +1736,9 @@ where
         ))
     }
 
-    fn exec_split<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn exec_split<W: WriteBatch<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
+        ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         info!(
@@ -1790,9 +1758,9 @@ where
         self.exec_batch_split(ctx, &admin_req)
     }
 
-    fn exec_batch_split<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn exec_batch_split<W: WriteBatch<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
+        ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!(
@@ -1993,9 +1961,9 @@ where
         ))
     }
 
-    fn exec_prepare_merge<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn exec_prepare_merge<W: WriteBatch<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
+        ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!("apply_before_prepare_merge");
@@ -2064,9 +2032,9 @@ where
     // 7.   resume `exec_commit_merge` in target apply fsm
     // 8.   `on_ready_commit_merge` in target peer fsm and send `MergeResult` to source peer fsm
     // 9.   `on_merge_result` in source peer fsm (destroy itself)
-    fn exec_commit_merge<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn exec_commit_merge<W: WriteBatch<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
+        ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         {
@@ -2111,7 +2079,7 @@ where
                 logs_up_to_date: logs_up_to_date.clone(),
             });
             ctx.notifier
-                .notify(source_region_id, PeerMsg::SignificantMsg(msg));
+                .notify_one(source_region_id, PeerMsg::SignificantMsg(msg));
             return Ok((
                 AdminResponse::default(),
                 ApplyResult::WaitMergeSource(logs_up_to_date),
@@ -2196,9 +2164,9 @@ where
         ))
     }
 
-    fn exec_rollback_merge<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn exec_rollback_merge<W: WriteBatch<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
+        ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
@@ -2238,9 +2206,9 @@ where
         ))
     }
 
-    fn exec_compact_log<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn exec_compact_log<W: WriteBatch<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
+        ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
@@ -2298,9 +2266,9 @@ where
         ))
     }
 
-    fn exec_compute_hash<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn exec_compute_hash<W: WriteBatch<EK>>(
         &self,
-        ctx: &ApplyContext<EK, ER, W>,
+        ctx: &ApplyContext<EK, W>,
         _: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         let resp = AdminResponse::default();
@@ -2318,9 +2286,9 @@ where
         ))
     }
 
-    fn exec_verify_hash<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn exec_verify_hash<W: WriteBatch<EK>>(
         &self,
-        _: &ApplyContext<EK, ER, W>,
+        _: &ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         let verify_req = req.get_verify_hash();
@@ -2512,7 +2480,6 @@ where
 
 pub struct Destroy {
     region_id: u64,
-    async_remove: bool,
     merge_from_snapshot: bool,
 }
 
@@ -2663,10 +2630,9 @@ where
         Msg::Registration(Registration::new(peer))
     }
 
-    pub fn destroy(region_id: u64, async_remove: bool, merge_from_snapshot: bool) -> Msg<EK> {
+    pub fn destroy(region_id: u64, merge_from_snapshot: bool) -> Msg<EK> {
         Msg::Destroy(Destroy {
             region_id,
-            async_remove,
             merge_from_snapshot,
         })
     }
@@ -2790,9 +2756,9 @@ where
     }
 
     /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
-    fn handle_apply<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn handle_apply<W: WriteBatch<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        apply_ctx: &mut ApplyContext<EK, W>,
         mut apply: Apply<EK::Snapshot>,
     ) {
         if apply_ctx.timer.is_none() {
@@ -2870,10 +2836,7 @@ where
         APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
-    fn destroy<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
-        &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
-    ) {
+    fn destroy<W: WriteBatch<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>) {
         let region_id = self.delegate.region_id();
         if ctx.apply_res.iter().any(|res| res.region_id == region_id) {
             // Flush before destroying to avoid reordering messages.
@@ -2893,36 +2856,27 @@ where
     }
 
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
-    fn handle_destroy<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
-        &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
-        d: Destroy,
-    ) {
+    fn handle_destroy<W: WriteBatch<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>, d: Destroy) {
         assert_eq!(d.region_id, self.delegate.region_id());
         if d.merge_from_snapshot {
             assert_eq!(self.delegate.stopped, false);
         }
         if !self.delegate.stopped {
             self.destroy(ctx);
-            if d.async_remove {
-                ctx.notifier.notify(
-                    self.delegate.region_id(),
-                    PeerMsg::ApplyRes {
-                        res: TaskRes::Destroy {
-                            region_id: self.delegate.region_id(),
-                            peer_id: self.delegate.id,
-                            merge_from_snapshot: d.merge_from_snapshot,
-                        },
+            ctx.notifier.notify_one(
+                self.delegate.region_id(),
+                PeerMsg::ApplyRes {
+                    res: TaskRes::Destroy {
+                        region_id: self.delegate.region_id(),
+                        peer_id: self.delegate.id,
+                        merge_from_snapshot: d.merge_from_snapshot,
                     },
-                );
-            }
+                },
+            );
         }
     }
 
-    fn resume_pending<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
-        &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
-    ) {
+    fn resume_pending<W: WriteBatch<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>) {
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
             if source_region_id == 0 {
@@ -2954,9 +2908,9 @@ where
         }
     }
 
-    fn logs_up_to_date_for_merge<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn logs_up_to_date_for_merge<W: WriteBatch<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<EK, ER, W>,
+        ctx: &mut ApplyContext<EK, W>,
         catch_up_logs: CatchUpLogs,
     ) {
         fail_point!("after_handle_catch_up_logs_for_merge");
@@ -2991,9 +2945,9 @@ where
     }
 
     #[allow(unused_mut)]
-    fn handle_snapshot<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn handle_snapshot<W: WriteBatch<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        apply_ctx: &mut ApplyContext<EK, W>,
         snap_task: GenSnapTask,
     ) {
         if self.delegate.pending_remove || self.delegate.stopped {
@@ -3048,9 +3002,9 @@ where
         );
     }
 
-    fn handle_change<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn handle_change<W: WriteBatch<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        apply_ctx: &mut ApplyContext<EK, W>,
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
@@ -3127,9 +3081,9 @@ where
         cb.invoke_read(resp);
     }
 
-    fn handle_tasks<W: WriteBatch + WriteBatchVecExt<EK>, ER: RaftEngine>(
+    fn handle_tasks<W: WriteBatch<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        apply_ctx: &mut ApplyContext<EK, W>,
         msgs: &mut Vec<Msg<EK>>,
     ) {
         let mut channel_timer = None;
@@ -3221,23 +3175,21 @@ impl Fsm for ControlFsm {
     }
 }
 
-pub struct ApplyPoller<EK, ER, W>
+pub struct ApplyPoller<EK, W>
 where
     EK: KvEngine,
-    ER: RaftEngine,
-    W: WriteBatch + WriteBatchVecExt<EK>,
+    W: WriteBatch<EK>,
 {
     msg_buf: Vec<Msg<EK>>,
-    apply_ctx: ApplyContext<EK, ER, W>,
+    apply_ctx: ApplyContext<EK, W>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }
 
-impl<EK, ER, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, ER, W>
+impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
 where
     EK: KvEngine,
-    ER: RaftEngine,
-    W: WriteBatch + WriteBatchVecExt<EK>,
+    W: WriteBatch<EK>,
 {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -3286,6 +3238,9 @@ where
             }
             expected_msg_count = None;
         }
+        fail_point!("before_handle_normal_3", normal.delegate.id() == 3, |_| {
+            None
+        });
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => self.msg_buf.push(msg),
@@ -3321,29 +3276,29 @@ where
     }
 }
 
-pub struct Builder<EK: KvEngine, ER: RaftEngine, W: WriteBatch + WriteBatchVecExt<EK>> {
+pub struct Builder<EK: KvEngine, W: WriteBatch<EK>> {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<EK>,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<<EK as KvEngine>::Snapshot>>,
     engine: EK,
-    sender: Notifier<EK, ER>,
+    sender: Box<dyn Notifier<EK>>,
     router: ApplyRouter<EK>,
     _phantom: PhantomData<W>,
     store_id: u64,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine, W> Builder<EK, ER, W>
+impl<EK: KvEngine, W> Builder<EK, W>
 where
-    W: WriteBatch + WriteBatchVecExt<EK>,
+    W: WriteBatch<EK>,
 {
-    pub fn new<T, C>(
+    pub fn new<T, C, ER: RaftEngine>(
         builder: &RaftPollerBuilder<EK, ER, T, C>,
-        sender: Notifier<EK, ER>,
+        sender: Box<dyn Notifier<EK>>,
         router: ApplyRouter<EK>,
-    ) -> Builder<EK, ER, W> {
+    ) -> Builder<EK, W> {
         Builder {
             tag: format!("[store {}]", builder.store.get_id()),
             cfg: builder.cfg.clone(),
@@ -3360,15 +3315,14 @@ where
     }
 }
 
-impl<EK, ER, W> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK, ER, W>
+impl<EK, W> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK, W>
 where
     EK: KvEngine,
-    ER: RaftEngine,
-    W: WriteBatch + WriteBatchVecExt<EK>,
+    W: WriteBatch<EK>,
 {
-    type Handler = ApplyPoller<EK, ER, W>;
+    type Handler = ApplyPoller<EK, W>;
 
-    fn build(&mut self) -> ApplyPoller<EK, ER, W> {
+    fn build(&mut self) -> ApplyPoller<EK, W> {
         let cfg = self.cfg.value();
         ApplyPoller {
             msg_buf: Vec::with_capacity(cfg.messages_per_tick),
@@ -3379,7 +3333,7 @@ where
                 self.region_scheduler.clone(),
                 self.engine.clone(),
                 self.router.clone(),
-                self.sender.clone(),
+                self.sender.clone_box(),
                 &cfg,
                 self.store_id,
                 self.pending_create_peers.clone(),
@@ -3597,6 +3551,26 @@ mod tests {
         e
     }
 
+    #[derive(Clone)]
+    pub struct TestNotifier<EK: KvEngine> {
+        tx: Sender<PeerMsg<EK>>,
+    }
+
+    impl<EK: KvEngine> Notifier<EK> for TestNotifier<EK> {
+        fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+            for r in apply_res {
+                let res = TaskRes::Apply(r);
+                let _ = self.tx.send(PeerMsg::ApplyRes { res });
+            }
+        }
+        fn notify_one(&self, _: u64, msg: PeerMsg<EK>) {
+            let _ = self.tx.send(msg);
+        }
+        fn clone_box(&self) -> Box<dyn Notifier<EK>> {
+            Box::new(self.clone())
+        }
+    }
+
     #[test]
     fn test_should_sync_log() {
         // Admin command
@@ -3735,14 +3709,14 @@ mod tests {
     #[test]
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
-        let sender: Notifier<RocksEngine, RocksEngine> = Notifier::Sender(tx);
+        let sender = Box::new(TestNotifier { tx });
         let (_tmp, engine) = create_tmp_engine("apply-basic");
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<_, _, RocksWriteBatch> {
+        let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
             coprocessor_host: CoprocessorHost::<RocksEngine>::default(),
@@ -3876,7 +3850,7 @@ mod tests {
             );
         });
 
-        router.schedule_task(2, Msg::destroy(2, true, false));
+        router.schedule_task(2, Msg::destroy(2, false));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Destroy {
@@ -4103,11 +4077,11 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
-        let sender: Notifier<RocksEngine, RocksEngine> = Notifier::Sender(tx);
+        let sender = Box::new(TestNotifier { tx });
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<_, _, RocksWriteBatch> {
+        let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
             sender,
@@ -4461,11 +4435,11 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
-        let sender = Notifier::<_, RocksEngine>::Sender(tx);
+        let sender = Box::new(TestNotifier { tx });
         let cfg = Config::default();
         let (router, mut system) = create_apply_batch_system(&cfg);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<_, _, RocksWriteBatch> {
+        let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg: Arc::new(VersionTrack::new(cfg)),
             sender,
@@ -4753,7 +4727,7 @@ mod tests {
         let peers = vec![new_peer(2, 3), new_peer(4, 5), new_learner_peer(6, 7)];
         reg.region.set_peers(peers.clone().into());
         let (tx, _rx) = mpsc::channel();
-        let sender: Notifier<RocksEngine, RocksEngine> = Notifier::Sender(tx);
+        let sender = Box::new(TestNotifier { tx });
         let mut host = CoprocessorHost::<RocksEngine>::default();
         let mut obs = ApplyObserver::default();
         let (sink, cmdbatch_rx) = mpsc::channel();
@@ -4764,7 +4738,7 @@ mod tests {
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<_, _, RocksWriteBatch> {
+        let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
             sender,

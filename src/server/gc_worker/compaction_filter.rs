@@ -12,8 +12,8 @@ use engine_rocks::raw::{
 };
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, MiscExt, Mutable, SeekKey, WriteBatch, WriteBatchExt,
-    WriteOptions, CF_WRITE,
+    IterOptions, Iterable, Iterator, MiscExt, Mutable, SeekKey, WriteBatchExt, WriteOptions,
+    CF_WRITE,
 };
 use pd_client::ClusterVersion;
 use txn_types::{Key, WriteRef, WriteType};
