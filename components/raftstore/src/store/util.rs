@@ -12,6 +12,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
+use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use time::{Duration, Timespec};
 
@@ -46,13 +47,16 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::default();
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
+    peer.set_role(metapb::PeerRole::Voter);
     peer
 }
 
 // a helper function to create learner peer easily.
 pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
-    let mut peer = new_peer(store_id, peer_id);
-    peer.set_is_learner(true);
+    let mut peer = metapb::Peer::default();
+    peer.set_store_id(store_id);
+    peer.set_id(peer_id);
+    peer.set_role(metapb::PeerRole::Learner);
     peer
 }
 
@@ -145,33 +149,77 @@ pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionE
         || epoch.get_conf_ver() < check_epoch.get_conf_ver()
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct AdminCmdEpochState {
+    pub check_ver: bool,
+    pub check_conf_ver: bool,
+    pub change_ver: bool,
+    pub change_conf_ver: bool,
+}
+
+impl AdminCmdEpochState {
+    fn new(
+        check_ver: bool,
+        check_conf_ver: bool,
+        change_ver: bool,
+        change_conf_ver: bool,
+    ) -> AdminCmdEpochState {
+        AdminCmdEpochState {
+            check_ver,
+            check_conf_ver,
+            change_ver,
+            change_conf_ver,
+        }
+    }
+}
+
+lazy_static! {
+    /// WARNING: the existing settings in `ADMIN_CMD_EPOCH_MAP` **MUST NOT** be changed!!!
+    /// Changing any admin cmd's `AdminCmdEpochState` or the epoch-change behavior during applying
+    /// will break upgrade compatibility and correctness dependency of `CmdEpochChecker`.
+    /// Please remember it is very difficult to fix the issues arising from not following this rule.
+    ///
+    /// If you really want to change an admin cmd behavior, please add a new admin cmd and **do not**
+    /// delete the old one.
+    pub static ref ADMIN_CMD_EPOCH_MAP: HashMap<AdminCmdType, AdminCmdEpochState> = [
+        (AdminCmdType::InvalidAdmin, AdminCmdEpochState::new(false, false, false, false)),
+        (AdminCmdType::CompactLog, AdminCmdEpochState::new(false, false, false, false)),
+        (AdminCmdType::ComputeHash, AdminCmdEpochState::new(false, false, false, false)),
+        (AdminCmdType::VerifyHash, AdminCmdEpochState::new(false, false, false, false)),
+        // Change peer
+        (AdminCmdType::ChangePeer, AdminCmdEpochState::new(false, true, false, true)),
+        (AdminCmdType::ChangePeerV2, AdminCmdEpochState::new(false, true, false, true)),
+        // Split
+        (AdminCmdType::Split, AdminCmdEpochState::new(true, true, true, false)),
+        (AdminCmdType::BatchSplit, AdminCmdEpochState::new(true, true, true, false)),
+        // Merge
+        (AdminCmdType::PrepareMerge, AdminCmdEpochState::new(true, true, true, true)),
+        (AdminCmdType::CommitMerge, AdminCmdEpochState::new(true, true, true, false)),
+        (AdminCmdType::RollbackMerge, AdminCmdEpochState::new(true, true, true, false)),
+        // Transfer leader
+        (AdminCmdType::TransferLeader, AdminCmdEpochState::new(true, true, false, false)),
+    ].iter().copied().collect();
+}
+
+/// WARNING: `NORMAL_REQ_CHECK_VER` and `NORMAL_REQ_CHECK_CONF_VER` **MUST NOT** be changed.
+/// The reason is the same as `ADMIN_CMD_EPOCH_MAP`.
+pub static NORMAL_REQ_CHECK_VER: bool = true;
+pub static NORMAL_REQ_CHECK_CONF_VER: bool = false;
+
 pub fn check_region_epoch(
     req: &RaftCmdRequest,
     region: &metapb::Region,
     include_region: bool,
 ) -> Result<()> {
-    let (mut check_ver, mut check_conf_ver) = (false, false);
-    if !req.has_admin_request() {
+    let (check_ver, check_conf_ver) = if !req.has_admin_request() {
         // for get/set/delete, we don't care conf_version.
-        check_ver = true;
+        (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
     } else {
-        match req.get_admin_request().get_cmd_type() {
-            AdminCmdType::CompactLog
-            | AdminCmdType::InvalidAdmin
-            | AdminCmdType::ComputeHash
-            | AdminCmdType::VerifyHash => {}
-            AdminCmdType::ChangePeer => check_conf_ver = true,
-            AdminCmdType::Split
-            | AdminCmdType::BatchSplit
-            | AdminCmdType::PrepareMerge
-            | AdminCmdType::CommitMerge
-            | AdminCmdType::RollbackMerge
-            | AdminCmdType::TransferLeader => {
-                check_ver = true;
-                check_conf_ver = true;
-            }
-        };
-    }
+        let epoch_state = *ADMIN_CMD_EPOCH_MAP
+            .get(&req.get_admin_request().get_cmd_type())
+            .unwrap();
+        (epoch_state.check_ver, epoch_state.check_conf_ver)
+    };
 
     if !check_ver && !check_conf_ver {
         return Ok(());
@@ -295,10 +343,15 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
     // Because every store can only have one replica for the same region,
     // so just one round check is enough.
     lhs.get_peers().iter().all(|lp| {
-        rhs.get_peers().iter().any(|rp| {
-            rp.get_store_id() == lp.get_store_id() && rp.get_is_learner() == lp.get_is_learner()
-        })
+        rhs.get_peers()
+            .iter()
+            .any(|rp| rp.get_store_id() == lp.get_store_id() && rp.get_role() == lp.get_role())
     })
+}
+
+#[inline]
+pub fn is_region_initialized(r: &metapb::Region) -> bool {
+    !r.get_peers().is_empty()
 }
 
 /// Lease records an expired time, for examining the current moment is in lease or not.
@@ -601,13 +654,19 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
     // Here `learners` means learner peers, and `nodes` means voter peers.
     let mut conf_state = ConfState::default();
     for p in region.get_peers() {
-        if p.get_is_learner() {
+        // TODO: when using joint consensus we also need to consider joint state
+        // which contains other roles like IncommingVoter and DemotingVoter
+        if is_learner(p) {
             conf_state.mut_learners().push(p.get_id());
         } else {
             conf_state.mut_voters().push(p.get_id());
         }
     }
     conf_state
+}
+
+pub fn is_learner(peer: &metapb::Peer) -> bool {
+    peer.get_role() == metapb::PeerRole::Learner
 }
 
 pub struct KeysInfoFormatter<
@@ -656,6 +715,14 @@ macro_rules! report_perf_context {
             observe_perf_context_type!($ctx, perf_context, $metric, db_mutex_lock_nanos);
             observe_perf_context_type!($ctx, $metric, pre_and_post_process);
             observe_perf_context_type!($ctx, $metric, write_thread_wait);
+            observe_perf_context_type!(
+                $ctx,
+                perf_context,
+                $metric,
+                write_scheduling_flushes_compactions_time
+            );
+            observe_perf_context_type!($ctx, perf_context, $metric, db_condition_wait_nanos);
+            observe_perf_context_type!($ctx, perf_context, $metric, write_delay_time);
         }
     };
 }
@@ -680,6 +747,9 @@ pub struct PerfContextStatistics {
     pub write_memtable_time: u64,
     pub write_thread_wait: u64,
     pub db_mutex_lock_nanos: u64,
+    pub write_scheduling_flushes_compactions_time: u64,
+    pub db_condition_wait_nanos: u64,
+    pub write_delay_time: u64,
 }
 
 impl PerfContextStatistics {
@@ -692,6 +762,9 @@ impl PerfContextStatistics {
             write_thread_wait: 0,
             write_memtable_time: 0,
             db_mutex_lock_nanos: 0,
+            write_scheduling_flushes_compactions_time: 0,
+            db_condition_wait_nanos: 0,
+            write_delay_time: 0,
         }
     }
 
@@ -706,6 +779,9 @@ impl PerfContextStatistics {
         self.db_mutex_lock_nanos = 0;
         self.write_thread_wait = 0;
         self.write_memtable_time = 0;
+        self.write_scheduling_flushes_compactions_time = 0;
+        self.db_condition_wait_nanos = 0;
+        self.write_delay_time = 0;
     }
 }
 
@@ -893,7 +969,7 @@ mod tests {
 
         let mut peer = metapb::Peer::default();
         peer.set_id(2);
-        peer.set_is_learner(true);
+        peer.set_role(metapb::PeerRole::Learner);
         region.mut_peers().push(peer);
 
         let cs = conf_state_from_region(&region);
@@ -908,8 +984,8 @@ mod tests {
         region.mut_peers().push(new_peer(1, 1));
         region.mut_peers().push(new_learner_peer(2, 2));
 
-        assert!(!find_peer(&region, 1).unwrap().get_is_learner());
-        assert!(find_peer(&region, 2).unwrap().get_is_learner());
+        assert!(!is_learner(find_peer(&region, 1).unwrap()));
+        assert!(is_learner(find_peer(&region, 2).unwrap()));
 
         assert!(remove_peer(&mut region, 1).is_some());
         assert!(remove_peer(&mut region, 1).is_none());
@@ -1170,6 +1246,7 @@ mod tests {
             AdminCmdType::Split,
             AdminCmdType::BatchSplit,
             AdminCmdType::ChangePeer,
+            AdminCmdType::ChangePeerV2,
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
             AdminCmdType::RollbackMerge,
@@ -1207,6 +1284,24 @@ mod tests {
         for (voter_count, expected_quorum) in voters.into_iter().zip(quorum) {
             let quorum = super::integration_on_half_fail_quorum_fn(voter_count);
             assert_eq!(quorum, expected_quorum);
+        }
+    }
+
+    #[test]
+    fn test_is_region_initialized() {
+        let mut region = metapb::Region::default();
+        assert!(!is_region_initialized(&region));
+        let peers = vec![new_peer(1, 2)];
+        region.set_peers(peers.into());
+        assert!(is_region_initialized(&region));
+    }
+
+    #[test]
+    fn test_admin_cmd_epoch_map_include_all_cmd_type() {
+        #[cfg(feature = "protobuf-codec")]
+        use protobuf::ProtobufEnum;
+        for cmd_type in AdminCmdType::values() {
+            assert!(ADMIN_CMD_EPOCH_MAP.contains_key(cmd_type));
         }
     }
 }

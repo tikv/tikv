@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    IterOptions, KvEngine, KvEngines, Peekable, ReadOptions, Result as EngineResult, Snapshot,
+    IterOptions, KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot,
 };
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
@@ -10,11 +10,11 @@ use std::sync::Arc;
 
 use crate::store::{util, PeerStorage};
 use crate::{Error, Result};
-use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::util::check_key_in_range;
 use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
 use keys::DATA_PREFIX_KEY;
+use raft_engine::RaftEngine;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -27,6 +27,8 @@ pub struct RegionSnapshot<S: Snapshot> {
     snap: Arc<S>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
+    // `None` means the snapshot does not care about max_ts
+    pub max_ts_sync_status: Option<Arc<AtomicU64>>,
 }
 
 impl<S> RegionSnapshot<S>
@@ -34,27 +36,39 @@ where
     S: Snapshot,
 {
     #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
-    pub fn new(ps: &PeerStorage<RocksEngine, RocksEngine>) -> RegionSnapshot<RocksSnapshot> {
-        RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), ps.region().clone())
+    pub fn new<EK>(ps: &PeerStorage<EK, impl RaftEngine>) -> RegionSnapshot<EK::Snapshot>
+    where
+        EK: KvEngine,
+    {
+        RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), Arc::new(ps.region().clone()))
     }
 
-    pub fn from_raw(db: RocksEngine, region: Region) -> RegionSnapshot<RocksSnapshot> {
-        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), region)
+    pub fn from_raw<EK>(db: EK, region: Region) -> RegionSnapshot<EK::Snapshot>
+    where
+        EK: KvEngine,
+    {
+        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), Arc::new(region))
     }
 
-    pub fn from_snapshot(snap: Arc<S>, region: Region) -> RegionSnapshot<S> {
+    pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>) -> RegionSnapshot<S> {
         RegionSnapshot {
             snap,
-            region: Arc::new(region),
+            region,
             // Use 0 to indicate that the apply index is missing and we need to KvGet it,
             // since apply index must be >= RAFT_INIT_LOG_INDEX.
             apply_index: Arc::new(AtomicU64::new(0)),
+            max_ts_sync_status: None,
         }
     }
 
     #[inline]
     pub fn get_region(&self) -> &Region {
         &self.region
+    }
+
+    #[inline]
+    pub fn get_snapshot(&self) -> &S {
+        self.snap.as_ref()
     }
 
     #[inline]
@@ -155,6 +169,7 @@ where
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
             apply_index: Arc::clone(&self.apply_index),
+            max_ts_sync_status: self.max_ts_sync_status.clone(),
         }
     }
 }
@@ -362,35 +377,14 @@ fn handle_check_key_in_region_error(e: crate::Error) -> Result<()> {
     }
 }
 
-pub fn new_temp_engine(path: &tempfile::TempDir) -> KvEngines<RocksEngine, RocksEngine> {
-    let raft_path = path.path().join(std::path::Path::new("raft"));
-    let shared_block_cache = false;
-    KvEngines::new(
-        engine_rocks::util::new_engine(
-            path.path().to_str().unwrap(),
-            None,
-            engine_traits::ALL_CFS,
-            None,
-        )
-        .unwrap(),
-        engine_rocks::util::new_engine(
-            raft_path.to_str().unwrap(),
-            None,
-            &[engine_traits::CF_DEFAULT],
-            None,
-        )
-        .unwrap(),
-        shared_block_cache,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use crate::store::PeerStorage;
     use crate::Result;
 
+    use engine_rocks::util::new_temp_engine;
     use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_traits::{CompactExt, KvEngines, MiscExt, Peekable, SyncMutable};
+    use engine_traits::{CompactExt, Engines, MiscExt, Peekable, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -401,7 +395,7 @@ mod tests {
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
     fn new_peer_storage(
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
         r: &Region,
     ) -> PeerStorage<RocksEngine, RocksEngine> {
         let (sched, _) = worker::dummy_scheduler();
@@ -409,7 +403,7 @@ mod tests {
     }
 
     fn load_default_dataset(
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
     ) -> (PeerStorage<RocksEngine, RocksEngine>, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
@@ -433,7 +427,7 @@ mod tests {
     }
 
     fn load_multiple_levels_dataset(
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
     ) -> (PeerStorage<RocksEngine, RocksEngine>, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());

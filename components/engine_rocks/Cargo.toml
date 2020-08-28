@@ -8,10 +8,12 @@ publish = false
 protobuf-codec = [
   "keys/protobuf-codec",
   "txn_types/protobuf-codec",
+  "raft-engine/protobuf-codec"
 ]
 prost-codec = [
   "keys/prost-codec",
   "txn_types/prost-codec",
+  "raft-engine/prost-codec"
 ]
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
@@ -19,8 +21,8 @@ sse = ["rocksdb/sse"]
 
 [dependencies]
 encryption = { path = "../encryption" }
-engine = { path = "../engine" }
 engine_traits = { path = "../engine_traits" }
+hex = "0.4"
 keys = { path = "../keys" }
 num_cpus = "1"
 prometheus = { version = "0.8", features = ["nightly", "push"] }
@@ -32,9 +34,14 @@ txn_types = { path = "../txn_types"}
 lazy_static = "1.4.0"
 time = "0.1"
 configuration = { path = "../configuration" }
+tempfile = "3.0"
 serde = "1.0"
 serde_derive = "1.0"
 coarsetime = "0.1"
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+raft = { version = "0.6.0-alpha", default-features = false }
+raft-engine = { git = "https://github.com/tikv/raft-engine", default-features = false }
+protobuf = "2"
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
@@ -47,6 +54,5 @@ rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6"
 
 [dev-dependencies]
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-tempfile = "3.0"
 rand = "0.7"
 toml = "0.4"

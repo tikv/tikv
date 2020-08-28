@@ -8,7 +8,7 @@ use crate::types::function::RpnFnMeta;
 use crate::RpnExpressionBuilder;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-use tidb_query_datatype::codec::data_type::{Evaluable, ScalarValue};
+use tidb_query_datatype::codec::data_type::{EvaluableRet, ScalarValue};
 use tidb_query_datatype::expr::EvalContext;
 
 /// Helper utility to evaluate RPN function over scalar inputs.
@@ -147,7 +147,7 @@ impl RpnFnScalarEvaluator {
     }
 
     /// Evaluates the given function by using collected parameters.
-    pub fn evaluate<T: Evaluable>(self, sig: ScalarFuncSig) -> Result<Option<T>>
+    pub fn evaluate<T: EvaluableRet>(self, sig: ScalarFuncSig) -> Result<Option<T>>
     where
         Option<T>: From<ScalarValue>,
     {

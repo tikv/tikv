@@ -12,14 +12,14 @@ const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const FLUSHER_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 
 pub struct MetricsFlusher<K: KvEngine, R: KvEngine> {
-    pub engines: KvEngines<K, R>,
+    pub engines: Engines<K, R>,
     interval: Duration,
     handle: Option<JoinHandle<()>>,
     sender: Option<Sender<bool>>,
 }
 
 impl<K: KvEngine, R: KvEngine> MetricsFlusher<K, R> {
-    pub fn new(engines: KvEngines<K, R>) -> Self {
+    pub fn new(engines: Engines<K, R>) -> Self {
         MetricsFlusher {
             engines,
             interval: DEFAULT_FLUSH_INTERVAL,
@@ -41,6 +41,7 @@ impl<K: KvEngine, R: KvEngine> MetricsFlusher<K, R> {
         let h = ThreadBuilder::new()
             .name("metrics-flusher".to_owned())
             .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
                 let mut last_reset = Instant::now();
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
                     kv_db.flush_metrics("kv", shared_block_cache);
@@ -51,6 +52,7 @@ impl<K: KvEngine, R: KvEngine> MetricsFlusher<K, R> {
                         last_reset = Instant::now();
                     }
                 }
+                tikv_alloc::remove_thread_memory_accessor();
             })?;
 
         self.handle = Some(h);

@@ -111,6 +111,7 @@ make_auto_flush_static_metric! {
         pessimistic_rollback,
         txn_heart_beat,
         check_txn_status,
+        check_secondary_locks,
         scan_lock,
         resolve_lock,
         resolve_lock_lite,
@@ -161,8 +162,7 @@ make_auto_flush_static_metric! {
     }
 
     pub label_enum GcKeysDetail {
-        total,
-        processed,
+        processed_keys,
         get,
         next,
         prev,
@@ -228,8 +228,7 @@ impl Into<GcKeysCF> for ServerGcKeysCF {
 impl Into<GcKeysDetail> for ServerGcKeysDetail {
     fn into(self) -> GcKeysDetail {
         match self {
-            ServerGcKeysDetail::total => GcKeysDetail::total,
-            ServerGcKeysDetail::processed => GcKeysDetail::processed,
+            ServerGcKeysDetail::processed_keys => GcKeysDetail::processed_keys,
             ServerGcKeysDetail::get => GcKeysDetail::get,
             ServerGcKeysDetail::next => GcKeysDetail::next,
             ServerGcKeysDetail::prev => GcKeysDetail::prev,

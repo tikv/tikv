@@ -1,6 +1,4 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
-
-extern crate futures;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
@@ -23,23 +21,25 @@ mod util;
 
 mod config;
 pub mod errors;
-pub use self::client::RpcClient;
+pub use self::client::{DummyPdClient, RpcClient};
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
 pub use self::util::validate_endpoints;
 pub use self::util::RECONNECT_INTERVAL_SEC;
 
 use std::ops::Deref;
+use std::sync::{Arc, RwLock};
 
-use futures::Future;
+use futures::future::BoxFuture;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
+use semver::{SemVerError, Version};
 use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;
 
 pub type Key = Vec<u8>;
-pub type PdFuture<T> = Box<dyn Future<Item = T, Error = Error> + Send>;
+pub type PdFuture<T> = BoxFuture<'static, Result<T>>;
 
 #[derive(Default, Clone)]
 pub struct RegionStat {
@@ -202,7 +202,7 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Sends store statistics regularly.
-    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<Option<ReplicationStatus>> {
+    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         unimplemented!();
     }
 
@@ -253,5 +253,39 @@ pub fn take_peer_address(store: &mut metapb::Store) -> String {
         store.take_peer_address()
     } else {
         store.take_address()
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct ClusterVersion {
+    version: Arc<RwLock<Option<Version>>>,
+}
+
+impl ClusterVersion {
+    pub fn get(&self) -> Option<Version> {
+        self.version.read().unwrap().clone()
+    }
+
+    fn set(&self, version: &str) -> std::result::Result<bool, SemVerError> {
+        let new = Version::parse(version)?;
+        let mut holder = self.version.write().unwrap();
+        match &mut *holder {
+            Some(ref mut old) if *old < new => {
+                *old = new;
+                Ok(true)
+            }
+            None => {
+                *holder = Some(new);
+                Ok(true)
+            }
+            Some(_) => Ok(false),
+        }
+    }
+
+    /// Initialize a `ClusterVersion` as given `version`. Only should be used for tests.
+    pub fn new(version: Version) -> Self {
+        ClusterVersion {
+            version: Arc::new(RwLock::new(Some(version))),
+        }
     }
 }

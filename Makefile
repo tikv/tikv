@@ -51,6 +51,11 @@ ROCKSDB_SYS_PORTABLE=0
 RUST_TEST_THREADS ?= 2
 endif
 
+# Disable SSE on ARM
+ifeq ($(shell uname -p),aarch64)
+ROCKSDB_SYS_SSE=0
+endif
+
 # Build portable binary by default unless disable explicitly
 ifneq ($(ROCKSDB_SYS_PORTABLE),0)
 ENABLE_FEATURES += portable
@@ -232,10 +237,15 @@ run-test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --workspace --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo test --workspace \
+		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored; \
+		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored && \
+		cargo test --workspace \
+			--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+			--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv --lib -- --nocapture --ignored; \
 	fi
 
 .PHONY: test
@@ -259,6 +269,11 @@ format: pre-format
 	@cargo fmt --all -- --check >/dev/null || \
 	cargo fmt --all
 
+doc: 
+	@cargo doc --workspace --document-private-items \
+		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		--no-default-features --features "${ENABLE_FEATURES}"
+
 pre-clippy: unset-override
 	@rustup component add clippy
 
@@ -269,14 +284,14 @@ ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_val
 	-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
 	-A clippy::needless_range_loop -A clippy::redundant_closure \
 	-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call \
-	-A clippy::identity_conversion -A clippy::new_ret_no_self
+	-A clippy::useless_conversion -A clippy::new_ret_no_self -A clippy::unnecessary_sort_by
 
 # PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
 ifneq (,$(findstring prost-codec,"$(ENABLE_FEATURES)"))
 clippy: pre-clippy
-	@cargo clippy --all --exclude cdc --exclude backup --exclude tests --exclude cmd \
+	@cargo clippy --workspace --all-targets --no-default-features \
+		--exclude cdc --exclude backup --exclude tests --exclude cmd \
 		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--all-targets --no-default-features \
 		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
 	@for pkg in "components/cdc" "components/backup" "cmd" "tests"; do \
 		cd $$pkg && \
@@ -284,14 +299,16 @@ clippy: pre-clippy
 			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
 		cd - >/dev/null;\
 	done
-	@for pkg in "fuzz" "fuzz/fuzzer-afl" "fuzz/fuzzer-honggfuzz" "fuzz/fuzzer-libfuzzer"; do \
+	@for pkg in "fuzz"; do \
 		cd $$pkg && \
 		cargo clippy --all-targets -- $(ALLOWED_CLIPPY_LINTS) && \
 		cd - >/dev/null; \
 	done
 else
 clippy: pre-clippy
-	@cargo clippy --workspace --features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
+	@cargo clippy --workspace \
+		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
 endif
 
 pre-audit:

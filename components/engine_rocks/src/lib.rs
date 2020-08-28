@@ -45,6 +45,8 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use crate::import::*;
+mod logger;
+pub use crate::logger::*;
 mod misc;
 pub use crate::misc::*;
 mod snapshot;
@@ -55,11 +57,14 @@ mod table_properties;
 pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
+pub mod range_properties;
+pub use crate::range_properties::*;
 
 mod engine_iterator;
 pub use crate::engine_iterator::*;
 
 mod options;
+pub mod raw_util;
 pub mod util;
 
 mod compat;
@@ -84,5 +89,9 @@ pub mod config;
 pub use config::*;
 pub mod encryption;
 
+mod raft_engine;
+
 pub use rocksdb::set_perf_level;
 pub use rocksdb::PerfContext;
+
+pub mod raw;

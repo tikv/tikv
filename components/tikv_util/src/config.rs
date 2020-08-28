@@ -63,6 +63,13 @@ const MINUTE: u64 = SECOND * TIME_MAGNITUDE_2;
 const HOUR: u64 = MINUTE * TIME_MAGNITUDE_2;
 const DAY: u64 = HOUR * TIME_MAGNITUDE_3;
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LogFormat {
+    Text,
+    Json,
+}
+
 #[derive(Clone, Debug, Copy, PartialEq)]
 pub struct ReadableSize(pub u64);
 
@@ -78,6 +85,42 @@ impl Into<ReadableSize> for ConfigValue {
             ReadableSize(s)
         } else {
             panic!("expect: ConfigValue::Size, got: {:?}", self);
+        }
+    }
+}
+
+/// This trivial type is needed, because we can't define the `From<Option<ReadableSize>>`
+/// and `Into<Option<ReadableSize>>` trait for `ConfigValue` which is needed to derive
+/// `Configuration` trait for `BlockCacheConfig`
+#[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(from = "Option<ReadableSize>")]
+#[serde(into = "Option<ReadableSize>")]
+pub struct OptionReadableSize(pub Option<ReadableSize>);
+
+impl From<Option<ReadableSize>> for OptionReadableSize {
+    fn from(s: Option<ReadableSize>) -> OptionReadableSize {
+        OptionReadableSize(s)
+    }
+}
+
+impl Into<Option<ReadableSize>> for OptionReadableSize {
+    fn into(self) -> Option<ReadableSize> {
+        self.0
+    }
+}
+
+impl From<OptionReadableSize> for ConfigValue {
+    fn from(size: OptionReadableSize) -> ConfigValue {
+        ConfigValue::OptionSize(size.0.map(|v| v.0))
+    }
+}
+
+impl Into<OptionReadableSize> for ConfigValue {
+    fn into(self) -> OptionReadableSize {
+        if let ConfigValue::OptionSize(s) = self {
+            OptionReadableSize(s.map(|v| ReadableSize(v)))
+        } else {
+            panic!("expect: ConfigValue::OptionSize, got: {:?}", self);
         }
     }
 }
@@ -441,6 +484,20 @@ pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<d
     }
     if path.exists() && path.is_file() {
         return Err(format!("{}/{} is not a directory!", path.display(), sub_path).into());
+    }
+    Ok(format!("{}", path.display()))
+}
+
+pub fn canonicalize_log_dir(path: &str, filename: &str) -> Result<String, Box<dyn Error>> {
+    let mut path = Path::new(path).canonicalize()?;
+    if path.is_file() {
+        return Ok(format!("{}", path.display()));
+    }
+    if !filename.is_empty() {
+        path = path.join(Path::new(filename));
+    }
+    if path.is_dir() {
+        return Err(format!("{} is a directory!", path.display()).into());
     }
     Ok(format!("{}", path.display()))
 }

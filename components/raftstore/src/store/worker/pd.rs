@@ -2,15 +2,19 @@
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Sender};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
 use std::{cmp, io};
 
 use futures::Future;
+use futures03::compat::Compat;
 use tokio_core::reactor::Handle;
 
-use engine_traits::{KvEngine, Snapshot};
+use engine_traits::KvEngine;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
@@ -18,6 +22,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
+use raft_engine::RaftEngine;
 
 use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::cmd_resp::new_error;
@@ -28,8 +33,9 @@ use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::Callback;
 use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg};
+use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 
+use concurrency_manager::ConcurrencyManager;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
@@ -115,7 +121,6 @@ where
     ValidatePeer {
         region: metapb::Region,
         peer: metapb::Peer,
-        merge_source: Option<u64>,
     },
     ReadStats {
         read_stats: ReadStats,
@@ -127,6 +132,11 @@ where
         cpu_usages: RecordPairVec,
         read_io_rates: RecordPairVec,
         write_io_rates: RecordPairVec,
+    },
+    UpdateMaxTimestamp {
+        region_id: u64,
+        initial_status: u64,
+        max_ts_sync_status: Arc<AtomicU64>,
     },
 }
 
@@ -231,11 +241,10 @@ where
             Task::ValidatePeer {
                 ref region,
                 ref peer,
-                ref merge_source,
             } => write!(
                 f,
-                "validate peer {:?} with region {:?}, merge_source {:?}",
-                peer, region, merge_source
+                "validate peer {:?} with region {:?}",
+                peer, region
             ),
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
@@ -251,6 +260,11 @@ where
                 f,
                 "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
                 cpu_usages, read_io_rates, write_io_rates,
+            ),
+            Task::UpdateMaxTimestamp { region_id, ..} => write!(
+                f,
+                "update the max timestamp for region {} in the concurrency manager",
+                region_id
             ),
         }
     }
@@ -333,6 +347,7 @@ where
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
             .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
                     if timer_cnt % thread_info_interval == 0 {
@@ -379,9 +394,11 @@ where
                             }
                         }
                     }
-                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval); // modules timer_cnt with the least common multiple of intervals to avoid overflow
+                    // modules timer_cnt with the least common multiple of intervals to avoid overflow
+                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval);
                     auto_split_controller.refresh_cfg();
                 }
+                tikv_alloc::remove_thread_memory_accessor();
             })?;
 
         self.handle = Some(h);
@@ -389,15 +406,12 @@ where
     }
 
     pub fn stop(&mut self) {
-        let h = self.handle.take();
-        if h.is_none() {
-            return;
-        }
-        drop(self.timer.take().unwrap());
-        drop(self.sender.take().unwrap());
-        if let Err(e) = h.unwrap().join() {
-            error!("join stats collector failed"; "err" => ?e);
-            return;
+        if let Some(h) = self.handle.take() {
+            drop(self.timer.take());
+            drop(self.sender.take());
+            if let Err(e) = h.join() {
+                error!("join stats collector failed"; "err" => ?e);
+            }
         }
     }
 
@@ -406,15 +420,16 @@ where
     }
 }
 
-pub struct Runner<E, T>
+pub struct Runner<EK, ER, T>
 where
-    E: KvEngine,
-    T: PdClient,
+    EK: KvEngine,
+    ER: RaftEngine,
+    T: PdClient + 'static,
 {
     store_id: u64,
     pd_client: Arc<T>,
-    router: RaftRouter<E::Snapshot>,
-    db: E,
+    router: RaftRouter<EK, ER>,
+    db: EK,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
@@ -424,26 +439,30 @@ where
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
-    scheduler: Scheduler<Task<E>>,
-    stats_monitor: StatsMonitor<E>,
+    scheduler: Scheduler<Task<EK>>,
+    stats_monitor: StatsMonitor<EK>,
+
+    concurrency_manager: ConcurrencyManager,
 }
 
-impl<E, T> Runner<E, T>
+impl<EK, ER, T> Runner<EK, ER, T>
 where
-    E: KvEngine,
-    T: PdClient,
+    EK: KvEngine,
+    ER: RaftEngine,
+    T: PdClient + 'static,
 {
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        router: RaftRouter<E::Snapshot>,
-        db: E,
-        scheduler: Scheduler<Task<E>>,
+        router: RaftRouter<EK, ER>,
+        db: EK,
+        scheduler: Scheduler<Task<EK>>,
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
-    ) -> Runner<E, T> {
+        concurrency_manager: ConcurrencyManager,
+    ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start(auto_split_controller) {
@@ -461,6 +480,7 @@ where
             start_ts: UnixSecs::now(),
             scheduler,
             stats_monitor,
+            concurrency_manager,
         }
     }
 
@@ -472,11 +492,11 @@ where
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E::Snapshot>,
+        callback: Callback<EK::Snapshot>,
         task: String,
     ) {
         let router = self.router.clone();
-        let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
+        let f = Compat::new(self.pd_client.ask_split(region.clone())).then(move |resp| {
             match resp {
                 Ok(mut resp) => {
                     info!(
@@ -516,76 +536,82 @@ where
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E::Snapshot>,
+        callback: Callback<EK::Snapshot>,
         task: String,
     ) {
+        if split_keys.is_empty() {
+            info!("empty split key, skip ask batch split";
+                "region_id" => region.get_id());
+            return;
+        }
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
-        let f = self
-            .pd_client
-            .ask_batch_split(region.clone(), split_keys.len())
-            .then(move |resp| {
-                match resp {
-                    Ok(mut resp) => {
-                        info!(
-                            "try to batch split region";
-                            "region_id" => region.get_id(),
-                            "new_region_ids" => ?resp.get_ids(),
-                            "region" => ?region,
-                            "task" => task,
-                        );
+        let f = Compat::new(
+            self.pd_client
+                .ask_batch_split(region.clone(), split_keys.len()),
+        )
+        .then(move |resp| {
+            match resp {
+                Ok(mut resp) => {
+                    info!(
+                        "try to batch split region";
+                        "region_id" => region.get_id(),
+                        "new_region_ids" => ?resp.get_ids(),
+                        "region" => ?region,
+                        "task" => task,
+                    );
 
-                        let req = new_batch_split_region_request(
-                            split_keys,
-                            resp.take_ids().into(),
-                            right_derive,
+                    let req = new_batch_split_region_request(
+                        split_keys,
+                        resp.take_ids().into(),
+                        right_derive,
+                    );
+                    let region_id = region.get_id();
+                    let epoch = region.take_region_epoch();
+                    send_admin_request(&router, region_id, epoch, peer, req, callback)
+                }
+                // When rolling update, there might be some old version tikvs that don't support batch split in cluster.
+                // In this situation, PD version check would refuse `ask_batch_split`.
+                // But if update time is long, it may cause large Regions, so call `ask_split` instead.
+                Err(Error::Incompatible) => {
+                    let (region_id, peer_id) = (region.id, peer.id);
+                    info!(
+                        "ask_batch_split is incompatible, use ask_split instead";
+                        "region_id" => region_id
+                    );
+                    let task = Task::AskSplit {
+                        region,
+                        split_key: split_keys.pop().unwrap(),
+                        peer,
+                        right_derive,
+                        callback,
+                    };
+                    if let Err(Stopped(t)) = scheduler.schedule(task) {
+                        error!(
+                            "failed to notify pd to split: Stopped";
+                            "region_id" => region_id,
+                            "peer_id" =>  peer_id
                         );
-                        let region_id = region.get_id();
-                        let epoch = region.take_region_epoch();
-                        send_admin_request(&router, region_id, epoch, peer, req, callback)
-                    }
-                    // When rolling update, there might be some old version tikvs that don't support batch split in cluster.
-                    // In this situation, PD version check would refuse `ask_batch_split`.
-                    // But if update time is long, it may cause large Regions, so call `ask_split` instead.
-                    Err(Error::Incompatible) => {
-                        let (region_id, peer_id) = (region.id, peer.id);
-                        info!(
-                            "ask_batch_split is incompatible, use ask_split instead";
-                            "region_id" => region_id
-                        );
-                        let task = Task::AskSplit {
-                            region,
-                            split_key: split_keys.pop().unwrap(),
-                            peer,
-                            right_derive,
-                            callback,
-                        };
-                        if let Err(Stopped(t)) = scheduler.schedule(task) {
-                            error!(
-                                "failed to notify pd to split: Stopped";
-                                "region_id" => region_id,
-                                "peer_id" =>  peer_id
-                            );
-                            match t {
-                                Task::AskSplit { callback, .. } => {
-                                    callback.invoke_with_response(new_error(box_err!(
-                                        "failed to split: Stopped"
-                                    )));
-                                }
-                                _ => unreachable!(),
+                        match t {
+                            Task::AskSplit { callback, .. } => {
+                                callback.invoke_with_response(new_error(box_err!(
+                                    "failed to split: Stopped"
+                                )));
                             }
+                            _ => unreachable!(),
                         }
                     }
-                    Err(e) => {
-                        warn!(
-                            "ask batch split failed";
-                            "region_id" => region.get_id(),
-                            "err" => ?e,
-                        );
-                    }
                 }
-                Ok(())
-            });
+                Err(e) => {
+                    warn!(
+                        "ask batch split failed";
+                        "region_id" => region.get_id(),
+                        "err" => ?e,
+                    );
+                }
+            }
+            Ok(())
+        });
         handle.spawn(f)
     }
 
@@ -611,16 +637,20 @@ where
             .region_keys_read
             .observe(region_stat.read_keys as f64);
 
-        let f = self
-            .pd_client
-            .region_heartbeat(term, region.clone(), peer, region_stat, replication_status)
-            .map_err(move |e| {
-                debug!(
-                    "failed to send heartbeat";
-                    "region_id" => region.get_id(),
-                    "err" => ?e
-                );
-            });
+        let f = Compat::new(self.pd_client.region_heartbeat(
+            term,
+            region.clone(),
+            peer,
+            region_stat,
+            replication_status,
+        ))
+        .map_err(move |e| {
+            debug!(
+                "failed to send heartbeat";
+                "region_id" => region.get_id(),
+                "err" => ?e
+            );
+        });
         handle.spawn(f);
     }
 
@@ -628,7 +658,7 @@ where
         &mut self,
         handle: &Handle,
         mut stats: pdpb::StoreStats,
-        store_info: StoreInfo<E>,
+        store_info: StoreInfo<EK>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.engine.path()) {
             Err(e) => {
@@ -698,14 +728,12 @@ where
             .set(available as i64);
 
         let router = self.router.clone();
-        let f = self
-            .pd_client
-            .store_heartbeat(stats)
+        let f = Compat::new(self.pd_client.store_heartbeat(stats))
             .map_err(|e| {
                 error!("store heartbeat failed"; "err" => ?e);
             })
-            .map(move |status| {
-                if let Some(status) = status {
+            .map(move |mut resp| {
+                if let Some(status) = resp.replication_status.take() {
                     let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                 }
             });
@@ -713,7 +741,7 @@ where
     }
 
     fn handle_report_batch_split(&self, handle: &Handle, regions: Vec<metapb::Region>) {
-        let f = self.pd_client.report_batch_split(regions).map_err(|e| {
+        let f = Compat::new(self.pd_client.report_batch_split(regions)).map_err(|e| {
             warn!("report split failed"; "err" => ?e);
         });
         handle.spawn(f);
@@ -724,13 +752,10 @@ where
         handle: &Handle,
         local_region: metapb::Region,
         peer: metapb::Peer,
-        merge_source: Option<u64>,
     ) {
         let router = self.router.clone();
-        let f = self
-            .pd_client
-            .get_region_by_id(local_region.get_id())
-            .then(move |resp| {
+        let f =
+            Compat::new(self.pd_client.get_region_by_id(local_region.get_id())).then(move |resp| {
                 match resp {
                     Ok(Some(pd_region)) => {
                         if is_epoch_stale(
@@ -772,11 +797,7 @@ where
                             PD_VALIDATE_PEER_COUNTER_VEC
                                 .with_label_values(&["peer stale"])
                                 .inc();
-                            if let Some(source) = merge_source {
-                                send_merge_fail(&router, source, peer);
-                            } else {
-                                send_destroy_peer_message(&router, local_region, peer, pd_region);
-                            }
+                            send_destroy_peer_message(&router, local_region, peer, pd_region);
                             return Ok(());
                         }
                         info!(
@@ -805,8 +826,8 @@ where
     fn schedule_heartbeat_receiver(&mut self, handle: &Handle) {
         let router = self.router.clone();
         let store_id = self.store_id;
-        let f = self
-            .pd_client
+        let f = Compat::new(
+            self.pd_client
             .handle_region_heartbeat_response(self.store_id, move |mut resp| {
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
@@ -875,7 +896,7 @@ where
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
-            })
+            }))
             .map_err(|e| panic!("unexpected error: {:?}", e))
             .map(move |_| {
                 info!(
@@ -900,7 +921,9 @@ where
         }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_sender() {
-                sender.send(read_stats).unwrap();
+                if sender.send(read_stats).is_err() {
+                    warn!("send read_stats failed, are we shutting down?")
+                }
             }
         }
     }
@@ -922,14 +945,61 @@ where
         self.store_stat.store_read_io_rates = read_io_rates;
         self.store_stat.store_write_io_rates = write_io_rates;
     }
+
+    fn handle_update_max_timestamp(
+        &mut self,
+        region_id: u64,
+        initial_status: u64,
+        max_ts_sync_status: Arc<AtomicU64>,
+        handle: &Handle,
+    ) {
+        let pd_client = self.pd_client.clone();
+        let concurrency_manager = self.concurrency_manager.clone();
+        let f = async move {
+            let mut success = false;
+            while max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
+                match pd_client.get_tso().await {
+                    Ok(ts) => {
+                        concurrency_manager.update_max_read_ts(ts);
+                        // Set the least significant bit to 1 to mark it as synced.
+                        let old_value = max_ts_sync_status.compare_and_swap(
+                            initial_status,
+                            initial_status | 1,
+                            Ordering::SeqCst,
+                        );
+                        success = old_value == initial_status;
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "failed to update max timestamp for region {}: {:?}",
+                            region_id, e
+                        );
+                    }
+                }
+            }
+            if success {
+                info!("succeed to update max timestamp"; "region_id" => region_id);
+            } else {
+                info!(
+                    "updating max timestamp is stale";
+                    "region_id" => region_id,
+                    "initial_status" => initial_status,
+                );
+            }
+            Ok(())
+        };
+        handle.spawn(Compat::new(Box::pin(f)));
+    }
 }
 
-impl<E, T> Runnable<Task<E>> for Runner<E, T>
+impl<EK, ER, T> Runnable<Task<EK>> for Runner<EK, ER, T>
 where
-    E: KvEngine,
+    EK: KvEngine,
+    ER: RaftEngine,
     T: PdClient,
 {
-    fn run(&mut self, task: Task<E>, handle: &Handle) {
+    fn run(&mut self, task: Task<EK>, handle: &Handle) {
         debug!("executing task"; "task" => %task);
 
         if !self.is_hb_receiver_scheduled {
@@ -971,7 +1041,7 @@ where
             Task::AutoSplit { split_infos } => {
                 for split_info in split_infos {
                     if let Ok(Some(region)) =
-                        self.pd_client.get_region_by_id(split_info.region_id).wait()
+                        Compat::new(self.pd_client.get_region_by_id(split_info.region_id)).wait()
                     {
                         self.handle_ask_batch_split(
                             handle,
@@ -1059,11 +1129,7 @@ where
                 self.handle_store_heartbeat(handle, stats, store_info)
             }
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(handle, regions),
-            Task::ValidatePeer {
-                region,
-                peer,
-                merge_source,
-            } => self.handle_validate_peer(handle, region, peer, merge_source),
+            Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
             Task::StoreInfos {
@@ -1071,6 +1137,16 @@ where
                 read_io_rates,
                 write_io_rates,
             } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
+            Task::UpdateMaxTimestamp {
+                region_id,
+                initial_status,
+                max_ts_sync_status,
+            } => self.handle_update_max_timestamp(
+                region_id,
+                initial_status,
+                max_ts_sync_status,
+                handle,
+            ),
         };
     }
 
@@ -1137,15 +1213,16 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     req
 }
 
-fn send_admin_request<S>(
-    router: &RaftRouter<S>,
+fn send_admin_request<EK, ER>(
+    router: &RaftRouter<EK, ER>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback<S>,
+    callback: Callback<EK::Snapshot>,
 ) where
-    S: Snapshot,
+    EK: KvEngine,
+    ER: RaftEngine,
 {
     let cmd_type = request.get_cmd_type();
 
@@ -1164,34 +1241,16 @@ fn send_admin_request<S>(
     }
 }
 
-/// Sends merge fail message to gc merge source.
-fn send_merge_fail(
-    router: &RaftRouter<impl Snapshot>,
-    source_region_id: u64,
-    target: metapb::Peer,
-) {
-    let target_id = target.get_id();
-    if let Err(e) = router.force_send(
-        source_region_id,
-        PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
-            target,
-            stale: true,
-        }),
-    ) {
-        error!(
-            "source region report merge failed";
-            "region_id" => source_region_id, "targe_region_id" => target_id, "err" => ?e,
-        );
-    }
-}
-
 /// Sends a raft message to destroy the specified stale Peer
-fn send_destroy_peer_message(
-    router: &RaftRouter<impl Snapshot>,
+fn send_destroy_peer_message<EK, ER>(
+    router: &RaftRouter<EK, ER>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,
-) {
+) where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     let mut message = RaftMessage::default();
     message.set_region_id(local_region.get_id());
     message.set_from_peer(peer.clone());

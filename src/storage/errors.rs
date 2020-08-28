@@ -10,6 +10,7 @@ use crate::storage::{
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb};
 use txn_types::{KvPair, TimeStamp};
 
@@ -56,9 +57,6 @@ quick_error! {
         InvalidCf (cf_name: String) {
             display("invalid cf name: {}", cf_name)
         }
-        PessimisticTxnNotEnabled {
-            display("pessimistic transaction is not enabled")
-        }
     }
 }
 
@@ -94,6 +92,23 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     default fn from(err: T) -> Self {
         let err = err.into();
         err.into()
+    }
+}
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Engine(e) => e.error_code(),
+            ErrorInner::Txn(e) => e.error_code(),
+            ErrorInner::Mvcc(e) => e.error_code(),
+            ErrorInner::Closed => error_code::storage::CLOSED,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
+            ErrorInner::Io(_) => error_code::storage::IO,
+            ErrorInner::SchedTooBusy => error_code::storage::SCHED_TOO_BUSY,
+            ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,
+            ErrorInner::KeyTooLarge(_, _) => error_code::storage::KEY_TOO_LARGE,
+            ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
+        }
     }
 }
 
@@ -172,6 +187,13 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
         | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e))),
         )))))) => Some(e.to_owned()),
+        Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::MaxTimestampNotSynced {
+            ..
+        })))) => {
+            let mut err = errorpb::Error::default();
+            err.set_max_timestamp_not_synced(Default::default());
+            Some(err)
+        }
         Err(Error(box ErrorInner::SchedTooBusy)) => {
             let mut err = errorpb::Error::default();
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();

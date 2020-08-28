@@ -6,15 +6,13 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use super::load_statistics::ThreadLoad;
-use super::metrics::*;
-use super::{Config, Result};
+use super::super::load_statistics::ThreadLoad;
+use super::super::metrics::*;
+use super::super::{Config, Result};
 use crossbeam::channel::SendError;
-use engine_rocks::RocksSnapshot;
+use engine_rocks::RocksEngine;
 use futures::{future, stream, Future, Poll, Sink, Stream};
-use grpcio::{
-    ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
-};
+use grpcio::{ChannelBuilder, Environment, Error as GrpcError, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
 use raftstore::router::RaftStoreRouter;
@@ -38,7 +36,7 @@ struct Conn {
 }
 
 impl Conn {
-    fn new<T: RaftStoreRouter<RocksSnapshot> + 'static>(
+    fn new<T: RaftStoreRouter<RocksEngine> + 'static>(
         env: Arc<Environment>,
         router: T,
         addr: &str,
@@ -151,7 +149,7 @@ pub struct RaftClient<T: 'static> {
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter<RocksSnapshot>> RaftClient<T> {
+impl<T: RaftStoreRouter<RocksEngine>> RaftClient<T> {
     pub fn new(
         env: Arc<Environment>,
         cfg: Arc<Config>,
@@ -277,14 +275,6 @@ impl<T: Stream> Stream for Reusable<T> {
     }
 }
 
-fn grpc_error_is_unimplemented(e: &GrpcError) -> bool {
-    if let GrpcError::RpcFailure(RpcStatus { ref status, .. }) = e {
-        let x = *status == RpcStatusCode::UNIMPLEMENTED;
-        return x;
-    }
-    false
-}
-
 fn check_rpc_result(
     rpc: &str,
     addr: &str,
@@ -295,5 +285,5 @@ fn check_rpc_result(
         return Ok(());
     }
     warn!( "RPC {} fail", rpc; "to_addr" => addr, "sink_err" => ?sink_e, "err" => ?recv_e);
-    recv_e.map_or(Ok(()), |e| Err(grpc_error_is_unimplemented(&e)))
+    recv_e.map_or(Ok(()), |e| Err(super::grpc_error_is_unimplemented(&e)))
 }

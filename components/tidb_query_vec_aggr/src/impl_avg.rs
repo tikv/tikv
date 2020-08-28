@@ -6,10 +6,11 @@ use tidb_query_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};
 use tipb::{Expr, ExprType, FieldType};
 
 use super::summable::Summable;
+use super::*;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_vec_expr::RpnExpression;
 
 /// The parser for AVG aggregate function.
 pub struct AggrFnDefinitionParserAvg;
@@ -20,25 +21,25 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
         super::util::check_aggr_exp_supported_one_child(aggr_def)
     }
 
-    fn parse(
+    #[inline]
+    fn parse_rpn(
         &self,
-        mut aggr_def: Expr,
-        ctx: &mut EvalContext,
+        mut root_expr: Expr,
+        mut exp: RpnExpression,
+        _ctx: &mut EvalContext,
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
-    ) -> Result<Box<dyn super::AggrFunction>> {
+    ) -> Result<Box<dyn AggrFunction>> {
         use std::convert::TryFrom;
         use tidb_query_datatype::FieldTypeAccessor;
 
-        assert_eq!(aggr_def.get_tp(), ExprType::Avg);
+        assert_eq!(root_expr.get_tp(), ExprType::Avg);
 
-        let col_sum_ft = aggr_def.take_field_type();
+        let col_sum_ft = root_expr.take_field_type();
         let col_sum_et = box_try!(EvalType::try_from(col_sum_ft.as_accessor().tp()));
 
         // Rewrite expression to insert CAST() if needed.
-        let child = aggr_def.take_children().into_iter().next().unwrap();
-        let mut exp = RpnExpressionBuilder::build_from_expr_tree(child, ctx, src_schema.len())?;
         super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
 
         let rewritten_eval_type =
@@ -115,6 +116,21 @@ where
             count: 0,
         }
     }
+
+    #[inline]
+    fn update_concrete<'a, TT>(&mut self, ctx: &mut EvalContext, value: Option<TT>) -> Result<()>
+    where
+        TT: EvaluableRef<'a, EvaluableType = T>,
+    {
+        match value {
+            None => Ok(()),
+            Some(value) => {
+                self.sum.add_assign(ctx, &value.to_owned_value())?;
+                self.count += 1;
+                Ok(())
+            }
+        }
+    }
 }
 
 impl<T> super::ConcreteAggrFunctionState for AggrFnStateAvg<T>
@@ -122,19 +138,9 @@ where
     T: Summable,
     VectorValue: VectorValueExt<T>,
 {
-    type ParameterType = T;
+    type ParameterType = &'static T;
 
-    #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
-        match value {
-            None => Ok(()),
-            Some(value) => {
-                self.sum.add_assign(ctx, value)?;
-                self.count += 1;
-                Ok(())
-            }
-        }
-    }
+    impl_concrete_state! { Self::ParameterType }
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
@@ -172,41 +178,34 @@ mod tests {
             VectorValue::with_capacity(0, EvalType::Real),
         ];
         state.push_result(&mut ctx, &mut result[..]).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(0)]);
-        assert_eq!(result[1].as_real_slice(), &[None]);
+        assert_eq!(result[0].to_int_vec(), &[Some(0)]);
+        assert_eq!(result[1].to_real_vec(), &[None]);
 
-        state.update(&mut ctx, &Option::<Real>::None).unwrap();
-
-        state.push_result(&mut ctx, &mut result[..]).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(0), Some(0)]);
-        assert_eq!(result[1].as_real_slice(), &[None, None]);
-
-        state.update(&mut ctx, &Real::new(5.0).ok()).unwrap();
-        state.update(&mut ctx, &Option::<Real>::None).unwrap();
-        state.update(&mut ctx, &Real::new(10.0).ok()).unwrap();
+        update!(state, &mut ctx, Option::<&Real>::None).unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(0), Some(0), Some(2)]);
-        assert_eq!(
-            result[1].as_real_slice(),
-            &[None, None, Real::new(15.0).ok()]
-        );
+        assert_eq!(result[0].to_int_vec(), &[Some(0), Some(0)]);
+        assert_eq!(result[1].to_real_vec(), &[None, None]);
 
-        state
-            .update_vector(
-                &mut ctx,
-                &[Real::new(0.0).ok(), Real::new(-4.5).ok(), None],
-                &[0, 1, 2],
-            )
-            .unwrap();
+        update!(state, &mut ctx, Real::new(5.0).ok().as_ref()).unwrap();
+        update!(state, &mut ctx, Option::<&Real>::None).unwrap();
+        update!(state, &mut ctx, Real::new(10.0).ok().as_ref()).unwrap();
+
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(0), Some(0), Some(2)]);
+        assert_eq!(result[1].to_real_vec(), &[None, None, Real::new(15.0).ok()]);
+
+        let x: ChunkedVecSized<Real> = vec![Real::new(0.0).ok(), Real::new(-4.5).ok(), None].into();
+
+        update_vector!(state, &mut ctx, &x, &[0, 1, 2]).unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(
-            result[0].as_int_slice(),
+            result[0].to_int_vec(),
             &[Some(0), Some(0), Some(2), Some(4)]
         );
         assert_eq!(
-            result[1].as_real_slice(),
+            result[1].to_real_vec(),
             &[None, None, Real::new(15.0).ok(), Real::new(10.5).ok()]
         );
     }
@@ -250,10 +249,9 @@ mod tests {
             .eval(&mut ctx, &src_schema, &mut columns, &[4, 1, 2, 3], 4)
             .unwrap();
         let exp_result = exp_result.vector_value().unwrap();
-        let slice: &[Option<Decimal>] = exp_result.as_ref().as_ref();
-        state
-            .update_vector(&mut ctx, slice, exp_result.logical_rows())
-            .unwrap();
+        let slice = exp_result.as_ref().to_decimal_vec();
+        let slice: ChunkedVecSized<Decimal> = slice.into();
+        update_vector!(state, &mut ctx, &slice, exp_result.logical_rows()).unwrap();
 
         let mut aggr_result = [
             VectorValue::with_capacity(0, EvalType::Int),
@@ -261,9 +259,9 @@ mod tests {
         ];
         state.push_result(&mut ctx, &mut aggr_result).unwrap();
 
-        assert_eq!(aggr_result[0].as_int_slice(), &[Some(2)]);
+        assert_eq!(aggr_result[0].to_int_vec(), &[Some(2)]);
         assert_eq!(
-            aggr_result[1].as_decimal_slice(),
+            aggr_result[1].to_decimal_vec(),
             &[Some(Decimal::from(43u64))]
         );
     }

@@ -626,20 +626,20 @@ mod tests {
 
     use std::sync::Arc;
 
-    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
-    use engine::rocks::{DBEntryType, TablePropertiesCollector};
+    use crate::raw::{ColumnFamilyOptions, DBOptions, Writable};
+    use crate::raw::{DBEntryType, TablePropertiesCollector};
     use tempfile::Builder;
     use test::Bencher;
 
     use crate::compat::Compat;
-    use engine::rocks;
-    use engine::rocks::util::CFOptions;
+    use crate::raw_util::CFOptions;
     use engine_traits::CFHandleExt;
     use engine_traits::{CF_WRITE, LARGE_CFS};
     use txn_types::{Key, Write, WriteType};
 
     use super::*;
 
+    #[allow(clippy::many_single_char_names)]
     #[test]
     fn test_range_properties() {
         let cases = [
@@ -811,7 +811,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db = Arc::new(crate::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let cases = ["a", "b", "c"];
         for &key in &cases {

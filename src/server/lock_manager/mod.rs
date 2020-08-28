@@ -284,7 +284,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use futures::Future;
+    use futures03::executor::block_on;
     use kvproto::metapb::{Peer, Region};
     use raft::StateRole;
 
@@ -338,9 +338,9 @@ mod tests {
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
-            2900,
-            3200,
+            || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
+            2500,
+            3500,
         );
         assert!(!lock_mgr.has_waiter());
 
@@ -364,9 +364,9 @@ mod tests {
         assert!(lock_mgr.has_waiter());
         lock_mgr.wake_up(lock.ts, vec![lock.hash], 30.into(), false);
         assert_elapsed(
-            || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, 30.into()),
+            || expect_write_conflict(block_on(f).unwrap(), waiter_ts, lock_info, 30.into()),
             0,
-            200,
+            500,
         );
         assert!(!lock_mgr.has_waiter());
 
@@ -392,16 +392,16 @@ mod tests {
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
-            || expect_deadlock(f2.wait().unwrap(), 20.into(), lock_info2, 20),
+            || expect_deadlock(block_on(f2).unwrap(), 20.into(), lock_info2, 20),
             0,
-            200,
+            500,
         );
         // Waiter2 releases its lock.
         lock_mgr.wake_up(20.into(), vec![20], 20.into(), true);
         assert_elapsed(
-            || expect_write_conflict(f1.wait().unwrap(), 10.into(), lock_info1, 20.into()),
+            || expect_write_conflict(block_on(f1).unwrap(), 10.into(), lock_info1, 20.into()),
             0,
-            200,
+            500,
         );
         assert!(!lock_mgr.has_waiter());
 
@@ -420,11 +420,11 @@ mod tests {
             assert!(lock_mgr.has_waiter());
             assert_eq!(lock_mgr.remove_from_detected(30.into()), !is_first_lock);
             lock_mgr.wake_up(40.into(), vec![40], 40.into(), false);
-            f.wait().unwrap().unwrap_err();
+            block_on(f).unwrap().unwrap_err();
         }
         assert!(!lock_mgr.has_waiter());
 
-        // If key_hashes is none, no wake up.
+        // If key_hashes is empty, no wake up.
         let prev_wake_up = TASK_COUNTER_METRICS.wake_up.get();
         lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
         assert_eq!(TASK_COUNTER_METRICS.wake_up.get(), prev_wake_up);
@@ -439,7 +439,7 @@ mod tests {
         lock_mgr.wake_up(10.into(), vec![], 10.into(), true);
         assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
 
-        // If timeout is negative, no wait for.
+        // If timeout is none, no wait for.
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
         let prev_wait_for = TASK_COUNTER_METRICS.wait_for.get();
         lock_mgr.wait_for(
@@ -451,9 +451,9 @@ mod tests {
             None,
         );
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
+            || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
             0,
-            200,
+            500,
         );
         assert_eq!(TASK_COUNTER_METRICS.wait_for.get(), prev_wait_for,);
     }

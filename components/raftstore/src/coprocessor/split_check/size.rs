@@ -2,12 +2,10 @@
 
 use std::marker::PhantomData;
 use std::mem;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use engine_traits::LARGE_CFS;
-use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{KvEngine, Range};
+use error_code::ErrorCodeExt;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
@@ -17,7 +15,6 @@ use super::super::error::Result;
 use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
-use engine_rocks::RangeProperties;
 
 pub struct Checker {
     max_size: u64,
@@ -106,7 +103,7 @@ pub struct SizeCheckObserver<C, E> {
     _phantom: PhantomData<E>,
 }
 
-impl<C: CasualRouter<E::Snapshot>, E> SizeCheckObserver<C, E>
+impl<C: CasualRouter<E>, E> SizeCheckObserver<C, E>
 where
     E: KvEngine,
 {
@@ -120,7 +117,7 @@ where
 
 impl<C: Send, E: Send> Coprocessor for SizeCheckObserver<C, E> {}
 
-impl<C: CasualRouter<E::Snapshot> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E>
+impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E>
 where
     E: KvEngine,
 {
@@ -144,6 +141,7 @@ where
                     "failed to get approximate stat";
                     "region_id" => region_id,
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 // Need to check size.
                 host.add_checker(Box::new(Checker::new(
@@ -163,6 +161,7 @@ where
                 "failed to send approximate region size";
                 "region_id" => region_id,
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
         }
 
@@ -203,14 +202,14 @@ pub fn get_region_approximate_size(
     region: &Region,
     large_threshold: u64,
 ) -> Result<u64> {
-    let mut size = 0;
-    for cfname in LARGE_CFS {
-        size += get_region_approximate_size_cf(db, cfname, &region, large_threshold)
-            // CF_LOCK doesn't have RangeProperties until v4.0, so we swallow the error for
-            // backward compatibility.
-            .or_else(|e| if cfname == &CF_LOCK { Ok(0) } else { Err(e) })?;
-    }
-    Ok(size)
+    let start_key = keys::enc_start_key(region);
+    let end_key = keys::enc_end_key(region);
+    let range = Range::new(&start_key, &end_key);
+    Ok(box_try!(db.get_range_approximate_size(
+        range,
+        region.get_id(),
+        large_threshold
+    )))
 }
 
 pub fn get_region_approximate_size_cf(
@@ -222,43 +221,12 @@ pub fn get_region_approximate_size_cf(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    let mut total_size = 0;
-    let (_, mem_size) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
-    total_size += mem_size;
-
-    let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
-    for (_, v) in collection.iter() {
-        let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
-        total_size += props.get_approximate_size_in_range(&start_key, &end_key);
-    }
-
-    if large_threshold != 0 && total_size > large_threshold {
-        let ssts = collection
-            .iter()
-            .map(|(k, v)| {
-                let props = RangeProperties::decode(&v.user_collected_properties()).unwrap();
-                let size = props.get_approximate_size_in_range(&start_key, &end_key);
-                format!(
-                    "{}:{}",
-                    Path::new(&*k)
-                        .file_name()
-                        .map(|f| f.to_str().unwrap())
-                        .unwrap_or(&*k),
-                    size
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        info!(
-            "region size is too large";
-            "region_id" => region.get_id(),
-            "total_size" => total_size,
-            "memtable" => mem_size,
-            "ssts_size" => ssts,
-            "cf" => cfname,
-        )
-    }
-    Ok(total_size)
+    Ok(box_try!(db.get_range_approximate_size_cf(
+        cfname,
+        range,
+        region.get_id(),
+        large_threshold
+    )))
 }
 
 /// Get region approximate split keys based on default, write and lock cf.
@@ -269,115 +237,16 @@ fn get_approximate_split_keys(
     max_size: u64,
     batch_split_limit: u64,
 ) -> Result<Vec<Vec<u8>>> {
-    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region, 0);
-    let cfs = [
-        (CF_DEFAULT, box_try!(get_cf_size(CF_DEFAULT))),
-        (CF_WRITE, box_try!(get_cf_size(CF_WRITE))),
-        // CF_LOCK doesn't have RangeProperties until v4.0, so we swallow the error for
-        // backward compatibility.
-        (CF_LOCK, get_cf_size(CF_LOCK).unwrap_or(0)),
-    ];
-
-    let total_size: u64 = cfs.iter().map(|(_, s)| s).sum();
-    if total_size == 0 {
-        return Err(box_err!("all CFs are empty"));
-    }
-
-    let (cf, cf_size) = cfs.iter().max_by_key(|(_, s)| s).unwrap();
-    // assume the size of keys is uniform distribution in both cfs.
-    let cf_split_size = split_size * cf_size / total_size;
-
-    get_approximate_split_keys_cf(db, cf, &region, cf_split_size, max_size, batch_split_limit)
-}
-
-fn get_approximate_split_keys_cf(
-    db: &impl KvEngine,
-    cfname: &str,
-    region: &Region,
-    split_size: u64,
-    max_size: u64,
-    batch_split_limit: u64,
-) -> Result<Vec<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
-    let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
-
-    let mut keys = vec![];
-    let mut total_size = 0;
-    for (_, v) in collection.iter() {
-        let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
-        total_size += props.get_approximate_size_in_range(&start_key, &end_key);
-
-        keys.extend(
-            props
-                .take_excluded_range(start_key.as_slice(), end_key.as_slice())
-                .into_iter()
-                .map(|(k, _)| k),
-        );
-    }
-    if keys.len() == 1 {
-        return Ok(vec![]);
-    }
-    if keys.is_empty() || total_size == 0 || split_size == 0 {
-        return Err(box_err!(
-            "unexpected key len {} or total_size {} or split size {}, len of collection {}, cf {}, start {}, end {}",
-            keys.len(),
-            total_size,
-            split_size,
-            collection.len(),
-            cfname,
-            hex::encode_upper(&start_key),
-            hex::encode_upper(&end_key)
-        ));
-    }
-    keys.sort();
-
-    // use total size of this range and the number of keys in this range to
-    // calculate the average distance between two keys, and we produce a
-    // split_key every `split_size / distance` keys.
-    let len = keys.len();
-    let distance = total_size as f64 / len as f64;
-    let n = (split_size as f64 / distance).ceil() as usize;
-    if n == 0 {
-        return Err(box_err!(
-            "unexpected n == 0, total_size: {}, split_size: {}, len: {}, distance: {}",
-            total_size,
-            split_size,
-            keys.len(),
-            distance
-        ));
-    }
-
-    // cause first element of the iterator will always be returned by step_by(),
-    // so the first key returned may not the desired split key. Note that, the
-    // start key of region is not included, so we we drop first n - 1 keys.
-    //
-    // For example, the split size is `3 * distance`. And the numbers stand for the
-    // key in `RangeProperties`, `^` stands for produced split key.
-    //
-    // skip:
-    // start___1___2___3___4___5___6___7....
-    //                 ^           ^
-    //
-    // not skip:
-    // start___1___2___3___4___5___6___7....
-    //         ^           ^           ^
-    let mut split_keys = keys
-        .into_iter()
-        .skip(n - 1)
-        .step_by(n)
-        .collect::<Vec<Vec<u8>>>();
-
-    if split_keys.len() as u64 > batch_split_limit {
-        split_keys.truncate(batch_split_limit as usize);
-    } else {
-        // make sure not to split when less than max_size for last part
-        let rest = (len % n) as u64;
-        if rest * distance as u64 + split_size < max_size {
-            split_keys.pop();
-        }
-    }
-    Ok(split_keys)
+    let range = Range::new(&start_key, &end_key);
+    Ok(box_try!(db.get_range_approximate_split_keys(
+        range,
+        region.get_id(),
+        split_size,
+        max_size,
+        batch_split_limit
+    )))
 }
 
 #[cfg(test)]
@@ -385,11 +254,11 @@ pub mod tests {
     use super::Checker;
     use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
-    use engine::rocks;
-    use engine::rocks::util::{new_engine_opt, CFOptions};
-    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine_rocks::properties::RangePropertiesCollectorFactory;
-    use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
+    use engine_rocks::{Compat, RocksEngine};
+    use engine_traits::CF_LOCK;
     use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
@@ -409,7 +278,7 @@ pub mod tests {
     use super::*;
 
     fn must_split_at_impl(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksSnapshot>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
         ignore_split_keys: bool,
@@ -441,7 +310,7 @@ pub mod tests {
     }
 
     pub fn must_split_at(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksSnapshot>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
     ) {
@@ -517,7 +386,7 @@ pub mod tests {
 
         // Approximate size of memtable is inaccurate for small data,
         // we flush it to SST so we can use the size properties instead.
-        engine.flush(true).unwrap();
+        engine.flush_cf(&cf_handle, true).unwrap();
 
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
@@ -531,7 +400,7 @@ pub mod tests {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             engine.put_cf(&cf_handle, &s, &s).unwrap();
         }
-        engine.flush(true).unwrap();
+        engine.flush_cf(&cf_handle, true).unwrap();
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,
@@ -545,7 +414,7 @@ pub mod tests {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             engine.put_cf(&cf_handle, &s, &s).unwrap();
         }
-        engine.flush(true).unwrap();
+        engine.flush_cf(&cf_handle, true).unwrap();
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,
@@ -724,7 +593,8 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine = Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
+        let engine =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
 
         let region = make_region(1, vec![], vec![]);
         assert_eq!(
@@ -763,7 +633,8 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine = Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
+        let engine =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
 
         let cf_handle = engine.cf_handle(data_cf).unwrap();
         let mut big_value = Vec::with_capacity(256);
@@ -886,7 +757,8 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         let cf_size = 2 + 1024 + 2 + 2048 + 2 + 4096;
@@ -926,7 +798,8 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let mut cf_size = 0;
         for i in 0..100 {
@@ -967,7 +840,8 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let mut cf_size = 0;
         let cf = db.cf_handle("default").unwrap();
