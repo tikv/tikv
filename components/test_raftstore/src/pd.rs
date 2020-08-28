@@ -803,8 +803,8 @@ impl TestPdClient {
     }
 
     pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
-        for _ in 1..500 {
-            sleep_ms(10);
+        for retry in 1..500 {
+            sleep_ms(10 * retry);
             let region = match block_on(self.get_region_by_id(region_id)).unwrap() {
                 Some(region) => region,
                 None => continue,
@@ -821,8 +821,8 @@ impl TestPdClient {
     }
 
     pub fn must_none_peer(&self, region_id: u64, peer: metapb::Peer) {
-        for _ in 1..500 {
-            sleep_ms(10);
+        for retry in 1..500 {
+            sleep_ms(10 * retry);
             let region = match block_on(self.get_region_by_id(region_id)).unwrap() {
                 Some(region) => region,
                 None => continue,
@@ -838,8 +838,8 @@ impl TestPdClient {
     }
 
     pub fn must_none_pending_peer(&self, peer: metapb::Peer) {
-        for _ in 1..500 {
-            sleep_ms(10);
+        for retry in 1..500 {
+            sleep_ms(10 * retry);
             if self.cluster.rl().pending_peers.contains_key(&peer.get_id()) {
                 continue;
             }
@@ -1215,7 +1215,7 @@ impl PdClient for TestPdClient {
             rx.map(|resp| vec![resp])
                 .select(
                     stream::unfold(timer, |timer| {
-                        let interval = timer.delay(Instant::now() + Duration::from_millis(500));
+                        let interval = timer.delay(Instant::now() + Duration::from_millis(5000));
                         Some(interval.then(|_| Ok(((), timer))))
                     })
                     .map(move |_| {
