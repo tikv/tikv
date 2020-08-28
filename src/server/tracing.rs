@@ -2,18 +2,18 @@
 
 use super::Result;
 use kvproto::kvrpcpb::TraceContext;
-use std::cell::Cell;
 use std::net::SocketAddr;
 use std::ops::Deref;
-use std::sync::atomic::AtomicU16;
 use std::time::Duration;
-use tikv_util::minitrace::{jaeger::thrift_compact_encode, Collector, Event, State, TraceDetails};
+use tikv_util::minitrace::{
+    jaeger::{thrift_compact_encode, JaegerSpanInfo, ReferenceType},
+    Collector, Event, State, TraceDetails,
+};
 use tokio::net::UdpSocket;
 use tokio::runtime::{Builder, Runtime};
 
 #[cfg(feature = "protobuf-codec")]
 use protobuf::ProtobufEnum;
-use std::collections::HashMap;
 
 /// Tracing Reporter
 pub trait Reporter: Send + Sync {
@@ -78,15 +78,13 @@ impl JaegerReporter {
         .parse()?;
         let mut udp_socket = UdpSocket::bind(local_addr).await?;
 
-        if trace_context.get_is_trace_enabled() {
-            Self::id_remap(&trace_context, &mut trace_details);
-        }
-
         // Check if len of spans reaches `spans_max_length`
         if trace_details.spans.len() > spans_max_length {
             trace_details.spans.sort_unstable_by_key(|s| s.begin_cycles);
             trace_details.spans.truncate(spans_max_length);
         }
+
+        let external_trace = trace_context.get_is_trace_enabled();
 
         const BUFFER_SIZE: usize = 4096;
         let mut buf = Vec::with_capacity(BUFFER_SIZE);
@@ -94,23 +92,50 @@ impl JaegerReporter {
             &mut buf,
             "TiKV",
             0,
-            if trace_context.get_is_trace_enabled() {
+            if external_trace {
                 trace_context.get_trace_id() as _
             } else {
                 rand::random()
             },
             &trace_details,
-            // transform numerical event to string
-            |event| {
-                #[cfg(feature = "protobuf-codec")]
-                return Event::enum_descriptor_static()
-                    .value_by_number(event as _)
-                    .name();
-                #[cfg(feature = "prost-codec")]
-                return format!(
-                    "{:?}",
-                    Event::from_i32(event as _).unwrap_or(Event::Unknown)
-                );
+            |s| JaegerSpanInfo {
+                self_id: if external_trace {
+                    (trace_context.get_span_id_prefix() as i64) << 32 | s.id as i64
+                } else {
+                    s.id as _
+                },
+                parent_id: if external_trace {
+                    if s.state == State::Root {
+                        eprintln!("{}", trace_context.get_parent_span_id());
+                        trace_context.get_parent_span_id() as _
+                    } else {
+                        (trace_context.get_span_id_prefix() as i64) << 32 | s.related_id as i64
+                    }
+                } else {
+                    s.related_id as _
+                },
+                reference_type: match s.state {
+                    State::Root => ReferenceType::ChildOf,
+                    State::Local => ReferenceType::ChildOf,
+                    State::Spawning => ReferenceType::FollowFrom,
+                    State::Scheduling => ReferenceType::FollowFrom,
+                    State::Settle => ReferenceType::FollowFrom,
+                },
+                operation_name: {
+                    #[cfg(feature = "protobuf-codec")]
+                    {
+                        Event::enum_descriptor_static()
+                            .value_by_number(s.event as _)
+                            .name()
+                    }
+                    #[cfg(feature = "prost-codec")]
+                    {
+                        format!(
+                            "{:?}",
+                            Event::from_i32(s.event as _).unwrap_or(Event::Unknown)
+                        )
+                    }
+                },
             },
             // transform encoded property in protobuf to key-value strings
             |bytes| {
@@ -133,30 +158,6 @@ impl JaegerReporter {
         );
         udp_socket.send_to(&buf, agent).await?;
         Ok(())
-    }
-
-    fn id_remap(trace_context: &TraceContext, trace_details: &mut TraceDetails) {
-        let mut id_mapper = HashMap::with_capacity(trace_details.spans.len());
-        let id_prefix = trace_context.get_span_id_prefix();
-        for span in &trace_details.spans {
-            id_mapper.insert(span.id, (id_prefix as u64) << 32 | unique_u32() as u64);
-        }
-
-        // remap self if and parent id
-        for span in &mut trace_details.spans {
-            span.id = id_mapper[&span.id];
-            if span.state != State::Root {
-                span.related_id = id_mapper[&span.related_id];
-            } else {
-                span.state = State::Scheduling;
-                span.related_id = trace_context.get_parent_span_id();
-            }
-        }
-
-        // remap relevant span id of property
-        for span_id in &mut trace_details.properties.span_ids {
-            *span_id = id_mapper[span_id];
-        }
     }
 }
 
@@ -200,29 +201,4 @@ impl Reporter for NullReporter {
     fn is_null(&self) -> bool {
         true
     }
-}
-
-static GLOBAL_ID_COUNTER: AtomicU16 = AtomicU16::new(0);
-
-#[inline]
-fn next_global_id_prefix() -> u16 {
-    GLOBAL_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::AcqRel)
-}
-
-thread_local! {
-    static ID_PREFIX: Cell<(u16, u16)> = Cell::new((0, 0));
-}
-
-fn unique_u32() -> u32 {
-    ID_PREFIX.with(|c| {
-        let (mut id_prefix, mut id_suffix) = c.get();
-        if id_suffix == std::u16::MAX {
-            id_suffix = 0;
-            id_prefix = next_global_id_prefix();
-        } else {
-            id_suffix += 1;
-        }
-        c.set((id_prefix, id_suffix));
-        (id_prefix as u32) << 16 | id_suffix as u32
-    })
 }

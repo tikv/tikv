@@ -39,7 +39,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::paired_future_callback;
-use tikv_util::minitrace::{self, Event};
+use tikv_util::minitrace::{self, prelude::*, Event};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
 use txn_types::{self, Key};
@@ -180,7 +180,6 @@ macro_rules! handle_request {
             let task = async move {
                 let resp = resp.await?;
                 sink.success(resp).compat().await?;
-                reporter.report(req_trace_context, collector);
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
                     .observe(duration_to_sec(begin_instant.elapsed()));
@@ -192,7 +191,9 @@ macro_rules! handle_request {
                     "err" => ?e
                 );
                 GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
-            });
+            })
+            .trace_task(Event::TiKvGrpcio as u32)
+            .inspect(move |_| reporter.report(req_trace_context, collector));
 
             ctx.spawn(Compat::new(task.boxed()));
         }
@@ -896,6 +897,7 @@ impl<
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let cop = self.cop.clone();
+        let tracing_reporter = self.tracing_reporter.clone();
         let enable_req_batch = self.enable_req_batch;
         let request_handler = stream.for_each(move |mut req| {
             let request_ids = req.take_request_ids();
@@ -907,7 +909,16 @@ impl<
             };
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                handle_batch_commands_request(&mut batcher, &storage, &cop, &peer, id, req, &tx);
+                handle_batch_commands_request(
+                    &mut batcher,
+                    &storage,
+                    &cop,
+                    &tracing_reporter,
+                    &peer,
+                    id,
+                    req,
+                    &tx,
+                );
             }
             if let Some(mut batch) = batcher {
                 batch.commit(&storage, &tx);
@@ -1057,10 +1068,15 @@ pub fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: 
     notify.notify(0);
 }
 
-fn handle_batch_commands_request<E: Engine, L: LockManager>(
+fn handle_batch_commands_request<
+    E: Engine,
+    L: LockManager,
+    R: tracing::Reporter + Clone + 'static,
+>(
     batcher: &mut Option<ReqBatcher>,
     storage: &Storage<E, L>,
     cop: &Endpoint<E>,
+    tracing_reporter: &R,
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,
@@ -1114,11 +1130,26 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get);
                     }
                 },
-                $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
+                Some(batch_commands_request::request::Cmd::Empty(req)) => {
                     let begin_instant = Instant::now();
+
+                    let resp = future_handle_empty(req)
+                        .map_ok(oneof!(batch_commands_response::response::Cmd::Empty))
+                        .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid);
+                },
+                $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
+                    let begin_instant = Instant::now();
+
+                    let reporter = tracing_reporter.clone();
+                    let (_root_span, collector) = trace_may_enable!($metric_name, !tracing_reporter.is_null());
+                    let req_trace_context = req.mut_context().take_trace_context();
+
                     let resp = $future_fn($($arg,)* req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
-                        .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
+                        .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc())
+                        .trace_task(Event::TiKvGrpcio as u32)
+                        .inspect(move |_| reporter.report(req_trace_context, collector));
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name);
                 })*
                 Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
@@ -1157,7 +1188,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         Coprocessor, future_cop(cop, Some(peer.to_string())), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
-        Empty, future_handle_empty(), invalid;
     }
 }
 
