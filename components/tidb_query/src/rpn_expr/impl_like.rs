@@ -151,6 +151,36 @@ mod tests {
                 Collation::Utf8Mb4GeneralCi,
                 Some(1),
             ),
+<<<<<<< HEAD:components/tidb_query/src/rpn_expr/impl_like.rs
+=======
+            (r#"baab"#, r#"b_%b"#, '\\', Collation::Utf8Mb4Bin, Some(1)),
+            (r#"baab"#, r#"b%_b"#, '\\', Collation::Utf8Mb4Bin, Some(1)),
+            (r#"bab"#, r#"b_%b"#, '\\', Collation::Utf8Mb4Bin, Some(1)),
+            (r#"bab"#, r#"b%_b"#, '\\', Collation::Utf8Mb4Bin, Some(1)),
+            (r#"bb"#, r#"b_%b"#, '\\', Collation::Utf8Mb4Bin, Some(0)),
+            (r#"bb"#, r#"b%_b"#, '\\', Collation::Utf8Mb4Bin, Some(0)),
+            (
+                r#"baabccc"#,
+                r#"b_%b%"#,
+                '\\',
+                Collation::Utf8Mb4Bin,
+                Some(1),
+            ),
+            (
+                r#"ßssß"#,
+                r#"_sSß"#,
+                '\\',
+                Collation::Utf8Mb4GeneralCi,
+                Some(1),
+            ),
+            (
+                r#"ßssß"#,
+                r#"_ßß"#,
+                '\\',
+                Collation::Utf8Mb4GeneralCi,
+                Some(0),
+            ),
+>>>>>>> f456abae9... charset: support utf8mb4_unicode_ci collation (#8420):components/tidb_query_vec_expr/src/impl_like.rs
         ];
         for (target, pattern, escape, collation, expected) in cases {
             let output = RpnFnScalarEvaluator::new()

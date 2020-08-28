@@ -1,6 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD:components/tidb_query/src/codec/collation/mod.rs
 mod latin1_bin;
+=======
+mod unicode_ci_data;
+>>>>>>> f456abae9... charset: support utf8mb4_unicode_ci collation (#8420):components/tidb_query_datatype/src/codec/collation/mod.rs
 mod utf8mb4;
 
 pub use self::latin1_bin::*;
@@ -22,7 +26,11 @@ pub macro match_template_collator($t:tt, $($tail:tt)*) {
             Utf8Mb4Bin => CollatorUtf8Mb4Bin,
             Utf8Mb4BinNoPadding => CollatorUtf8Mb4BinNoPadding,
             Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
+<<<<<<< HEAD:components/tidb_query/src/codec/collation/mod.rs
             Latin1Bin => CollatorLatin1Bin,
+=======
+            Utf8Mb4UnicodeCi => CollatorUtf8Mb4UnicodeCi,
+>>>>>>> f456abae9... charset: support utf8mb4_unicode_ci collation (#8420):components/tidb_query_datatype/src/codec/collation/mod.rs
         ],
         $($tail)*
     }
