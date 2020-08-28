@@ -109,7 +109,9 @@ where
     pub receiver: Receiver<PeerMsg<EK>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
-    /// Sometimes applied raft logs won't be compacted in time, don't keep them too long time.
+    /// Sometimes applied raft logs won't be compacted in time, because less compact means less
+    /// sync-log in apply threads. Stale logs will be deleted if the skip time reaches this
+    /// `skip_gc_raft_log_count`.
     skip_gc_raft_log_count: usize,
 
     // Batch raft command which has the same header into an entry
@@ -3225,10 +3227,11 @@ where
 
         let first_idx = self.fsm.peer.get_store().first_index();
 
-        if !force_compact
-            && (replicated_idx < first_idx
-                || replicated_idx - first_idx <= self.ctx.cfg.raft_log_gc_threshold)
-        {
+        if !force_compact && replicated_idx < first_idx {
+            return;
+        }
+
+        if !force_compact && replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold {
             self.fsm.skip_gc_raft_log_count += 1;
             if self.fsm.skip_gc_raft_log_count <= 6 {
                 // Logs will only be kept 6 * `raft_log_gc_tick_interval`.
@@ -3237,7 +3240,7 @@ where
             }
         }
 
-        let compact_idx = if force_compact
+        let mut compact_idx = if force_compact
             // Too many logs between applied index and first index.
             || (applied_idx > first_idx && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit)
             // Raft log size ecceeds the limit.
