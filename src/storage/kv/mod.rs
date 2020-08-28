@@ -211,6 +211,12 @@ pub trait Snapshot: Sync + Send + Clone {
     fn get_data_version(&self) -> Option<u64> {
         None
     }
+
+    fn is_max_ts_synced(&self) -> bool {
+        // If the snapshot does not come from a multi-raft engine, max ts
+        // needn't be updated.
+        true
+    }
 }
 
 pub trait Iterator: Send {
@@ -390,7 +396,7 @@ pub fn snapshot<E: Engine>(
     ctx: &Context,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let (callback, future) =
-        tikv_util::future::paired_must_called_std_future_callback(drop_snapshot_callback::<E>);
+        tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
     let val = engine.async_snapshot(ctx, read_id, callback);
     // make engine not cross yield point
     async move {

@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
@@ -47,7 +47,7 @@ use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
-use tikv_util::worker::Scheduler;
+use tikv_util::worker::{FutureScheduler, Scheduler};
 use tikv_util::Either;
 
 use super::cmd_resp;
@@ -89,13 +89,13 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
-    fn find_propose_time(&self, index: u64, term: u64) -> Option<Timespec> {
-        for p in self.queue.iter() {
-            if p.index == index && p.term == term {
-                return Some(p.renew_lease_time.unwrap());
-            }
-        }
-        None
+    fn find_propose_time(&self, key: (u64, u64)) -> Option<Timespec> {
+        let (front, back) = self.queue.as_slices();
+        let map = |p: &Proposal<_>| (p.term, p.index);
+        let idx = front
+            .binary_search_by_key(&key, map)
+            .or_else(|_| back.binary_search_by_key(&key, map));
+        idx.ok().map(|i| self.queue[i].renew_lease_time).flatten()
     }
 
     // Return all proposals that before (and included) the proposal
@@ -118,6 +118,11 @@ impl<S: Snapshot> ProposalQueue<S> {
     }
 
     fn push(&mut self, p: Proposal<S>) {
+        if let Some(f) = self.queue.front() {
+            // The term must be increasing among all log entries and the index
+            // must be increasing inside a given term
+            assert!((p.term, p.index) > (f.term, f.index));
+        }
         self.queue.push_back(p);
     }
 
@@ -433,6 +438,17 @@ where
     pub local_first_replicate: bool,
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+
+    /// The max timestamp recorded in the concurrency manager is only updated at leader.
+    /// So if a peer becomes leader from a follower, the max timestamp can be outdated.
+    /// We need to update the max timestamp with a latest timestamp from PD before this
+    /// peer can work.
+    /// From the least significant to the most, 1 bit marks whether the timestamp is
+    /// updated, 31 bits for the current epoch version, 32 bits for the current term.
+    /// The version and term are stored to prevent stale UpdateMaxTimestamp task from
+    /// marking the lowest bit.
+    pub max_ts_sync_status: Arc<AtomicU64>,
+
     /// Check whether this proposal can be proposed based on its epoch
     cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
 }
@@ -524,6 +540,7 @@ where
             check_stale_peers: vec![],
             local_first_replicate: false,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
+            max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
         };
 
@@ -682,13 +699,8 @@ where
                 return None;
             }
         }
-        // If initialized is false, it implicitly means apply fsm does not exist now.
-        let initialized = self.get_store().is_initialized();
-        // If async_remove is true, it means peer fsm needs to be removed after its
-        // corresponding apply fsm was removed.
-        // If it is false, it means either apply fsm does not exist or there is no task
-        // in apply fsm so it's ok to remove peer fsm immediately.
-        let async_remove = if self.is_applying_snapshot() {
+
+        if self.is_applying_snapshot() {
             if !self.mut_store().cancel_applying_snap() {
                 info!(
                     "stale peer is applying snapshot, will destroy next time";
@@ -697,16 +709,12 @@ where
                 );
                 return None;
             }
-            // There is no tasks in apply/local read worker.
-            false
-        } else {
-            initialized
-        };
+        }
+
         self.pending_remove = true;
 
         Some(DestroyPeerJob {
-            async_remove,
-            initialized,
+            initialized: self.get_store().is_initialized(),
             region_id: self.region_id,
             peer: self.peer.clone(),
         })
@@ -1254,6 +1262,10 @@ where
                     // prewrites or commits will be just a waste.
                     self.last_urgent_proposal_idx = self.raft_group.raft.raft_log.last_index();
                     self.raft_group.skip_bcast_commit(false);
+
+                    // A more recent read may happen on the old leader. So max ts should
+                    // be updated after a peer becomes leader.
+                    self.require_updating_max_ts(&ctx.pd_scheduler);
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -1664,7 +1676,7 @@ where
                 if lease_to_be_updated {
                     let propose_time = self
                         .proposals
-                        .find_propose_time(entry.get_index(), entry.get_term());
+                        .find_propose_time((entry.get_term(), entry.get_index()));
                     if let Some(propose_time) = propose_time {
                         ctx.raft_metrics.commit_log.observe(duration_to_sec(
                             (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
@@ -2875,6 +2887,9 @@ where
             }
         }
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
+        if let Some(snap) = resp.snapshot.as_mut() {
+            snap.max_ts_sync_status = Some(self.max_ts_sync_status.clone());
+        }
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -3187,6 +3202,30 @@ where
             );
         } else {
             ctx.need_flush_trans = true;
+        }
+    }
+
+    pub fn require_updating_max_ts(&self, pd_scheduler: &FutureScheduler<PdTask<EK>>) {
+        let epoch = self.region().get_region_epoch();
+        let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
+        let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits
+        let initial_status = (term_low_bits << 32) | (version_lot_bits << 1);
+        self.max_ts_sync_status
+            .store(initial_status, Ordering::SeqCst);
+        info!(
+            "require updating max ts";
+            "region_id" => self.region_id,
+            "initial_status" => initial_status,
+        );
+        if let Err(e) = pd_scheduler.schedule(PdTask::UpdateMaxTimestamp {
+            region_id: self.region_id,
+            initial_status,
+            max_ts_sync_status: self.max_ts_sync_status.clone(),
+        }) {
+            error!(
+                "failed to update max ts";
+                "err" => ?e,
+            );
         }
     }
 }
@@ -3590,6 +3629,34 @@ mod tests {
                 lease_state: LeaseState::Valid,
             };
             assert!(inspector.inspect(&req).is_err());
+        }
+    }
+
+    #[test]
+    fn test_propose_queue_find_propose_time() {
+        let mut pq: ProposalQueue<engine_panic::PanicSnapshot> = ProposalQueue::new();
+        let t = monotonic_raw_now();
+        for index in 1..=100 {
+            let renew_lease_time = if index % 3 == 1 { None } else { Some(t) };
+            pq.push(Proposal {
+                is_conf_change: false,
+                index,
+                term: (index / 10) + 1,
+                cb: Callback::None,
+                txn_extra: TxnExtra::default(),
+                renew_lease_time,
+            });
+        }
+        for remove_i in &[0, 65, 98] {
+            let _ = pq.take(*remove_i, (*remove_i / 10) + 1);
+            for i in 1..=100 {
+                let pt = pq.find_propose_time(((i / 10) + 1, i));
+                if i <= *remove_i || i % 3 == 1 {
+                    assert!(pt.is_none())
+                } else {
+                    assert!(pt.is_some())
+                };
+            }
         }
     }
 

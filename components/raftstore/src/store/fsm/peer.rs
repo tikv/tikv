@@ -8,9 +8,8 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, Snapshot, WriteBatchExt};
+use engine_traits::{Engines, KvEngine, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use futures::Future;
 use kvproto::errorpb;
@@ -68,7 +67,6 @@ const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
-    pub async_remove: bool,
     pub region_id: u64,
     pub peer: metapb::Peer,
 }
@@ -114,17 +112,17 @@ where
     skip_split_count: usize,
 
     // Batch raft command which has the same header into an entry
-    batch_req_builder: BatchRaftCmdRequestBuilder<EK::Snapshot>,
+    batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
 }
 
-pub struct BatchRaftCmdRequestBuilder<S>
+pub struct BatchRaftCmdRequestBuilder<E>
 where
-    S: Snapshot,
+    E: KvEngine,
 {
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<S>, usize)>,
+    callbacks: Vec<(Callback<E::Snapshot>, usize)>,
     txn_extra: TxnExtra,
 }
 
@@ -277,11 +275,11 @@ where
     }
 }
 
-impl<S> BatchRaftCmdRequestBuilder<S>
+impl<E> BatchRaftCmdRequestBuilder<E>
 where
-    S: Snapshot,
+    E: KvEngine,
 {
-    fn new(raft_entry_max_size: f64) -> BatchRaftCmdRequestBuilder<S> {
+    fn new(raft_entry_max_size: f64) -> BatchRaftCmdRequestBuilder<E> {
         BatchRaftCmdRequestBuilder {
             raft_entry_max_size,
             request: None,
@@ -315,7 +313,7 @@ where
         true
     }
 
-    fn add(&mut self, cmd: RaftCommand<S>, req_size: u32) {
+    fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
         let req_num = cmd.request.get_requests().len();
         let RaftCommand {
             mut request,
@@ -343,14 +341,14 @@ where
             if f64::from(self.batch_req_size) > self.raft_entry_max_size * 0.4 {
                 return true;
             }
-            if batch_req.get_requests().len() > RocksEngine::WRITE_BATCH_MAX_KEYS {
+            if batch_req.get_requests().len() > <E as WriteBatchExt>::WRITE_BATCH_MAX_KEYS {
                 return true;
             }
         }
         false
     }
 
-    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<S>> {
+    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<E::Snapshot>> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
@@ -1752,24 +1750,15 @@ where
     }
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
+        // The initialized flag implicitly means whether apply fsm exists or not.
         if job.initialized {
-            // When initialized is true and async_remove is false, apply fsm doesn't need to
-            // send destroy msg to peer fsm because peer fsm has already destroyed.
-            // In this case, if apply fsm sends destroy msg, peer fsm may be destroyed twice
-            // because there are some msgs in channel so peer fsm still need to handle them (e.g. callback)
-            self.ctx.apply_router.schedule_task(
-                job.region_id,
-                ApplyTask::destroy(job.region_id, job.async_remove, false),
-            );
-        }
-        if job.async_remove {
-            info!(
-                "peer is destroyed asynchronously";
-                "region_id" => job.region_id,
-                "peer_id" => job.peer.get_id(),
-            );
+            // Destroy the apply fsm first, wait for the reply msg from apply fsm
+            self.ctx
+                .apply_router
+                .schedule_task(job.region_id, ApplyTask::destroy(job.region_id, false));
             false
         } else {
+            // Destroy the peer fsm directly
             self.destroy_peer(false);
             true
         }
@@ -2609,6 +2598,13 @@ where
         let reader = meta.readers.remove(&source.get_id()).unwrap();
         reader.mark_invalid();
 
+        // If a follower merges into a leader, a more recent read may happen
+        // on the leader of the follower. So max ts should be updated after
+        // a region merge.
+        self.fsm
+            .peer
+            .require_updating_max_ts(&self.ctx.pd_scheduler);
+
         drop(meta);
 
         // make approximate size and keys updated in time.
@@ -2746,7 +2742,7 @@ where
                 // Destroy apply fsm at first
                 self.ctx.apply_router.schedule_task(
                     self.fsm.region_id(),
-                    ApplyTask::destroy(self.fsm.region_id(), true, true),
+                    ApplyTask::destroy(self.fsm.region_id(), true),
                 );
             }
             MergeResultKind::FromTargetSnapshotStep2 => {
@@ -3908,7 +3904,7 @@ mod tests {
     use crate::store::local_metrics::RaftProposeMetrics;
     use crate::store::msg::{Callback, ExtCallback, RaftCommand};
 
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::RocksEngine;
     use kvproto::raft_cmdpb::{
         AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
         StatusRequest,
@@ -3920,7 +3916,7 @@ mod tests {
     #[test]
     fn test_batch_raft_cmd_request_builder() {
         let max_batch_size = 1000.0;
-        let mut builder = BatchRaftCmdRequestBuilder::<RocksSnapshot>::new(max_batch_size);
+        let mut builder = BatchRaftCmdRequestBuilder::<RocksEngine>::new(max_batch_size);
         let mut q = Request::default();
         let mut metric = RaftProposeMetrics::default();
 

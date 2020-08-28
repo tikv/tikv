@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
+use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
 use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
 use txn_types::TimeStamp;
@@ -48,10 +49,8 @@ use crate::storage::txn::{
     Error, ProcessResult,
 };
 use crate::storage::{
-    concurrency_manager::{ConcurrencyManager, KeyHandleGuard},
-    get_priority_tag,
-    types::StorageCallback,
-    Error as StorageError, ErrorInner as StorageErrorInner,
+    get_priority_tag, types::StorageCallback, Error as StorageError,
+    ErrorInner as StorageErrorInner,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
