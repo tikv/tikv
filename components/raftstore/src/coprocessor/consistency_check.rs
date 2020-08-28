@@ -10,10 +10,13 @@ pub trait ConsistencyCheckObserver<E: KvEngine>: Coprocessor {
     /// Update context. Return `true` if later observers should be skiped.
     fn update_context(&self, context: &mut Vec<u8>) -> bool;
 
-    /// Compute hash for `region`. The policy is extracted from `context`,
-    /// which shouldn't be empty.
-    fn compute_hash(&self, region: &Region, context: &mut &[u8], snap: &E::Snapshot)
-        -> Result<u32>;
+    /// Compute hash for `region`. The policy is extracted from `context`.
+    fn compute_hash(
+        &self,
+        region: &Region,
+        context: &mut &[u8],
+        snap: &E::Snapshot,
+    ) -> Result<Option<u32>>;
 }
 
 #[derive(Clone)]
@@ -40,8 +43,10 @@ impl<E: KvEngine> ConsistencyCheckObserver<E> for Raw<E> {
         region: &kvproto::metapb::Region,
         context: &mut &[u8],
         snap: &E::Snapshot,
-    ) -> Result<u32> {
-        assert!(!context.is_empty());
+    ) -> Result<Option<u32>> {
+        if context.is_empty() {
+            return Ok(None);
+        }
         assert_eq!(context[0], ConsistencyCheckMethod::Raw as u8);
         *context = &context[1..];
         compute_hash_on_raw(region, snap)

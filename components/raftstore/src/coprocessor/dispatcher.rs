@@ -453,7 +453,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
         for observer in &self.registry.consistency_check_observers {
             let observer = observer.observer.inner();
             let old_len = reader.len();
-            let hash = box_try!(observer.compute_hash(region, &mut reader, &snap));
+            let hash = match box_try!(observer.compute_hash(region, &mut reader, &snap)) {
+                Some(hash) => hash,
+                None => break,
+            };
             let new_len = reader.len();
             let ctx = context[context_len - old_len..context_len - new_len].to_vec();
             hashes.push((hash, ctx));
