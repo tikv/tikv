@@ -201,6 +201,7 @@ fn test_sync_max_ts_after_leader_transfer() {
         assert!(snapshot.is_max_ts_synced());
     };
 
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     wait_for_synced(&mut cluster);
     let max_ts = cm.max_read_ts();
 

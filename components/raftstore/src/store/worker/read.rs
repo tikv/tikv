@@ -370,13 +370,10 @@ where
         // Check region id.
         let region_id = req.get_header().get_region_id();
         let delegate = match self.delegates.get_mut(&region_id) {
-            Some(delegate) => {
-                fail_point!("localreader_on_find_delegate");
-                match delegate.take() {
-                    Some(d) => d,
-                    None => return Ok(None),
-                }
-            }
+            Some(delegate) => match delegate.take() {
+                Some(d) => d,
+                None => return Ok(None),
+            },
             None => {
                 self.metrics.rejected_by_cache_miss += 1;
                 debug!("rejected by cache miss"; "region_id" => region_id);
@@ -388,6 +385,8 @@ where
             self.delegates.remove(&region_id);
             return Ok(None);
         }
+
+        fail_point!("localreader_on_find_delegate");
 
         // Check peer id.
         if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
