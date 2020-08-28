@@ -79,3 +79,18 @@ fn compute_hash_on_raw<S: Snapshot>(region: &Region, snap: &S) -> Result<u32> {
     }
     Ok(digest.finalize())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine_rocks::RocksEngine;
+
+    #[test]
+    fn test_update_context() {
+        let mut context = Vec::new();
+        let observer = Raw::<RocksEngine>::default();
+        assert!(observer.update_context(&mut context));
+        assert_eq!(context.len(), 1);
+        assert_eq!(context[0], ConsistencyCheckMethod::Raw as u8);
+    }
+}

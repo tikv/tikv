@@ -87,7 +87,7 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
             }
         };
 
-        for (sum, ctx) in hashes {
+        for (ctx, sum) in hashes {
             let mut checksum = Vec::with_capacity(4);
             checksum.write_u32::<BigEndian>(sum).unwrap();
             let msg = CasualMessage::ComputeHashResult {

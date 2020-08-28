@@ -447,7 +447,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         region: &Region,
         context: &[u8],
         snap: E::Snapshot,
-    ) -> Result<Vec<(u32, Vec<u8>)>> {
+    ) -> Result<Vec<(Vec<u8>, u32)>> {
         let mut hashes = Vec::new();
         let (mut reader, context_len) = (context, context.len());
         for observer in &self.registry.consistency_check_observers {
@@ -459,7 +459,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
             };
             let new_len = reader.len();
             let ctx = context[context_len - old_len..context_len - new_len].to_vec();
-            hashes.push((hash, ctx));
+            hashes.push((ctx, hash));
         }
         Ok(hashes)
     }
