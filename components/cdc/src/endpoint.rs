@@ -9,6 +9,7 @@ use std::time::Duration;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::future::Future;
+use futures03::compat::Compat;
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
@@ -501,7 +502,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             deregister_downstream(Error::Request(e.into()));
             return;
         }
-        self.workers.spawn(fut.then(move |res| {
+        self.workers.spawn(Compat::new(fut).then(move |res| {
             match res {
                 Ok(resp) => init.on_change_cmd(resp),
                 Err(e) => deregister_downstream(Error::Other(box_err!(e))),
@@ -585,7 +586,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
     fn register_min_ts_event(&self) {
         let timeout = self.timer.delay(self.min_ts_interval);
-        let tso = self.pd_client.get_tso();
+        let tso = Compat::new(self.pd_client.get_tso());
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
         let regions: Vec<(u64, ObserveID)> = self

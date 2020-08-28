@@ -39,6 +39,7 @@ testexport = []
 batch-system = { path = "../batch-system" }
 bitflags = "1.0.1"
 byteorder = "1.2"
+concurrency_manager = { path = "../concurrency_manager" }
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
 crossbeam = "0.7.2"
@@ -50,6 +51,7 @@ fail = "0.3"
 openssl = "0.10"
 fs2 = "0.4"
 futures = "0.1"
+futures03 = { package = "futures", version = "0.3", features = ["compat"] }
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
 hex = "0.4"
@@ -82,7 +84,7 @@ tokio = { version = "0.2", features = ["sync"] }
 tokio-core = "0.1"
 tokio-threadpool = "0.1.13"
 tokio-timer = "0.2"
-txn_types = { path = "../txn_types"}
+txn_types = { path = "../txn_types" }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 raft-engine = { git = "https://github.com/tikv/raft-engine", default-features = false }
 

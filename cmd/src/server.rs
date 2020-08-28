@@ -9,12 +9,13 @@
 //! We keep these components in the `TiKVServer` struct.
 
 use crate::{setup::*, signal_handler};
+use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, MetricsFlusher};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use fs2::FileExt;
-use futures::Future;
+use futures03::executor::block_on;
 use futures_cpupool::Builder;
 use kvproto::{
     backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -57,7 +58,7 @@ use tikv::{
         status_server::StatusServer,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
     },
-    storage::{self, concurrency_manager::ConcurrencyManager, config::StorageConfigManger},
+    storage::{self, config::StorageConfigManger},
 };
 use tikv_util::config::VersionTrack;
 use tikv_util::{
@@ -133,13 +134,13 @@ struct TiKVServer {
 struct TiKVEngines {
     engines: Engines<RocksEngine, RocksEngine>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<ServerRaftStoreRouter<RocksEngine>>,
-    raft_router: ServerRaftStoreRouter<RocksEngine>,
+    engine: RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>,
+    raft_router: ServerRaftStoreRouter<RocksEngine, RocksEngine>,
 }
 
 struct Servers {
     lock_mgr: LockManager,
-    server: Server<ServerRaftStoreRouter<RocksEngine>, resolve::PdStoreAddrResolver>,
+    server: Server<ServerRaftStoreRouter<RocksEngine, RocksEngine>, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
@@ -174,10 +175,7 @@ impl TiKVServer {
         region_info_accessor.start();
 
         // Initialize concurrency manager
-        let latest_ts = pd_client
-            .get_tso()
-            .wait()
-            .expect("failed to get timestamp from PD");
+        let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts.into());
 
         TiKVServer {
@@ -446,7 +444,9 @@ impl TiKVServer {
         });
     }
 
-    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>> {
+    fn init_gc_worker(
+        &mut self,
+    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -466,7 +466,7 @@ impl TiKVServer {
 
     fn init_servers(
         &mut self,
-        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
+        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>>,
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -629,6 +629,7 @@ impl TiKVServer {
             importer.clone(),
             split_check_worker,
             auto_split_controller,
+            self.concurrency_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

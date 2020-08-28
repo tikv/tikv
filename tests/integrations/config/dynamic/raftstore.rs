@@ -14,6 +14,7 @@ use raftstore::Result;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 
+use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, ALL_CFS};
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
@@ -112,6 +113,7 @@ fn start_raftstore(
             Worker::new("split"),
             AutoSplitController::default(),
             Arc::default(),
+            ConcurrencyManager::new(1.into()),
         )
         .unwrap();
     (cfg_controller, raft_router, system.apply_router(), system)

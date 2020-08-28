@@ -9,7 +9,6 @@
 //! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and
 //! [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
-pub mod concurrency_manager;
 pub mod config;
 pub mod errors;
 pub mod kv;
@@ -35,7 +34,6 @@ pub use self::{
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::{
-    concurrency_manager::ConcurrencyManager,
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
     lock_manager::{DummyLockManager, LockManager},
@@ -44,6 +42,7 @@ use crate::storage::{
     txn::{commands::TypedCommand, scheduler::Scheduler as TxnScheduler, Command},
     types::StorageCallbackType,
 };
+use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::Future;
@@ -359,7 +358,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         }
 
                         let snap = Self::with_tls_engine(|engine| {
-                            Self::snapshot(engine, read_id.clone(), req.get_context())
+                            Self::snapshot(engine, read_id.clone(), &ctx)
                         });
                         req_snaps.push(Ok((
                             snap,

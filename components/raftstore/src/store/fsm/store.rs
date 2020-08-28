@@ -12,9 +12,7 @@ use std::{mem, thread, u64};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{
-    Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
-};
+use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -51,10 +49,9 @@ use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
 };
 use crate::store::fsm::ApplyNotifier;
-#[cfg(feature = "failpoints")]
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
-    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter,
+    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter,
 };
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
@@ -74,6 +71,7 @@ use crate::store::{
 };
 use crate::Result;
 use tikv_util::future::poll_future_notify;
+use concurrency_manager::ConcurrencyManager;
 
 type Key = Vec<u8>;
 
@@ -179,6 +177,30 @@ where
 
     fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm> {
         &self.router
+    }
+}
+
+impl<EK, ER> ApplyNotifier<EK> for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+        for r in apply_res {
+            self.router.try_send(
+                r.region_id,
+                PeerMsg::ApplyRes {
+                    res: ApplyTaskRes::Apply(r),
+                },
+            );
+        }
+    }
+    fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>) {
+        self.router.try_send(region_id, msg);
+    }
+
+    fn clone_box(&self) -> Box<dyn ApplyNotifier<EK>> {
+        Box::new(self.clone())
     }
 }
 
@@ -1154,6 +1176,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
+        concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1203,6 +1226,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 region_peers,
                 builder,
                 auto_split_controller,
+                concurrency_manager,
             )?;
         } else {
             self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
@@ -1210,21 +1234,19 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 region_peers,
                 builder,
                 auto_split_controller,
+                concurrency_manager,
             )?;
         }
         Ok(())
     }
 
-    fn start_system<
-        T: Transport + 'static,
-        C: PdClient + 'static,
-        W: WriteBatch + WriteBatchVecExt<EK> + 'static,
-    >(
+    fn start_system<T: Transport + 'static, C: PdClient + 'static, W: WriteBatch<EK> + 'static>(
         &mut self,
         mut workers: Workers<EK, ER>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
         builder: RaftPollerBuilder<EK, ER, T, C>,
         auto_split_controller: AutoSplitController,
+        concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1235,9 +1257,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let pd_client = builder.pd_client.clone();
         let importer = builder.importer.clone();
 
-        let apply_poller_builder = ApplyPollerBuilder::<_, _, W>::new(
+        let apply_poller_builder = ApplyPollerBuilder::<EK, W>::new(
             &builder,
-            ApplyNotifier::Router(self.router.clone()),
+            Box::new(self.router.clone()),
             self.apply_router.clone(),
         );
         self.apply_system
@@ -1315,6 +1337,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
+            concurrency_manager,
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
@@ -1374,8 +1397,8 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
 
 #[derive(Debug, PartialEq)]
 enum CheckMsgStatus {
-    // The peer already exist
-    PeerExist,
+    // The message is the first request vote message to an existing peer.
+    FirstRequestVote,
     // The message can be dropped silently
     DropMsg,
     // Try to create the peer
@@ -1405,26 +1428,19 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
 
         if local_state.get_state() != PeerState::Tombstone {
             // Maybe split, but not registered yet.
-            self.ctx.raft_metrics.message_dropped.region_nonexistent += 1;
-            if util::is_first_vote_msg(msg.get_message()) {
-                let mut meta = self.ctx.store_meta.lock().unwrap();
-                // Last check on whether target peer is created, otherwise, the
-                // vote message will never be consumed.
-                if meta.regions.contains_key(&region_id) {
-                    return Ok(CheckMsgStatus::PeerExist);
-                }
-                meta.pending_votes.push(msg.to_owned());
-                info!(
-                    "region doesn't exist yet, wait for it to be split";
-                    "region_id" => region_id
-                );
-                return Ok(CheckMsgStatus::DropMsg);
+            if !util::is_first_vote_msg(msg.get_message()) {
+                self.ctx.raft_metrics.message_dropped.region_nonexistent += 1;
+                return Err(box_err!(
+                    "[region {}] region not exist but not tombstone: {:?}",
+                    region_id,
+                    local_state
+                ));
             }
-            return Err(box_err!(
-                "[region {}] region not exist but not tombstone: {:?}",
-                region_id,
-                local_state
-            ));
+            info!(
+                "region doesn't exist yet, wait for it to be split";
+                "region_id" => region_id
+            );
+            return Ok(CheckMsgStatus::FirstRequestVote);
         }
         debug!(
             "region is in tombstone state";
@@ -1568,19 +1584,44 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
             return Ok(());
         }
         let check_msg_status = self.check_msg(&msg)?;
-        match check_msg_status {
+        let is_first_request_vote = match check_msg_status {
             CheckMsgStatus::DropMsg => return Ok(()),
-            CheckMsgStatus::PeerExist => (),
+            CheckMsgStatus::FirstRequestVote => true,
             CheckMsgStatus::NewPeer | CheckMsgStatus::NewPeerFirst => {
                 if !self.maybe_create_peer(
                     region_id,
                     &msg,
                     check_msg_status == CheckMsgStatus::NewPeerFirst,
                 )? {
-                    return Ok(());
+                    if !util::is_first_vote_msg(msg.get_message()) {
+                        // Can not create peer from the message and it's not the
+                        // first request vote message.
+                        return Ok(());
+                    }
+                    true
+                } else {
+                    false
                 }
             }
+        };
+        if is_first_request_vote {
+            // To void losing request vote messages, either put it to
+            // pending_votes or force send.
+            let mut store_meta = self.ctx.store_meta.lock().unwrap();
+            if !store_meta.regions.contains_key(&region_id) {
+                store_meta.pending_votes.push(msg);
+                return Ok(());
+            }
+            if let Err(e) = self
+                .ctx
+                .router
+                .force_send(region_id, PeerMsg::RaftMessage(msg))
+            {
+                warn!("handle first request vote failed"; "region_id" => region_id, "error" => ?e);
+            }
+            return Ok(());
         }
+
         let _ = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
         Ok(())
     }
@@ -1667,7 +1708,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         }
 
         let mut is_overlapped = false;
-        let mut keep_vote_msg = false;
         let mut regions_to_destroy = vec![];
         for (_, id) in meta.region_ranges.range((
             Excluded(data_key(msg.get_start_key())),
@@ -1716,16 +1756,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                     exist_region.get_id(),
                     PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
                 );
-                // Maybe this peer is splitted from exist_region.
-                keep_vote_msg = true;
             }
         }
 
         if is_overlapped {
             self.ctx.raft_metrics.message_dropped.region_overlap += 1;
-            if keep_vote_msg && util::is_first_vote_msg(msg.get_message()) {
-                meta.pending_votes.push(msg.to_owned());
-            }
             return Ok(false);
         }
 
