@@ -224,6 +224,7 @@ pub fn bounded<T>(cap: usize, notify_size: usize) -> (Sender<T>, Receiver<T>) {
 
 impl<T> Stream for Receiver<T> {
     type Item = T;
+
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.try_recv() {
             Ok(m) => Poll::Ready(Some(m)),
@@ -364,7 +365,12 @@ mod tests {
         }));
 
         // Wait until the receiver is suspended.
-        thread::sleep(time::Duration::from_millis(100));
+        loop {
+            thread::sleep(time::Duration::from_millis(10));
+            if !tx.state.recv_task.load(Ordering::SeqCst).is_null() {
+                break;
+            }
+        }
 
         // Send without notify, the receiver can't get batched messages.
         assert!(tx.send(0).is_ok());
@@ -440,53 +446,31 @@ mod tests {
 
     #[test]
     fn test_switch_between_sender_and_receiver() {
-        let (task_sender, executor) = create_sender_and_executor();
-        let (tx, mut rx) = unbounded::<u64>(4);
+        let (tx, mut rx) = unbounded::<i32>(4);
         let future = async move { rx.next().await };
-        let task = Arc::new(Task {
-            future: Mutex::new(Some(future.boxed())),
-            task_sender: task_sender.clone(),
-        });
-
+        let mut task = Task {
+            future: Arc::new(Mutex::new(Some(future.boxed()))),
+        };
         // Receiver has not received any messages, so the future is not be finished
         // in this tick.
-        task_sender.send(task.clone()).unwrap();
-        executor.tick();
+        task.tick();
         assert!(task.future.lock().unwrap().is_some());
-
         // After sender is dropped, waker will send the task to executor again and
-        // the future will be finished in this tikc.
+        // the future will be finished in this tick.
         drop(tx);
-        executor.tick();
+        task.tick();
         assert!(task.future.lock().unwrap().is_none());
     }
 
-    fn create_sender_and_executor<T>() -> (mpsc::SyncSender<Arc<Task<T>>>, Executor<T>) {
-        let (tx, rx) = mpsc::sync_channel(10);
-        (tx, Executor(rx))
+    #[derive(Clone)]
+    struct Task {
+        future: Arc<Mutex<Option<BoxFuture<'static, Option<i32>>>>>,
     }
 
-    struct Task<T> {
-        future: Mutex<Option<BoxFuture<'static, Option<T>>>>,
-        task_sender: mpsc::SyncSender<Arc<Task<T>>>,
-    }
-
-    impl<T> ArcWake for Task<T> {
-        fn wake_by_ref(arc_self: &Arc<Self>) {
-            let cloned = arc_self.clone();
-            arc_self.task_sender.send(cloned).unwrap();
-        }
-    }
-
-    struct Executor<T>(mpsc::Receiver<Arc<Task<T>>>);
-
-    impl<T> Executor<T> {
-        fn tick(&self) {
-            let task = self
-                .0
-                .recv_timeout(std::time::Duration::from_millis(100))
-                .expect("Cannot receive any tasks");
-            let mut future_slot = task.future.lock().unwrap();
+    impl Task {
+        fn tick(&mut self) {
+            let task = Arc::new(self.clone());
+            let mut future_slot = self.future.lock().unwrap();
             if let Some(mut future) = future_slot.take() {
                 let waker = task::waker_ref(&task);
                 let cx = &mut Context::from_waker(&*waker);
@@ -499,5 +483,9 @@ mod tests {
                 }
             }
         }
+    }
+
+    impl ArcWake for Task {
+        fn wake_by_ref(_: &Arc<Self>) {}
     }
 }
