@@ -1632,8 +1632,8 @@ txn_command_future!(future_cleanup, CleanupRequest, CleanupResponse, (v, resp) {
 txn_command_future!(future_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResponse, (v, resp) {
     match v {
         Ok(txn_status) => {
-            if let TxnStatus::Uncommitted { lock_ttl, .. } = txn_status {
-                resp.set_lock_ttl(lock_ttl);
+            if let TxnStatus::Uncommitted { lock } = txn_status {
+                resp.set_lock_ttl(lock.ttl);
             } else {
                 unreachable!();
             }
@@ -1652,21 +1652,16 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                 TxnStatus::Committed { commit_ts } => {
                     resp.set_commit_version(commit_ts.into_inner())
                 }
-                TxnStatus::Uncommitted {
-                    lock_ttl,
-                    min_commit_ts,
-                    use_async_commit,
-                    secondaries,
-                } => {
-                    resp.set_lock_ttl(lock_ttl);
-                    resp.set_use_async_commit(use_async_commit);
-                    resp.set_secondaries(secondaries.into());
+                TxnStatus::Uncommitted { lock } => {
                     // If the caller_start_ts is max, it's a point get in the autocommit transaction.
                     // Even though the min_commit_ts is not pushed, the point get can ingore the lock
                     // next time because it's not committed. So we pretend it has been pushed.
-                    if min_commit_ts > caller_start_ts || caller_start_ts.is_max() {
+                    if lock.min_commit_ts > caller_start_ts || caller_start_ts.is_max() {
                         resp.set_action(Action::MinCommitTsPushed);
                     }
+                    resp.set_lock_ttl(lock.ttl);
+                    let primary = lock.primary.clone();
+                    resp.set_lock_info(lock.into_lock_info(primary));
                 }
             },
             Err(e) => resp.set_error(extract_key_error(&e)),
