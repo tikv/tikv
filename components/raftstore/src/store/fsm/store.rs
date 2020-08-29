@@ -332,8 +332,8 @@ where
     pub need_flush_trans: bool,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
-    pub node_start_time: Option<Instant>,
     pub tick_batch: Vec<PeerTickBatch>,
+    pub node_start_time: Option<TiInstant>,
 }
 
 impl<EK, ER, T, C> HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>
@@ -1124,6 +1124,7 @@ where
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             node_start_time: Some(Instant::now()),
             tick_batch: vec![PeerTickBatch::default(); 256],
+            node_start_time: Some(TiInstant::now_coarse()),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
