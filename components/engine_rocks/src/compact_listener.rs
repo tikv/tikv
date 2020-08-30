@@ -10,6 +10,8 @@ use rocksdb::{
     CompactionJobInfo as RawCompactionJobInfo, CompactionReason, TablePropertiesCollectionView,
 };
 use tikv_util::collections::hash_set_with_capacity;
+use engine_traits::CompactedEvent;
+use std::collections::BTreeMap;
 
 pub struct RocksCompactionJobInfo<'a>(&'a RawCompactionJobInfo);
 
@@ -117,6 +119,24 @@ impl RocksCompactedEvent {
             input_props,
             output_props,
         }
+    }
+}
+
+impl CompactedEvent for RocksCompactedEvent {
+    fn total_bytes_declined(&self) -> u64 {
+        panic!()
+    }
+
+    fn is_size_declining_trivial(&self, split_check_diff: u64) -> bool {
+        panic!()
+    }
+
+    fn output_level_label(&self) -> String {
+        panic!()
+    }
+
+    fn calc_ranges_declined_bytes(self, ranges: &BTreeMap<Vec<u8>, u64>, bytes_threshold: u64) -> Vec<(u64, u64)> {
+        panic!()
     }
 }
 
