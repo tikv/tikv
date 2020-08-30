@@ -88,7 +88,7 @@ impl CompactionJobInfo for RocksCompactionJobInfo<'_> {
     }
 }
 
-pub struct CompactedEvent {
+pub struct RocksCompactedEvent {
     pub cf: String,
     pub output_level: i32,
     pub total_input_bytes: u64,
@@ -99,15 +99,15 @@ pub struct CompactedEvent {
     pub output_props: Vec<RangeProperties>,
 }
 
-impl CompactedEvent {
+impl RocksCompactedEvent {
     pub fn new(
         info: &RocksCompactionJobInfo,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         input_props: Vec<RangeProperties>,
         output_props: Vec<RangeProperties>,
-    ) -> CompactedEvent {
-        CompactedEvent {
+    ) -> RocksCompactedEvent {
+        RocksCompactedEvent {
             cf: info.cf_name().to_owned(),
             output_level: info.output_level(),
             total_input_bytes: info.total_input_bytes(),
@@ -123,13 +123,13 @@ impl CompactedEvent {
 pub type Filter = fn(&RocksCompactionJobInfo) -> bool;
 
 pub struct CompactionListener {
-    ch: Box<dyn Fn(CompactedEvent) + Send + Sync>,
+    ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
     filter: Option<Filter>,
 }
 
 impl CompactionListener {
     pub fn new(
-        ch: Box<dyn Fn(CompactedEvent) + Send + Sync>,
+        ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
         filter: Option<Filter>,
     ) -> CompactionListener {
         CompactionListener { ch, filter }
@@ -205,7 +205,7 @@ impl EventListener for CompactionListener {
             return;
         }
 
-        (self.ch)(CompactedEvent::new(
+        (self.ch)(RocksCompactedEvent::new(
             info,
             smallest_key.unwrap(),
             largest_key.unwrap(),

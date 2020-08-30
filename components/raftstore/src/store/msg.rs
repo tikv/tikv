@@ -19,7 +19,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
-use engine_rocks::CompactedEvent;
+use engine_rocks::RocksCompactedEvent;
 use tikv_util::escape;
 
 use super::{AbstractPeer, RegionSnapshot};
@@ -419,7 +419,7 @@ pub enum StoreMsg {
     },
 
     // Compaction finished event
-    CompactedEvent(CompactedEvent),
+    CompactedEvent(RocksCompactedEvent),
     Tick(StoreTick),
     Start {
         store: metapb::Store,

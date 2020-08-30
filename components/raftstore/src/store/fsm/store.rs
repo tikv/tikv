@@ -26,8 +26,8 @@ use raft::{Ready, StateRole};
 use time::{self, Timespec};
 use tokio::runtime::{self, Handle, Runtime};
 
-use engine_rocks::CompactedEvent;
 use engine_traits::{RaftEngine, RaftLogBatch};
+use engine_rocks::RocksCompactedEvent;
 use error_code::ErrorCodeExt;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
@@ -1783,7 +1783,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         Ok(true)
     }
 
-    fn on_compaction_finished(&mut self, event: CompactedEvent) {
+    fn on_compaction_finished(&mut self, event: RocksCompactedEvent) {
         // If size declining is trivial, skip.
         let total_bytes_declined = if event.total_input_bytes > event.total_output_bytes {
             event.total_input_bytes - event.total_output_bytes
@@ -2376,7 +2376,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
 }
 
 fn calc_region_declined_bytes(
-    event: CompactedEvent,
+    event: RocksCompactedEvent,
     region_ranges: &BTreeMap<Key, u64>,
     bytes_threshold: u64,
 ) -> Vec<(u64, u64)> {
@@ -2452,7 +2452,7 @@ mod tests {
                 ),
             ],
         };
-        let event = CompactedEvent {
+        let event = RocksCompactedEvent {
             cf: "default".to_owned(),
             output_level: 3,
             total_input_bytes: 12 * 1024,
