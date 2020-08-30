@@ -448,17 +448,16 @@ mod tests {
     fn test_switch_between_sender_and_receiver() {
         let (tx, mut rx) = unbounded::<i32>(4);
         let future = async move { rx.next().await };
-        let mut task = Task {
+        let task = Task {
             future: Arc::new(Mutex::new(Some(future.boxed()))),
         };
         // Receiver has not received any messages, so the future is not be finished
         // in this tick.
         task.tick();
         assert!(task.future.lock().unwrap().is_some());
-        // After sender is dropped, waker will send the task to executor again and
-        // the future will be finished in this tick.
+        // After sender is dropped, the task will be waked and then it tick self
+        // again to advance the progress.
         drop(tx);
-        task.tick();
         assert!(task.future.lock().unwrap().is_none());
     }
 
@@ -468,7 +467,7 @@ mod tests {
     }
 
     impl Task {
-        fn tick(&mut self) {
+        fn tick(&self) {
             let task = Arc::new(self.clone());
             let mut future_slot = self.future.lock().unwrap();
             if let Some(mut future) = future_slot.take() {
@@ -486,6 +485,8 @@ mod tests {
     }
 
     impl ArcWake for Task {
-        fn wake_by_ref(_: &Arc<Self>) {}
+        fn wake_by_ref(arc_self: &Arc<Self>) {
+            arc_self.tick();
+        }
     }
 }
