@@ -1033,7 +1033,7 @@ fn cast_real_as_time(
                 ctx,
                 fv,
                 extra.ret_field_type.as_accessor().tp().try_into()?,
-                extra.ret_field_type.get_decimal() as i7,
+                extra.ret_field_type.get_decimal() as i8,
                 // Enable round
                 true,
             )
