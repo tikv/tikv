@@ -3250,7 +3250,7 @@ where
                 return;
             }
             self.fsm.skip_gc_raft_log_count += 1;
-            if self.fsm.skip_gc_raft_log_count <= 6 {
+            if self.fsm.skip_gc_raft_log_count <= self.ctx.cfg.raft_log_reserve_max_ticks {
                 // Logs will only be kept 6 * `raft_log_gc_tick_interval`.
                 self.register_raft_gc_log_tick();
                 return;

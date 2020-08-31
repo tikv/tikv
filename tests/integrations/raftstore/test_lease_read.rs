@@ -35,7 +35,6 @@ use tikv_util::HandyRwLock;
 fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration(Duration::from_secs(60));
     // Increase the Raft tick interval to make this test case running reliably.
     // Use large election timeout to make leadership stable.
     configure_for_lease_read(cluster, Some(50), Some(10_000));
