@@ -948,8 +948,8 @@ fn test_node_multiple_rollback_merge() {
             .contains("merging mode")
         {
             panic!(
-                "err message {:?} does not contain merging mode",
-                resp.get_header().get_error()
+                "resp {:?} does not contain merging mode error",
+                resp
             );
         }
 
