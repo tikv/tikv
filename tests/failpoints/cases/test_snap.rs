@@ -223,13 +223,9 @@ fn assert_snapshot(snap_dir: &str, region_id: u64, exist: bool) {
 // pending and can be canceled, but panic may happen if the applyfsm runs very slow.
 #[test]
 fn test_destroy_peer_on_pending_snapshot() {
-<<<<<<< HEAD
     let _guard = crate::setup();
 
-    let mut cluster = new_server_cluster(0, 4);
-=======
     let mut cluster = new_server_cluster(0, 3);
->>>>>>> c4b7e8f... raftstore: destroy process must be asynchronous if peer is initialized (#8455)
     configure_for_snapshot(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
