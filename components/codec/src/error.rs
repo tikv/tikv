@@ -2,6 +2,7 @@
 
 use std::io;
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use failure::{Backtrace, Fail};
 
 #[derive(Debug, Fail)]
@@ -68,3 +69,12 @@ impl<T: Into<ErrorInner>> From<T> for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 const_assert!(8 == std::mem::size_of::<Result<()>>());
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Io(_) => error_code::codec::IO,
+            ErrorInner::BadPadding => error_code::codec::BAD_PADDING,
+        }
+    }
+}

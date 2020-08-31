@@ -1926,6 +1926,21 @@ impl Default for BackupConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct CdcConfig {
+    pub min_ts_interval: ReadableDuration,
+}
+
+impl Default for CdcConfig {
+    fn default() -> Self {
+        Self {
+            min_ts_interval: ReadableDuration::secs(1),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -2002,6 +2017,9 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub split: SplitConfig,
+
+    #[config(submodule)]
+    pub cdc: CdcConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2031,6 +2049,7 @@ impl Default for TiKvConfig {
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
             split: SplitConfig::default(),
+            cdc: CdcConfig::default(),
         }
     }
 }

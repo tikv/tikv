@@ -8,9 +8,11 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
+use crossbeam::atomic::AtomicCell;
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{KvEngine, Peekable, Snapshot, WriteBatchExt, WriteOptions};
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -29,6 +31,7 @@ use raft::{
     NO_LIMIT,
 };
 use time::Timespec;
+use txn_types::TxnExtra;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -75,6 +78,7 @@ pub struct ProposalMeta {
     pub term: u64,
     /// `renew_lease_time` contains the last time when a peer starts to renew lease.
     pub renew_lease_time: Option<Timespec>,
+    pub txn_extra: TxnExtra,
 }
 
 #[derive(Default)]
@@ -255,6 +259,8 @@ pub struct Peer {
     /// Send to these peers to check whether itself is stale.
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
+
+    pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 }
 
 impl Peer {
@@ -336,6 +342,7 @@ impl Peer {
             bcast_wake_up_time: None,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1741,6 +1748,7 @@ impl Peer {
         cb: Callback<RocksEngine>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
+        txn_extra: TxnExtra,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -1786,6 +1794,7 @@ impl Peer {
                 let meta = ProposalMeta {
                     index: idx,
                     term: self.term(),
+                    txn_extra,
                     renew_lease_time: None,
                 };
                 self.post_propose(ctx, meta, is_conf_change, cb);
@@ -1808,7 +1817,13 @@ impl Peer {
         meta.renew_lease_time = poll_ctx.current_time;
 
         if !cb.is_none() {
-            let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
+            let p = Proposal::new(
+                is_conf_change,
+                meta.index,
+                meta.term,
+                cb,
+                meta.txn_extra.clone(),
+            );
             self.apply_proposals.push(p);
         }
 
@@ -2168,6 +2183,7 @@ impl Peer {
                 let meta = ProposalMeta {
                     index,
                     term: self.term(),
+                    txn_extra: TxnExtra::default(),
                     renew_lease_time: Some(renew_lease_time),
                 };
                 self.post_propose(poll_ctx, meta, false, Callback::None);
@@ -2520,6 +2536,7 @@ impl Peer {
             false, /* we don't need snapshot time */
         )
         .execute(&req, self.region(), read_index);
+        resp.txn_extra_op = self.txn_extra_op.load();
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -2987,6 +3004,7 @@ where
                 return ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
                 };
             }
         }
@@ -3008,6 +3026,7 @@ where
                         return ReadResponse {
                             response: cmd_resp::new_error(e),
                             snapshot: None,
+                            txn_extra_op: TxnExtraOp::Noop,
                         };
                     }
                 },
@@ -3047,7 +3066,11 @@ where
         } else {
             None
         };
-        ReadResponse { response, snapshot }
+        ReadResponse {
+            response,
+            snapshot,
+            txn_extra_op: TxnExtraOp::Noop,
+        }
     }
 }
 

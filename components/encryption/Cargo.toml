@@ -13,6 +13,7 @@ byteorder = "1.2"
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
 engine_traits = { path = "../engine_traits" }
+error_code = { path = "../error_code" }
 failure = "0.1"
 lazy_static = "1.3"
 prometheus = { version = "0.8", features = ["nightly"] }

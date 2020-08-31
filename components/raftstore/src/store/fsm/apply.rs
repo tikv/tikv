@@ -23,6 +23,7 @@ use engine_traits::{
 };
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
@@ -57,6 +58,7 @@ use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
 use tikv_util::Either;
 use tikv_util::MustConsumeVec;
+use txn_types::TxnExtra;
 
 use super::metrics::*;
 
@@ -71,13 +73,15 @@ pub struct PendingCmd {
     pub index: u64,
     pub term: u64,
     pub cb: Option<Callback<RocksEngine>>,
+    pub txn_extra: TxnExtra,
 }
 
 impl PendingCmd {
-    fn new(index: u64, term: u64, cb: Callback<RocksEngine>) -> PendingCmd {
+    fn new(index: u64, term: u64, cb: Callback<RocksEngine>, txn_extra: TxnExtra) -> PendingCmd {
         PendingCmd {
             index,
             term,
+            txn_extra,
             cb: Some(cb),
         }
     }
@@ -312,6 +316,9 @@ struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
 
     yield_duration: Duration,
     perf_context_statistics: PerfContextStatistics,
+
+    // TxnExtra collected from applied cmds.
+    txn_extras: MustConsumeVec<TxnExtra>,
 }
 
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
@@ -347,6 +354,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             use_delete_range: cfg.use_delete_range,
             yield_duration: cfg.apply_yield_duration.0,
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
+            txn_extras: MustConsumeVec::new("extra data from txn"),
         }
     }
 
@@ -439,7 +447,8 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             self.kv_wb_last_keys = 0;
         }
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
-        self.host.on_flush_apply();
+        self.host
+            .on_flush_apply(std::mem::take(&mut self.txn_extras), self.engine.clone());
 
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
@@ -915,27 +924,33 @@ impl ApplyDelegate {
         }
     }
 
-    fn find_cb(
+    fn find_pending(
         &mut self,
         index: u64,
         term: u64,
         is_conf_change: bool,
-    ) -> Option<Callback<RocksEngine>> {
+    ) -> (Option<Callback<RocksEngine>>, TxnExtra) {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.index == index && cmd.term == term {
-                    return Some(cmd.cb.take().unwrap());
+                    return (
+                        Some(cmd.cb.take().unwrap()),
+                        std::mem::take(&mut cmd.txn_extra),
+                    );
                 } else {
                     notify_stale_command(region_id, peer_id, self.term, cmd);
                 }
             }
-            return None;
+            return (None, TxnExtra::default());
         }
         while let Some(mut head) = self.pending_cmds.pop_normal(index, term) {
             if head.term == term {
                 if head.index == index {
-                    return Some(head.cb.take().unwrap());
+                    return (
+                        Some(head.cb.take().unwrap()),
+                        std::mem::take(&mut head.txn_extra),
+                    );
                 } else {
                     panic!(
                         "{} unexpected callback at term {}, found index {}, expected {}",
@@ -948,7 +963,7 @@ impl ApplyDelegate {
                 notify_stale_command(region_id, peer_id, self.term, head);
             }
         }
-        None
+        (None, TxnExtra::default())
     }
 
     fn process_raft_cmd<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
@@ -985,9 +1000,10 @@ impl ApplyDelegate {
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
-        let cmd_cb = self.find_cb(index, term, is_conf_change);
+        let (cmd_cb, txn_extra) = self.find_pending(index, term, is_conf_change);
         if let Some(observe_cmd) = self.observe_cmd.as_ref() {
             let cmd = Cmd::new(index, cmd, resp.clone());
+            apply_ctx.txn_extras.push(txn_extra);
             apply_ctx
                 .host
                 .on_apply_cmd(observe_cmd.id, self.region_id(), cmd);
@@ -2263,15 +2279,23 @@ pub struct Proposal {
     index: u64,
     term: u64,
     pub cb: Callback<RocksEngine>,
+    pub txn_extra: TxnExtra,
 }
 
 impl Proposal {
-    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback<RocksEngine>) -> Proposal {
+    pub fn new(
+        is_conf_change: bool,
+        index: u64,
+        term: u64,
+        cb: Callback<RocksEngine>,
+        txn_extra: TxnExtra,
+    ) -> Proposal {
         Proposal {
             is_conf_change,
             index,
             term,
             cb,
+            txn_extra,
         }
     }
 }
@@ -2599,13 +2623,13 @@ impl ApplyFsm {
         assert_eq!(self.delegate.id, region_proposal.id);
         if self.delegate.stopped {
             for p in region_proposal.props {
-                let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                let cmd = PendingCmd::new(p.index, p.term, p.cb, p.txn_extra);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
         }
         for p in region_proposal.props {
-            let cmd = PendingCmd::new(p.index, p.term, p.cb);
+            let cmd = PendingCmd::new(p.index, p.term, p.cb, p.txn_extra);
             if p.is_conf_change {
                 if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
                     // if it loses leadership before conf change is replicated, there may be
@@ -2841,6 +2865,7 @@ impl ApplyFsm {
                         apply_ctx.engine.snapshot().into_sync(),
                         self.delegate.region.clone(),
                     )),
+                    txn_extra_op: TxnExtraOp::Noop,
                 }
             }
             Err(e) => {
@@ -2848,6 +2873,7 @@ impl ApplyFsm {
                 cb.invoke_read(ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
                 });
                 return;
             }
@@ -3140,7 +3166,7 @@ impl ApplyRouter {
                         "region_id" => region_id
                     );
                     for p in props.props {
-                        let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                        let cmd = PendingCmd::new(p.index, p.term, p.cb, p.txn_extra);
                         notify_region_removed(props.region_id, props.id, cmd);
                     }
                     return;
@@ -3182,6 +3208,7 @@ impl ApplyRouter {
                     let resp = ReadResponse {
                         response: cmd_resp::new_error(Error::RegionNotFound(region_id)),
                         snapshot: None,
+                        txn_extra_op: TxnExtraOp::Noop,
                     };
                     cb.invoke_read(resp);
                     return;
@@ -3432,6 +3459,7 @@ mod tests {
             Callback::Write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
             })),
+            TxnExtra::default(),
         );
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
         router.schedule_task(1, Msg::Proposal(region_proposal));
@@ -3442,7 +3470,7 @@ mod tests {
 
         let (cc_tx, cc_rx) = mpsc::channel();
         let pops = vec![
-            Proposal::new(false, 2, 0, Callback::None),
+            Proposal::new(false, 2, 0, Callback::None, TxnExtra::default()),
             Proposal::new(
                 true,
                 3,
@@ -3450,6 +3478,7 @@ mod tests {
                 Callback::Write(Box::new(move |write: WriteResponse| {
                     cc_tx.send(write.response).unwrap();
                 })),
+                TxnExtra::default(),
             ),
         ];
         let region_proposal = RegionProposal::new(1, 2, pops);
@@ -3466,7 +3495,7 @@ mod tests {
         });
         assert!(rx.try_recv().is_err());
 
-        let p = Proposal::new(true, 4, 0, Callback::None);
+        let p = Proposal::new(true, 4, 0, Callback::None, TxnExtra::default());
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
         router.schedule_task(2, Msg::Proposal(region_proposal));
         validate(&router, 2, |delegate| {
@@ -3561,6 +3590,7 @@ mod tests {
             Callback::Write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
             })),
+            TxnExtra::default(),
         );
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
         router.schedule_task(2, Msg::Proposal(region_proposal));
@@ -3611,7 +3641,13 @@ mod tests {
             cb: Callback<RocksEngine>,
         ) -> EntryBuilder {
             // TODO: may need to support conf change.
-            let prop = Proposal::new(false, self.entry.get_index(), self.entry.get_term(), cb);
+            let prop = Proposal::new(
+                false,
+                self.entry.get_index(),
+                self.entry.get_term(),
+                cb,
+                TxnExtra::default(),
+            );
             router.schedule_task(
                 region_id,
                 Msg::Proposal(RegionProposal::new(id, region_id, vec![prop])),
@@ -3735,7 +3771,7 @@ mod tests {
         }
     }
 
-    impl CmdObserver for ApplyObserver {
+    impl CmdObserver<RocksEngine> for ApplyObserver {
         fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
             self.cmd_batches
                 .borrow_mut()
@@ -3750,7 +3786,7 @@ mod tests {
                 .push(observe_id, region_id, cmd);
         }
 
-        fn on_flush_apply(&self) {
+        fn on_flush_apply(&self, _: Vec<TxnExtra>, _: RocksEngine) {
             if !self.cmd_batches.borrow().is_empty() {
                 let batches = self.cmd_batches.replace(Vec::default());
                 for b in batches {
@@ -4508,7 +4544,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::new(1, 1, Callback::None, TxnExtra::default());
         });
         res.unwrap_err();
     }
@@ -4516,7 +4552,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak_dtor_not_abort() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::new(1, 1, Callback::None, TxnExtra::default());
             panic!("Don't abort");
             // It would abort and fail if there was a double-panic in PendingCmd dtor.
         });

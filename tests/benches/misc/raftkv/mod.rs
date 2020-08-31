@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::test;
 use tempfile::{Builder, TempDir};
 
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
@@ -23,9 +23,11 @@ use raftstore::store::{
 };
 use raftstore::Result;
 use tikv::server::raftkv::{CmdRes, RaftKv};
-use tikv::storage::kv::{Callback as EngineCallback, CbContext, Modify, Result as EngineResult};
+use tikv::storage::kv::{
+    Callback as EngineCallback, CbContext, Modify, Result as EngineResult, WriteData,
+};
 use tikv::storage::Engine;
-use txn_types::Key;
+use txn_types::{Key, TxnExtra};
 
 #[derive(Clone)]
 struct SyncBenchRouter {
@@ -50,6 +52,7 @@ impl SyncBenchRouter {
                 cb(ReadResponse {
                     response,
                     snapshot: Some(RegionSnapshot::from_snapshot(snapshot.into_sync(), region)),
+                    txn_extra_op: TxnExtraOp::Noop,
                 })
             }
             Callback::Write(cb) => {
@@ -71,6 +74,16 @@ impl RaftStoreRouter for SyncBenchRouter {
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> Result<()> {
         self.invoke(RaftCommand::new(req, cb));
+        Ok(())
+    }
+
+    fn send_command_txn_extra(
+        &self,
+        req: RaftCmdRequest,
+        txn_extra: TxnExtra,
+        cb: Callback<RocksEngine>,
+    ) -> Result<()> {
+        self.invoke(RaftCommand::with_txn_extra(req, cb, txn_extra));
         Ok(())
     }
 
@@ -103,6 +116,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
             snapshot.into_sync(),
             Region::default(),
         )),
+        txn_extra_op: TxnExtraOp::Noop,
     };
 
     b.iter(|| {
@@ -174,10 +188,10 @@ fn bench_async_write(b: &mut test::Bencher) {
         });
         kv.async_write(
             &ctx,
-            vec![Modify::Delete(
+            WriteData::from_modifies(vec![Modify::Delete(
                 CF_DEFAULT,
                 Key::from_encoded(b"fooo".to_vec()),
-            )],
+            )]),
             on_finished,
         )
         .unwrap();

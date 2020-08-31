@@ -12,8 +12,10 @@ impl RocksReadOptions {
 }
 
 impl From<engine_traits::ReadOptions> for RocksReadOptions {
-    fn from(_opts: engine_traits::ReadOptions) -> Self {
-        RocksReadOptions(RawReadOptions::default())
+    fn from(opts: engine_traits::ReadOptions) -> Self {
+        let mut r = RawReadOptions::default();
+        r.fill_cache(opts.fill_cache());
+        RocksReadOptions(r)
     }
 }
 

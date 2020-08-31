@@ -13,11 +13,12 @@ use std::{error, ptr, result};
 
 use engine::IterOption;
 use engine_rocks::RocksTablePropertiesCollection;
+use engine_traits::ReadOptions;
 use engine_traits::{CfName, CF_DEFAULT};
 use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::Context;
-use txn_types::{Key, Value};
+use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
+use txn_types::{Key, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -26,6 +27,7 @@ pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
 
 pub const SEEK_BOUND: u64 = 8;
@@ -37,11 +39,15 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(Debug)]
 pub struct CbContext {
     pub term: Option<u64>,
+    pub txn_extra_op: TxnExtraOp,
 }
 
 impl CbContext {
     pub fn new() -> CbContext {
-        CbContext { term: None }
+        CbContext {
+            term: None,
+            txn_extra_op: TxnExtraOp::Noop,
+        }
     }
 }
 
@@ -70,13 +76,29 @@ impl Modify {
     }
 }
 
+#[derive(Default)]
+pub struct WriteData {
+    pub modifies: Vec<Modify>,
+    pub extra: TxnExtra,
+}
+
+impl WriteData {
+    pub fn new(modifies: Vec<Modify>, extra: TxnExtra) -> Self {
+        Self { modifies, extra }
+    }
+
+    pub fn from_modifies(modifies: Vec<Modify>) -> Self {
+        Self::new(modifies, TxnExtra::default())
+    }
+}
+
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
 
-    fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
+    fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
 
-    fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
+    fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {
             Some((_, res)) => res,
@@ -97,7 +119,10 @@ pub trait Engine: Send + Clone + 'static {
     }
 
     fn put_cf(&self, ctx: &Context, cf: CfName, key: Key, value: Value) -> Result<()> {
-        self.write(ctx, vec![Modify::Put(cf, key, value)])
+        self.write(
+            ctx,
+            WriteData::from_modifies(vec![Modify::Put(cf, key, value)]),
+        )
     }
 
     fn delete(&self, ctx: &Context, key: Key) -> Result<()> {
@@ -105,7 +130,7 @@ pub trait Engine: Send + Clone + 'static {
     }
 
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
-        self.write(ctx, vec![Modify::Delete(cf, key)])
+        self.write(ctx, WriteData::from_modifies(vec![Modify::Delete(cf, key)]))
     }
 }
 
@@ -114,6 +139,7 @@ pub trait Snapshot: Send + Clone {
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>>;
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     fn iter_cf(
         &self,
@@ -264,6 +290,17 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     default fn from(err: T) -> Self {
         let err = err.into();
         err.into()
+    }
+}
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Request(e) => e.error_code(),
+            ErrorInner::Timeout(_) => error_code::storage::TIMEOUT,
+            ErrorInner::EmptyRequest => error_code::storage::EMPTY_REQUEST,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
+        }
     }
 }
 
@@ -475,10 +512,10 @@ pub mod tests {
         engine
             .write(
                 &Context::default(),
-                vec![
+                WriteData::from_modifies(vec![
                     Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
                     Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
-                ],
+                ]),
             )
             .unwrap();
         assert_has(engine, b"x", b"1");
@@ -487,10 +524,10 @@ pub mod tests {
         engine
             .write(
                 &Context::default(),
-                vec![
+                WriteData::from_modifies(vec![
                     Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
                     Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
-                ],
+                ]),
             )
             .unwrap();
         assert_none(engine, b"y");
@@ -738,7 +775,9 @@ pub mod tests {
     }
 
     fn test_empty_write<E: Engine>(engine: &E) {
-        engine.write(&Context::default(), vec![]).unwrap_err();
+        engine
+            .write(&Context::default(), WriteData::default())
+            .unwrap_err();
     }
 
     pub fn test_cfs_statistics<E: Engine>(engine: &E) {
