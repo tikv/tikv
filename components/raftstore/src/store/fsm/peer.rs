@@ -3237,7 +3237,7 @@ where
             // |------------- entries needs to be compacted ----------|
             // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
             //             |-------------------- entries will be left ----------------------|
-            if last_idx - first_idx <= 3 {
+            if last_idx - first_idx < 3 {
                 return;
             }
             self.fsm.skip_gc_raft_log_count += 1;
