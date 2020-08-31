@@ -1020,7 +1020,7 @@ fn cast_real_as_time(
     val: Option<&Real>,
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
-        if val == 0 {
+        if val.is_zero() {
             Time::zero(
                 ctx,
                 extra.ret_field_type.get_decimal() as i8,
@@ -2096,6 +2096,7 @@ mod tests {
             ("2019-09-16 10:11:12", 20190916101112.111, 0),
             ("2019-09-16 10:11:12", 20190916101112.123, 0),
             ("2019-09-16 10:11:13", 20190916101112.999, 0),
+            ("0000-00-00 00:00:00", 0.0, 0),
         ];
 
         for (expected, input, fsp) in cases {
