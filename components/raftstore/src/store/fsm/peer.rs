@@ -3240,8 +3240,6 @@ where
             if last_idx - first_idx <= 3 {
                 return;
             }
-
-            let _ = self.fsm.peer.get_store().get_entry(last_idx);
             self.fsm.skip_gc_raft_log_count += 1;
             if self.fsm.skip_gc_raft_log_count <= 6 {
                 // Logs will only be kept 6 * `raft_log_gc_tick_interval`.

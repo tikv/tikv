@@ -25,9 +25,10 @@ use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use futures03::compat::{Compat, Future01CompatExt};
 use futures03::future::{self as future03, Future as Future03, FutureExt, TryFutureExt};
+use futures03::stream::{StreamExt, TryStreamExt};
 use grpcio::{
-    ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
-    RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
+    ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
+    RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
@@ -886,19 +887,22 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             .inspect(|r| GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64))
             .map(move |mut r| {
                 r.set_transport_layer_load(thread_load.load() as u64);
-                (r, WriteFlags::default().buffer_hint(false))
-            })
-            .map_err(|e| {
-                let msg = Some(format!("{:?}", e));
-                GrpcError::RpcFailure(RpcStatus::new(RpcStatusCode::UNKNOWN, msg))
+                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
+                    r,
+                    WriteFlags::default().buffer_hint(false),
+                ))
             });
 
-        ctx.spawn(sink.send_all(response_retriever).map(|_| ()).map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "batch_commands",
-                "err" => ?e
-            );
-        }));
+        ctx.spawn(
+            sink.send_all(response_retriever.compat())
+                .map(|_| ())
+                .map_err(|e| {
+                    debug!("kv rpc failed";
+                        "request" => "batch_commands",
+                        "err" => ?e
+                    );
+                }),
+        );
     }
 
     fn ver_get(
