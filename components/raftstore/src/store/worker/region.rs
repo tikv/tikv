@@ -844,8 +844,7 @@ mod tests {
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
-        let shared_block_cache = false;
-        let engines = Engines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
+        let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let (router, _) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
             engines,
@@ -922,8 +921,7 @@ mod tests {
             }
         }
 
-        let shared_block_cache = false;
-        let engines = Engines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
+        let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("snap-manager");

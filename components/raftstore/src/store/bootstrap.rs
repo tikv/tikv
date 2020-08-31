@@ -146,8 +146,7 @@ mod tests {
         let raft_engine =
             engine_rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                 .unwrap();
-        let shared_block_cache = false;
-        let engines = Engines::new(kv_engine.clone(), raft_engine.clone(), shared_block_cache);
+        let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
         let region = initial_region(1, 1, 1);
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
