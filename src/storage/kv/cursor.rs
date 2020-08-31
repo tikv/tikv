@@ -4,6 +4,7 @@ use std::cell::Cell;
 use std::cmp::Ordering;
 use std::ops::Bound;
 
+use engine_rocks::PerfContext;
 use engine_traits::CfName;
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use tikv_util::keybuilder::KeyBuilder;
@@ -11,9 +12,7 @@ use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use txn_types::{Key, TimeStamp};
 
-use crate::storage::kv::{
-    CfStatistics, Error, Iterator, PerfStatisticsInstant, Result, ScanMode, Snapshot, SEEK_BOUND,
-};
+use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
 
 pub struct Cursor<I: Iterator> {
     iter: I,
@@ -300,9 +299,10 @@ impl<I: Iterator> Cursor<I> {
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
-        let perf = PerfStatisticsInstant::new();
+        let before = PerfContext::get().internal_delete_skipped_count() as usize;
         let res = self.iter.seek_to_first().expect("Invalid Iterator");
-        statistics.seek_tombstone += perf.delta().0.internal_delete_skipped_count;
+        statistics.seek_tombstone +=
+            PerfContext::get().internal_delete_skipped_count() as usize - before;
         res
     }
 
@@ -310,9 +310,10 @@ impl<I: Iterator> Cursor<I> {
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
-        let perf = PerfStatisticsInstant::new();
+        let before = PerfContext::get().internal_delete_skipped_count() as usize;
         let res = self.iter.seek_to_last().expect("Invalid Iterator");
-        statistics.seek_tombstone += perf.delta().0.internal_delete_skipped_count;
+        statistics.seek_tombstone +=
+            PerfContext::get().internal_delete_skipped_count() as usize - before;
         res
     }
 
@@ -320,9 +321,10 @@ impl<I: Iterator> Cursor<I> {
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         statistics.seek += 1;
         self.mark_unread();
-        let perf = PerfStatisticsInstant::new();
+        let before = PerfContext::get().internal_delete_skipped_count() as usize;
         let res = self.iter.seek(key);
-        statistics.seek_tombstone += perf.delta().0.internal_delete_skipped_count;
+        statistics.seek_tombstone +=
+            PerfContext::get().internal_delete_skipped_count() as usize - before;
         res
     }
 
@@ -334,9 +336,10 @@ impl<I: Iterator> Cursor<I> {
     ) -> Result<bool> {
         statistics.seek_for_prev += 1;
         self.mark_unread();
-        let perf = PerfStatisticsInstant::new();
+        let before = PerfContext::get().internal_delete_skipped_count() as usize;
         let res = self.iter.seek_for_prev(key);
-        statistics.seek_for_prev_tombstone += perf.delta().0.internal_delete_skipped_count;
+        statistics.seek_for_prev_tombstone +=
+            PerfContext::get().internal_delete_skipped_count() as usize - before;
         res
     }
 
@@ -344,9 +347,10 @@ impl<I: Iterator> Cursor<I> {
     pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.next += 1;
         self.mark_unread();
-        let perf = PerfStatisticsInstant::new();
+        let before = PerfContext::get().internal_delete_skipped_count() as usize;
         let res = self.iter.next().expect("Invalid Iterator");
-        statistics.next_tombstone += perf.delta().0.internal_delete_skipped_count;
+        statistics.next_tombstone +=
+            PerfContext::get().internal_delete_skipped_count() as usize - before as usize;
         res
     }
 
@@ -354,9 +358,10 @@ impl<I: Iterator> Cursor<I> {
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.prev += 1;
         self.mark_unread();
-        let perf = PerfStatisticsInstant::new();
+        let before = PerfContext::get().internal_delete_skipped_count() as usize;
         let res = self.iter.prev().expect("Invalid Iterator");
-        statistics.prev_tombstone += perf.delta().0.internal_delete_skipped_count;
+        statistics.prev_tombstone +=
+            PerfContext::get().internal_delete_skipped_count() as usize - before as usize;
         res
     }
 
