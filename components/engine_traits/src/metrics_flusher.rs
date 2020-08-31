@@ -6,19 +6,21 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
+use raft_engine::RaftEngine;
+
 use crate::*;
 
 const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const FLUSHER_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 
-pub struct MetricsFlusher<K: KvEngine, R: KvEngine> {
+pub struct MetricsFlusher<K: KvEngine, R: RaftEngine> {
     pub engines: Engines<K, R>,
     interval: Duration,
     handle: Option<JoinHandle<()>>,
     sender: Option<Sender<bool>>,
 }
 
-impl<K: KvEngine, R: KvEngine> MetricsFlusher<K, R> {
+impl<K: KvEngine, R: RaftEngine> MetricsFlusher<K, R> {
     pub fn new(engines: Engines<K, R>) -> Self {
         MetricsFlusher {
             engines,
@@ -45,10 +47,10 @@ impl<K: KvEngine, R: KvEngine> MetricsFlusher<K, R> {
                 let mut last_reset = Instant::now();
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
                     kv_db.flush_metrics("kv", shared_block_cache);
-                    raft_db.flush_metrics("raft", shared_block_cache);
+                    // raft_db.flush_metrics("raft", shared_block_cache);
                     if last_reset.elapsed() >= FLUSHER_RESET_INTERVAL {
                         kv_db.reset_statistics();
-                        raft_db.reset_statistics();
+                        // raft_db.reset_statistics();
                         last_reset = Instant::now();
                     }
                 }

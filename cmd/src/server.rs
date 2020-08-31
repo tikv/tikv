@@ -8,12 +8,21 @@
 //! Components are often used to initialize other components, and/or must be explicitly stopped.
 //! We keep these components in the `TiKVServer` struct.
 
-use crate::{setup::*, signal_handler};
+use std::{
+    convert::TryFrom,
+    env, fmt,
+    fs::{self, File},
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    thread::JoinHandle,
+};
+
 use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine};
-use engine_traits::{compaction_job::CompactionJobInfo, Engines, MetricsFlusher};
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use raft_engine::RaftEngine;
+use engine_traits::{compaction_job::CompactionJobInfo, Engines, MetricsFlusher, CF_DEFAULT, CF_WRITE};
 use fs2::FileExt;
 use futures03::executor::block_on;
 use futures_cpupool::Builder;
@@ -27,22 +36,13 @@ use raftstore::{
     router::ServerRaftStoreRouter,
     store::{
         config::RaftstoreConfigManager,
-        fsm,
+        fsm::create_raft_batch_system,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
         AutoSplitController, GlobalReplicationState, LocalReader, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
 };
 use security::SecurityManager;
-use std::{
-    convert::TryFrom,
-    env, fmt,
-    fs::{self, File},
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    thread::JoinHandle,
-};
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
@@ -51,7 +51,7 @@ use tikv::{
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
-        gc_worker::{AutoGcConfig, GcWorker},
+        gc_worker::{AutoGcConfig, GcWorker as BareGcWorker},
         lock_manager::LockManager,
         resolve,
         service::{DebugService, DiagnosticsService},
@@ -68,6 +68,15 @@ use tikv_util::{
     time::Monitor,
     worker::{FutureWorker, Worker},
 };
+
+use crate::{setup::*, signal_handler};
+
+const RESERVED_OPEN_FDS: u64 = 1000;
+
+type GcWorker<ER> where ER: RaftEngine = BareGcWorker<
+RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
+RaftRouter<RocksEngine, ER>
+>;
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -108,22 +117,127 @@ pub fn run_tikv(config: TiKvConfig) {
     tikv.stop();
 }
 
-const RESERVED_OPEN_FDS: u64 = 1000;
+fn create_raftstore_compaction_listener<ER: RaftEngine>(router: RaftRouter<RocksEngine, ER>) -> engine_rocks::CompactionListener {
+    fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo) -> bool {
+        // When calculating region size, we only consider write and default
+        // column families.
+        let cf = info.cf_name();
+        if cf != CF_WRITE && cf != CF_DEFAULT {
+            return false;
+        }
+        // Compactions in level 0 and level 1 are very frequently.
+        if info.output_level() < 2 {
+            return false;
+        }
+
+        true
+    }
+
+    let ch = Mutex::new(router);
+    let compacted_handler = Box::new(move |compacted_event: engine_rocks::CompactedEvent| {
+        let ch = ch.lock().unwrap();
+        let event = StoreMsg::CompactedEvent(compacted_event);
+        if let Err(e) = ch.send_control(event) {
+            error!(
+                "send compaction finished event to raftstore failed";
+                "err" => ?e,
+                );
+        }
+    });
+    engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
+}
+
+fn init_engines(
+    config: &TiKvConfig,
+    encryption_key_manager: Option<Arc<DataKeyManager>>,
+    router: RaftRouter<RocksEngine, RocksEngine>,
+    cfg_controller: &mut ConfigController,
+) -> TiKVEngines<RocksEngine> {
+    let store_path = Path::new(&config.storage.data_dir);
+    let env = get_env(encryption_key_manager.clone(), None /*base_env*/).unwrap();
+    let block_cache = config.storage.block_cache.build_shared_cache();
+
+    let raft_db_path = Path::new(&config.raft_store.raftdb_path);
+    let mut raft_db_opts = config.raftdb.build_opt();
+    raft_db_opts.set_env(env.clone());
+    let raft_db_cf_opts = config.raftdb.build_cf_opts(&block_cache);
+    let raft_engine = engine_rocks::raw_util::new_engine_opt(
+        raft_db_path.to_str().unwrap(),
+        raft_db_opts,
+        raft_db_cf_opts,
+        )
+        .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
+
+    // Create kv engine.
+    let mut kv_db_opts = config.rocksdb.build_opt();
+    kv_db_opts.set_env(env);
+    kv_db_opts.add_event_listener(create_raftstore_compaction_listener(router.clone()));
+    let kv_cfs_opts = config.rocksdb.build_cf_opts(&block_cache);
+    let db_path = store_path
+        .join(Path::new(storage::config::DEFAULT_ROCKSDB_SUB_DIR));
+    let kv_engine = engine_rocks::raw_util::new_engine_opt(
+        db_path.to_str().unwrap(),
+        kv_db_opts,
+        kv_cfs_opts,
+        )
+        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+
+    let engines = Engines::new(
+        RocksEngine::from_db(Arc::new(kv_engine)),
+        RocksEngine::from_db(Arc::new(raft_engine)),
+        block_cache.is_some(),
+    );
+
+    let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+    let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+    let engine = RaftKv::new(ServerRaftStoreRouter::new(router, local_reader), engines.kv.clone());
+
+    cfg_controller.register(
+        tikv::config::Module::Storage,
+        Box::new(StorageConfigManger::new(
+                engines.kv.clone(),
+                config.storage.block_cache.shared,
+                )),
+                );
+    cfg_controller.register(
+        tikv::config::Module::Rocksdb,
+        Box::new(DBConfigManger::new(
+                engines.kv.clone(),
+                DBType::Kv,
+                config.storage.block_cache.shared,
+                )),
+                );
+    cfg_controller.register(
+        tikv::config::Module::Raftdb,
+        Box::new(DBConfigManger::new(
+                engines.raft.clone(),
+                DBType::Raft,
+                config.storage.block_cache.shared,
+                )),
+                );
+
+    TiKVEngines {
+        engines,
+        store_meta,
+        engine,
+    }
+}
+
 
 /// A complete TiKV server.
-struct TiKVServer {
+struct TiKVServer<ER: RaftEngine> {
     config: TiKvConfig,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
-    router: RaftRouter<RocksEngine, RocksEngine>,
-    system: Option<RaftBatchSystem<RocksEngine, RocksEngine>>,
+    router: RaftRouter<RocksEngine, ER>,
+    system: Option<RaftBatchSystem<RocksEngine, ER>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
-    engines: Option<TiKVEngines>,
-    servers: Option<Servers>,
+    engines: Option<TiKVEngines<ER>>,
+    servers: Option<Servers<ER>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
@@ -131,23 +245,22 @@ struct TiKVServer {
     concurrency_manager: ConcurrencyManager,
 }
 
-struct TiKVEngines {
-    engines: Engines<RocksEngine, RocksEngine>,
+struct TiKVEngines<ER: RaftEngine> {
+    engines: Engines<RocksEngine, ER>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>,
-    raft_router: ServerRaftStoreRouter<RocksEngine, RocksEngine>,
+    engine: RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
 }
 
-struct Servers {
+struct Servers<ER: RaftEngine> {
     lock_mgr: LockManager,
-    server: Server<ServerRaftStoreRouter<RocksEngine, RocksEngine>, resolve::PdStoreAddrResolver>,
-    node: Node<RpcClient>,
+    server: Server<RaftRouter<RocksEngine, ER>, resolve::PdStoreAddrResolver>,
+    node: Node<RpcClient, ER>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
 }
 
-impl TiKVServer {
-    fn init(mut config: TiKvConfig) -> TiKVServer {
+impl<ER: RaftEngine> TiKVServer<ER> {
+    fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
         // used during startup process.
@@ -164,7 +277,7 @@ impl TiKVServer {
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
         // Initialize raftstore channels.
-        let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
+        let (router, system) = create_raft_batch_system(&config.raft_store);
 
         let (resolve_worker, resolver, state) =
             resolve::new_resolver(Arc::clone(&pd_client), router.clone())
@@ -339,114 +452,11 @@ impl TiKVServer {
         .map(|key_manager| Arc::new(key_manager));
     }
 
-    fn create_raftstore_compaction_listener(&self) -> engine_rocks::CompactionListener {
-        fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo) -> bool {
-            // When calculating region size, we only consider write and default
-            // column families.
-            let cf = info.cf_name();
-            if cf != CF_WRITE && cf != CF_DEFAULT {
-                return false;
-            }
-            // Compactions in level 0 and level 1 are very frequently.
-            if info.output_level() < 2 {
-                return false;
-            }
 
-            true
-        }
-
-        let ch = Mutex::new(self.router.clone());
-        let compacted_handler = Box::new(move |compacted_event: engine_rocks::CompactedEvent| {
-            let ch = ch.lock().unwrap();
-            let event = StoreMsg::CompactedEvent(compacted_event);
-            if let Err(e) = ch.send_control(event) {
-                error!(
-                    "send compaction finished event to raftstore failed";
-                    "err" => ?e,
-                );
-            }
-        });
-        engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
-    }
-
-    fn init_engines(&mut self) {
-        let env = get_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let block_cache = self.config.storage.block_cache.build_shared_cache();
-
-        let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
-        let mut raft_db_opts = self.config.raftdb.build_opt();
-        raft_db_opts.set_env(env.clone());
-        let raft_db_cf_opts = self.config.raftdb.build_cf_opts(&block_cache);
-        let raft_engine = engine_rocks::raw_util::new_engine_opt(
-            raft_db_path.to_str().unwrap(),
-            raft_db_opts,
-            raft_db_cf_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
-
-        // Create kv engine.
-        let mut kv_db_opts = self.config.rocksdb.build_opt();
-        kv_db_opts.set_env(env);
-        kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(&block_cache);
-        let db_path = self
-            .store_path
-            .join(Path::new(storage::config::DEFAULT_ROCKSDB_SUB_DIR));
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
-            db_path.to_str().unwrap(),
-            kv_db_opts,
-            kv_cfs_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-
-        let engines = Engines::new(
-            RocksEngine::from_db(Arc::new(kv_engine)),
-            RocksEngine::from_db(Arc::new(raft_engine)),
-            block_cache.is_some(),
-        );
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader =
-            LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
-        let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
-
-        let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Storage,
-            Box::new(StorageConfigManger::new(
-                engines.kv.clone(),
-                self.config.storage.block_cache.shared,
-            )),
-        );
-        cfg_controller.register(
-            tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(
-                engines.kv.clone(),
-                DBType::Kv,
-                self.config.storage.block_cache.shared,
-            )),
-        );
-        cfg_controller.register(
-            tikv::config::Module::Raftdb,
-            Box::new(DBConfigManger::new(
-                engines.raft.clone(),
-                DBType::Raft,
-                self.config.storage.block_cache.shared,
-            )),
-        );
-
-        let engine = RaftKv::new(raft_router.clone(), engines.kv.clone());
-
-        self.engines = Some(TiKVEngines {
-            engines,
-            store_meta,
-            engine,
-            raft_router,
-        });
-    }
 
     fn init_gc_worker(
         &mut self,
-    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>> {
+    ) -> GcWorker<ER> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -466,7 +476,7 @@ impl TiKVServer {
 
     fn init_servers(
         &mut self,
-        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>>,
+        gc_worker: &GcWorker<ER>,
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -567,7 +577,7 @@ impl TiKVServer {
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
             ),
-            engines.raft_router.clone(),
+            self.router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
             gc_worker.clone(),
@@ -646,12 +656,11 @@ impl TiKVServer {
         }
 
         // Start CDC.
-        let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
         let cdc_endpoint = cdc::Endpoint::new(
             &self.config.cdc,
             self.pd_client.clone(),
             cdc_worker.scheduler(),
-            raft_router,
+            self.router.clone(),
             cdc_ob,
             engines.store_meta.clone(),
         );
@@ -679,7 +688,7 @@ impl TiKVServer {
         // Import SST service.
         let import_service = ImportSSTService::new(
             self.config.import.clone(),
-            engines.raft_router.clone(),
+            self.router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
             self.security_mgr.clone(),
@@ -983,7 +992,7 @@ where
     }
 }
 
-impl Stop for MetricsFlusher<RocksEngine, RocksEngine> {
+impl<ER: RaftEngine> Stop for MetricsFlusher<RocksEngine, ER> {
     fn stop(mut self: Box<Self>) {
         (*self).stop()
     }
