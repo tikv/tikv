@@ -22,8 +22,7 @@ error_code = { path = "../error_code" }
 derive_more = "0.99.3"
 fail = "0.3"
 fs2 = "0.4"
-futures = "0.1"
-futures03 = { package = "futures", version = "0.3" }
+futures = "0.3"
 fxhash = "0.2.1"
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"

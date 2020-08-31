@@ -543,8 +543,12 @@ where
                 );
                 self.on_prepare_split_region(region_epoch, split_keys, callback);
             }
-            CasualMessage::ComputeHashResult { index, hash } => {
-                self.on_hash_computed(index, hash);
+            CasualMessage::ComputeHashResult {
+                index,
+                context,
+                hash,
+            } => {
+                self.on_hash_computed(index, context, hash);
             }
             CasualMessage::RegionApproximateSize { size } => {
                 self.on_approximate_region_size(size);
@@ -2912,9 +2916,14 @@ where
                 ExecResult::ComputeHash {
                     region,
                     index,
+                    context,
                     snap,
-                } => self.on_ready_compute_hash(region, index, snap),
-                ExecResult::VerifyHash { index, hash } => self.on_ready_verify_hash(index, hash),
+                } => self.on_ready_compute_hash(region, index, context, snap),
+                ExecResult::VerifyHash {
+                    index,
+                    context,
+                    hash,
+                } => self.on_ready_verify_hash(index, context, hash),
                 ExecResult::DeleteRange { .. } => {
                     // TODO: clean user properties?
                 }
@@ -3625,9 +3634,15 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EK::Snapshot) {
+    fn on_ready_compute_hash(
+        &mut self,
+        region: metapb::Region,
+        index: u64,
+        context: Vec<u8>,
+        snap: EK::Snapshot,
+    ) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
-        let task = ConsistencyCheckTask::compute_hash(region, index, snap);
+        let task = ConsistencyCheckTask::compute_hash(region, index, context, snap);
         info!(
             "schedule compute hash task";
             "region_id" => self.fsm.region_id(),
@@ -3644,12 +3659,17 @@ where
         }
     }
 
-    fn on_ready_verify_hash(&mut self, expected_index: u64, expected_hash: Vec<u8>) {
-        self.verify_and_store_hash(expected_index, expected_hash);
+    fn on_ready_verify_hash(
+        &mut self,
+        expected_index: u64,
+        context: Vec<u8>,
+        expected_hash: Vec<u8>,
+    ) {
+        self.verify_and_store_hash(expected_index, context, expected_hash);
     }
 
-    fn on_hash_computed(&mut self, index: u64, hash: Vec<u8>) {
-        if !self.verify_and_store_hash(index, hash) {
+    fn on_hash_computed(&mut self, index: u64, context: Vec<u8>, hash: Vec<u8>) {
+        if !self.verify_and_store_hash(index, context, hash) {
             return;
         }
 
@@ -3683,7 +3703,13 @@ where
     }
 
     /// Verify and store the hash to state. return true means the hash has been stored successfully.
-    fn verify_and_store_hash(&mut self, expected_index: u64, expected_hash: Vec<u8>) -> bool {
+    // TODO: Consider context in the function.
+    fn verify_and_store_hash(
+        &mut self,
+        expected_index: u64,
+        _context: Vec<u8>,
+        expected_hash: Vec<u8>,
+    ) -> bool {
         if expected_index < self.fsm.peer.consistency_state.index {
             REGION_HASH_COUNTER.verify.miss.inc();
             warn!(
@@ -3824,6 +3850,7 @@ fn new_verify_hash_request(
     let mut admin = AdminRequest::default();
     admin.set_cmd_type(AdminCmdType::VerifyHash);
     admin.mut_verify_hash().set_index(state.index);
+    admin.mut_verify_hash().set_context(state.context.clone());
     admin.mut_verify_hash().set_hash(state.hash.clone());
     request.set_admin_request(admin);
     request
