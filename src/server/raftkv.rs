@@ -1,5 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt::{self, Debug, Display, Formatter};
+use std::io::Error as IoError;
+use std::result;
+use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
+
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CfName;
 use engine_traits::CF_DEFAULT;
@@ -10,11 +15,7 @@ use kvproto::raft_cmdpb::{
     RaftRequestHeader, Request, Response,
 };
 use kvproto::{errorpb, metapb};
-use std::fmt::{self, Debug, Display, Formatter};
-use std::io::Error as IoError;
-use std::result;
-use std::{sync::atomic::Ordering, time::Duration};
-use txn_types::{Key, TxnExtra, Value};
+use txn_types::{Key, TxnExtraScheduler, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -27,7 +28,6 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
-use tikv_util::mpsc::Sender;
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
 
@@ -109,7 +109,7 @@ impl From<RaftServerError> for KvError {
 pub struct RaftKv<S: RaftStoreRouter<RocksEngine> + 'static> {
     router: S,
     engine: RocksEngine,
-    txn_extra_tx: Option<Sender<TxnExtra>>,
+    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
 }
 
 pub enum CmdRes {
@@ -170,12 +170,12 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
         RaftKv {
             router,
             engine,
-            txn_extra_tx: None,
+            txn_extra_scheduler: None,
         }
     }
 
-    pub fn set_txn_extra_sender(&mut self, txn_extra_tx: Sender<TxnExtra>) {
-        self.txn_extra_tx = Some(txn_extra_tx);
+    pub fn set_txn_extra_scheduler(&mut self, txn_extra_scheduler: Arc<dyn TxnExtraScheduler>) {
+        self.txn_extra_scheduler = Some(txn_extra_scheduler);
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
@@ -366,11 +366,9 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
-        if let Some(tx) = self.txn_extra_tx.as_ref() {
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
             if !batch.extra.is_empty() {
-                if let Err(e) = tx.send(batch.extra) {
-                    error!("send txn extra failed"; "err" => ?e);
-                }
+                tx.schedule(batch.extra);
             }
         }
 

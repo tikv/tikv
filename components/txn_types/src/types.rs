@@ -350,6 +350,10 @@ impl TxnExtra {
     }
 }
 
+pub trait TxnExtraScheduler: Send + Sync {
+    fn schedule(&self, txn_extra: TxnExtra);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

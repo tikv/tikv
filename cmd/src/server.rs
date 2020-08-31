@@ -64,7 +64,6 @@ use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
-    mpsc,
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureWorker, Worker},
@@ -475,12 +474,16 @@ impl TiKVServer {
             Box::new(gc_worker.get_config_manager()),
         );
 
-        let (txn_extra_tx, txn_extra_rx) = mpsc::unbounded();
+        // Create cdc.
+        let mut cdc_worker = Box::new(tikv_util::worker::Worker::new("cdc"));
+        let cdc_scheduler = cdc_worker.scheduler();
+        let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
+
         self.engines
             .as_mut()
             .unwrap()
             .engine
-            .set_txn_extra_sender(txn_extra_tx);
+            .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
@@ -557,9 +560,7 @@ impl TiKVServer {
             cop_read_pools.handle()
         };
 
-        // Create and register cdc.
-        let mut cdc_worker = Box::new(tikv_util::worker::Worker::new("cdc"));
-        let cdc_scheduler = cdc_worker.scheduler();
+        // Register cdc
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(&mut coprocessor_host);
 
@@ -662,7 +663,6 @@ impl TiKVServer {
             raft_router,
             cdc_ob,
             engines.store_meta.clone(),
-            txn_extra_rx,
         );
         let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker
