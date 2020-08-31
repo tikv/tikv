@@ -1021,7 +1021,7 @@ fn cast_real_as_time(
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
         let fv = &val.to_string();
-        let tm = if fv == "0" {
+        if fv == "0" {
             Time::zero(
                 ctx,
                 extra.ret_field_type.get_decimal() as i8,
@@ -1037,9 +1037,9 @@ fn cast_real_as_time(
                 // Enable round
                 true,
             )
-        };
-        tm.map(Some)
-            .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
+        }
+        .map(Some)
+        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
     } else {
         Ok(None)
     }
