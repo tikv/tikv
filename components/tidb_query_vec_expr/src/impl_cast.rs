@@ -1020,7 +1020,7 @@ fn cast_real_as_time(
     val: Option<&Real>,
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
-        if v == 0 {
+        if val == 0 {
             Time::zero(
                 ctx,
                 extra.ret_field_type.get_decimal() as i8,
