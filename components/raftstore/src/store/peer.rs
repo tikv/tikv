@@ -351,7 +351,7 @@ where
 
     proposals: ProposalQueue<EK::Snapshot>,
     leader_missing_time: Option<Instant>,
-    leader_lease: Lease,
+    pub leader_lease: Lease,
     pending_reads: ReadIndexQueue<EK::Snapshot>,
 
     /// If it fails to send messages to leader.
@@ -1796,12 +1796,18 @@ where
                     // Starting from the second, all the following ones' read_index is not none.
                     read_index = read.read_index;
                 }
-                cb.invoke_read(self.handle_read(ctx, req, true, read_index));
+                cb.invoke_read(
+                    self.handle_read(ctx, req, true, read_index),
+                    self.leader_lease.remote(),
+                );
                 continue;
             }
             if req.get_header().get_replica_read() {
                 // We should check epoch since the range could be changed.
-                cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+                cb.invoke_read(
+                    self.handle_read(ctx, req, true, read.read_index),
+                    self.leader_lease.remote(),
+                );
             } else {
                 // The request could be proposed when the peer was leader.
                 // TODO: figure out that it's necessary to notify stale or not.
@@ -2292,7 +2298,10 @@ where
         cb: Callback<EK::Snapshot>,
     ) {
         ctx.raft_metrics.propose.local_read += 1;
-        cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().committed_index())))
+        cb.invoke_read(
+            self.handle_read(ctx, req, false, Some(self.get_store().committed_index())),
+            self.leader_lease.remote(),
+        )
     }
 
     fn pre_read_index(&self) -> Result<()> {

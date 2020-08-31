@@ -3059,11 +3059,14 @@ where
             }
             Err(e) => {
                 // Return error if epoch not match
-                cb.invoke_read(ReadResponse {
-                    response: cmd_resp::new_error(e),
-                    snapshot: None,
-                    txn_extra_op: TxnExtraOp::Noop,
-                });
+                cb.invoke_read(
+                    ReadResponse {
+                        response: cmd_resp::new_error(e),
+                        snapshot: None,
+                        txn_extra_op: TxnExtraOp::Noop,
+                    },
+                    None,
+                );
                 return;
             }
         };
@@ -3086,7 +3089,7 @@ where
             });
         }
 
-        cb.invoke_read(resp);
+        cb.invoke_read(resp, None);
     }
 
     fn handle_tasks<W: WriteBatch<EK>>(
@@ -3440,7 +3443,7 @@ where
                         snapshot: None,
                         txn_extra_op: TxnExtraOp::Noop,
                     };
-                    cb.invoke_read(resp);
+                    cb.invoke_read(resp, None);
                     return;
                 }
                 #[cfg(any(test, feature = "testexport"))]

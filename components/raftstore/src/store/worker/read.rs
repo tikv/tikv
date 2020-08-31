@@ -350,7 +350,7 @@ where
             txn_extra_op: TxnExtraOp::Noop,
         };
 
-        cmd.callback.invoke_read(read_resp);
+        cmd.callback.invoke_read(read_resp, None);
     }
 
     fn pre_propose_raft_command(&mut self, req: &RaftCmdRequest) -> Result<Option<ReadDelegate>> {
@@ -455,7 +455,7 @@ where
                             snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
                         }
                         response.txn_extra_op = delegate.txn_extra_op.load();
-                        cb.invoke_read(response);
+                        cb.invoke_read(response, delegate.leader_lease.clone());
                         self.delegates.insert(region_id, Some(delegate));
                         return;
                     }
@@ -483,11 +483,14 @@ where
                     if let Some(Some(ref delegate)) = self.delegates.get(&region_id) {
                         cmd_resp::bind_term(&mut response, delegate.term);
                     }
-                    cb.invoke_read(ReadResponse {
-                        response,
-                        snapshot: None,
-                        txn_extra_op: TxnExtraOp::Noop,
-                    });
+                    cb.invoke_read(
+                        ReadResponse {
+                            response,
+                            snapshot: None,
+                            txn_extra_op: TxnExtraOp::Noop,
+                        },
+                        None,
+                    );
                     self.delegates.remove(&region_id);
                     return;
                 }

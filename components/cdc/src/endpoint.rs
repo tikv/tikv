@@ -633,7 +633,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 let scheduler_clone = scheduler.clone();
                 if let Err(e) = raft_router.significant_send(
                     region_id,
-                    SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
+                    SignificantMsg::CheckLeader(Callback::Read(Box::new(move |resp| {
                         if !resp.response.get_header().has_error() {
                             match scheduler_clone.schedule(Task::MinTS { region_id, min_ts }) {
                                 Ok(_) | Err(ScheduleError::Stopped(_)) => (),

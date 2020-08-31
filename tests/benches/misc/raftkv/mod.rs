@@ -158,7 +158,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
                 let res = CmdRes::Snap(resp.snapshot.unwrap());
                 cb2((CbContext::new(), Ok(res)));
             }));
-        cb.invoke_read(resp.clone());
+        cb.invoke_read(resp.clone(), None);
     });
 }
 
