@@ -21,7 +21,6 @@ use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
-use txn_types::TxnExtra;
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -412,7 +411,6 @@ pub enum StoreMsg {
     Start {
         store: metapb::Store,
     },
-    TxnExtra(TxnExtra),
 
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
@@ -438,7 +436,6 @@ impl fmt::Debug for StoreMsg {
                 "Clear Region size in range {:?} to {:?}",
                 start_key, end_key
             ),
-            StoreMsg::TxnExtra(_) => write!(fmt, "Txn Extra"),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
             #[cfg(any(test, feature = "testexport"))]

@@ -15,7 +15,7 @@ use raftstore::Error as RaftStoreError;
 use tikv::storage::{Cursor, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::Scheduler;
-use txn_types::{Key, Lock, MutationType, TxnExtra, Value, WriteRef, WriteType};
+use txn_types::{Key, Lock, MutationType, Value, WriteRef, WriteType};
 
 use crate::endpoint::{Deregister, OldValueCache, Task};
 use crate::{Error as CdcError, Result};
@@ -151,12 +151,6 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             }) {
                 warn!("schedule cdc task failed"; "error" => ?e);
             }
-        }
-    }
-
-    fn on_txn_extra(&self, txn_extra: TxnExtra) {
-        if let Err(e) = self.sched.schedule(Task::TxnExtra(txn_extra)) {
-            warn!("schedule cdc task failed"; "error" => ?e);
         }
     }
 }

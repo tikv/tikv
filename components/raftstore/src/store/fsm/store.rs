@@ -562,7 +562,6 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
-                StoreMsg::TxnExtra(txn_extra) => self.ctx.coprocessor_host.on_txn_extra(txn_extra),
             }
         }
     }
