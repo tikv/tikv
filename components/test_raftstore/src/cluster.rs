@@ -1255,12 +1255,36 @@ impl<T: Simulator> Cluster<T> {
             .unwrap()
             .unwrap();
         let prepare_merge = new_prepare_merge(region);
-        let source = block_on(self.pd_client.get_region_by_id(source))
+        let source_region = block_on(self.pd_client.get_region_by_id(source))
             .unwrap()
             .unwrap();
-        let req = new_admin_request(source.get_id(), source.get_region_epoch(), prepare_merge);
-        self.call_command_on_leader(req, Duration::from_secs(3))
-            .unwrap()
+        let req = new_admin_request(
+            source_region.get_id(),
+            source_region.get_region_epoch(),
+            prepare_merge,
+        );
+        let mut try_cnt = 0;
+        loop {
+            let resp = self
+                .call_command_on_leader(req.clone(), Duration::from_secs(3))
+                .unwrap();
+            if !resp
+                .get_header()
+                .get_error()
+                .get_message()
+                .contains("not applied to current term")
+            {
+                return resp;
+            }
+            if try_cnt > 250 {
+                panic!(
+                    "region {}'s leader is not applied to current term after {} tries",
+                    source, try_cnt
+                );
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
     }
 
     /// Make sure region exists on that store.

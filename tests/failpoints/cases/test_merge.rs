@@ -884,7 +884,7 @@ fn test_node_merge_cascade_merge_with_apply_yield() {
 
 // Test if the rollback merge proposal is proposed before the majority of peers want to rollback
 #[test]
-fn test_node_mutiple_rollback_merge() {
+fn test_node_multiple_rollback_merge() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
@@ -941,11 +941,17 @@ fn test_node_mutiple_rollback_merge() {
         let resp = cluster
             .call_command_on_leader(req, Duration::from_millis(100))
             .unwrap();
-        assert!(resp
+        if !resp
             .get_header()
             .get_error()
             .get_message()
-            .contains("merging mode"));
+            .contains("merging mode")
+        {
+            panic!(
+                "err message {:?} does not contain merging mode",
+                resp.get_header().get_error()
+            );
+        }
 
         fail::remove(on_check_merge_not_1001_fp);
         // Write data for waiting the merge to rollback easily
