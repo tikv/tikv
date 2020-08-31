@@ -676,8 +676,11 @@ impl Cluster {
 fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) -> Result<()> {
     let epoch = region.get_region_epoch();
     let check_epoch = check_region.get_region_epoch();
-    if check_epoch.get_conf_ver() >= epoch.get_conf_ver()
-        && check_epoch.get_version() >= epoch.get_version()
+
+    // If check_epoch >= epoch then return Ok directly,
+    // here `ver` have higher priority than `conf_ver`
+    if (check_epoch.get_version(), check_epoch.get_conf_ver())
+        >= (epoch.get_version(), epoch.get_conf_ver())
     {
         return Ok(());
     }
