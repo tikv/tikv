@@ -562,10 +562,9 @@ pub fn create_test_engine(
 
     let mut engine = RocksEngine::from_db(engine);
     let mut raft_engine = RocksEngine::from_db(raft_engine);
-    if cache.is_some() {
-        engine.set_shared_block_cache();
-        raft_engine.set_shared_block_cache();
-    }
+    let shared_block_cache = cache.is_some();
+    engine.set_shared_block_cache(shared_block_cache);
+    raft_engine.set_shared_block_cache(shared_block_cache);
     let engines = Engines::new(engine, raft_engine);
     (engines, key_manager, dir)
 }

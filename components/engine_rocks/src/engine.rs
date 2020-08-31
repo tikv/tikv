@@ -60,8 +60,8 @@ impl RocksEngine {
         fs::read_dir(&path).unwrap().next().is_some()
     }
 
-    pub fn set_shared_block_cache(&mut self) {
-        self.shared_block_cache = true;
+    pub fn set_shared_block_cache(&mut self, enable: bool) {
+        self.shared_block_cache = enable;
     }
 }
 

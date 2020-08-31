@@ -104,10 +104,9 @@ fn new_debug_executor(
 
             let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
             let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
-            if cache.is_some() {
-                kv_db.set_shared_block_cache();
-                raft_db.set_shared_block_cache();
-            }
+            let shared_block_cache = cache.is_some();
+            kv_db.set_shared_block_cache(shared_block_cache);
+            raft_db.set_shared_block_cache(shared_block_cache);
 
             Box::new(Debugger::new(
                 Engines::new(kv_db, raft_db),

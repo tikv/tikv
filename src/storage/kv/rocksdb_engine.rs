@@ -113,10 +113,8 @@ impl RocksEngine {
         // rocksdb.
         let mut kv_engine = BaseRocksEngine::from_db(db.clone());
         let mut raft_engine = BaseRocksEngine::from_db(db);
-        if shared_block_cache {
-            kv_engine.set_shared_block_cache();
-            raft_engine.set_shared_block_cache();
-        }
+        kv_engine.set_shared_block_cache(shared_block_cache);
+        raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
         box_try!(worker.start(Runner(engines.clone())));
         Ok(RocksEngine {
