@@ -4676,6 +4676,7 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
+ "raft-engine",
  "raftstore",
  "rand",
  "regex",

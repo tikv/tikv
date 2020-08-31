@@ -49,18 +49,12 @@ pub fn bootstrap_store<ER>(
     store_id: u64,
 ) -> Result<()>
 where
-    ER: KvEngine + RaftEngine,
+    ER: RaftEngine,
 {
     let mut ident = StoreIdent::default();
 
     if !is_range_empty(&engines.kv, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
         return Err(box_err!("kv store is not empty and has already had data."));
-    }
-
-    if !is_range_empty(&engines.raft, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
-        return Err(box_err!(
-            "raft store is not empty and has already had data."
-        ));
     }
 
     ident.set_cluster_id(cluster_id);
