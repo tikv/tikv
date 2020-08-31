@@ -8,7 +8,6 @@ use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
-use txn_types::TxnExtra;
 
 use super::*;
 use crate::store::CasualRouter;
