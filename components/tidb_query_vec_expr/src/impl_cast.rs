@@ -1020,17 +1020,26 @@ fn cast_real_as_time(
     val: Option<&Real>,
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
-        // Convert `val` to a string first and then parse it as a float string.
-        Time::parse(
-            ctx,
-            &val.to_string(),
-            extra.ret_field_type.as_accessor().tp().try_into()?,
-            extra.ret_field_type.get_decimal() as i8,
-            // Enable round
-            true,
-        )
-        .map(Some)
-        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
+        let fv = &val.to_string();
+        let tm = if fv == "0" {
+            Time::zero(
+                ctx,
+                extra.ret_field_type.get_decimal() as i8,
+                extra.ret_field_type.as_accessor().tp().try_into()?,
+            )
+        } else {
+            // Convert `val` to a string first and then parse it as a float string.
+            Time::parse(
+                ctx,
+                fv,
+                extra.ret_field_type.as_accessor().tp().try_into()?,
+                extra.ret_field_type.get_decimal() as i7,
+                // Enable round
+                true,
+            )
+        };
+        tm.map(Some)
+            .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
     } else {
         Ok(None)
     }
