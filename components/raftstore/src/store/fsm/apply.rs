@@ -220,10 +220,12 @@ pub enum ExecResult<S> {
     ComputeHash {
         region: Region,
         index: u64,
+        context: Vec<u8>,
         snap: S,
     },
     VerifyHash {
         index: u64,
+        context: Vec<u8>,
         hash: Vec<u8>,
     },
     DeleteRange {
@@ -2255,7 +2257,7 @@ where
     fn exec_compute_hash<W: WriteBatch<EK>>(
         &self,
         ctx: &ApplyContext<EK, W>,
-        _: &AdminRequest,
+        req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         let resp = AdminResponse::default();
         Ok((
@@ -2263,6 +2265,7 @@ where
             ApplyResult::Res(ExecResult::ComputeHash {
                 region: self.region.clone(),
                 index: ctx.exec_ctx.as_ref().unwrap().index,
+                context: req.get_compute_hash().get_context().to_vec(),
                 // This snapshot may be held for a long time, which may cause too many
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
@@ -2279,11 +2282,16 @@ where
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
+        let context = verify_req.get_context().to_vec();
         let hash = verify_req.get_hash().to_vec();
         let resp = AdminResponse::default();
         Ok((
             resp,
-            ApplyResult::Res(ExecResult::VerifyHash { index, hash }),
+            ApplyResult::Res(ExecResult::VerifyHash {
+                index,
+                context,
+                hash,
+            }),
         ))
     }
 }

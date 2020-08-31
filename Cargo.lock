@@ -1876,7 +1876,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#6157337686b1654f0bfb55920faf95b3d3e34d87"
+source = "git+https://github.com/pingcap/kvproto.git#d677e6fd224a9c59ff6b3e29426fc8818ebebfbd"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -3082,7 +3082,6 @@ dependencies = [
  "fs2",
  "futures 0.1.29",
  "futures 0.3.4",
- "futures-executor",
  "futures-util",
  "hex 0.4.2",
  "into_other",
@@ -3706,6 +3705,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_ignored"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c2c7d39d14f2f2ea82239de71594782f186fd03501ac81f0ce08e674819ff2f"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde_json"
 version = "1.0.51"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3917,6 +3925,7 @@ dependencies = [
  "error_code",
  "external_storage",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-cpupool",
  "futures-executor",
  "futures-util",
@@ -3937,7 +3946,6 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio 0.2.13",
- "tokio-sync",
  "txn_types",
  "uuid",
 ]
@@ -4241,6 +4249,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_traits",
+ "fail",
  "futures 0.1.29",
  "futures 0.3.4",
  "futures-cpupool",
@@ -4550,6 +4559,7 @@ name = "tidb_query_vec_executors"
 version = "0.0.1"
 dependencies = [
  "codec",
+ "fail",
  "failure",
  "hex 0.3.2",
  "kvproto",
@@ -4673,6 +4683,7 @@ dependencies = [
  "semver 0.10.0",
  "serde",
  "serde_derive",
+ "serde_ignored",
  "serde_json",
  "slog",
  "slog-global",
@@ -4776,7 +4787,6 @@ dependencies = [
  "error_code",
  "fail",
  "fs2",
- "futures 0.1.29",
  "futures 0.3.4",
  "futures-cpupool",
  "fxhash",
@@ -4809,9 +4819,9 @@ dependencies = [
  "tikv_alloc",
  "time 0.1.42",
  "tipb",
+ "tokio 0.2.13",
  "tokio-core",
  "tokio-executor",
- "tokio-sync",
  "tokio-timer",
  "toml",
  "url",

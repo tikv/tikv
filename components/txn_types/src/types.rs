@@ -245,11 +245,11 @@ pub enum Mutation {
     Lock(Key),
     /// Put `Value` into `Key` if `Key` does not yet exist.
     ///
-    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
+    /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
     Insert((Key, Value)),
     /// Check `key` must be not exist.
     ///
-    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
+    /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
     CheckNotExists(Key),
 }
 

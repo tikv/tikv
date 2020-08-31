@@ -242,6 +242,7 @@ pub enum CasualMessage<EK: KvEngine> {
     /// Hash result of ComputeHash command.
     ComputeHashResult {
         index: u64,
+        context: Vec<u8>,
         hash: Vec<u8>,
     },
 
@@ -280,10 +281,15 @@ pub enum CasualMessage<EK: KvEngine> {
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CasualMessage::ComputeHashResult { index, ref hash } => write!(
-                fmt,
-                "ComputeHashResult [index: {}, hash: {}]",
+            CasualMessage::ComputeHashResult {
                 index,
+                context,
+                ref hash,
+            } => write!(
+                fmt,
+                "ComputeHashResult [index: {}, context: {}, hash: {}]",
+                index,
+                hex::encode_upper(&context),
                 escape(hash)
             ),
             CasualMessage::SplitRegion { ref split_keys, .. } => write!(

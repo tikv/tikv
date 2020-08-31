@@ -1613,7 +1613,15 @@ mod tests {
 
         // Shortcuts
         let ts = TimeStamp::compose;
-        let uncommitted = super::TxnStatus::uncommitted;
+        let uncommitted = |ttl, min_commit_ts| {
+            move |s| {
+                if let TxnStatus::Uncommitted { lock } = s {
+                    lock.ttl == ttl && lock.min_commit_ts == min_commit_ts
+                } else {
+                    false
+                }
+            }
+        };
 
         must_prewrite_put_for_large_txn(&engine, k, v, k, ts(10, 0), 100, 0);
         check_txn_status::tests::must_success(
@@ -1623,7 +1631,7 @@ mod tests {
             ts(20, 0),
             ts(20, 0),
             true,
-            uncommitted(100, ts(20, 1), false, vec![]),
+            uncommitted(100, ts(20, 1)),
         );
         // The the min_commit_ts should be ts(20, 1)
         must_commit_err(&engine, k, ts(10, 0), ts(15, 0));
@@ -1638,7 +1646,7 @@ mod tests {
             ts(40, 0),
             ts(40, 0),
             true,
-            uncommitted(100, ts(40, 1), false, vec![]),
+            uncommitted(100, ts(40, 1)),
         );
         must_commit(&engine, k, ts(30, 0), ts(50, 0));
 
@@ -1651,7 +1659,7 @@ mod tests {
             ts(70, 0),
             ts(70, 0),
             true,
-            uncommitted(100, ts(70, 1), false, vec![]),
+            uncommitted(100, ts(70, 1)),
         );
         must_prewrite_put_impl(
             &engine,
@@ -2957,7 +2965,9 @@ mod tests {
         assert!(w.has_overlapped_rollback);
 
         must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 20, 0);
-        check_txn_status::tests::must_success(&engine, k, 25, 0, 0, true, TxnStatus::LockNotExist);
+        check_txn_status::tests::must_success(&engine, k, 25, 0, 0, true, |s| {
+            s == TxnStatus::LockNotExist
+        });
         must_commit(&engine, k, 20, 25);
         let w = must_written(&engine, k, 20, 25, WriteType::Put);
         assert!(w.has_overlapped_rollback);
