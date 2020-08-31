@@ -77,7 +77,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        gc_worker: GcWorker<E>,
+        gc_worker: GcWorker<E, T>,
         yatp_read_pool: Option<ReadPool>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
