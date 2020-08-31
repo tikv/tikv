@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::callback::must_call;
-use futures03::channel::oneshot as futures_oneshot;
+use futures::channel::oneshot as futures_oneshot;
 
 /// Generates a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.
