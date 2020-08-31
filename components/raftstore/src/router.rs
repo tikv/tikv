@@ -34,6 +34,8 @@ where
         msg: SignificantMsg<EK::Snapshot>,
     ) -> RaftStoreResult<()>;
 
+    fn broadcast_normal(&self, msg_en: impl FnMut() -> PeerMsg<EK>);
+
     fn send_casual_msg(&self, region_id: u64, msg: CasualMessage<EK>) -> RaftStoreResult<()> {
         <Self as CasualRouter<EK>>::send(self, region_id, msg)
     }
@@ -87,6 +89,12 @@ where
     fn broadcast_unreachable(&self, store_id: u64) {
         let _ = self.send_store_msg(StoreMsg::StoreUnreachable { store_id });
     }
+
+    fn report_resolved(&self, store_id: u64, group_id: u64) {
+        self.broadcast_normal(|| {
+            PeerMsg::SignificantMsg(SignificantMsg::StoreResolved { store_id, group_id })
+        })
+    }
 }
 
 pub trait LocalReadRouter<EK>: Send + Clone
@@ -137,6 +145,8 @@ where
     fn significant_send(&self, _: u64, _: SignificantMsg<EK::Snapshot>) -> RaftStoreResult<()> {
         Ok(())
     }
+
+    fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<EK>) {}
 }
 
 /// A router that routes messages to the raftstore
@@ -202,6 +212,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter
     ) -> RaftStoreResult<()> {
         RaftStoreRouter::significant_send(&self.router, region_id, msg)
     }
+
+    fn broadcast_normal(&self, msg_gen: impl FnMut() -> PeerMsg<EK>) {
+        self.router.broadcast_normal(msg_gen)
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter<EK, ER> {
@@ -252,5 +266,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for RaftRouter<EK, ER> {
         }
 
         Ok(())
+    }
+
+    fn broadcast_normal(&self, msg_gen: impl FnMut() -> PeerMsg<EK>) {
+        batch_system::Router::broadcast_normal(self, msg_gen)
     }
 }
