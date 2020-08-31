@@ -306,10 +306,10 @@ impl Engine for RocksEngine {
         if batch.modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
-        box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
         if let Some(cb) = proposed_cb {
             cb();
         }
+        box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
         Ok(())
     }
 
