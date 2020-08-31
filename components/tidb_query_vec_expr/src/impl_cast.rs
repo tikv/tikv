@@ -1020,8 +1020,7 @@ fn cast_real_as_time(
     val: Option<&Real>,
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
-        let fv = &val.to_string();
-        if fv == "0" {
+        if v == 0 {
             Time::zero(
                 ctx,
                 extra.ret_field_type.get_decimal() as i8,
@@ -1031,7 +1030,7 @@ fn cast_real_as_time(
             // Convert `val` to a string first and then parse it as a float string.
             Time::parse(
                 ctx,
-                fv,
+                &val.to_string(),
                 extra.ret_field_type.as_accessor().tp().try_into()?,
                 extra.ret_field_type.get_decimal() as i8,
                 // Enable round
