@@ -1211,18 +1211,20 @@ impl PdClient for TestPdClient {
             .or_insert_with(Store::default);
         let rx = store.receiver.take().unwrap();
         let st1 = rx.map(|resp| vec![resp]);
-        let st2 = stream::unfold(timer, |timer| async move {
-            timer
-                .delay(Instant::now() + Duration::from_millis(500))
-                .compat()
-                .await
-                .unwrap();
-            Some(((), timer))
-        })
-        .map(move |_| {
-            let mut cluster = cluster1.wl();
-            cluster.poll_heartbeat_responses_for(store_id)
-        });
+        let st2 = stream::unfold(
+            (timer, cluster1, store_id),
+            |(timer, cluster1, store_id)| async move {
+                timer
+                    .delay(Instant::now() + Duration::from_millis(500))
+                    .compat()
+                    .await
+                    .unwrap();
+                let mut cluster = cluster1.wl();
+                let resps = cluster.poll_heartbeat_responses_for(store_id);
+                drop(cluster);
+                Some((resps, (timer, cluster1, store_id)))
+            },
+        );
         Box::pin(
             stream::select(st1, st2)
                 .for_each(move |resps| {
