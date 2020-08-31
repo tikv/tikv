@@ -1877,7 +1877,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#597e3bf93df7ede3de7df8e7fe313f3afa513e96"
+source = "git+https://github.com/pingcap/kvproto.git#d677e6fd224a9c59ff6b3e29426fc8818ebebfbd"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -3083,7 +3083,6 @@ dependencies = [
  "fs2",
  "futures 0.1.29",
  "futures 0.3.4",
- "futures-executor",
  "futures-util",
  "hex 0.4.2",
  "into_other",
@@ -3704,6 +3703,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "serde_ignored"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c2c7d39d14f2f2ea82239de71594782f186fd03501ac81f0ce08e674819ff2f"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -4676,6 +4684,7 @@ dependencies = [
  "semver 0.10.0",
  "serde",
  "serde_derive",
+ "serde_ignored",
  "serde_json",
  "slog",
  "slog-global",
@@ -4779,7 +4788,6 @@ dependencies = [
  "error_code",
  "fail",
  "fs2",
- "futures 0.1.29",
  "futures 0.3.4",
  "futures-cpupool",
  "fxhash",
