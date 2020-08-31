@@ -607,7 +607,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             let (tso, _) =
                 futures03::future::join(tso, timeout.compat().map_err(|_| unreachable!())).await;
             // Ignore get tso errors since we will retry every `min_ts_interval`.
-            let min_ts = tso.unwrap_or(TimeStamp::default());
+            let min_ts = tso.unwrap_or_default();
             // TODO: send a message to raftstore would consume too much cpu time,
             // try to handle it outside raftstore.
             for (region_id, observe_id) in regions {
