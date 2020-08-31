@@ -25,9 +25,10 @@ use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use futures03::compat::{Compat, Future01CompatExt};
 use futures03::future::{self as future03, Future as Future03, FutureExt, TryFutureExt};
+use futures03::stream::{StreamExt, TryStreamExt};
 use grpcio::{
-    ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
-    RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
+    ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
+    RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
@@ -886,19 +887,22 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             .inspect(|r| GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64))
             .map(move |mut r| {
                 r.set_transport_layer_load(thread_load.load() as u64);
-                (r, WriteFlags::default().buffer_hint(false))
-            })
-            .map_err(|e| {
-                let msg = Some(format!("{:?}", e));
-                GrpcError::RpcFailure(RpcStatus::new(RpcStatusCode::UNKNOWN, msg))
+                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
+                    r,
+                    WriteFlags::default().buffer_hint(false),
+                ))
             });
 
-        ctx.spawn(sink.send_all(response_retriever).map(|_| ()).map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "batch_commands",
-                "err" => ?e
-            );
-        }));
+        ctx.spawn(
+            sink.send_all(response_retriever.compat())
+                .map(|_| ())
+                .map_err(|e| {
+                    debug!("kv rpc failed";
+                        "request" => "batch_commands",
+                        "err" => ?e
+                    );
+                }),
+        );
     }
 
     fn ver_get(
@@ -1632,8 +1636,8 @@ txn_command_future!(future_cleanup, CleanupRequest, CleanupResponse, (v, resp) {
 txn_command_future!(future_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResponse, (v, resp) {
     match v {
         Ok(txn_status) => {
-            if let TxnStatus::Uncommitted { lock_ttl, .. } = txn_status {
-                resp.set_lock_ttl(lock_ttl);
+            if let TxnStatus::Uncommitted { lock } = txn_status {
+                resp.set_lock_ttl(lock.ttl);
             } else {
                 unreachable!();
             }
@@ -1652,21 +1656,16 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                 TxnStatus::Committed { commit_ts } => {
                     resp.set_commit_version(commit_ts.into_inner())
                 }
-                TxnStatus::Uncommitted {
-                    lock_ttl,
-                    min_commit_ts,
-                    use_async_commit,
-                    secondaries,
-                } => {
-                    resp.set_lock_ttl(lock_ttl);
-                    resp.set_use_async_commit(use_async_commit);
-                    resp.set_secondaries(secondaries.into());
+                TxnStatus::Uncommitted { lock } => {
                     // If the caller_start_ts is max, it's a point get in the autocommit transaction.
                     // Even though the min_commit_ts is not pushed, the point get can ingore the lock
                     // next time because it's not committed. So we pretend it has been pushed.
-                    if min_commit_ts > caller_start_ts || caller_start_ts.is_max() {
+                    if lock.min_commit_ts > caller_start_ts || caller_start_ts.is_max() {
                         resp.set_action(Action::MinCommitTsPushed);
                     }
+                    resp.set_lock_ttl(lock.ttl);
+                    let primary = lock.primary.clone();
+                    resp.set_lock_info(lock.into_lock_info(primary));
                 }
             },
             Err(e) => resp.set_error(extract_key_error(&e)),
