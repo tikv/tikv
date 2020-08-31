@@ -2,7 +2,7 @@
 
 use super::error::{ProfError, ProfResult};
 use crate::AllocStats;
-use libc::{self, c_char, c_void};
+use libc::{self, c_char, c_uint, c_void};
 use std::collections::HashMap;
 use std::{ptr, slice, sync::Mutex, thread};
 use tikv_jemalloc_ctl::{epoch, stats, Error};
@@ -22,14 +22,22 @@ struct MemoryStatsAccessor {
     // TODO: trace arena, allocated, deallocated. Original implement doesn't
     // work actually.
     thread_name: String,
+    arena: isize,
 }
 
 pub fn add_thread_memory_accessor() {
+    const THREAD_ARENA: &[u8] = b"thread.arena\0";
+    let arena = match unsafe { tikv_jemalloc_ctl::raw::read::<c_uint>(THREAD_ARENA) } {
+        Ok(arena) => arena as isize,
+        Err(_) => -1,
+    };
+
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
     thread_memory_map.insert(
         thread::current().id(),
         MemoryStatsAccessor {
             thread_name: thread::current().name().unwrap().to_string(),
+            arena,
         },
     );
 }
@@ -61,6 +69,7 @@ pub fn dump_stats() -> String {
     let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
     for (_, accessor) in thread_memory_map.iter() {
         memory_stats.push_str(format!("Thread [{}]: \n", accessor.thread_name).as_str());
+        memory_stats.push_str(format!("  arena: {}\n", accessor.arena).as_str());
     }
     memory_stats
 }

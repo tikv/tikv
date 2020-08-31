@@ -144,7 +144,7 @@ unportable_release:
 
 # An optimized build with jemalloc memory profiling enabled.
 prof_release:
-	ENABLE_FEATURES=mem-profiling make release
+	ENABLE_FEATURES=mem-profiling make dist_release
 
 # An optimized build instrumented with failpoints.
 # This is used for schrodinger chaos testing.
