@@ -3236,27 +3236,6 @@ where
 
         let first_idx = self.fsm.peer.get_store().first_index();
 
-        if !force_compact && replicated_idx < first_idx {
-            return;
-        }
-
-        if !force_compact && replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold {
-            // In the current implementation one compaction can't delete all stale Raft logs.
-            // There will be at least 3 entries left after one compaction:
-            // |------------- entries needs to be compacted ----------|
-            // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
-            //             |-------------------- entries will be left ----------------------|
-            if last_idx - first_idx < 3 {
-                return;
-            }
-            if self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks {
-                // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
-                self.fsm.skip_gc_raft_log_ticks += 1;
-                self.register_raft_gc_log_tick();
-                return;
-            }
-        }
-
         let mut compact_idx = if force_compact
             // Too many logs between applied index and first index.
             || (applied_idx > first_idx && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit)
@@ -3264,6 +3243,20 @@ where
             || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0)
         {
             applied_idx
+        } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
+            // In the current implementation one compaction can't delete all stale Raft logs.
+            // There will be at least 3 entries left after one compaction:
+            // |------------- entries needs to be compacted ----------|
+            // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
+            //             |-------------------- entries will be left ----------------------|
+            return;
+        } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold {
+            if self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks {
+                // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
+                self.fsm.skip_gc_raft_log_ticks += 1;
+                self.register_raft_gc_log_tick();
+            }
+            return;
         } else {
             replicated_idx
         };
