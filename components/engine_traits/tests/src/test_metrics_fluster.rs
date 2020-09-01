@@ -45,8 +45,7 @@ fn test_metrics_flusher() {
     .unwrap();
     assert!(!raft_engine.is_titan());
 
-    let shared_block_cache = false;
-    let engines = Engines::new(engine, raft_engine, shared_block_cache);
+    let engines = Engines::new(engine, raft_engine);
     let mut metrics_flusher = MetricsFlusher::new(engines);
     metrics_flusher.set_flush_interval(Duration::from_millis(100));
 

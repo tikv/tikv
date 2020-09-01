@@ -1,13 +1,13 @@
 use crate::{RocksEngine, RocksWriteBatch};
 
 use engine_traits::{
-    Iterable, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt, WriteOptions, CF_DEFAULT,
-    MAX_DELETE_BATCH_SIZE,
+    Iterable, KvEngine, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt, WriteOptions,
+    CF_DEFAULT, MAX_DELETE_BATCH_SIZE,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::{eraftpb::Entry, StorageError};
-use raft_engine::{CacheStats, Error, RaftEngine, RaftLogBatch, Result};
+use raft_engine::{Error, RaftEngine, RaftLogBatch, Result};
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
@@ -192,24 +192,31 @@ impl RaftEngine for RocksEngine {
             box_try!(raft_wb.delete(&key));
             if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
                 // Avoid large write batch to reduce latency.
-                self.write(&raft_wb).unwrap();
+                box_try!(self.write(&raft_wb));
                 raft_wb.clear();
             }
         }
 
         // TODO: disable WAL here.
         if !Mutable::is_empty(&raft_wb) {
-            self.write(&raft_wb).unwrap();
+            box_try!(self.write(&raft_wb));
         }
         Ok((to - from) as usize)
+    }
+
+    fn purge_expired_files(&self) -> Result<Vec<u64>> {
+        Ok(vec![])
     }
 
     fn has_builtin_entry_cache(&self) -> bool {
         false
     }
 
-    fn flush_stats(&self) -> CacheStats {
-        CacheStats::default()
+    fn flush_metrics(&self, instance: &str) {
+        KvEngine::flush_metrics(self, instance)
+    }
+    fn reset_statistics(&self) {
+        KvEngine::reset_statistics(self)
     }
 }
 

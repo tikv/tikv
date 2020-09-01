@@ -8,7 +8,7 @@ use std::result;
 
 use encryption::Error as EncryptionError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use futures03::channel::oneshot::Canceled;
+use futures::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
 use kvproto::import_sstpb;
 use tikv_util::codec::Error as CodecError;
