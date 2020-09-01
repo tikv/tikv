@@ -103,7 +103,10 @@ pub fn init_log_for_test() {
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // We don't mind set it multiple times.
     // We hardly ever read rocksdb log in tests.
-    let drainer = CaseTraceLogger { f: writer, skip_tags: vec!["rocksdb_log".to_owned(), "raftdb_log".to_owned()] };
+    let drainer = CaseTraceLogger {
+        f: writer,
+        skip_tags: vec!["rocksdb_log".to_owned(), "raftdb_log".to_owned()],
+    };
 
     // Default disabled log targets for test.
     let disabled_targets = vec!["tokio_core".to_owned(), "tokio_reactor".to_owned()];
