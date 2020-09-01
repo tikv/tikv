@@ -4258,6 +4258,7 @@ dependencies = [
  "hex 0.4.2",
  "keys",
  "kvproto",
+ "lazy_static",
  "pd_client",
  "raft",
  "raftstore",
