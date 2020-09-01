@@ -24,7 +24,7 @@ use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::{Ready, StateRole};
 use time::{self, Timespec};
-use tokio::runtime::{Builder as RuntimeBuilder, Handle, Runtime};
+use tokio::runtime::{self, Handle, Runtime};
 
 use engine_rocks::CompactedEvent;
 use error_code::ErrorCodeExt;
@@ -1150,7 +1150,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cleanup_worker: Worker::new("cleanup-worker"),
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
             coprocessor_host: coprocessor_host.clone(),
-            future_poller: RuntimeBuilder::new()
+            future_poller: runtime::Builder::new()
                 .threaded_scheduler()
                 .thread_name("future-poller")
                 .core_threads(cfg.value().future_poll_size)
