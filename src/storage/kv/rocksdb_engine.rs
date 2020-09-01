@@ -68,7 +68,7 @@ impl Runnable for Runner {
 struct RocksEngineCore {
     // only use for memory mode
     temp_dir: Option<TempDir>,
-    worker: Worker<Runner>,
+    worker: Worker<Task>,
 }
 
 impl Drop for RocksEngineCore {

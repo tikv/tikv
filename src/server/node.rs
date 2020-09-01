@@ -22,9 +22,9 @@ use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
+use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
-use raftstore::store::{AutoSplitController, SplitCheckRunner};
-use raftstore::store::{GlobalReplicationState, PdTask};
+use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::FutureWorker;
 use tikv_util::worker::Worker;
@@ -62,25 +62,25 @@ pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
-    system: RaftBatchSystem<RocksEngine, RocksEngine, C>,
+    system: RaftBatchSystem<RocksEngine, RocksEngine>,
     has_started: bool,
 
     pd_client: Arc<C>,
     state: Arc<Mutex<GlobalReplicationState>>,
 }
 
-impl<PC> Node<PC>
+impl<C> Node<C>
 where
-    PC: PdClient,
+    C: PdClient,
 {
     /// Creates a new Node.
     pub fn new(
-        system: RaftBatchSystem<RocksEngine, RocksEngine, PC>,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
-        pd_client: Arc<PC>,
+        pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
-    ) -> Node<PC> {
+    ) -> Node<C> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -141,9 +141,7 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<
-            SplitCheckRunner<RocksEngine, RaftRouter<RocksEngine, RocksEngine>>,
-        >,
+        split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
@@ -380,9 +378,7 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<
-            SplitCheckRunner<RocksEngine, RaftRouter<RocksEngine, RocksEngine>>,
-        >,
+        split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()>

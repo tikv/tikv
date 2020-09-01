@@ -384,7 +384,7 @@ impl Runnable for LockCollectorRunner {
 }
 
 pub struct AppliedLockCollector {
-    worker: Mutex<Worker<LockCollectorRunner>>,
+    worker: Mutex<Worker<LockCollectorTask>>,
     scheduler: Scheduler<LockCollectorTask>,
 }
 

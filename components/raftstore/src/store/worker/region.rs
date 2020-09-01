@@ -758,7 +758,6 @@ mod tests {
     use super::Event;
     use super::PendingDeleteRanges;
     use super::Task;
-    use std::sync::mpsc::SyncSender;
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -847,9 +846,7 @@ mod tests {
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = Worker::<
-            RegionRunner<RocksEngine, RocksEngine, SyncSender<(u64, CasualMessage<RocksEngine>)>>,
-        >::new("region-worker");
+        let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let (router, _) = mpsc::sync_channel(1);
@@ -931,9 +928,7 @@ mod tests {
         let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = Worker::<
-            RegionRunner<RocksEngine, RocksEngine, SyncSender<(u64, CasualMessage<RocksEngine>)>>,
-        >::new("snap-manager");
+        let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(

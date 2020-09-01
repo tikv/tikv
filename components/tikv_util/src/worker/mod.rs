@@ -218,7 +218,7 @@ impl<S: Into<String>> Builder<S> {
         self
     }
 
-    pub fn create<R: Runnable>(self) -> Worker<R> {
+    pub fn create<T: Display>(self) -> Worker<T> {
         let (tx, rx) = if self.pending_capacity == usize::MAX {
             mpsc::unbounded()
         } else {
@@ -235,9 +235,9 @@ impl<S: Into<String>> Builder<S> {
 }
 
 /// A worker that can schedule time consuming tasks.
-pub struct Worker<R: Runnable> {
-    scheduler: Scheduler<R::Task>,
-    receiver: Mutex<Option<Receiver<Option<R::Task>>>>,
+pub struct Worker<T> {
+    scheduler: Scheduler<T>,
+    receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
     batch_size: usize,
 }
@@ -318,18 +318,17 @@ fn fill_task_batch<T>(
     true
 }
 
-impl<R> Worker<R>
-where
-    R: Runnable + Send + 'static,
-    <R as Runnable>::Task: Send,
-{
+impl<T: Display + Send + 'static> Worker<T> {
     /// Creates a worker.
-    pub fn new<S: Into<String>>(name: S) -> Worker<R> {
+    pub fn new<S: Into<String>>(name: S) -> Worker<T> {
         Builder::new(name).create()
     }
 
     /// Starts the worker.
-    pub fn start(&mut self, runner: R) -> Result<(), io::Error> {
+    pub fn start<R>(&mut self, runner: R) -> Result<(), io::Error>
+    where
+        R: Runnable<Task = T> + Send + 'static
+    {
         let runner = DefaultRunnerWithTimer(runner);
         let timer: Timer<()> = Timer::new(0);
         self.start_with_timer(runner, timer)
@@ -341,7 +340,7 @@ where
         timer: Timer<RT::TimeoutTask>,
     ) -> Result<(), io::Error>
     where
-        RT: RunnableWithTimer<Task = R::Task> + Send + 'static,
+        RT: RunnableWithTimer<Task = T> + Send + 'static,
         <RT as RunnableWithTimer>::TimeoutTask: Send,
     {
         let mut receiver = self.receiver.lock().unwrap();
@@ -362,14 +361,14 @@ where
     }
 
     /// Gets a scheduler to schedule the task.
-    pub fn scheduler(&self) -> Scheduler<R::Task> {
+    pub fn scheduler(&self) -> Scheduler<T> {
         self.scheduler.clone()
     }
 
     /// Schedules a task to run.
     ///
     /// If the worker is stopped, an error will return.
-    pub fn schedule(&self, task: R::Task) -> Result<(), ScheduleError<R::Task>> {
+    pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
         self.scheduler.schedule(task)
     }
 

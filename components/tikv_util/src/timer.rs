@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn test_worker_with_timer() {
-        let mut worker = WorkerBuilder::new("test-worker-with-timer").create::<Runner>();
+        let mut worker = WorkerBuilder::new("test-worker-with-timer").create();
         for _ in 0..10 {
             worker.schedule("normal msg").unwrap();
         }

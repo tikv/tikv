@@ -454,7 +454,7 @@ impl RunnableWithTimer for RegionCollector {
 /// `RegionInfoAccessor` keeps all region information separately from raftstore itself.
 #[derive(Clone)]
 pub struct RegionInfoAccessor {
-    worker: Arc<Mutex<Worker<RegionCollector>>>,
+    worker: Arc<Mutex<Worker<RegionInfoQuery>>>,
     scheduler: Scheduler<RegionInfoQuery>,
 }
 

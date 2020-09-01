@@ -35,7 +35,7 @@ use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-use cdc::CdcObserver;
+use cdc::{CdcObserver, Task};
 static INIT: Once = Once::new();
 
 pub fn init() {
@@ -81,7 +81,7 @@ pub fn new_event_feed(
 
 pub struct TestSuite {
     pub cluster: Cluster<ServerCluster>,
-    pub endpoints: HashMap<u64, Worker<cdc::Endpoint<SimulateStoreTransport>>>,
+    pub endpoints: HashMap<u64, Worker<Task>>,
     pub obs: HashMap<u64, CdcObserver>,
     tikv_cli: HashMap<u64, TikvClient>,
     cdc_cli: HashMap<u64, ChangeDataClient>,

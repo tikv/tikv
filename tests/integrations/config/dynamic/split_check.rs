@@ -1,21 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
-use std::sync::mpsc::{self, sync_channel, SyncSender};
+use std::sync::mpsc::{self, sync_channel};
 use std::sync::Arc;
 use std::time::Duration;
 
 use engine_rocks::raw::DB;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::Compat;
 use raftstore::coprocessor::{
     config::{Config, SplitCheckConfigManager},
     CoprocessorHost,
 };
-use raftstore::store::{CasualMessage, SplitCheckRunner as Runner, SplitCheckTask as Task};
+use raftstore::store::{SplitCheckRunner as Runner, SplitCheckTask as Task};
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv_util::worker::{Scheduler, Worker};
-
-type SplitCheckRunner = Runner<RocksEngine, SyncSender<(u64, CasualMessage<RocksEngine>)>>;
 
 fn tmp_engine<P: AsRef<Path>>(path: P) -> Arc<DB> {
     Arc::new(
@@ -29,7 +27,7 @@ fn tmp_engine<P: AsRef<Path>>(path: P) -> Arc<DB> {
     )
 }
 
-fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<SplitCheckRunner>) {
+fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<Task>) {
     let (router, _) = sync_channel(1);
     let runner = Runner::new(
         engine.c().clone(),
@@ -37,7 +35,7 @@ fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<SplitChe
         CoprocessorHost::new(router),
         cfg.coprocessor.clone(),
     );
-    let mut worker: Worker<SplitCheckRunner> = Worker::new("split-check-config");
+    let mut worker: Worker<Task> = Worker::new("split-check-config");
     worker.start(runner).unwrap();
 
     let cfg_controller = ConfigController::new(cfg);

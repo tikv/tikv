@@ -39,7 +39,7 @@ use raftstore::{
 use security::SecurityManager;
 use std::{
     convert::TryFrom,
-    env,
+    env, fmt,
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
@@ -69,7 +69,7 @@ use tikv_util::{
     config::ensure_dir_exist,
     sys::sys_quota::SysQuota,
     time::Monitor,
-    worker::{FutureWorker, Runnable, Worker},
+    worker::{FutureWorker, Worker},
 };
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
@@ -120,7 +120,7 @@ struct TiKVServer {
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter<RocksEngine, RocksEngine>,
-    system: Option<RaftBatchSystem<RocksEngine, RocksEngine, RpcClient>>,
+    system: Option<RaftBatchSystem<RocksEngine, RocksEngine>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
@@ -578,9 +578,7 @@ impl TiKVServer {
         };
 
         // Create and register cdc.
-        let mut cdc_worker = Box::new(tikv_util::worker::Worker::<
-            cdc::Endpoint<ServerRaftStoreRouter<RocksEngine, RocksEngine>>,
-        >::new("cdc"));
+        let mut cdc_worker = Box::new(tikv_util::worker::Worker::new("cdc"));
         let cdc_scheduler = cdc_worker.scheduler();
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(&mut coprocessor_host);
@@ -785,12 +783,7 @@ impl TiKVServer {
             .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
 
         // Backup service.
-        let mut backup_worker = Box::new(tikv_util::worker::Worker::<
-            backup::Endpoint<
-                RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>,
-                RegionInfoAccessor,
-            >,
-        >::new("backup-endpoint"));
+        let mut backup_worker = Box::new(tikv_util::worker::Worker::new("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
         let backup_service = backup::Service::new(backup_scheduler, self.security_mgr.clone());
         if servers
@@ -1023,11 +1016,7 @@ impl Stop for MetricsFlusher<RocksEngine, RocksEngine> {
     }
 }
 
-impl<R> Stop for Worker<R>
-where
-    R: Runnable + Send + 'static,
-    <R as Runnable>::Task: Send,
-{
+impl<T: fmt::Display + Send + 'static> Stop for Worker<T> {
     fn stop(mut self: Box<Self>) {
         if let Some(Err(e)) = Worker::stop(&mut *self).map(JoinHandle::join) {
             info!(
