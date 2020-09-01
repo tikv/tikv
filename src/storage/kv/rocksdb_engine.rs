@@ -278,8 +278,8 @@ impl Engine for RocksEngine {
     type Snap = Arc<RocksSnapshot>;
     type Local = BaseRocksEngine;
 
-    fn kv_engine(&self) -> engine_skiplist::SkiplistEngine {
-        engine_skiplist::SkiplistEngineBuilder::new().build()
+    fn kv_engine(&self) -> Self::Local {
+        self.engines.kv.clone()
     }
 
     fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {

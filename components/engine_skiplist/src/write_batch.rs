@@ -59,8 +59,14 @@ pub struct SkiplistWriteBatch {
     engine: SkiplistEngine,
 }
 
+impl SkiplistWriteBatch {
+    pub fn new(e: &SkiplistEngine) -> SkiplistWriteBatch {
+        SkiplistWriteBatch::with_capacity(e, 0)
+    }
+}
+
 impl WriteBatch<SkiplistEngine> for SkiplistWriteBatch {
-    fn with_capacity(e: &SkiplistEngine, cap: usize) -> Self {
+    fn with_capacity(e: &SkiplistEngine, cap: usize) -> SkiplistWriteBatch {
         Self {
             data_size: 0,
             actions: Vec::with_capacity(cap),
