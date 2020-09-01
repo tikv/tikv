@@ -685,17 +685,15 @@ impl<T: Simulator> Cluster<T> {
         let err = resp.get_header().get_error();
         if err
             .get_message()
-            .contains("peer is not applied to current term")
+            .contains("peer does not applied to current term")
         {
-            // leader peer is not applied to current term
+            // leader peer does not applied to current term
             return true;
         }
 
         // If command is stale, leadership may have changed.
         // Or epoch not match, it can be introduced by wrong leader.
-        if err.has_stale_command() 
-            || err.has_epoch_not_match()
-        {
+        if err.has_stale_command() || err.has_epoch_not_match() {
             self.reset_leader_of_region(region_id);
             return true;
         }
@@ -1181,7 +1179,7 @@ impl<T: Simulator> Cluster<T> {
                             || error.has_stale_command()
                             || error
                                 .get_message()
-                                .contains("peer is not applied to current term")
+                                .contains("peer does not applied to current term")
                         {
                             warn!("fail to split: {:?}, ignore.", error);
                             return;
