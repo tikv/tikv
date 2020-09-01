@@ -13,6 +13,7 @@ use tikv_util::collections::HashMap;
 
 use crate::cf_handle::SkiplistCFHandle;
 use crate::db_vector::SkiplistDBVector;
+use crate::metrics::*;
 use crate::snapshot::SkiplistSnapshot;
 use crate::write_batch::SkiplistWriteBatch;
 
@@ -107,6 +108,9 @@ impl Peekable for SkiplistEngine {
         cf: &str,
         key: &[u8],
     ) -> Result<Option<Self::DBVector>> {
+        let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
+            .with_label_values(&["get"])
+            .start_coarse_timer();
         let engine = self.get_cf_engine(cf)?;
         info!("get key"; "cf" => cf, "key" => hex::encode_upper(key));
         Ok(engine
@@ -120,6 +124,9 @@ impl SyncMutable for SkiplistEngine {
         self.put_cf(CF_DEFAULT, key, value)
     }
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+        let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
+            .with_label_values(&["put"])
+            .start_coarse_timer();
         self.total_bytes.fetch_add(key.len(), Ordering::Relaxed);
         self.total_bytes.fetch_add(value.len(), Ordering::Relaxed);
         info!("put key"; "cf" => cf, "key" => hex::encode_upper(key));
@@ -132,6 +139,9 @@ impl SyncMutable for SkiplistEngine {
         self.delete_cf(CF_DEFAULT, key)
     }
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
+        let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
+            .with_label_values(&["delete"])
+            .start_coarse_timer();
         let engine = self.get_cf_engine(cf)?;
         info!("delete key"; "cf" => cf, "key" => hex::encode_upper(key));
         if let Some(e) = engine.remove(key) {
@@ -142,6 +152,9 @@ impl SyncMutable for SkiplistEngine {
         Ok(())
     }
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
+            .with_label_values(&["delete_range"])
+            .start_coarse_timer();
         let range = Range {
             start: begin_key.to_vec(),
             end: end_key.to_vec(),
@@ -166,14 +179,8 @@ impl Iterable for SkiplistEngine {
     }
     fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         let engine = self.get_cf_engine(cf)?.clone();
-        let lower_bound = opts
-            .lower_bound()
-            .map(|e| Bound::Included(e))
-            .unwrap_or_else(|| Bound::Unbounded);
-        let upper_bound = opts
-            .upper_bound()
-            .map(|e| Bound::Excluded(e))
-            .unwrap_or_else(|| Bound::Unbounded);
+        let lower_bound = opts.lower_bound().map(|e| e.to_vec());
+        let upper_bound = opts.upper_bound().map(|e| e.to_vec());
         Ok(SkiplistEngineIterator::new(
             engine,
             lower_bound,
@@ -182,27 +189,61 @@ impl Iterable for SkiplistEngine {
     }
 }
 
+static ITERATOR_ID: AtomicUsize = AtomicUsize::new(0);
+
 pub struct SkiplistEngineIterator {
     engine: Arc<SkipMap<Vec<u8>, Vec<u8>>>,
-    lower_bound: Option<SkipEntry<'static, Vec<u8>, Vec<u8>>>,
-    upper_bound: Option<SkipEntry<'static, Vec<u8>, Vec<u8>>>,
-    cursor: Option<SkipEntry<'static, Vec<u8>, Vec<u8>>>,
-    valid: bool,
+    lower_bound: Option<Vec<u8>>,
+    upper_bound: Option<Vec<u8>>,
+    last_kv: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 impl SkiplistEngineIterator {
     fn new(
         engine: Arc<SkipMap<Vec<u8>, Vec<u8>>>,
-        lower_bound: Bound<&[u8]>,
-        upper_bound: Bound<&[u8]>,
+        lower_bound: Option<Vec<u8>>,
+        upper_bound: Option<Vec<u8>>,
     ) -> Self {
+        let engine_clone = engine.clone();
+        let lower = engine_clone.lower_bound(
+            lower_bound
+                .as_ref()
+                .map(|e| Bound::Included(e.as_slice()))
+                .unwrap_or_else(|| Bound::Unbounded),
+        );
+        let last_kv = if let Some(l) = lower {
+            if check_in_range(l.key(), upper_bound.as_ref(), lower_bound.as_ref()) {
+                Some((l.key().to_vec(), l.value().to_vec()))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         Self {
-            lower_bound: unsafe { (*Arc::downgrade(&engine).as_ptr()).lower_bound(lower_bound) },
-            upper_bound: unsafe { (*Arc::downgrade(&engine).as_ptr()).upper_bound(upper_bound) },
-            cursor: unsafe { (*Arc::downgrade(&engine).as_ptr()).lower_bound(lower_bound) },
+            lower_bound,
+            upper_bound,
             engine,
-            valid: true,
+            last_kv,
         }
+    }
+
+    fn lower_bound(&self) -> Option<SkipEntry<Vec<u8>, Vec<u8>>> {
+        self.engine.lower_bound(
+            self.lower_bound
+                .as_ref()
+                .map(|e| Bound::Included(e.as_slice()))
+                .unwrap_or_else(|| Bound::Unbounded),
+        )
+    }
+
+    fn upper_bound(&self) -> Option<SkipEntry<Vec<u8>, Vec<u8>>> {
+        self.engine.upper_bound(
+            self.upper_bound
+                .as_ref()
+                .map(|e| Bound::Excluded(e.as_slice()))
+                .unwrap_or_else(|| Bound::Unbounded),
+        )
     }
 }
 
@@ -212,7 +253,7 @@ fn check_in_range(
     lower_bound: Option<&Vec<u8>>,
 ) -> bool {
     if let Some(upper) = upper_bound {
-        if upper < key {
+        if upper <= key {
             return false;
         }
     }
@@ -226,162 +267,171 @@ fn check_in_range(
 
 impl Iterator for SkiplistEngineIterator {
     fn seek(&mut self, key: SeekKey) -> Result<bool> {
-        use std::cmp::Ordering;
+        let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
+            .with_label_values(&["seek"])
+            .start_coarse_timer();
 
-        let cursor = match self.cursor.as_mut() {
-            Some(c) => c,
-            None => return Ok(false),
-        };
-        self.valid = match key {
+        self.last_kv = match key {
             SeekKey::Start => {
-                self.cursor = self.lower_bound.clone();
-                true
+                if let Some(e) = self.lower_bound() {
+                    if check_in_range(
+                        e.key(),
+                        self.upper_bound.as_ref(),
+                        self.lower_bound.as_ref(),
+                    ) {
+                        Some((e.key().to_vec(), e.value().to_vec()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             }
             SeekKey::End => {
-                self.cursor = self.upper_bound.clone();
-                true
-            }
-            SeekKey::Key(key) => match cursor.key().as_slice().cmp(key) {
-                Ordering::Less => loop {
-                    if let Some(upper) = self.upper_bound.as_ref() {
-                        if cursor.key() > upper.key() {
-                            break false;
-                        }
-                    }
-                    if cursor.key().as_slice() < key {
-                        if !cursor.move_next() {
-                            break false;
-                        }
+                if let Some(e) = self.upper_bound() {
+                    if check_in_range(
+                        e.key(),
+                        self.upper_bound.as_ref(),
+                        self.lower_bound.as_ref(),
+                    ) {
+                        Some((e.key().to_vec(), e.value().to_vec()))
                     } else {
-                        break true;
+                        None
                     }
-                },
-                Ordering::Greater => loop {
-                    if let Some(e) = cursor.prev() {
-                        if let Some(lower) = self.lower_bound.as_ref() {
-                            if e.key() < lower.key() {
-                                break true;
-                            }
-                        }
-                        if e.key().as_slice() >= key {
-                            cursor.move_prev();
-                            continue;
-                        }
+                } else {
+                    None
+                }
+            }
+            SeekKey::Key(key) => {
+                if let Some(l) = self.lower_bound.as_deref() {
+                    if key < l {
+                        return self.seek(SeekKey::Start);
                     }
-                    break true;
-                },
-                Ordering::Equal => true,
-            },
+                }
+                if let Some(u) = self.upper_bound.as_deref() {
+                    if key > u {
+                        self.last_kv = None;
+                        return Ok(false);
+                    }
+                }
+                if let Some(e) = self.engine.lower_bound(Bound::Included(key)) {
+                    if check_in_range(
+                        e.key(),
+                        self.upper_bound.as_ref(),
+                        self.lower_bound.as_ref(),
+                    ) {
+                        Some((e.key().to_vec(), e.value().to_vec()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
         };
-        Ok(self.valid)
+        Ok(self.last_kv.is_some())
     }
     fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool> {
-        use std::cmp::Ordering;
+        let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
+            .with_label_values(&["seek_for_prev"])
+            .start_coarse_timer();
 
-        let cursor = match self.cursor.as_mut() {
-            Some(c) => c,
-            None => return Ok(false),
-        };
-        let valid = match key {
-            SeekKey::Start => {
-                self.cursor = self.lower_bound.clone();
-                true
-            }
-            SeekKey::End => {
-                self.cursor = self.upper_bound.clone();
-                true
-            }
-            SeekKey::Key(key) => match cursor.key().as_slice().cmp(key) {
-                Ordering::Less => loop {
-                    if let Some(e) = cursor.next() {
-                        if let Some(upper) = self.upper_bound.as_ref() {
-                            if e.key() > upper.key() {
-                                break true;
-                            }
-                        }
-                        if e.key().as_slice() < key {
-                            cursor.move_next();
-                            continue;
-                        }
+        match key {
+            SeekKey::Start | SeekKey::End => self.seek(key),
+            SeekKey::Key(key) => {
+                if let Some(l) = self.lower_bound.as_deref() {
+                    if key < l {
+                        return Ok(false);
                     }
-                    break true;
-                },
-                Ordering::Greater => loop {
-                    if let Some(lower) = self.lower_bound.as_ref() {
-                        if cursor.key() < lower.key() {
-                            break false;
-                        }
+                }
+                if let Some(u) = self.upper_bound.as_deref() {
+                    if key > u {
+                        self.last_kv = None;
+                        return self.seek(SeekKey::End);
                     }
-                    if cursor.key().as_slice() >= key {
-                        if !cursor.move_prev() {
-                            break false;
-                        }
+                }
+                self.last_kv = if let Some(e) = self.engine.upper_bound(Bound::Excluded(key)) {
+                    if check_in_range(
+                        e.key(),
+                        self.upper_bound.as_ref(),
+                        self.lower_bound.as_ref(),
+                    ) {
+                        Some((e.key().to_vec(), e.value().to_vec()))
                     } else {
-                        break true;
+                        None
                     }
-                },
-                Ordering::Equal => true,
-            },
-        };
-        Ok(valid)
+                } else {
+                    None
+                };
+                Ok(self.last_kv.is_some())
+            }
+        }
     }
 
     fn prev(&mut self) -> Result<bool> {
-        self.valid = match self.cursor.as_mut() {
-            Some(e) => {
-                info!("cursor indicates a key prev"; "key" => hex::encode_upper(e.key()));
-                e.move_prev()
-                    && check_in_range(
-                        e.key(),
-                        self.upper_bound.as_ref().map(|e| e.key()),
-                        self.lower_bound.as_ref().map(|e| e.key()),
-                    )
+        let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
+            .with_label_values(&["prev"])
+            .start_coarse_timer();
+        if self.last_kv.is_none() {
+            return Ok(false);
+        }
+        let (last_key, _) = self.last_kv.as_ref().unwrap();
+        self.last_kv = if let Some(e) = self
+            .engine
+            .upper_bound(Bound::Excluded(last_key.as_slice()))
+        {
+            if check_in_range(
+                e.key(),
+                self.upper_bound.as_ref(),
+                self.lower_bound.as_ref(),
+            ) {
+                Some((e.key().to_vec(), e.value().to_vec()))
+            } else {
+                None
             }
-            None => false,
+        } else {
+            None
         };
-        info!("not valied prev");
-        Ok(self.valid)
+        Ok(self.last_kv.is_some())
     }
     fn next(&mut self) -> Result<bool> {
-        self.valid = match self.cursor.as_mut() {
-            Some(e) => {
-                info!("cursor indicates a key next"; "key" => hex::encode_upper(e.key()));
-                e.move_next()
-                    && check_in_range(
-                        e.key(),
-                        self.upper_bound.as_ref().map(|e| e.key()),
-                        self.lower_bound.as_ref().map(|e| e.key()),
-                    )
+        let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
+            .with_label_values(&["next"])
+            .start_coarse_timer();
+        if self.last_kv.is_none() {
+            return Ok(false);
+        }
+        let (last_key, _) = self.last_kv.as_ref().unwrap();
+        self.last_kv = if let Some(e) = self
+            .engine
+            .lower_bound(Bound::Excluded(last_key.as_slice()))
+        {
+            if check_in_range(
+                e.key(),
+                self.upper_bound.as_ref(),
+                self.lower_bound.as_ref(),
+            ) {
+                Some((e.key().to_vec(), e.value().to_vec()))
+            } else {
+                None
             }
-            None => {
-                info!("cursor is none next");
-                false
-            }
+        } else {
+            None
         };
-        info!("not valied next");
-        Ok(self.valid)
+        Ok(self.last_kv.is_some())
     }
 
     fn key(&self) -> &[u8] {
-        self.cursor.as_ref().unwrap().key()
+        let (key, _) = self.last_kv.as_ref().unwrap();
+        key.as_slice()
     }
     fn value(&self) -> &[u8] {
-        self.cursor.as_ref().unwrap().value()
+        let (_, value) = self.last_kv.as_ref().unwrap();
+        value.as_slice()
     }
 
     fn valid(&self) -> Result<bool> {
-        Ok(self.valid
-            && self
-                .cursor
-                .as_ref()
-                .map(|e| {
-                    check_in_range(
-                        e.key(),
-                        self.upper_bound.as_ref().map(|e| e.key()),
-                        self.lower_bound.as_ref().map(|e| e.key()),
-                    )
-                })
-                .unwrap_or_default())
+        Ok(self.last_kv.is_some())
     }
 }
 

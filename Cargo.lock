@@ -1145,6 +1145,8 @@ dependencies = [
  "hex 0.3.2",
  "keys",
  "kvproto",
+ "lazy_static",
+ "prometheus",
  "protobuf",
  "raft",
  "raft-engine",
