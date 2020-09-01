@@ -7,11 +7,11 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use std::{cmp, thread};
 
-use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use futures::{Future, Stream};
-use futures03::compat::Future01CompatExt;
-use futures03::executor::block_on;
-use futures03::future::{err, ok};
+use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use futures::compat::Future01CompatExt;
+use futures::executor::block_on;
+use futures::future::{err, ok, FutureExt};
+use futures::{stream, stream::StreamExt};
 use tokio_timer::timer::Handle;
 
 use kvproto::metapb::{self, Region};
@@ -1212,7 +1212,6 @@ impl PdClient for TestPdClient {
         Self: Sized,
         F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
     {
-        use futures::stream;
         let cluster1 = Arc::clone(&self.cluster);
         let timer = self.timer.clone();
         let mut cluster = self.cluster.wl();
@@ -1221,26 +1220,30 @@ impl PdClient for TestPdClient {
             .entry(store_id)
             .or_insert_with(Store::default);
         let rx = store.receiver.take().unwrap();
+        let st1 = rx.map(|resp| vec![resp]);
+        let st2 = stream::unfold(
+            (timer, cluster1, store_id),
+            |(timer, cluster1, store_id)| async move {
+                timer
+                    .delay(Instant::now() + Duration::from_millis(500))
+                    .compat()
+                    .await
+                    .unwrap();
+                let mut cluster = cluster1.wl();
+                let resps = cluster.poll_heartbeat_responses_for(store_id);
+                drop(cluster);
+                Some((resps, (timer, cluster1, store_id)))
+            },
+        );
         Box::pin(
-            rx.map(|resp| vec![resp])
-                .select(
-                    stream::unfold(timer, |timer| {
-                        let interval = timer.delay(Instant::now() + Duration::from_millis(500));
-                        Some(interval.then(|_| Ok(((), timer))))
-                    })
-                    .map(move |_| {
-                        let mut cluster = cluster1.wl();
-                        cluster.poll_heartbeat_responses_for(store_id)
-                    }),
-                )
-                .map_err(|e| box_err!("failed to receive next heartbeat response: {:?}", e))
+            stream::select(st1, st2)
                 .for_each(move |resps| {
                     for resp in resps {
                         f(resp);
                     }
-                    Ok(())
+                    futures::future::ready(())
                 })
-                .compat(),
+                .map(|_| Ok(())),
         )
     }
 
