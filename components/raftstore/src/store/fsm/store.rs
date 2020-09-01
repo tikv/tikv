@@ -12,9 +12,7 @@ use std::{mem, thread, u64};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{
-    Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
-};
+use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -52,10 +50,9 @@ use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
 };
 use crate::store::fsm::ApplyNotifier;
-#[cfg(feature = "failpoints")]
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
-    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter,
+    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter,
 };
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
@@ -182,6 +179,30 @@ where
     }
 }
 
+impl<EK, ER> ApplyNotifier<EK> for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+        for r in apply_res {
+            self.router.try_send(
+                r.region_id,
+                PeerMsg::ApplyRes {
+                    res: ApplyTaskRes::Apply(r),
+                },
+            );
+        }
+    }
+    fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>) {
+        self.router.try_send(region_id, msg);
+    }
+
+    fn clone_box(&self) -> Box<dyn ApplyNotifier<EK>> {
+        Box::new(self.clone())
+    }
+}
+
 impl<EK, ER> RaftRouter<EK, ER>
 where
     EK: KvEngine,
@@ -296,7 +317,7 @@ where
     pub need_flush_trans: bool,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
-    pub node_start_time: Option<Instant>,
+    pub node_start_time: Option<TiInstant>,
 }
 
 impl<EK, ER, T, C> HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>
@@ -1048,7 +1069,7 @@ where
             need_flush_trans: false,
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
-            node_start_time: Some(Instant::now()),
+            node_start_time: Some(TiInstant::now_coarse()),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
@@ -1126,7 +1147,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_worker: Worker::new("cleanup-worker"),
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
-            coprocessor_host,
+            coprocessor_host: coprocessor_host.clone(),
             future_poller: tokio_threadpool::Builder::new()
                 .name_prefix("future-poller")
                 .pool_size(cfg.value().future_poll_size)
@@ -1146,7 +1167,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             apply_router: self.apply_router.clone(),
             trans,
             pd_client,
-            coprocessor_host: workers.coprocessor_host.clone(),
+            coprocessor_host: coprocessor_host.clone(),
             importer,
             snap_mgr: mgr,
             global_replication_state,
@@ -1164,6 +1185,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 region_peers,
                 builder,
                 auto_split_controller,
+                coprocessor_host,
                 concurrency_manager,
             )?;
         } else {
@@ -1172,22 +1194,20 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 region_peers,
                 builder,
                 auto_split_controller,
+                coprocessor_host,
                 concurrency_manager,
             )?;
         }
         Ok(())
     }
 
-    fn start_system<
-        T: Transport + 'static,
-        C: PdClient + 'static,
-        W: WriteBatch + WriteBatchVecExt<EK> + 'static,
-    >(
+    fn start_system<T: Transport + 'static, C: PdClient + 'static, W: WriteBatch<EK> + 'static>(
         &mut self,
         mut workers: Workers<EK, ER>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
         builder: RaftPollerBuilder<EK, ER, T, C>,
         auto_split_controller: AutoSplitController,
+        coprocessor_host: CoprocessorHost<EK>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
@@ -1199,9 +1219,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let pd_client = builder.pd_client.clone();
         let importer = builder.importer.clone();
 
-        let apply_poller_builder = ApplyPollerBuilder::<_, _, W>::new(
+        let apply_poller_builder = ApplyPollerBuilder::<EK, W>::new(
             &builder,
-            ApplyNotifier::Router(self.router.clone()),
+            Box::new(self.router.clone()),
             self.apply_router.clone(),
         );
         self.apply_system
@@ -1283,7 +1303,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
-        let consistency_check_runner = ConsistencyCheckRunner::<EK, _>::new(self.router.clone());
+        let consistency_check_runner =
+            ConsistencyCheckRunner::<EK, _>::new(self.router.clone(), coprocessor_host);
         box_try!(workers
             .consistency_check_worker
             .start(consistency_check_runner));
@@ -2237,6 +2258,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         let mut request = new_admin_request(target_region_id, target_peer);
         let mut admin = AdminRequest::default();
         admin.set_cmd_type(AdminCmdType::ComputeHash);
+        self.ctx
+            .coprocessor_host
+            .on_prepropose_compute_hash(admin.mut_compute_hash());
         request.set_admin_request(admin);
 
         let _ = self.ctx.router.send(

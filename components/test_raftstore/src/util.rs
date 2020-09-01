@@ -122,7 +122,7 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RocksEngine>, region: &
 pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let common_test_cfg = manifest_dir.join("src/common-test.toml");
-    let mut cfg = TiKvConfig::from_file(common_test_cfg);
+    let mut cfg = TiKvConfig::from_file(&common_test_cfg, None);
     cfg.server.cluster_id = cluster_id;
     cfg
 }

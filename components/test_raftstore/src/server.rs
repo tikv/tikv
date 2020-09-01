@@ -53,7 +53,7 @@ use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 use tikv_util::HandyRwLock;
 
-type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine>>;
+type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
 type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 

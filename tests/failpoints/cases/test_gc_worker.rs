@@ -107,6 +107,7 @@ fn test_observer_send_error() {
 #[test]
 fn test_notify_observer_after_apply() {
     let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
+    cluster.pd_client.disable_default_operator();
     let post_apply_query_fp = "notify_lock_observer_query";
     let apply_plain_kvs_fp = "notify_lock_observer_snapshot";
 
