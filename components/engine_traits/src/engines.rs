@@ -10,15 +10,13 @@ use crate::options::WriteOptions;
 pub struct Engines<K, R> {
     pub kv: K,
     pub raft: R,
-    pub shared_block_cache: bool,
 }
 
 impl<K: KvEngine, R: RaftEngine> Engines<K, R> {
-    pub fn new(kv_engine: K, raft_engine: R, shared_block_cache: bool) -> Self {
+    pub fn new(kv_engine: K, raft_engine: R) -> Self {
         Engines {
             kv: kv_engine,
             raft: raft_engine,
-            shared_block_cache,
         }
     }
 

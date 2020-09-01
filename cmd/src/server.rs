@@ -23,7 +23,10 @@ use kvproto::{
 };
 use pd_client::{PdClient, RpcClient};
 use raftstore::{
-    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost, RegionInfoAccessor},
+    coprocessor::{
+        config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
+        CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
+    },
     router::ServerRaftStoreRouter,
     store::{
         config::RaftstoreConfigManager,
@@ -171,6 +174,29 @@ impl TiKVServer {
                 .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
+        match config.coprocessor.consistency_check_method {
+            ConsistencyCheckMethod::Mvcc => {
+                // TODO: use mvcc consistency checker.
+                coprocessor_host
+                    .as_mut()
+                    .unwrap()
+                    .registry
+                    .register_consistency_check_observer(
+                        100,
+                        BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
+                    );
+            }
+            ConsistencyCheckMethod::Raw => {
+                coprocessor_host
+                    .as_mut()
+                    .unwrap()
+                    .registry
+                    .register_consistency_check_observer(
+                        100,
+                        BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
+                    );
+            }
+        }
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();
 
@@ -399,11 +425,13 @@ impl TiKVServer {
         )
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
-        let engines = Engines::new(
-            RocksEngine::from_db(Arc::new(kv_engine)),
-            RocksEngine::from_db(Arc::new(raft_engine)),
-            block_cache.is_some(),
-        );
+        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
+        let mut raft_engine = RocksEngine::from_db(Arc::new(raft_engine));
+        let shared_block_cache = block_cache.is_some();
+        kv_engine.set_shared_block_cache(shared_block_cache);
+        raft_engine.set_shared_block_cache(shared_block_cache);
+        let engines = Engines::new(kv_engine, raft_engine);
+
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader =
             LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
@@ -450,7 +478,7 @@ impl TiKVServer {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
-            Some(engines.raft_router.clone()),
+            Some(self.router.clone()),
             self.config.gc.clone(),
             self.pd_client.cluster_version(),
         );
@@ -654,6 +682,7 @@ impl TiKVServer {
             raft_router,
             cdc_ob,
             engines.store_meta.clone(),
+            self.concurrency_manager.clone(),
         );
         let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker
@@ -796,11 +825,9 @@ impl TiKVServer {
     }
 
     fn init_metrics_flusher(&mut self) {
-        let mut metrics_flusher = Box::new(MetricsFlusher::new(Engines::new(
-            self.engines.as_ref().unwrap().engines.kv.clone(),
-            self.engines.as_ref().unwrap().engines.raft.clone(),
-            self.engines.as_ref().unwrap().engines.shared_block_cache,
-        )));
+        let mut metrics_flusher = Box::new(MetricsFlusher::new(
+            self.engines.as_ref().unwrap().engines.clone(),
+        ));
 
         // Start metrics flusher
         if let Err(e) = metrics_flusher.start() {

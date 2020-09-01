@@ -6,10 +6,11 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use futures::future::Future;
-use futures03::compat::Compat;
+use futures03::compat::Future01CompatExt;
+use futures03::future::TryFutureExt;
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
@@ -28,7 +29,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 use tikv_util::timer::{SteadyTimer, Timer};
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
-use tokio_threadpool::{Builder, ThreadPool};
+use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
@@ -219,10 +220,13 @@ pub struct Endpoint<T> {
     timer: SteadyTimer,
     min_ts_interval: Duration,
     scan_batch_size: usize,
-    tso_worker: ThreadPool,
+    tso_worker: Runtime,
     store_meta: Arc<Mutex<StoreMeta>>,
+    /// The concurrency manager for transactions. It's needed for CDC to check locks when
+    /// calculating resolved_ts.
+    concurrency_manager: ConcurrencyManager,
 
-    workers: ThreadPool,
+    workers: Runtime,
 
     min_resolved_ts: TimeStamp,
     min_ts_region_id: u64,
@@ -236,9 +240,20 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         raft_router: T,
         observer: CdcObserver,
         store_meta: Arc<Mutex<StoreMeta>>,
+        concurrency_manager: ConcurrencyManager,
     ) -> Endpoint<T> {
-        let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
-        let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
+        let workers = Builder::new()
+            .threaded_scheduler()
+            .thread_name("cdcwkr")
+            .core_threads(4)
+            .build()
+            .unwrap();
+        let tso_worker = Builder::new()
+            .threaded_scheduler()
+            .thread_name("tso")
+            .core_threads(1)
+            .build()
+            .unwrap();
         let ep = Endpoint {
             capture_regions: HashMap::default(),
             connections: HashMap::default(),
@@ -250,6 +265,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             raft_router,
             observer,
             store_meta,
+            concurrency_manager,
             scan_batch_size: 1024,
             min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
@@ -502,13 +518,12 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             deregister_downstream(Error::Request(e.into()));
             return;
         }
-        self.workers.spawn(Compat::new(fut).then(move |res| {
-            match res {
+        self.workers.spawn(async move {
+            match fut.await {
                 Ok(resp) => init.on_change_cmd(resp),
                 Err(e) => deregister_downstream(Error::Other(box_err!(e))),
-            };
-            Ok(())
-        }));
+            }
+        });
     }
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
@@ -586,7 +601,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
     fn register_min_ts_event(&self) {
         let timeout = self.timer.delay(self.min_ts_interval);
-        let tso = Compat::new(self.pd_client.get_tso());
+        let tso = self.pd_client.get_tso();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
         let regions: Vec<(u64, ObserveID)> = self
@@ -594,55 +609,67 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .iter()
             .map(|(region_id, delegate)| (*region_id, delegate.id))
             .collect();
-        let fut = tso.join(timeout.map_err(|_| unreachable!())).then(
-            move |tso: pd_client::Result<(TimeStamp, ())>| {
-                // Ignore get tso errors since we will retry every `min_ts_interval`.
-                let (min_ts, _) = tso.unwrap_or((TimeStamp::default(), ()));
-                // TODO: send a message to raftstore would consume too much cpu time,
-                // try to handle it outside raftstore.
-                for (region_id, observe_id) in regions {
-                    let scheduler_clone = scheduler.clone();
-                    if let Err(e) = raft_router.significant_send(
-                        region_id,
-                        SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
-                            if !resp.response.get_header().has_error() {
-                                match scheduler_clone.schedule(Task::MinTS { region_id, min_ts }) {
-                                    Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                                    Err(err) => panic!(
-                                        "failed to schedule min_ts event, min_ts: {}, error: {:?}",
-                                        min_ts, err
-                                    ),
-                                }
+        let cm: ConcurrencyManager = self.concurrency_manager.clone();
+        let fut = async move {
+            let (tso, _) =
+                futures03::future::join(tso, timeout.compat().map_err(|_| unreachable!())).await;
+            // Ignore get tso errors since we will retry every `min_ts_interval`.
+            let mut min_ts = tso.unwrap_or_default();
+
+            // Sync with concurrency manager so that it can work correctly when optimizations
+            // like async commit is enabled.
+            // Note: This step must be done before scheduling `Task::MinTS` task, and the
+            // resolver must be checked in or after `Task::MinTS`' execution.
+            cm.update_max_read_ts(min_ts);
+            if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
+                if min_mem_lock_ts < min_ts {
+                    min_ts = min_mem_lock_ts;
+                }
+            }
+
+            // TODO: send a message to raftstore would consume too much cpu time,
+            // try to handle it outside raftstore.
+            for (region_id, observe_id) in regions {
+                let scheduler_clone = scheduler.clone();
+                if let Err(e) = raft_router.significant_send(
+                    region_id,
+                    SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
+                        if !resp.response.get_header().has_error() {
+                            match scheduler_clone.schedule(Task::MinTS { region_id, min_ts }) {
+                                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                                Err(err) => panic!(
+                                    "failed to schedule min_ts event, min_ts: {}, error: {:?}",
+                                    min_ts, err
+                                ),
                             }
-                        }))),
-                    ) {
-                        warn!(
-                            "send LeaderCallback for advancing resolved ts failed";
-                            "err" => ?e,
-                            "min_ts" => min_ts,
-                        );
-                        let deregister = Deregister::Region {
-                            observe_id,
-                            region_id,
-                            err: Error::Request(e.into()),
-                        };
-                        if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                            error!("schedule cdc task failed"; "error" => ?e);
                         }
+                    }))),
+                ) {
+                    warn!(
+                        "send LeaderCallback for advancing resolved ts failed";
+                        "err" => ?e,
+                        "min_ts" => min_ts,
+                    );
+                    let deregister = Deregister::Region {
+                        observe_id,
+                        region_id,
+                        err: Error::Request(e.into()),
+                    };
+                    if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
+                        error!("schedule cdc task failed"; "error" => ?e);
                     }
                 }
-                match scheduler.schedule(Task::RegisterMinTsEvent) {
-                    Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                    // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
-                    // advance normally.
-                    Err(err) => panic!(
-                        "failed to schedule regiester min ts event, error: {:?}",
-                        err
-                    ),
-                }
-                Ok(())
-            },
-        );
+            }
+            match scheduler.schedule(Task::RegisterMinTsEvent) {
+                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                // advance normally.
+                Err(err) => panic!(
+                    "failed to schedule regiester min ts event, error: {:?}",
+                    err
+                ),
+            }
+        };
         self.tso_worker.spawn(fut);
     }
 
@@ -941,13 +968,15 @@ mod tests {
         (worker, rx)
     }
 
-    fn mock_initializer() -> (Worker<Task>, ThreadPool, Initializer, Receiver<Task>) {
+    fn mock_initializer() -> (Worker<Task>, Runtime, Initializer, Receiver<Task>) {
         let (receiver_worker, rx) = new_receiver_worker();
 
         let pool = Builder::new()
-            .name_prefix("test-initializer-worker")
-            .pool_size(4)
-            .build();
+            .threaded_scheduler()
+            .thread_name("test-initializer-worker")
+            .core_threads(4)
+            .build()
+            .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Normal));
         let initializer = Initializer {
             sched: receiver_worker.scheduler(),
@@ -1064,6 +1093,7 @@ mod tests {
             raft_router.clone(),
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
+            ConcurrencyManager::new(1.into()),
         );
         let (tx, _rx) = batch::unbounded(1);
 
@@ -1071,14 +1101,14 @@ mod tests {
         let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
         loop {
             if let Err(RaftStoreError::Transport(_)) =
-                raft_router.casual_send(1, CasualMessage::ClearRegionSize)
+                raft_router.send_casual_msg(1, CasualMessage::ClearRegionSize)
             {
                 break;
             }
         }
         // Make sure channel is full.
         raft_router
-            .casual_send(1, CasualMessage::ClearRegionSize)
+            .send_casual_msg(1, CasualMessage::ClearRegionSize)
             .unwrap_err();
 
         let conn = Conn::new(tx);
@@ -1122,6 +1152,7 @@ mod tests {
             raft_router,
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
+            ConcurrencyManager::new(1.into()),
         );
         let (tx, rx) = batch::unbounded(1);
 
