@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::future::Future;
@@ -221,6 +222,9 @@ pub struct Endpoint<T> {
     scan_batch_size: usize,
     tso_worker: ThreadPool,
     store_meta: Arc<Mutex<StoreMeta>>,
+    /// The concurrency manager for transactions. It's needed for CDC to check locks when
+    /// calculating resolved_ts.
+    concurrency_manager: ConcurrencyManager,
 
     workers: ThreadPool,
 
@@ -236,6 +240,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         raft_router: T,
         observer: CdcObserver,
         store_meta: Arc<Mutex<StoreMeta>>,
+        concurrency_manager: ConcurrencyManager,
     ) -> Endpoint<T> {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
         let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
@@ -250,6 +255,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             raft_router,
             observer,
             store_meta,
+            concurrency_manager,
             scan_batch_size: 1024,
             min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
@@ -594,10 +600,23 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .iter()
             .map(|(region_id, delegate)| (*region_id, delegate.id))
             .collect();
+        let cm: ConcurrencyManager = self.concurrency_manager.clone();
         let fut = tso.join(timeout.map_err(|_| unreachable!())).then(
             move |tso: pd_client::Result<(TimeStamp, ())>| {
                 // Ignore get tso errors since we will retry every `min_ts_interval`.
-                let (min_ts, _) = tso.unwrap_or((TimeStamp::default(), ()));
+                let (mut min_ts, _) = tso.unwrap_or((TimeStamp::default(), ()));
+
+                // Sync with concurrency manager so that it can work correctly when optimizations
+                // like async commit is enabled.
+                // Note: This step must be done before scheduling `Task::MinTS` task, and the
+                // resolver must be checked in or after `Task::MinTS`' execution.
+                cm.update_max_read_ts(min_ts);
+                if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
+                    if min_mem_lock_ts < min_ts {
+                        min_ts = min_mem_lock_ts;
+                    }
+                }
+
                 // TODO: send a message to raftstore would consume too much cpu time,
                 // try to handle it outside raftstore.
                 for (region_id, observe_id) in regions {
@@ -1064,6 +1083,7 @@ mod tests {
             raft_router.clone(),
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
+            ConcurrencyManager::new(1.into()),
         );
         let (tx, _rx) = batch::unbounded(1);
 
@@ -1122,6 +1142,7 @@ mod tests {
             raft_router,
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
+            ConcurrencyManager::new(1.into()),
         );
         let (tx, rx) = batch::unbounded(1);
 
