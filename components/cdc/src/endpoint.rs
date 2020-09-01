@@ -975,7 +975,12 @@ mod tests {
         (worker, rx)
     }
 
-    fn mock_initializer() -> (Worker<ReceiverRunnable<Task>>, Runtime, Initializer, Receiver<Task>) {
+    fn mock_initializer() -> (
+        Worker<ReceiverRunnable<Task>>,
+        Runtime,
+        Initializer,
+        Receiver<Task>,
+    ) {
         let (receiver_worker, rx) = new_receiver_worker();
 
         let pool = Builder::new()
