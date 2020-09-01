@@ -685,9 +685,9 @@ impl<T: Simulator> Cluster<T> {
         let err = resp.get_header().get_error();
         if err
             .get_message()
-            .contains("peer does not applied to current term")
+            .contains("peer has not applied to current term")
         {
-            // leader peer does not applied to current term
+            // leader peer has not applied to current term
             return true;
         }
 
@@ -1179,7 +1179,7 @@ impl<T: Simulator> Cluster<T> {
                             || error.has_stale_command()
                             || error
                                 .get_message()
-                                .contains("peer does not applied to current term")
+                                .contains("peer has not applied to current term")
                         {
                             warn!("fail to split: {:?}, ignore.", error);
                             return;
