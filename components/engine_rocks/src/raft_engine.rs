@@ -2,7 +2,7 @@ use crate::{RocksEngine, RocksWriteBatch};
 
 use engine_traits::{
     Iterable, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt, WriteOptions, CF_DEFAULT,
-    MAX_DELETE_BATCH_SIZE,
+    MAX_DELETE_BATCH_COUNT,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
@@ -186,11 +186,11 @@ impl RaftEngine for RocksEngine {
             }
         }
 
-        let mut raft_wb = self.write_batch_with_cap(MAX_DELETE_BATCH_SIZE);
+        let mut raft_wb = self.write_batch_with_cap(4 * 1024);
         for idx in from..to {
             let key = keys::raft_log_key(raft_group_id, idx);
             box_try!(raft_wb.delete(&key));
-            if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
+            if raft_wb.count() >= MAX_DELETE_BATCH_COUNT {
                 // Avoid large write batch to reduce latency.
                 self.write(&raft_wb).unwrap();
                 raft_wb.clear();
