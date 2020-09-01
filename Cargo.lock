@@ -482,7 +482,7 @@ dependencies = [
  "test_util",
  "tikv",
  "tikv_util",
- "tokio-threadpool",
+ "tokio 0.2.13",
  "txn_types",
 ]
 
@@ -1897,9 +1897,9 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
-version = "0.2.66"
+version = "0.2.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d515b1f41455adea1313a4a2ac8a8a477634fbae63cc6100e3aebb207ce61558"
+checksum = "755456fae044e6fa1ebbbd1b3e902ae19e73097ed4ed87bb79934a867c007bc3"
 
 [[package]]
 name = "libflate"
@@ -2331,6 +2331,18 @@ dependencies = [
  "cfg-if",
  "libc",
  "void",
+]
+
+[[package]]
+name = "nix"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83450fe6a6142ddd95fb064b746083fc4ef1705fe81f64a64e1d4b39f54a1055"
+dependencies = [
+ "bitflags",
+ "cc",
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]
@@ -3032,10 +3044,11 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine#8d45f51381ebf9941f9857474602cab2a5e9a0a2"
+source = "git+https://github.com/tikv/raft-engine#16f8a37c88d758131740f492a1626f6016dfaafd"
 dependencies = [
  "byteorder",
  "crc32fast",
+ "crossbeam",
  "errno",
  "fxhash",
  "kvproto",
@@ -3043,6 +3056,7 @@ dependencies = [
  "libc",
  "log",
  "lz4-sys",
+ "nix 0.18.0",
  "prometheus",
  "protobuf",
  "quick-error",
@@ -3050,6 +3064,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
@@ -3081,7 +3096,6 @@ dependencies = [
  "error_code",
  "fail",
  "fs2",
- "futures 0.1.29",
  "futures 0.3.4",
  "futures-util",
  "hex 0.4.2",
@@ -3116,9 +3130,6 @@ dependencies = [
  "tikv_util",
  "time 0.1.42",
  "tokio 0.2.13",
- "tokio-core",
- "tokio-threadpool",
- "tokio-timer",
  "txn_types",
  "uuid",
  "yatp",
@@ -3925,10 +3936,8 @@ dependencies = [
  "engine_traits",
  "error_code",
  "external_storage",
- "futures 0.1.29",
  "futures 0.3.4",
  "futures-cpupool",
- "futures-executor",
  "futures-util",
  "grpcio",
  "hex 0.4.2",
@@ -4247,11 +4256,11 @@ name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
  "concurrency_manager",
+ "crossbeam",
  "encryption",
  "engine_rocks",
  "engine_traits",
  "fail",
- "futures 0.1.29",
  "futures 0.3.4",
  "futures-cpupool",
  "grpcio",
@@ -4822,7 +4831,6 @@ dependencies = [
  "time 0.1.42",
  "tipb",
  "tokio 0.2.13",
- "tokio-core",
  "tokio-executor",
  "tokio-timer",
  "toml",
