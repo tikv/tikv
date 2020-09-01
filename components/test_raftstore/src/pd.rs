@@ -415,118 +415,52 @@ impl Cluster {
         assert!(self.region_id_keys.remove(&region.get_id()).is_some());
     }
 
-    fn handle_heartbeat_version(&mut self, region: metapb::Region) -> Result<()> {
-        // For split, we should handle heartbeat carefully.
-        // E.g, for region 1 [a, c) -> 1 [a, b) + 2 [b, c).
-        // after split, region 1 and 2 will do heartbeat independently.
-        let start_key = enc_start_key(&region);
-        let end_key = enc_end_key(&region);
-        assert!(end_key > start_key);
-
-        let version = region.get_region_epoch().get_version();
-
-        loop {
-            let search_key = data_key(region.get_start_key());
-            let search_region = match self.get_region(search_key) {
-                None => {
-                    // Find no range after start key, insert directly.
-                    self.add_region(&region);
-                    return Ok(());
-                }
-                Some(search_region) => search_region,
-            };
-
-            let search_start_key = enc_start_key(&search_region);
-            let search_end_key = enc_end_key(&search_region);
-
-            let search_version = search_region.get_region_epoch().get_version();
-
-            if start_key == search_start_key && end_key == search_end_key {
-                // we are the same, must check epoch here.
-                check_stale_region(&search_region, &region)?;
-                if search_region.get_region_epoch().get_version()
-                    < region.get_region_epoch().get_version()
-                {
-                    self.remove_region(&search_region);
-                    self.add_region(&region);
-                }
-                return Ok(());
-            }
-
-            if search_start_key >= end_key {
-                // No range covers [start, end) now, insert directly.
-                self.add_region(&region);
-                return Ok(());
-            } else {
-                // overlap, remove old, insert new.
-                // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c), either new 1 or 2 reports, the region
-                // is overlapped with origin [a, c).
-                if version <= search_version {
-                    return Err(box_err!("epoch {:?} is stale.", region.get_region_epoch()));
-                }
-
-                self.remove_region(&search_region);
-            }
-        }
+    fn get_overlap(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Vec<metapb::Region> {
+        self.regions
+            .range((Excluded(start_key), Unbounded))
+            .map(|(_, r)| r.clone())
+            .take_while(|exist_region| end_key > enc_start_key(exist_region))
+            .collect()
     }
 
-    fn handle_heartbeat_conf_ver(
+    fn check_put_region(&mut self, region: metapb::Region) -> Result<Vec<metapb::Region>> {
+        let (start_key, end_key, incoming_epoch) = (
+            enc_start_key(&region),
+            enc_end_key(&region),
+            region.get_region_epoch().clone(),
+        );
+        assert!(end_key > start_key);
+        let mut overlaps = self.get_overlap(start_key.clone(), end_key.clone());
+        for r in overlaps.iter() {
+            if incoming_epoch.get_version() < r.get_region_epoch().get_version() {
+                return Err(box_err!("epoch {:?} is stale.", incoming_epoch));
+            }
+        }
+        if let Some(o) = self.get_region_by_id(region.get_id())? {
+            let exist_epoch = o.get_region_epoch();
+            if incoming_epoch.get_version() < exist_epoch.get_version()
+                || incoming_epoch.get_conf_ver() < exist_epoch.get_conf_ver()
+            {
+                return Err(box_err!("epoch {:?} is stale.", incoming_epoch));
+            }
+        }
+        Ok(overlaps)
+    }
+
+    fn handle_heartbeat(
         &mut self,
         mut region: metapb::Region,
         leader: metapb::Peer,
     ) -> Result<pdpb::RegionHeartbeatResponse> {
-        let conf_ver = region.get_region_epoch().get_conf_ver();
-        let end_key = enc_end_key(&region);
-
-        // it can pass handle_heartbeat_version means it must exist.
-        let cur_region = self.get_region_by_id(region.get_id()).unwrap().unwrap();
-
-        let cur_conf_ver = cur_region.get_region_epoch().get_conf_ver();
-        check_stale_region(&cur_region, &region)?;
-
-        let region_peer_len = region.get_peers().len();
-        let cur_region_peer_len = cur_region.get_peers().len();
-
-        if conf_ver > cur_conf_ver {
-            match cur_region_peer_len.cmp(&region_peer_len) {
-                cmp::Ordering::Equal => {
-                    // For promote learner to voter.
-                    let get_learners =
-                        |r: &Region| r.get_peers().iter().filter(|p| is_learner(p)).count();
-                    let region_learner_len = get_learners(&region);
-                    let cur_region_learner_len = get_learners(&cur_region);
-                    assert_eq!(cur_region_learner_len, region_learner_len + 1);
-                }
-                cmp::Ordering::Greater => {
-                    // If ConfVer changed, TiKV has added/removed one peer already.
-                    // So pd and TiKV can't have same peer count and can only have
-                    // only one different peer.
-                    // E.g, we can't meet following cases:
-                    // 1) pd is (1, 2, 3), TiKV is (1)
-                    // 2) pd is (1), TiKV is (1, 2, 3)
-                    // 3) pd is (1, 2), TiKV is (3)
-                    // 4) pd id (1), TiKV is (2, 3)
-                    // must pd is (1, 2), TiKV is (1)
-                    assert_eq!(cur_region_peer_len - region_peer_len, 1);
-                    let peers = setdiff_peers(&cur_region, &region);
-                    assert_eq!(peers.len(), 1);
-                    assert!(setdiff_peers(&region, &cur_region).is_empty());
-                }
-                cmp::Ordering::Less => {
-                    // must pd is (1), TiKV is (1, 2)
-                    assert_eq!(region_peer_len - cur_region_peer_len, 1);
-                    let peers = setdiff_peers(&region, &cur_region);
-                    assert_eq!(peers.len(), 1);
-                    assert!(setdiff_peers(&cur_region, &region).is_empty());
-                }
-            }
-
-            // update the region.
-            assert!(self.regions.insert(end_key, region.clone()).is_some());
-        } else {
-            must_same_peers(&cur_region, &region);
+        // remove overlap regions
+        for r in self.check_put_region(region.clone())? {
+            self.remove_region(&r);
         }
-
+        // remove stale that have same id but different key range
+        if let Some(o) = self.get_region_by_id(region.get_id())? {
+            self.remove_region(&o);
+        }
+        self.add_region(&region);
         let resp = self
             .poll_heartbeat_responses(region.clone(), leader.clone())
             .unwrap_or_else(|| {
@@ -660,8 +594,7 @@ impl Cluster {
             self.region_replication_status.insert(region.id, status);
         }
 
-        self.handle_heartbeat_version(region.clone())?;
-        self.handle_heartbeat_conf_ver(region, leader)
+        self.handle_heartbeat(region, leader)
     }
 
     fn set_gc_safe_point(&mut self, safe_point: u64) {
@@ -677,19 +610,16 @@ fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) ->
     let epoch = region.get_region_epoch();
     let check_epoch = check_region.get_region_epoch();
 
-    // If check_epoch >= epoch then return Ok directly,
-    // here `ver` have higher priority than `conf_ver`
-    if (check_epoch.get_version(), check_epoch.get_conf_ver())
-        >= (epoch.get_version(), epoch.get_conf_ver())
+    if check_epoch.get_version() < epoch.get_version()
+        || check_epoch.get_conf_ver() < epoch.get_conf_ver()
     {
-        return Ok(());
+        return Err(box_err!(
+            "epoch not match {:?}, we are now {:?}",
+            check_epoch,
+            epoch
+        ));
     }
-
-    Err(box_err!(
-        "epoch not match {:?}, we are now {:?}",
-        check_epoch,
-        epoch
-    ))
+    Ok(())
 }
 
 fn must_same_peers(left: &metapb::Region, right: &metapb::Region) {
