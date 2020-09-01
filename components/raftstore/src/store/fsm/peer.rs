@@ -10,7 +10,7 @@ use batch_system::{BasicMailbox, Fsm};
 use engine_traits::CF_RAFT;
 use engine_traits::{Engines, KvEngine, WriteBatchExt};
 use error_code::ErrorCodeExt;
-use futures::Future;
+use futures::compat::Future01CompatExt;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -954,36 +954,37 @@ where
             }
         };
         let peer_id = self.fsm.peer.peer_id();
-        let f = self
-            .ctx
-            .timer
-            .delay(timeout)
-            .map(move |_| {
-                fail_point!(
-                    "on_raft_log_gc_tick_1",
-                    peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
-                    |_| unreachable!()
-                );
-                // This can happen only when the peer is about to be destroyed
-                // or the node is shutting down. So it's OK to not to clean up
-                // registry.
-                if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
-                    debug!(
-                        "failed to schedule peer tick";
-                        "region_id" => region_id,
-                        "peer_id" => peer_id,
-                        "tick" => ?tick,
-                        "err" => %e,
+        let delay = self.ctx.timer.delay(timeout).compat();
+        let f = async move {
+            match delay.await {
+                Ok(_) => {
+                    fail_point!(
+                        "on_raft_log_gc_tick_1",
+                        peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
+                        |_| unreachable!()
+                    );
+                    // This can happen only when the peer is about to be destroyed
+                    // or the node is shutting down. So it's OK to not to clean up
+                    // registry.
+                    if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
+                        debug!(
+                            "failed to schedule peer tick";
+                            "region_id" => region_id,
+                            "peer_id" => peer_id,
+                            "tick" => ?tick,
+                            "err" => %e,
+                        );
+                    }
+                }
+                Err(e) => {
+                    panic!(
+                        "[region {}] {} tick {:?} is lost due to timeout error: {:?}",
+                        region_id, peer_id, tick, e
                     );
                 }
-            })
-            .map_err(move |e| {
-                panic!(
-                    "[region {}] {} tick {:?} is lost due to timeout error: {:?}",
-                    region_id, peer_id, tick, e
-                );
-            });
-        self.ctx.future_poller.spawn(f).unwrap();
+            }
+        };
+        self.ctx.poller_handle.spawn(f);
     }
 
     fn register_raft_base_tick(&mut self) {
