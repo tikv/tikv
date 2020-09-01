@@ -79,7 +79,7 @@ fn test_node_merge_rollback() {
     pd_client.must_remove_peer(right.get_id(), new_peer(3, 5));
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    let target_region = pd_client.get_region(b"k1").unwrap();
+    let target_region = pd_client.get_region(b"k3").unwrap();
     cluster.must_try_merge(region.get_id(), target_region.get_id());
     let mut region = pd_client.get_region(b"k1").unwrap();
 
@@ -89,8 +89,9 @@ fn test_node_merge_rollback() {
     // Wait till rollback.
     cluster.must_put(b"k12", b"v12");
 
-    // After premerge and rollback, version becomes 4 + 2 = 6;
-    region.mut_region_epoch().set_version(4);
+    // After premerge and rollback, conf_ver becomes 3 + 1 = 4, version becomes 4 + 2 = 6;
+    region.mut_region_epoch().set_conf_ver(4);
+    region.mut_region_epoch().set_version(6);
     for i in 1..3 {
         must_get_equal(&cluster.get_engine(i), b"k12", b"v12");
         let state_key = keys::region_state_key(region.get_id());
