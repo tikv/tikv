@@ -14,7 +14,7 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use futures::Future;
+use futures::compat::Future01CompatExt;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
@@ -24,7 +24,7 @@ use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::{Ready, StateRole};
 use time::{self, Timespec};
-use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
+use tokio::runtime::{self, Handle, Runtime};
 
 use engine_rocks::CompactedEvent;
 use error_code::ErrorCodeExt;
@@ -296,7 +296,7 @@ where
     /// 1. lock the store_meta.
     /// 2. lock the pending_create_peers.
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    pub future_poller: ThreadPoolSender,
+    pub poller_handle: Handle,
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager,
     pub applying_snap_count: Arc<AtomicUsize>,
@@ -385,22 +385,24 @@ where
     fn schedule_store_tick(&self, tick: StoreTick, timeout: Duration) {
         if !is_zero_duration(&timeout) {
             let mb = self.router.control_mailbox();
-            let f = self
-                .timer
-                .delay(timeout)
-                .map(move |_| {
-                    if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
-                        info!(
-                            "failed to schedule store tick, are we shutting down?";
-                            "tick" => ?tick,
-                            "err" => ?e
-                        );
+            let delay = self.timer.delay(timeout).compat();
+            let f = async move {
+                match delay.await {
+                    Ok(_) => {
+                        if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
+                            info!(
+                                "failed to schedule store tick, are we shutting down?";
+                                "tick" => ?tick,
+                                "err" => ?e
+                            );
+                        }
                     }
-                })
-                .map_err(move |e| {
-                    panic!("tick {:?} is lost due to timeout error: {:?}", tick, e);
-                });
-            self.future_poller.spawn(f).unwrap();
+                    Err(e) => {
+                        panic!("tick {:?} is lost due to timeout error: {:?}", tick, e);
+                    }
+                }
+            };
+            self.poller_handle.spawn(f);
         }
     }
 
@@ -851,7 +853,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T, C> {
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    future_poller: ThreadPoolSender,
+    poller_handle: Handle,
     snap_mgr: SnapManager,
     pub coprocessor_host: CoprocessorHost<EK>,
     trans: T,
@@ -1050,7 +1052,7 @@ where
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
             pending_create_peers: self.pending_create_peers.clone(),
-            future_poller: self.future_poller.clone(),
+            poller_handle: self.poller_handle.clone(),
             raft_metrics: RaftMetrics::default(),
             snap_mgr: self.snap_mgr.clone(),
             applying_snap_count: self.applying_snap_count.clone(),
@@ -1096,7 +1098,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     raftlog_gc_worker: Worker<RaftlogGcTask<ER>>,
     region_worker: Worker<RegionTask<EK::Snapshot>>,
     coprocessor_host: CoprocessorHost<EK>,
-    future_poller: ThreadPool,
+    future_poller: Runtime,
 }
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
@@ -1150,10 +1152,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cleanup_worker: Worker::new("cleanup-worker"),
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
             coprocessor_host: coprocessor_host.clone(),
-            future_poller: tokio_threadpool::Builder::new()
-                .name_prefix("future-poller")
-                .pool_size(cfg.value().future_poll_size)
-                .build(),
+            future_poller: runtime::Builder::new()
+                .threaded_scheduler()
+                .thread_name("future-poller")
+                .core_threads(cfg.value().future_poll_size)
+                .build()
+                .unwrap(),
         };
         let mut builder = RaftPollerBuilder {
             cfg,
@@ -1177,7 +1181,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
-            future_poller: workers.future_poller.sender().clone(),
+            poller_handle: workers.future_poller.handle().clone(),
         };
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();
@@ -1339,7 +1343,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             }
         }
         workers.coprocessor_host.shutdown();
-        workers.future_poller.shutdown_now().wait().unwrap();
+        workers
+            .future_poller
+            .shutdown_timeout(Duration::from_nanos(0));
     }
 }
 
