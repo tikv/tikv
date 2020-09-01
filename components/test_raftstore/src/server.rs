@@ -25,7 +25,9 @@ use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
-use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
+use raftstore::router::{
+    LocalReadRouter, RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter,
+};
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::{
@@ -196,7 +198,7 @@ impl Simulator for ServerCluster {
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            Some(raft_router.clone()),
+            Some(router.clone()),
             cfg.gc.clone(),
             Default::default(),
         );
