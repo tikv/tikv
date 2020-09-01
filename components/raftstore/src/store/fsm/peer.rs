@@ -365,12 +365,21 @@ where
                 .iter_mut()
                 .filter_map(|cb| {
                     if let Callback::Write { proposed_cb, .. } = &mut cb.0 {
-                        proposed_cb.take()
+                        cb.take()
                     } else {
                         None
                     }
                 })
                 .collect();
+            let proposed_cb = if proposed_cbs.is_empty() {
+                None
+            } else {
+                Some(Box::new(move || {
+                    for proposed_cb in proposed_cbs {
+                        proposed_cb();
+                    }
+                }))
+            };
             let cb = Callback::write_ext(
                 Box::new(move |resp| {
                     let mut last_index = 0;
@@ -388,11 +397,7 @@ where
                         last_index = next_index;
                     }
                 }),
-                Some(Box::new(move || {
-                    for proposed_cb in proposed_cbs {
-                        proposed_cb();
-                    }
-                })),
+                proposed_cb,
             );
             return Some(RaftCommand::with_txn_extra(
                 req,
