@@ -675,27 +675,34 @@ impl<T: Simulator> Cluster<T> {
     }
 
     // If the resp is "not leader error", get the real leader.
-    // Sometimes, we may still can't get leader even in "not leader error",
-    // returns a INVALID_PEER for this.
+    // Otherwise reset or refresh leader if needed.
+    // Returns if the request should retry.
     fn refresh_leader_if_needed(&mut self, resp: &RaftCmdResponse, region_id: u64) -> bool {
         if !is_error_response(resp) {
             return false;
         }
 
         let err = resp.get_header().get_error();
-        if err.has_stale_command() {
-            // command got truncated, leadership may have changed.
+        if err
+            .get_message()
+            .contains("peer is not applied to current term")
+        {
+            // leader peer is not applied to current term
+            return true;
+        }
+
+        // If command is stale, leadership may have changed.
+        // Or epoch not match, it can be introduced by wrong leader.
+        if err.has_stale_command() 
+            || err.has_epoch_not_match()
+        {
             self.reset_leader_of_region(region_id);
             return true;
         }
-        // Not match epoch can be introduced by wrong leader.
-        if err.has_epoch_not_match() {
-            self.reset_leader_of_region(region_id);
-        }
+
         if !err.has_not_leader() {
             return false;
         }
-
         let err = err.get_not_leader();
         if !err.has_leader() {
             self.reset_leader_of_region(region_id);
@@ -1263,28 +1270,8 @@ impl<T: Simulator> Cluster<T> {
             source_region.get_region_epoch(),
             prepare_merge,
         );
-        let mut try_cnt = 0;
-        loop {
-            let resp = self
-                .call_command_on_leader(req.clone(), Duration::from_secs(3))
-                .unwrap();
-            if !resp
-                .get_header()
-                .get_error()
-                .get_message()
-                .contains("not applied to current term")
-            {
-                return resp;
-            }
-            if try_cnt > 250 {
-                panic!(
-                    "region {}'s leader is not applied to current term after {} tries",
-                    source, try_cnt
-                );
-            }
-            try_cnt += 1;
-            sleep_ms(20);
-        }
+        self.call_command_on_leader(req.clone(), Duration::from_secs(5))
+            .unwrap()
     }
 
     pub fn must_try_merge(&mut self, source: u64, target: u64) {
