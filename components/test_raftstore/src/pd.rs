@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use std::{cmp, thread};
@@ -21,6 +21,7 @@ use kvproto::replication_modepb::{
 };
 use raft::eraftpb;
 
+use fail::fail_point;
 use keys::{self, data_key, enc_end_key, enc_start_key};
 use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use raftstore::store::util::{check_key_in_region, is_learner};
@@ -731,7 +732,7 @@ pub struct TestPdClient {
     cluster: Arc<RwLock<Cluster>>,
     timer: Handle,
     is_incompatible: bool,
-    tso: AtomicUsize,
+    tso: AtomicU64,
     trigger_tso_failure: AtomicBool,
 }
 
@@ -742,7 +743,7 @@ impl TestPdClient {
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
             timer: GLOBAL_TIMER_HANDLE.clone(),
             is_incompatible,
-            tso: AtomicUsize::new(1),
+            tso: AtomicU64::new(1),
             trigger_tso_failure: AtomicBool::new(false),
         }
     }
@@ -1084,6 +1085,16 @@ impl TestPdClient {
     pub fn ignore_merge_target_integrity(&self) {
         self.cluster.wl().check_merge_target_integrity = false;
     }
+
+    pub fn set_tso(&self, ts: TimeStamp) {
+        let old = self.tso.swap(ts.into_inner(), Ordering::SeqCst);
+        if old > ts.into_inner() {
+            panic!(
+                "cannot decrease tso. current tso: {}; trying to set to: {}",
+                old, ts
+            );
+        }
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -1351,6 +1362,7 @@ impl PdClient for TestPdClient {
     }
 
     fn get_tso(&self) -> PdFuture<TimeStamp> {
+        fail_point!("test_raftstore_get_tso");
         if self.trigger_tso_failure.swap(false, Ordering::SeqCst) {
             return Box::pin(err(pd_client::errors::Error::Grpc(
                 grpcio::Error::RpcFailure(grpcio::RpcStatus::new(
@@ -1360,6 +1372,6 @@ impl PdClient for TestPdClient {
             )));
         }
         let tso = self.tso.fetch_add(1, Ordering::SeqCst);
-        Box::pin(ok(TimeStamp::new(tso as _)))
+        Box::pin(ok(TimeStamp::new(tso)))
     }
 }

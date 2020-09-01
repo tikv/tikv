@@ -171,6 +171,7 @@ pub struct ConsistencyState {
     pub last_check_time: Instant,
     // (computed_result_or_to_be_verified, index, hash)
     pub index: u64,
+    pub context: Vec<u8>,
     pub hash: Vec<u8>,
 }
 
@@ -525,6 +526,7 @@ where
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
                 index: INVALID_INDEX,
+                context: vec![],
                 hash: vec![],
             },
             raft_log_size_hint: 0,

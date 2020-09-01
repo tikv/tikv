@@ -325,3 +325,12 @@ pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
         }
     }
 }
+
+pub fn ensure_no_unrecognized_config(unrecognized_keys: &[String]) {
+    if !unrecognized_keys.is_empty() {
+        fatal!(
+            "unknown configuration options: {}",
+            unrecognized_keys.join(", ")
+        );
+    }
+}
