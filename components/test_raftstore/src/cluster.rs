@@ -1268,7 +1268,7 @@ impl<T: Simulator> Cluster<T> {
             source_region.get_region_epoch(),
             prepare_merge,
         );
-        self.call_command_on_leader(req.clone(), Duration::from_secs(5))
+        self.call_command_on_leader(req, Duration::from_secs(5))
             .unwrap()
     }
 
