@@ -12,7 +12,7 @@ use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, KvEngine, KvEngines, Mutable, Peekable, ReadOptions, SeekKey,
+    Engines, IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, ReadOptions, SeekKey,
     WriteBatchExt,
 };
 use kvproto::kvrpcpb::Context;
@@ -49,7 +49,7 @@ impl Display for Task {
     }
 }
 
-struct Runner(KvEngines<BaseRocksEngine, BaseRocksEngine>);
+struct Runner(Engines<BaseRocksEngine, BaseRocksEngine>);
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
@@ -86,7 +86,7 @@ impl Drop for RocksEngineCore {
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
-    engines: KvEngines<BaseRocksEngine, BaseRocksEngine>,
+    engines: Engines<BaseRocksEngine, BaseRocksEngine>,
     not_leader: Arc<AtomicBool>,
 }
 
@@ -111,7 +111,7 @@ impl RocksEngine {
         )?);
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let engines = KvEngines::new(
+        let engines = Engines::new(
             BaseRocksEngine::from_db(db.clone()),
             BaseRocksEngine::from_db(db),
             shared_block_cache,
@@ -133,7 +133,7 @@ impl RocksEngine {
         self.sched.schedule(Task::Pause(dur)).unwrap();
     }
 
-    pub fn engines(&self) -> KvEngines<BaseRocksEngine, BaseRocksEngine> {
+    pub fn engines(&self) -> Engines<BaseRocksEngine, BaseRocksEngine> {
         self.engines.clone()
     }
 
@@ -200,12 +200,16 @@ impl TestEngineBuilder {
 
     /// Build a `RocksEngine`.
     pub fn build(self) -> Result<RocksEngine> {
+        let cfg_rocksdb = crate::config::DbConfig::default();
+        self.build_with_cfg(&cfg_rocksdb)
+    }
+
+    pub fn build_with_cfg(self, cfg_rocksdb: &crate::config::DbConfig) -> Result<RocksEngine> {
         let path = match self.path {
             None => TEMP_DIR.to_owned(),
             Some(p) => p.to_str().unwrap().to_owned(),
         };
         let cfs = self.cfs.unwrap_or_else(|| crate::storage::ALL_CFS.to_vec());
-        let cfg_rocksdb = crate::config::DbConfig::default();
         let cache = BlockCacheConfig::default().build_shared_cache();
         let cfs_opts = cfs
             .iter()
@@ -272,6 +276,7 @@ pub fn write_modifies<E: KvEngine>(kv_engine: &E, modifies: Vec<Modify>) -> Resu
 
 impl Engine for RocksEngine {
     type Snap = Arc<RocksSnapshot>;
+    type Local = BaseRocksEngine;
 
     fn kv_engine(&self) -> engine_skiplist::SkiplistEngine {
         engine_skiplist::SkiplistEngineBuilder::new().build()

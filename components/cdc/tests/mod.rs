@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::*;
 use std::time::Duration;
 
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
@@ -28,6 +29,7 @@ use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
 use security::*;
 use test_raftstore::*;
+use tikv::config::CdcConfig;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
@@ -83,6 +85,7 @@ pub struct TestSuite {
     pub obs: HashMap<u64, CdcObserver>,
     tikv_cli: HashMap<u64, TikvClient>,
     cdc_cli: HashMap<u64, ChangeDataClient>,
+    concurrency_managers: HashMap<u64, ConcurrencyManager>,
 
     env: Arc<Environment>,
 }
@@ -97,6 +100,7 @@ impl TestSuite {
         let pd_cli = cluster.pd_client.clone();
         let mut endpoints = HashMap::default();
         let mut obs = HashMap::default();
+        let mut concurrency_managers = HashMap::default();
         // Hack! node id are generated from 1..count+1.
         for id in 1..=count as u64 {
             // Create and run cdc endpoints.
@@ -128,15 +132,19 @@ impl TestSuite {
             let sim = cluster.sim.rl();
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
+            let cm = ConcurrencyManager::new(1.into());
             let mut cdc_endpoint = cdc::Endpoint::new(
+                &CdcConfig::default(),
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
                 cdc_ob,
                 cluster.store_metas[id].clone(),
+                cm.clone(),
             );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);
+            concurrency_managers.insert(*id, cm);
             worker.start(cdc_endpoint).unwrap();
         }
 
@@ -144,6 +152,7 @@ impl TestSuite {
             cluster,
             endpoints,
             obs,
+            concurrency_managers,
             env: Arc::new(Environment::new(1)),
             tikv_cli: HashMap::default(),
             cdc_cli: HashMap::default(),
@@ -291,5 +300,13 @@ impl TestSuite {
             let channel = ChannelBuilder::new(env).connect(&addr);
             ChangeDataClient::new(channel)
         })
+    }
+
+    pub fn get_txn_concurrency_manager(&self, store_id: u64) -> Option<ConcurrencyManager> {
+        self.concurrency_managers.get(&store_id).cloned()
+    }
+
+    pub fn set_tso(&self, ts: impl Into<TimeStamp>) {
+        self.cluster.pd_client.set_tso(ts.into());
     }
 }

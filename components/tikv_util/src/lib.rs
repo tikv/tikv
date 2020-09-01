@@ -2,11 +2,10 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
+#![feature(box_patterns)]
 
 #[macro_use(fail_point)]
 extern crate fail;
-#[macro_use]
-extern crate futures;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
@@ -47,6 +46,7 @@ pub mod callback;
 pub mod deadline;
 pub mod keybuilder;
 pub mod logger;
+pub mod lru;
 pub mod metrics;
 pub mod mpsc;
 pub mod sys;

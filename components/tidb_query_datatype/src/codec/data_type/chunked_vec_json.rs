@@ -45,6 +45,7 @@ impl ChunkedVecJson {
         self.length
     }
 
+    #[inline]
     pub fn push_data(&mut self, mut value: Json) {
         self.bitmap.push(true);
         self.data.push(value.get_type() as u8);
@@ -53,6 +54,7 @@ impl ChunkedVecJson {
         self.length += 1;
     }
 
+    #[inline]
     pub fn push_null(&mut self) {
         self.bitmap.push(false);
         self.var_offset.push(self.data.len());
@@ -84,6 +86,7 @@ impl ChunkedVecJson {
         other.length = 0;
     }
 
+    #[inline]
     pub fn get(&self, idx: usize) -> Option<JsonRef> {
         assert!(idx < self.len());
         if self.bitmap.get(idx) {
@@ -100,16 +103,24 @@ impl ChunkedVec<Json> for ChunkedVecJson {
     fn chunked_with_capacity(capacity: usize) -> Self {
         Self::with_capacity(capacity)
     }
+
+    #[inline]
     fn chunked_push(&mut self, value: Option<Json>) {
         self.push(value)
     }
 }
 
 impl<'a> ChunkRef<'a, JsonRef<'a>> for &'a ChunkedVecJson {
+    #[inline]
     fn get_option_ref(self, idx: usize) -> Option<JsonRef<'a>> {
         self.get(idx)
     }
 
+    fn get_bit_vec(self) -> &'a BitVec {
+        &self.bitmap
+    }
+
+    #[inline]
     fn phantom_data(self) -> Option<JsonRef<'a>> {
         None
     }
@@ -128,7 +139,7 @@ impl<'a> UnsafeRefInto<&'static ChunkedVecJson> for &'a ChunkedVecJson {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

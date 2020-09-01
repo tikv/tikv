@@ -1,18 +1,17 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CfName, KvEngine};
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use std::marker::PhantomData;
-use txn_types::TxnExtra;
-
 use std::mem;
 use std::ops::Deref;
 
-use crate::store::CasualRouter;
+use engine_traits::{CfName, KvEngine};
+use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
+use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
+use txn_types::TxnExtra;
 
 use super::*;
+use crate::store::CasualRouter;
 
 struct Entry<T> {
     priority: u32,
@@ -81,8 +80,8 @@ macro_rules! impl_box_observer {
 // This is the same as impl_box_observer_g except $ob has a typaram
 macro_rules! impl_box_observer_g {
     ($name:ident, $ob: ident, $wrapper: ident) => {
-        pub struct $name<E>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
-        impl<E: 'static + Send> $name<E> {
+        pub struct $name<E: KvEngine>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
+        impl<E: KvEngine + 'static + Send> $name<E> {
             pub fn new<T: 'static + $ob<E> + Clone>(observer: T) -> $name<E> {
                 $name(Box::new($wrapper {
                     inner: observer,
@@ -90,12 +89,12 @@ macro_rules! impl_box_observer_g {
                 }))
             }
         }
-        impl<E: 'static> Clone for $name<E> {
+        impl<E: KvEngine + 'static> Clone for $name<E> {
             fn clone(&self) -> $name<E> {
                 $name((**self).box_clone())
             }
         }
-        impl<E> Deref for $name<E> {
+        impl<E: KvEngine> Deref for $name<E> {
             type Target = Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>;
 
             fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send> {
@@ -103,11 +102,13 @@ macro_rules! impl_box_observer_g {
             }
         }
 
-        struct $wrapper<E, T: $ob<E> + Clone> {
+        struct $wrapper<E: KvEngine, T: $ob<E> + Clone> {
             inner: T,
             _phantom: PhantomData<E>,
         }
-        impl<E: 'static + Send, T: 'static + $ob<E> + Clone> ClonableObserver for $wrapper<E, T> {
+        impl<E: KvEngine + 'static + Send, T: 'static + $ob<E> + Clone> ClonableObserver
+            for $wrapper<E, T>
+        {
             type Ob = dyn $ob<E>;
             fn inner(&self) -> &Self::Ob {
                 &self.inner as _
@@ -146,30 +147,37 @@ impl_box_observer!(
     WrappedRegionChangeObserver
 );
 impl_box_observer_g!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
+impl_box_observer_g!(
+    BoxConsistencyCheckObserver,
+    ConsistencyCheckObserver,
+    WrappedConsistencyCheckObserver
+);
 
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
 pub struct Registry<E>
 where
-    E: 'static,
+    E: KvEngine + 'static,
 {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
     apply_snapshot_observers: Vec<Entry<BoxApplySnapshotObserver>>,
     split_check_observers: Vec<Entry<BoxSplitCheckObserver<E>>>,
+    consistency_check_observers: Vec<Entry<BoxConsistencyCheckObserver<E>>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver<E>>>,
     // TODO: add endpoint
 }
 
-impl<E> Default for Registry<E> {
+impl<E: KvEngine> Default for Registry<E> {
     fn default() -> Registry<E> {
         Registry {
             admin_observers: Default::default(),
             query_observers: Default::default(),
             apply_snapshot_observers: Default::default(),
             split_check_observers: Default::default(),
+            consistency_check_observers: Default::default(),
             role_observers: Default::default(),
             region_change_observers: Default::default(),
             cmd_observers: Default::default(),
@@ -190,7 +198,7 @@ macro_rules! push {
     };
 }
 
-impl<E> Registry<E> {
+impl<E: KvEngine> Registry<E> {
     pub fn register_admin_observer(&mut self, priority: u32, ao: BoxAdminObserver) {
         push!(priority, ao, self.admin_observers);
     }
@@ -209,6 +217,14 @@ impl<E> Registry<E> {
 
     pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver<E>) {
         push!(priority, sco, self.split_check_observers);
+    }
+
+    pub fn register_consistency_check_observer(
+        &mut self,
+        priority: u32,
+        cco: BoxConsistencyCheckObserver<E>,
+    ) {
+        push!(priority, cco, self.consistency_check_observers);
     }
 
     pub fn register_role_observer(&mut self, priority: u32, ro: BoxRoleObserver) {
@@ -272,12 +288,12 @@ macro_rules! loop_ob {
 #[derive(Clone)]
 pub struct CoprocessorHost<E>
 where
-    E: 'static,
+    E: KvEngine + 'static,
 {
     pub registry: Registry<E>,
 }
 
-impl<E> Default for CoprocessorHost<E>
+impl<E: KvEngine> Default for CoprocessorHost<E>
 where
     E: 'static,
 {
@@ -288,10 +304,7 @@ where
     }
 }
 
-impl<E> CoprocessorHost<E>
-where
-    E: KvEngine,
-{
+impl<E: KvEngine> CoprocessorHost<E> {
     pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(ch: C) -> CoprocessorHost<E> {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
@@ -356,19 +369,16 @@ where
         }
     }
 
-    pub fn post_apply(&self, region: &Region, resp: &mut RaftCmdResponse) {
-        if !resp.has_admin_response() {
-            let query = resp.mut_responses();
-            let mut vec_query = mem::take(query).into();
+    pub fn post_apply(&self, region: &Region, cmd: &mut Cmd) {
+        if !cmd.response.has_admin_response() {
             loop_ob!(
                 region,
                 &self.registry.query_observers,
                 post_apply_query,
-                &mut vec_query,
+                cmd,
             );
-            *query = vec_query.into();
         } else {
-            let admin = resp.mut_admin_response();
+            let admin = cmd.response.mut_admin_response();
             loop_ob!(
                 region,
                 &self.registry.admin_observers,
@@ -378,7 +388,7 @@ where
         }
     }
 
-    pub fn pre_apply_plain_kvs_from_snapshot(
+    pub fn post_apply_plain_kvs_from_snapshot(
         &self,
         region: &Region,
         cf: CfName,
@@ -387,17 +397,17 @@ where
         loop_ob!(
             region,
             &self.registry.apply_snapshot_observers,
-            pre_apply_plain_kvs,
+            apply_plain_kvs,
             cf,
             kv_pairs
         );
     }
 
-    pub fn pre_apply_sst_from_snapshot(&self, region: &Region, cf: CfName, path: &str) {
+    pub fn post_apply_sst_from_snapshot(&self, region: &Region, cf: CfName, path: &str) {
         loop_ob!(
             region,
             &self.registry.apply_snapshot_observers,
-            pre_apply_sst,
+            apply_sst,
             cf,
             path
         );
@@ -421,6 +431,37 @@ where
             policy
         );
         host
+    }
+
+    pub fn on_prepropose_compute_hash(&self, req: &mut ComputeHashRequest) {
+        for observer in &self.registry.consistency_check_observers {
+            let observer = observer.observer.inner();
+            if observer.update_context(req.mut_context()) {
+                break;
+            }
+        }
+    }
+
+    pub fn on_compute_hash(
+        &self,
+        region: &Region,
+        context: &[u8],
+        snap: E::Snapshot,
+    ) -> Result<Vec<(Vec<u8>, u32)>> {
+        let mut hashes = Vec::new();
+        let (mut reader, context_len) = (context, context.len());
+        for observer in &self.registry.consistency_check_observers {
+            let observer = observer.observer.inner();
+            let old_len = reader.len();
+            let hash = match box_try!(observer.compute_hash(region, &mut reader, &snap)) {
+                Some(hash) => hash,
+                None => break,
+            };
+            let new_len = reader.len();
+            let ctx = context[context_len - old_len..context_len - new_len].to_vec();
+            hashes.push((ctx, hash));
+        }
+        Ok(hashes)
     }
 
     pub fn on_role_change(&self, region: &Region, role: StateRole) {
@@ -517,7 +558,7 @@ mod tests {
     use engine_panic::PanicEngine;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{
-        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
+        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
     };
 
     #[derive(Clone, Default)]
@@ -573,7 +614,7 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &mut Vec<Response>) {
+        fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &mut Cmd) {
             self.called.fetch_add(6, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -599,7 +640,7 @@ mod tests {
     }
 
     impl ApplySnapshotObserver for TestCoprocessor {
-        fn pre_apply_plain_kvs(
+        fn apply_plain_kvs(
             &self,
             ctx: &mut ObserverContext<'_>,
             _: CfName,
@@ -609,7 +650,7 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn pre_apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &str) {
+        fn apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &str) {
             self.called.fetch_add(10, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -668,7 +709,7 @@ mod tests {
         assert_all!(&[&ob.called], &[3]);
         let mut admin_resp = RaftCmdResponse::default();
         admin_resp.set_admin_response(AdminResponse::default());
-        host.post_apply(&region, &mut admin_resp);
+        host.post_apply(&region, &mut Cmd::new(0, admin_req, admin_resp));
         assert_all!(&[&ob.called], &[6]);
 
         let mut query_req = RaftCmdRequest::default();
@@ -677,9 +718,8 @@ mod tests {
         assert_all!(&[&ob.called], &[10]);
         host.pre_apply(&region, &query_req);
         assert_all!(&[&ob.called], &[15]);
-        let mut query_resp = admin_resp;
-        query_resp.clear_admin_response();
-        host.post_apply(&region, &mut query_resp);
+        let query_resp = RaftCmdResponse::default();
+        host.post_apply(&region, &mut Cmd::new(0, query_req, query_resp));
         assert_all!(&[&ob.called], &[21]);
 
         host.on_role_change(&region, StateRole::Leader);
@@ -688,9 +728,9 @@ mod tests {
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         assert_all!(&[&ob.called], &[36]);
 
-        host.pre_apply_plain_kvs_from_snapshot(&region, "default", &[]);
+        host.post_apply_plain_kvs_from_snapshot(&region, "default", &[]);
         assert_all!(&[&ob.called], &[45]);
-        host.pre_apply_sst_from_snapshot(&region, "default", "");
+        host.post_apply_sst_from_snapshot(&region, "default", "");
         assert_all!(&[&ob.called], &[55]);
         let observe_id = ObserveID::new();
         host.prepare_for_apply(observe_id, 0);
@@ -698,7 +738,7 @@ mod tests {
         host.on_apply_cmd(
             observe_id,
             0,
-            Cmd::new(0, RaftCmdRequest::default(), query_resp),
+            Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
         assert_all!(&[&ob.called], &[78]);
         host.on_flush_apply(Vec::default(), PanicEngine);
@@ -730,7 +770,7 @@ mod tests {
 
         let cases = vec![(0, admin_req, admin_resp), (3, query_req, query_resp)];
 
-        for (base_score, mut req, mut resp) in cases {
+        for (base_score, mut req, resp) in cases {
             set_all!(&[&ob1.return_err, &ob2.return_err], false);
             set_all!(&[&ob1.called, &ob2.called], 0);
             set_all!(&[&ob1.bypass, &ob2.bypass], true);
@@ -743,7 +783,7 @@ mod tests {
             host.pre_apply(&region, &req);
             assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 2 + 3]);
 
-            host.post_apply(&region, &mut resp);
+            host.post_apply(&region, &mut Cmd::new(0, req.clone(), resp.clone()));
             assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 3 + 6]);
 
             set_all!(&[&ob2.bypass], false);

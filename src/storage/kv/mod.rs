@@ -11,9 +11,9 @@ use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use engine_skiplist::{SkiplistEngine, SkiplistTablePropertiesCollection};
+use engine_skiplist::SkiplistTablePropertiesCollection;
 use engine_traits::{CfName, CF_DEFAULT};
-use engine_traits::{IterOptions, MvccProperties, ReadOptions};
+use engine_traits::{IterOptions, KvEngine as LocalEngine, MvccProperties, ReadOptions};
 use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
@@ -26,6 +26,7 @@ pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot, TestE
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
 use tikv_util::time::ThreadReadId;
 
@@ -93,13 +94,14 @@ impl WriteData {
 
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
+    type Local: LocalEngine;
 
-    /// Key/value storage engine.
-    fn kv_engine(&self) -> SkiplistEngine;
+    /// Local storage engine.
+    fn kv_engine(&self) -> Self::Local;
 
     fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap>;
 
-    /// Write modifications into internal kv engine directly.
+    /// Write modifications into internal local engine directly.
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
 
     fn async_snapshot(
@@ -208,6 +210,12 @@ pub trait Snapshot: Sync + Send + Clone {
     fn get_data_version(&self) -> Option<u64> {
         None
     }
+
+    fn is_max_ts_synced(&self) -> bool {
+        // If the snapshot does not come from a multi-raft engine, max ts
+        // needn't be updated.
+        true
+    }
 }
 
 pub trait Iterator: Send {
@@ -315,6 +323,17 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     }
 }
 
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Request(e) => e.error_code(),
+            ErrorInner::Timeout(_) => error_code::storage::TIMEOUT,
+            ErrorInner::EmptyRequest => error_code::storage::EMPTY_REQUEST,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
+        }
+    }
+}
+
 thread_local! {
     // A pointer to thread local engine. Use raw pointer and `UnsafeCell` to reduce runtime check.
     static TLS_ENGINE_ANY: UnsafeCell<*mut ()> = UnsafeCell::new(ptr::null_mut());
@@ -376,7 +395,7 @@ pub fn snapshot<E: Engine>(
     ctx: &Context,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let (callback, future) =
-        tikv_util::future::paired_must_called_std_future_callback(drop_snapshot_callback::<E>);
+        tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
     let val = engine.async_snapshot(ctx, read_id, callback);
     // make engine not cross yield point
     async move {

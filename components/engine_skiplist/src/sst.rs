@@ -112,6 +112,9 @@ impl SstWriterBuilder<SkiplistEngine> for SkiplistSstWriterBuilder {
     fn build(self, path: &str) -> Result<SkiplistSstWriter> {
         panic!()
     }
+    fn set_compression_level(self, level: i32) -> Self {
+        panic!()
+    }
 }
 
 pub struct SkiplistExternalSstFileInfo;

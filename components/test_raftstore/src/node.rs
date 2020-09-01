@@ -12,9 +12,10 @@ use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
 use super::*;
+use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngines, MiscExt, Peekable};
+use engine_traits::{Engines, MiscExt, Peekable};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::errors::Error as RaftError;
@@ -35,8 +36,8 @@ use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 
 pub struct ChannelTransportCore {
-    snap_paths: HashMap<u64, (SnapManager<RocksEngine>, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine>>>,
+    snap_paths: HashMap<u64, (SnapManager, TempDir)>,
+    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>>,
 }
 
 #[derive(Clone)]
@@ -63,7 +64,7 @@ impl Transport for ChannelTransport {
         let region_id = msg.get_region_id();
         let is_snapshot = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
 
-        if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
+        if is_snapshot {
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
             let from = match self.core.lock().unwrap().snap_paths.get(&from_store) {
@@ -145,7 +146,7 @@ impl NodeCluster {
     pub fn get_node_router(
         &self,
         node_id: u64,
-    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine>> {
+    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>> {
         self.trans
             .core
             .lock()
@@ -177,11 +178,11 @@ impl Simulator for NodeCluster {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RocksEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = FutureWorker::new("test-pd-worker");
@@ -209,7 +210,7 @@ impl Simulator for NodeCluster {
             let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
             let snap_mgr = SnapManagerBuilder::default()
                 .encryption_key_manager(key_manager)
-                .build(tmp.path().to_str().unwrap(), Some(router.clone()));
+                .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.core.lock().unwrap();
@@ -263,6 +264,7 @@ impl Simulator for NodeCluster {
             importer,
             split_check_worker,
             AutoSplitController::default(),
+            ConcurrencyManager::new(1.into()),
         )?;
         assert!(engines
             .kv

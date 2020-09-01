@@ -164,7 +164,7 @@ fn get_background_job_limit(
     // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
     // the rest shared by flush and compaction.
     let max_background_jobs: i32 =
-        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1) as i32));
+        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1.0) as i32));
     // Cap max_sub_compactions to allow at least two compactions.
     let max_compactions = max_background_jobs - max_background_jobs / 4;
     let max_sub_compactions: u32 = cmp::max(
@@ -839,6 +839,8 @@ pub struct DbConfig {
     #[config(skip)]
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
+    #[config(skip)]
+    pub rate_limiter_refill_period: ReadableDuration,
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
@@ -896,6 +898,7 @@ impl Default for DbConfig {
             info_log_dir: "".to_owned(),
             info_log_level: LogLevel::Info,
             rate_bytes_per_sec: ReadableSize::kb(0),
+            rate_limiter_refill_period: ReadableDuration::millis(100),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
             auto_tuned: false,
             bytes_per_sync: ReadableSize::mb(1),
@@ -939,6 +942,7 @@ impl DbConfig {
         if self.rate_bytes_per_sec.0 > 0 {
             opts.set_ratelimiter_with_auto_tuned(
                 self.rate_bytes_per_sec.0 as i64,
+                (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
                 self.rate_limiter_mode,
                 self.auto_tuned,
             );
@@ -1489,7 +1493,7 @@ const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 impl Default for UnifiedReadPoolConfig {
     fn default() -> UnifiedReadPoolConfig {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.8) as usize;
+        let mut concurrency = (cpu_num * 0.8) as usize;
         concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             min_thread_count: 1,
@@ -1725,7 +1729,7 @@ readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 impl Default for StorageReadPoolConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.5) as usize;
+        let mut concurrency = (cpu_num * 0.5) as usize;
         concurrency = cmp::max(DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY, concurrency);
         concurrency = cmp::min(DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY, concurrency);
         Self {
@@ -1767,7 +1771,7 @@ readpool_config!(
 impl Default for CoprReadPoolConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.8) as usize;
+        let mut concurrency = (cpu_num * 0.8) as usize;
         concurrency = cmp::max(DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             use_unified_pool: None,
@@ -1997,7 +2001,22 @@ impl Default for BackupConfig {
         let cpu_num = SysQuota::new().cpu_cores_quota();
         Self {
             // use at most 75% of vCPU by default
-            num_threads: (cpu_num - cpu_num / 4).clamp(1, 32),
+            num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct CdcConfig {
+    pub min_ts_interval: ReadableDuration,
+}
+
+impl Default for CdcConfig {
+    fn default() -> Self {
+        Self {
+            min_ts_interval: ReadableDuration::secs(1),
         }
     }
 }
@@ -2081,6 +2100,9 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub split: SplitConfig,
+
+    #[config(submodule)]
+    pub cdc: CdcConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2110,6 +2132,7 @@ impl Default for TiKvConfig {
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
             split: SplitConfig::default(),
+            cdc: CdcConfig::default(),
         }
     }
 }
@@ -2332,17 +2355,23 @@ impl TiKvConfig {
         Ok(())
     }
 
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
+    pub fn from_file(path: &Path, unrecognized_keys: Option<&mut Vec<String>>) -> Self {
         (|| -> Result<Self, Box<dyn Error>> {
-            let s = fs::read_to_string(&path)?;
-            let mut cfg: TiKvConfig = toml::from_str(&s)?;
-            cfg.cfg_path = path.as_ref().display().to_string();
+            let s = fs::read_to_string(path)?;
+            let mut deserializer = toml::Deserializer::new(&s);
+            let mut cfg = if let Some(keys) = unrecognized_keys {
+                serde_ignored::deserialize(&mut deserializer, |key| keys.push(key.to_string()))
+            } else {
+                <TiKvConfig as serde::Deserialize>::deserialize(&mut deserializer)
+            }?;
+            deserializer.end()?;
+            cfg.cfg_path = path.display().to_string();
             Ok(cfg)
         })()
         .unwrap_or_else(|e| {
             panic!(
                 "invalid auto generated configuration file {}, err {}",
-                path.as_ref().display(),
+                path.display(),
                 e
             );
         })
@@ -2391,7 +2420,7 @@ fn get_last_config(data_dir: &str) -> Option<TiKvConfig> {
     let store_path = Path::new(data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     if last_cfg_path.exists() {
-        return Some(TiKvConfig::from_file(&last_cfg_path));
+        return Some(TiKvConfig::from_file(&last_cfg_path, None));
     }
     None
 }
@@ -2401,6 +2430,13 @@ pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     let store_path = Path::new(&config.storage.data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     let tmp_cfg_path = store_path.join(TMP_CONFIG_FILE);
+
+    let same_as_last_cfg = fs::read_to_string(&last_cfg_path).map_or(false, |last_cfg| {
+        toml::to_string(&config).unwrap() == last_cfg
+    });
+    if same_as_last_cfg {
+        return Ok(());
+    }
 
     // Create parent directory if missing.
     if let Err(e) = fs::create_dir_all(&store_path) {
@@ -2749,10 +2785,33 @@ mod tests {
     }
 
     #[test]
+    fn test_last_cfg_modified() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let store_path = Path::new(&cfg.storage.data_dir);
+        let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+
+        cfg.write_to_file(&last_cfg_path).unwrap();
+
+        let mut last_cfg_metadata = last_cfg_path.metadata().unwrap();
+        let first_modified = last_cfg_metadata.modified().unwrap();
+
+        // not write to file when config is the equivalent of last one.
+        assert!(persist_config(&cfg).is_ok());
+        last_cfg_metadata = last_cfg_path.metadata().unwrap();
+        assert_eq!(last_cfg_metadata.modified().unwrap(), first_modified);
+
+        // write to file when config is the inequivalent of last one.
+        cfg.log_level = slog::Level::Warning;
+        assert!(persist_config(&cfg).is_ok());
+        last_cfg_metadata = last_cfg_path.metadata().unwrap();
+        assert_ne!(last_cfg_metadata.modified().unwrap(), first_modified);
+    }
+
+    #[test]
     fn test_persist_cfg() {
         let dir = Builder::new().prefix("test_persist_cfg").tempdir().unwrap();
         let path_buf = dir.path().join(LAST_CONFIG_FILE);
-        let file = path_buf.as_path().to_str().unwrap();
+        let file = path_buf.as_path();
         let (s1, s2) = ("/xxx/wal_dir".to_owned(), "/yyy/wal_dir".to_owned());
 
         let mut tikv_cfg = TiKvConfig::default();
@@ -2760,7 +2819,7 @@ mod tests {
         tikv_cfg.rocksdb.wal_dir = s1.clone();
         tikv_cfg.raftdb.wal_dir = s2.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file);
+        let cfg_from_file = TiKvConfig::from_file(file, None);
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s1);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s2);
 
@@ -2768,7 +2827,7 @@ mod tests {
         tikv_cfg.rocksdb.wal_dir = s2.clone();
         tikv_cfg.raftdb.wal_dir = s1.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file);
+        let cfg_from_file = TiKvConfig::from_file(file, None);
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
     }
@@ -3131,5 +3190,43 @@ mod tests {
         cfg.compatible_adjust();
         assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(false));
+    }
+
+    #[test]
+    fn test_unrecognized_config_keys() {
+        let mut temp_config_file = tempfile::NamedTempFile::new().unwrap();
+        let temp_config_writer = temp_config_file.as_file_mut();
+        temp_config_writer
+            .write_all(
+                br#"
+                    log-level = "debug"
+                    log-fmt = "json"
+                    [readpool.unified]
+                    min-threads-count = 5
+                    stack-size = "20MB"
+                    [import]
+                    num_threads = 4
+                    [gcc]
+                    batch-keys = 1024
+                    [[security.encryption.master-keys]]
+                    type = "file"
+                "#,
+            )
+            .unwrap();
+        temp_config_writer.sync_data().unwrap();
+
+        let mut unrecognized_keys = Vec::new();
+        let _ = TiKvConfig::from_file(temp_config_file.path(), Some(&mut unrecognized_keys));
+
+        assert_eq!(
+            unrecognized_keys,
+            vec![
+                "log-fmt".to_owned(),
+                "readpool.unified.min-threads-count".to_owned(),
+                "import.num_threads".to_owned(),
+                "gcc".to_owned(),
+                "security.encryption.master-keys".to_owned(),
+            ],
+        );
     }
 }

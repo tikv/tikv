@@ -71,6 +71,7 @@ impl Default for BTreeEngine {
 
 impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
+    type Local = RocksEngine;
 
     fn kv_engine(&self) -> engine_skiplist::SkiplistEngine {
         unimplemented!();

@@ -6,23 +6,11 @@ use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
+pub use tidb_query_datatype::codec::data_type::{
+    LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS,
+};
 use tidb_query_datatype::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
 use tidb_query_datatype::expr::EvalContext;
-
-// TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
-pub const BATCH_MAX_SIZE: usize = 1024;
-
-/// Identical logical row is a special case in expression evaluation that
-/// the rows in physical_value are continuous and in order.
-static IDENTICAL_LOGICAL_ROWS: [usize; BATCH_MAX_SIZE] = {
-    let mut logical_rows = [0; BATCH_MAX_SIZE];
-    let mut row = 0;
-    while row < logical_rows.len() {
-        logical_rows[row] = row;
-        row += 1;
-    }
-    logical_rows
-};
 
 /// Represents a vector value node in the RPN stack.
 ///
@@ -54,13 +42,19 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     }
 
     /// Gets a reference to the logical rows.
-    pub fn logical_rows(&self) -> &[usize] {
+    pub fn logical_rows_struct(&self) -> LogicalRows {
         match self {
-            RpnStackNodeVectorValue::Generated { physical_value } => {
-                &IDENTICAL_LOGICAL_ROWS[0..physical_value.len()]
-            }
-            RpnStackNodeVectorValue::Ref { logical_rows, .. } => logical_rows,
+            RpnStackNodeVectorValue::Generated { physical_value } => LogicalRows::Ref {
+                logical_rows: &IDENTICAL_LOGICAL_ROWS[0..physical_value.len()],
+            },
+
+            RpnStackNodeVectorValue::Ref { logical_rows, .. } => LogicalRows::Ref { logical_rows },
         }
+    }
+
+    /// Gets a reference to the logical rows.
+    pub fn logical_rows(&self) -> &[usize] {
+        self.logical_rows_struct().as_slice()
     }
 }
 
@@ -139,8 +133,9 @@ impl<'a> RpnStackNode<'a> {
         match self {
             RpnStackNode::Vector { value, .. } => {
                 let physical_vector = value.as_ref();
-                let logical_rows = value.logical_rows();
-                physical_vector.get_scalar_ref(logical_rows[logical_index])
+                let logical_rows = value.logical_rows_struct();
+                let idx = logical_rows.get_idx(logical_index);
+                physical_vector.get_scalar_ref(idx)
             }
             RpnStackNode::Scalar { value, .. } => value.as_scalar_value_ref(),
         }
@@ -192,7 +187,7 @@ impl RpnExpression {
                 input_physical_columns[*offset].ensure_decoded(
                     ctx,
                     &schema[*offset],
-                    input_logical_rows,
+                    LogicalRows::from_slice(input_logical_rows),
                 )?;
             }
         }
@@ -1172,6 +1167,52 @@ mod tests {
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
+    #[test]
+    fn test_merge_nulls_constant_null() {
+        /// Expects real argument, receives int argument.
+        #[rpn_fn]
+        fn foo(v: &Real) -> Result<Option<Real>> {
+            Ok(Some(*v * 2.5))
+        }
+
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_constant_for_test(ScalarValue::Real(None))
+            .push_fn_call_for_test(foo_fn_meta(), 1, FieldTypeTp::Double)
+            .build_for_test();
+        let mut ctx = EvalContext::default();
+        let mut columns = LazyBatchColumnVec::empty();
+        let val = exp.eval(&mut ctx, &[], &mut columns, &[], 10).unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_real_vec(),
+            (0..10).map(|_| None).collect::<Vec<Option<Real>>>()
+        );
+    }
+
+    #[test]
+    fn test_merge_nulls_constant() {
+        /// Expects real argument, receives int argument.
+        #[rpn_fn]
+        fn foo(v: &Real) -> Result<Option<Real>> {
+            Ok(Some(*v * 2.5))
+        }
+
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_constant_for_test(ScalarValue::Real(Real::new(10.0).ok()))
+            .push_fn_call_for_test(foo_fn_meta(), 1, FieldTypeTp::Double)
+            .build_for_test();
+        let mut ctx = EvalContext::default();
+        let mut columns = LazyBatchColumnVec::empty();
+        let val = exp.eval(&mut ctx, &[], &mut columns, &[], 10).unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_real_vec(),
+            (0..10)
+                .map(|_| Real::new(25.0).ok())
+                .collect::<Vec<Option<Real>>>()
+        );
+    }
+
     #[bench]
     fn bench_eval_plus_1024_rows(b: &mut Bencher) {
         let mut columns = LazyBatchColumnVec::from(vec![{
@@ -1277,5 +1318,165 @@ mod tests {
             assert!(result.is_ok());
         });
         profiler::stop();
+    }
+}
+
+#[cfg(test)]
+mod benches {
+    use super::*;
+
+    use crate::RpnExpressionBuilder;
+    use tidb_query_codegen::rpn_fn;
+    use tidb_query_common::Result;
+    use tidb_query_datatype::codec::batch::LazyBatchColumn;
+    use tidb_query_datatype::codec::data_type::*;
+    use tidb_query_datatype::expr::EvalContext;
+    use tidb_query_datatype::{EvalType, FieldTypeTp};
+
+    #[bench]
+    fn bench_int_eval(b: &mut test::Bencher) {
+        /// Expects real argument, receives 3 real arguments.
+        #[rpn_fn]
+        fn foo(u: &Real, v: &Real, w: &Real) -> Result<Option<Real>> {
+            Ok(Some(*u * 2.5 + *v * 2.5 + *w * 2.5))
+        }
+
+        let mut columns = LazyBatchColumnVec::from(vec![
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Real);
+                for _i in 0..256 {
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                }
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Real);
+                for _i in 0..256 {
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(None);
+                }
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Real);
+                for _i in 0..256 {
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(None);
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(None);
+                }
+                col
+            },
+        ]);
+
+        let input_logical_rows: Vec<usize> = (0..1024).collect();
+
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_column_ref_for_test(1)
+            .push_column_ref_for_test(2)
+            .push_fn_call_for_test(foo_fn_meta(), 3, FieldTypeTp::Double)
+            .build_for_test();
+
+        let schema = &[
+            FieldTypeTp::Double.into(),
+            FieldTypeTp::Double.into(),
+            FieldTypeTp::Double.into(),
+        ];
+
+        b.iter(|| {
+            let mut ctx = EvalContext::default();
+            exp.eval(
+                &mut ctx,
+                schema,
+                &mut columns,
+                input_logical_rows.as_slice(),
+                input_logical_rows.len(),
+            )
+            .unwrap();
+        });
+    }
+
+    #[bench]
+    fn bench_bytes_eval(b: &mut test::Bencher) {
+        /// Expects real argument, receives 3 real arguments.
+        #[rpn_fn(writer)]
+        fn foo(u: BytesRef, v: BytesRef, w: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+            let mut partial = writer.begin();
+            partial.partial_write(u);
+            partial.partial_write(v);
+            partial.partial_write(w);
+            Ok(partial.finish())
+        }
+
+        let mut bytes_vec: Vec<u8> = vec![];
+        for _i in 0..10 {
+            bytes_vec.append(&mut b"2333333333".to_vec());
+        }
+
+        let mut columns = LazyBatchColumnVec::from(vec![
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Bytes);
+                for _i in 0..256 {
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                }
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Bytes);
+                for _i in 0..256 {
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(None);
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                }
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Bytes);
+                for _i in 0..256 {
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(None);
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(None);
+                }
+                col
+            },
+        ]);
+
+        let input_logical_rows: Vec<usize> = (0..1024).collect();
+
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_column_ref_for_test(1)
+            .push_column_ref_for_test(2)
+            .push_fn_call_for_test(foo_fn_meta(), 3, FieldTypeTp::String)
+            .build_for_test();
+
+        let schema = &[
+            FieldTypeTp::String.into(),
+            FieldTypeTp::String.into(),
+            FieldTypeTp::String.into(),
+        ];
+
+        b.iter(|| {
+            let mut ctx = EvalContext::default();
+            exp.eval(
+                &mut ctx,
+                schema,
+                &mut columns,
+                input_logical_rows.as_slice(),
+                input_logical_rows.len(),
+            )
+            .unwrap();
+        });
     }
 }

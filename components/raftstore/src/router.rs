@@ -9,9 +9,9 @@ use crate::store::{
     Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-use engine_skiplist::SkiplistEngine;
 use engine_traits::KvEngine;
 use raft::SnapshotStatus;
+use raft_engine::RaftEngine;
 use std::cell::RefCell;
 use tikv_util::time::ThreadReadId;
 use txn_types::TxnExtra;
@@ -86,11 +86,7 @@ where
         )
     }
 
-    fn casual_send(
-        &self,
-        region_id: u64,
-        msg: CasualMessage<EK, SkiplistEngine>,
-    ) -> RaftStoreResult<()>;
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<EK>) -> RaftStoreResult<()>;
 }
 
 #[derive(Clone)]
@@ -122,23 +118,25 @@ where
 
     fn broadcast_unreachable(&self, _: u64) {}
 
-    fn casual_send(&self, _: u64, _: CasualMessage<EK, SkiplistEngine>) -> RaftStoreResult<()> {
+    fn casual_send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
         Ok(())
     }
 }
 
 /// A router that routes messages to the raftstore
-pub struct ServerRaftStoreRouter<EK>
+pub struct ServerRaftStoreRouter<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
-    router: RaftRouter<EK, SkiplistEngine>,
-    local_reader: RefCell<LocalReader<RaftRouter<EK, SkiplistEngine>, EK>>,
+    router: RaftRouter<EK, ER>,
+    local_reader: RefCell<LocalReader<RaftRouter<EK, ER>, EK>>,
 }
 
-impl<EK> Clone for ServerRaftStoreRouter<EK>
+impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     fn clone(&self) -> Self {
         ServerRaftStoreRouter {
@@ -148,15 +146,16 @@ where
     }
 }
 
-impl<EK> ServerRaftStoreRouter<EK>
+impl<EK, ER> ServerRaftStoreRouter<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     /// Creates a new router.
     pub fn new(
-        router: RaftRouter<EK, SkiplistEngine>,
-        reader: LocalReader<RaftRouter<EK, SkiplistEngine>, EK>,
-    ) -> ServerRaftStoreRouter<EK> {
+        router: RaftRouter<EK, ER>,
+        reader: LocalReader<RaftRouter<EK, ER>, EK>,
+    ) -> ServerRaftStoreRouter<EK, ER> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
@@ -182,9 +181,10 @@ pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreErro
     }
 }
 
-impl<EK> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK>
+impl<EK, ER> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let region_id = msg.get_region_id();
@@ -247,11 +247,7 @@ where
         Ok(())
     }
 
-    fn casual_send(
-        &self,
-        region_id: u64,
-        msg: CasualMessage<EK, SkiplistEngine>,
-    ) -> RaftStoreResult<()> {
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<EK>) -> RaftStoreResult<()> {
         self.router
             .send(region_id, PeerMsg::CasualMessage(msg))
             .map_err(|e| handle_send_error(region_id, e))

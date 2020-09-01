@@ -44,28 +44,33 @@ impl ChunkedVecBytes {
         self.length
     }
 
+    #[inline]
     pub fn push_data(&mut self, mut value: Bytes) {
         self.bitmap.push(true);
         self.data.append(&mut value);
         self.finish_append();
     }
 
+    #[inline]
     pub fn push_data_ref(&mut self, value: BytesRef) {
         self.bitmap.push(true);
         self.data.extend_from_slice(value);
         self.finish_append();
     }
 
+    #[inline]
     fn finish_append(&mut self) {
         self.var_offset.push(self.data.len());
         self.length += 1;
     }
 
+    #[inline]
     pub fn push_null(&mut self) {
         self.bitmap.push(false);
         self.finish_append();
     }
 
+    #[inline]
     pub fn push_ref(&mut self, value: Option<BytesRef>) {
         if let Some(x) = value {
             self.push_data_ref(x);
@@ -99,6 +104,7 @@ impl ChunkedVecBytes {
         other.length = 0;
     }
 
+    #[inline]
     pub fn get(&self, idx: usize) -> Option<BytesRef> {
         assert!(idx < self.len());
         if self.bitmap.get(idx) {
@@ -172,16 +178,23 @@ impl ChunkedVec<Bytes> for ChunkedVecBytes {
         Self::with_capacity(capacity)
     }
 
+    #[inline]
     fn chunked_push(&mut self, value: Option<Bytes>) {
         self.push(value)
     }
 }
 
 impl<'a> ChunkRef<'a, BytesRef<'a>> for &'a ChunkedVecBytes {
+    #[inline]
     fn get_option_ref(self, idx: usize) -> Option<BytesRef<'a>> {
         self.get(idx)
     }
 
+    fn get_bit_vec(self) -> &'a BitVec {
+        &self.bitmap
+    }
+
+    #[inline]
     fn phantom_data(self) -> Option<BytesRef<'a>> {
         None
     }
@@ -200,7 +213,7 @@ impl<'a> UnsafeRefInto<&'static ChunkedVecBytes> for &'a ChunkedVecBytes {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]
@@ -377,5 +390,49 @@ mod test {
                 })
                 .collect::<Vec<Option<Bytes>>>()
         );
+    }
+}
+
+#[cfg(test)]
+mod benches {
+    use super::*;
+
+    #[bench]
+    fn bench_bytes_append(b: &mut test::Bencher) {
+        let mut bytes_vec: Vec<u8> = vec![];
+        for _i in 0..10 {
+            bytes_vec.append(&mut b"2333333333".to_vec());
+        }
+        b.iter(|| {
+            let mut chunked_vec_bytes = ChunkedVecBytes::with_capacity(10000);
+            for _i in 0..5000 {
+                chunked_vec_bytes.push_data_ref(bytes_vec.as_slice());
+                chunked_vec_bytes.push(None);
+            }
+        });
+    }
+
+    #[bench]
+    fn bench_bytes_iterate(b: &mut test::Bencher) {
+        let mut bytes_vec: Vec<u8> = vec![];
+        for _i in 0..10 {
+            bytes_vec.append(&mut b"2333333333".to_vec());
+        }
+        let mut chunked_vec_bytes = ChunkedVecBytes::with_capacity(10000);
+        for _i in 0..5000 {
+            chunked_vec_bytes.push(Some(bytes_vec.clone()));
+            chunked_vec_bytes.push(None);
+        }
+        b.iter(|| {
+            let mut sum = 0;
+            for i in 0..10000 {
+                if let Some(x) = chunked_vec_bytes.get(i) {
+                    for i in x {
+                        sum += *i as usize;
+                    }
+                }
+            }
+            sum
+        });
     }
 }

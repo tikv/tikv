@@ -3,7 +3,7 @@
 use crate::engine::SkiplistEngine;
 use engine_traits::{
     CfName, Error, KvEngine, Mutable, MvccPropertiesExt, Result, SyncMutable, WriteBatch,
-    WriteBatchExt, WriteBatchVecExt, WriteOptions, CF_DEFAULT,
+    WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
 
 impl WriteBatchExt for SkiplistEngine {
@@ -38,13 +38,10 @@ impl WriteBatchExt for SkiplistEngine {
     }
 
     fn write_batch(&self) -> Self::WriteBatch {
-        SkiplistWriteBatch::default()
+        SkiplistWriteBatch::with_capacity(self, 0)
     }
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        SkiplistWriteBatch::default()
-    }
-    fn write_batch_vec(&self, vec_size: usize, cap: usize) -> Self::WriteBatchVec {
-        SkiplistWriteBatch::default()
+        SkiplistWriteBatch::with_capacity(self, cap)
     }
 }
 
@@ -55,43 +52,24 @@ enum WriteAction {
     DeleteRange((String, Vec<u8>, Vec<u8>)),
 }
 
-#[derive(Default)]
 pub struct SkiplistWriteBatch {
     data_size: usize,
     actions: Vec<WriteAction>,
     safe_points: Vec<usize>,
+    engine: SkiplistEngine,
 }
 
-impl WriteBatch for SkiplistWriteBatch {
-    fn data_size(&self) -> usize {
-        self.data_size
+impl WriteBatch<SkiplistEngine> for SkiplistWriteBatch {
+    fn with_capacity(e: &SkiplistEngine, cap: usize) -> Self {
+        Self {
+            data_size: 0,
+            actions: Vec::with_capacity(cap),
+            safe_points: Vec::default(),
+            engine: e.clone(),
+        }
     }
-    fn count(&self) -> usize {
-        self.actions.len()
-    }
-    fn is_empty(&self) -> bool {
-        self.actions.is_empty()
-    }
-    fn should_write_to_engine(&self) -> bool {
-        self.count() > SkiplistEngine::WRITE_BATCH_MAX_KEYS
-    }
-    fn clear(&mut self) {
-        self.actions.clear();
-    }
-    fn set_save_point(&mut self) {
-        self.safe_points.push(self.actions.len());
-    }
-    fn pop_save_point(&mut self) -> Result<()> {
-        self.safe_points.pop();
-        Ok(())
-    }
-    fn rollback_to_save_point(&mut self) -> Result<()> {
-        let p = self
-            .safe_points
-            .pop()
-            .ok_or_else(|| Error::Engine("no save point".to_owned()))?;
-        self.actions.truncate(p);
-        Ok(())
+    fn write_to_engine(&self, e: &SkiplistEngine, opts: &WriteOptions) -> Result<()> {
+        e.write_opt(self, opts)
     }
 }
 
@@ -133,14 +111,34 @@ impl Mutable for SkiplistWriteBatch {
         )));
         Ok(())
     }
-}
-
-impl WriteBatchVecExt<SkiplistEngine> for SkiplistWriteBatch {
-    fn write_batch_vec(e: &SkiplistEngine, _vec_size: usize, cap: usize) -> SkiplistWriteBatch {
-        e.write_batch_with_cap(cap)
+    fn data_size(&self) -> usize {
+        self.data_size
     }
-
-    fn write_to_engine(&self, e: &SkiplistEngine, opts: &WriteOptions) -> Result<()> {
-        e.write_opt(self, opts)
+    fn count(&self) -> usize {
+        self.actions.len()
+    }
+    fn is_empty(&self) -> bool {
+        self.actions.is_empty()
+    }
+    fn should_write_to_engine(&self) -> bool {
+        self.count() > SkiplistEngine::WRITE_BATCH_MAX_KEYS
+    }
+    fn clear(&mut self) {
+        self.actions.clear();
+    }
+    fn set_save_point(&mut self) {
+        self.safe_points.push(self.actions.len());
+    }
+    fn pop_save_point(&mut self) -> Result<()> {
+        self.safe_points.pop();
+        Ok(())
+    }
+    fn rollback_to_save_point(&mut self) -> Result<()> {
+        let p = self
+            .safe_points
+            .pop()
+            .ok_or_else(|| Error::Engine("no save point".to_owned()))?;
+        self.actions.truncate(p);
+        Ok(())
     }
 }

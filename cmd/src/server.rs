@@ -9,11 +9,14 @@
 //! We keep these components in the `TiKVServer` struct.
 
 use crate::{setup::*, signal_handler};
+use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine, RocksSnapshot};
 use engine_skiplist::{SkiplistEngine, SkiplistEngineBuilder, SkiplistSnapshot};
-use engine_traits::{KvEngines, MetricsFlusher, ALL_CFS};
+use engine_traits::{compaction_job::CompactionJobInfo, Engines, MetricsFlusher};
+use engine_traits::{CF_DEFAULT, CF_WRITE};
 use fs2::FileExt;
+use futures03::executor::block_on;
 use futures_cpupool::Builder;
 use kvproto::{
     deadlock::create_deadlock, debugpb::create_debug, diagnosticspb::create_diagnostics,
@@ -21,14 +24,17 @@ use kvproto::{
 };
 use pd_client::{PdClient, RpcClient};
 use raftstore::{
-    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost, RegionInfoAccessor},
+    coprocessor::{
+        config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
+        CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
+    },
     router::ServerRaftStoreRouter,
     store::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-        new_compaction_listener, AutoSplitController, GlobalReplicationState, LocalReader,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+        AutoSplitController, GlobalReplicationState, LocalReader, SnapManagerBuilder,
+        SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
 };
 use security::SecurityManager;
@@ -54,7 +60,7 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
-        Node, RaftKv, Server, DEFAULT_CLUSTER_ID,
+        Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
     },
     storage::{self, config::StorageConfigManger},
 };
@@ -80,6 +86,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
     // Print resource quota.
     SysQuota::new().log_quota();
+    CPU_CORES_QUOTA_GAUGE.set(SysQuota::new().cpu_cores_quota());
 
     // Do some prepare works before start.
     pre_start();
@@ -114,29 +121,31 @@ struct TiKVServer {
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter<SkiplistEngine, SkiplistEngine>,
-    system: Option<RaftBatchSystem>,
+    system: Option<RaftBatchSystem<SkiplistEngine, SkiplistEngine>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
-    engines: Option<Engines>,
+    engines: Option<TiKVEngines>,
     servers: Option<Servers>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<SkiplistEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
+    concurrency_manager: ConcurrencyManager,
 }
 
-struct Engines {
-    engines: KvEngines<SkiplistEngine, SkiplistEngine>,
+struct TiKVEngines {
+    engines: Engines<SkiplistEngine, SkiplistEngine>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<ServerRaftStoreRouter<SkiplistEngine>>,
-    raft_router: ServerRaftStoreRouter<SkiplistEngine>,
+    engine: RaftKv<ServerRaftStoreRouter<SkiplistEngine, SkiplistEngine>>,
+    raft_router: ServerRaftStoreRouter<SkiplistEngine, SkiplistEngine>,
 }
 
 struct Servers {
     lock_mgr: LockManager,
-    server: Server<ServerRaftStoreRouter<SkiplistEngine>, resolve::PdStoreAddrResolver>,
+    server:
+        Server<ServerRaftStoreRouter<SkiplistEngine, SkiplistEngine>, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
 }
@@ -166,8 +175,35 @@ impl TiKVServer {
                 .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
+        match config.coprocessor.consistency_check_method {
+            ConsistencyCheckMethod::Mvcc => {
+                // TODO: use mvcc consistency checker.
+                coprocessor_host
+                    .as_mut()
+                    .unwrap()
+                    .registry
+                    .register_consistency_check_observer(
+                        100,
+                        BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
+                    );
+            }
+            ConsistencyCheckMethod::Raw => {
+                coprocessor_host
+                    .as_mut()
+                    .unwrap()
+                    .registry
+                    .register_consistency_check_observer(
+                        100,
+                        BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
+                    );
+            }
+        }
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();
+
+        // Initialize concurrency manager
+        let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
+        let concurrency_manager = ConcurrencyManager::new(latest_ts.into());
 
         TiKVServer {
             config,
@@ -186,6 +222,7 @@ impl TiKVServer {
             coprocessor_host,
             to_stop: vec![Box::new(resolve_worker)],
             lock_files: vec![],
+            concurrency_manager,
         }
     }
 
@@ -329,8 +366,38 @@ impl TiKVServer {
         .map(|key_manager| Arc::new(key_manager));
     }
 
+    fn create_raftstore_compaction_listener(&self) -> engine_rocks::CompactionListener {
+        fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo) -> bool {
+            // When calculating region size, we only consider write and default
+            // column families.
+            let cf = info.cf_name();
+            if cf != CF_WRITE && cf != CF_DEFAULT {
+                return false;
+            }
+            // Compactions in level 0 and level 1 are very frequently.
+            if info.output_level() < 2 {
+                return false;
+            }
+
+            true
+        }
+
+        let ch = Mutex::new(self.router.clone());
+        let compacted_handler = Box::new(move |compacted_event: engine_rocks::CompactedEvent| {
+            let ch = ch.lock().unwrap();
+            let event = StoreMsg::CompactedEvent(compacted_event);
+            if let Err(e) = ch.send_control(event) {
+                error!(
+                    "send compaction finished event to raftstore failed";
+                    "err" => ?e,
+                );
+            }
+        });
+        engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
+    }
+
     fn init_engines(&mut self) {
-        let engines = KvEngines::new(
+        let engines = Engines::new(
             SkiplistEngineBuilder::new().cf_names(ALL_CFS).build(),
             SkiplistEngineBuilder::new().build(),
             false,
@@ -341,7 +408,7 @@ impl TiKVServer {
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
         let engine = RaftKv::new(raft_router.clone(), engines.kv.clone());
 
-        self.engines = Some(Engines {
+        self.engines = Some(TiKVEngines {
             engines,
             store_meta,
             engine,
@@ -349,7 +416,9 @@ impl TiKVServer {
         });
     }
 
-    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter<SkiplistEngine>>> {
+    fn init_gc_worker(
+        &mut self,
+    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<SkiplistEngine, SkiplistEngine>>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -369,7 +438,7 @@ impl TiKVServer {
 
     fn init_servers(
         &mut self,
-        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<SkiplistEngine>>>,
+        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<SkiplistEngine, SkiplistEngine>>>,
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -418,7 +487,7 @@ impl TiKVServer {
             &self.config.storage,
             storage_read_pool_handle,
             lock_mgr.clone(),
-            self.pd_client.clone(),
+            self.concurrency_manager.clone(),
             self.config.pessimistic_txn.pipelined,
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
@@ -438,7 +507,7 @@ impl TiKVServer {
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
             .encryption_key_manager(self.encryption_key_manager.clone())
-            .build(snap_path, Some(self.router.clone()));
+            .build(snap_path);
 
         // Create coprocessor endpoint.
         let cop_read_pool_handle = if self.config.readpool.coprocessor.use_unified_pool() {
@@ -459,7 +528,11 @@ impl TiKVServer {
             &server_config,
             &self.security_mgr,
             storage,
-            coprocessor::Endpoint::new(&server_config, cop_read_pool_handle),
+            coprocessor::Endpoint::new(
+                &server_config,
+                cop_read_pool_handle,
+                self.concurrency_manager.clone(),
+            ),
             engines.raft_router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
@@ -522,6 +595,7 @@ impl TiKVServer {
             importer.clone(),
             split_check_worker,
             auto_split_controller,
+            self.concurrency_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -555,6 +629,8 @@ impl TiKVServer {
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
+            .after_start(|| tikv_alloc::add_thread_memory_accessor())
+            .before_stop(|| tikv_alloc::remove_thread_memory_accessor())
             .create();
 
         // Create Diagnostics service
@@ -596,7 +672,7 @@ impl TiKVServer {
     }
 
     fn init_metrics_flusher(&mut self) {
-        let mut metrics_flusher = Box::new(MetricsFlusher::new(KvEngines::new(
+        let mut metrics_flusher = Box::new(MetricsFlusher::new(Engines::new(
             self.engines.as_ref().unwrap().engines.kv.clone(),
             self.engines.as_ref().unwrap().engines.raft.clone(),
             self.engines.as_ref().unwrap().engines.shared_block_cache,

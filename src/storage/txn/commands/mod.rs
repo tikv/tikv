@@ -3,24 +3,26 @@
 //! Commands used in the transaction system
 #[macro_use]
 mod macros;
-mod acquire_pessimistic_lock;
-mod check_txn_status;
-mod cleanup;
-mod commit;
-mod mvcc_by_key;
-mod mvcc_by_start_ts;
-mod pause;
-mod pessimistic_rollback;
-mod prewrite;
-mod prewrite_pessimistic;
-mod resolve_lock;
-mod resolve_lock_lite;
-mod resolve_lock_readphase;
-mod rollback;
-mod scan_lock;
-mod txn_heart_beat;
+pub(crate) mod acquire_pessimistic_lock;
+pub(crate) mod check_secondary_locks;
+pub(crate) mod check_txn_status;
+pub(crate) mod cleanup;
+pub(crate) mod commit;
+pub(crate) mod mvcc_by_key;
+pub(crate) mod mvcc_by_start_ts;
+pub(crate) mod pause;
+pub(crate) mod pessimistic_rollback;
+pub(crate) mod prewrite;
+pub(crate) mod prewrite_pessimistic;
+pub(crate) mod resolve_lock;
+pub(crate) mod resolve_lock_lite;
+pub(crate) mod resolve_lock_readphase;
+pub(crate) mod rollback;
+pub(crate) mod scan_lock;
+pub(crate) mod txn_heart_beat;
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
+pub use check_secondary_locks::CheckSecondaryLocks;
 pub use check_txn_status::CheckTxnStatus;
 pub use cleanup::Cleanup;
 pub use commit::Commit;
@@ -37,20 +39,29 @@ pub use rollback::Rollback;
 pub use scan_lock::ScanLock;
 pub use txn_heart_beat::TxnHeartBeat;
 
+#[cfg(test)]
+pub(crate) use prewrite::FORWARD_MIN_MUTATIONS_NUM;
+
+pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
+
 use std::fmt::{self, Debug, Display, Formatter};
 use std::iter::{self, FromIterator};
 use std::marker::PhantomData;
 
 use kvproto::kvrpcpb::*;
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, TimeStamp, Value, Write};
 
-use crate::storage::lock_manager::WaitTimeout;
-use crate::storage::metrics;
+use crate::storage::kv::WriteData;
+use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
+use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock};
 use crate::storage::txn::latch::{self, Latches};
+use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
-    MvccInfo, PessimisticLockRes, PrewriteResult, StorageCallbackType, TxnStatus,
+    MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
+    TxnStatus,
 };
-use crate::storage::Result;
+use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
+use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use tikv_util::collections::HashMap;
 
 /// Store Transaction scheduler commands.
@@ -58,8 +69,8 @@ use tikv_util::collections::HashMap;
 /// Learn more about our transaction system at
 /// [Deep Dive TiKV: Distributed Transactions](https://tikv.org/docs/deep-dive/distributed-transaction/introduction/)
 ///
-/// These are typically scheduled and used through the [`Storage`](Storage) with functions like
-/// [`Storage::prewrite`](Storage::prewrite) trait and are executed asynchronously.
+/// These are typically scheduled and used through the [`Storage`](crate::storage::Storage) with functions like
+/// [`prewrite`](prewrite::Prewrite) trait and are executed asynchronously.
 // Logic related to these can be found in the `src/storage/txn/proccess.rs::process_write_impl` function.
 pub enum Command {
     Prewrite(Prewrite),
@@ -71,6 +82,7 @@ pub enum Command {
     PessimisticRollback(PessimisticRollback),
     TxnHeartBeat(TxnHeartBeat),
     CheckTxnStatus(CheckTxnStatus),
+    CheckSecondaryLocks(CheckSecondaryLocks),
     ScanLock(ScanLock),
     ResolveLockReadPhase(ResolveLockReadPhase),
     ResolveLock(ResolveLock),
@@ -103,6 +115,11 @@ impl<T> From<TypedCommand<T>> for Command {
 impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
     fn from(mut req: PrewriteRequest) -> Self {
         let for_update_ts = req.get_for_update_ts();
+        let secondary_keys = if req.get_use_async_commit() {
+            Some(req.get_secondaries().into())
+        } else {
+            None
+        };
         if for_update_ts == 0 {
             Prewrite::new(
                 req.take_mutations().into_iter().map(Into::into).collect(),
@@ -112,11 +129,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_skip_constraint_check(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
-                if req.get_use_async_commit() {
-                    Some(req.get_secondaries().into())
-                } else {
-                    None
-                },
+                secondary_keys,
                 req.take_context(),
             )
         } else {
@@ -135,13 +148,14 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 for_update_ts.into(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
+                secondary_keys,
                 req.take_context(),
             )
         }
     }
 }
 
-impl From<PessimisticLockRequest> for TypedCommand<Result<PessimisticLockRes>> {
+impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLockRes>> {
     fn from(mut req: PessimisticLockRequest) -> Self {
         let keys = req
             .take_mutations()
@@ -201,7 +215,7 @@ impl From<BatchRollbackRequest> for TypedCommand<()> {
     }
 }
 
-impl From<PessimisticRollbackRequest> for TypedCommand<Vec<Result<()>>> {
+impl From<PessimisticRollbackRequest> for TypedCommand<Vec<StorageResult<()>>> {
     fn from(mut req: PessimisticRollbackRequest) -> Self {
         let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
@@ -233,6 +247,19 @@ impl From<CheckTxnStatusRequest> for TypedCommand<TxnStatus> {
             req.get_caller_start_ts().into(),
             req.get_current_ts().into(),
             req.get_rollback_if_not_exist(),
+            req.take_context(),
+        )
+    }
+}
+
+impl From<CheckSecondaryLocksRequest> for TypedCommand<SecondaryLocksStatus> {
+    fn from(mut req: CheckSecondaryLocksRequest) -> Self {
+        CheckSecondaryLocks::new(
+            req.take_keys()
+                .into_iter()
+                .map(|k| Key::from_raw(&k))
+                .collect(),
+            req.get_start_version().into(),
             req.take_context(),
         )
     }
@@ -298,6 +325,78 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
     }
 }
 
+#[derive(Default)]
+struct ReleasedLocks {
+    start_ts: TimeStamp,
+    commit_ts: TimeStamp,
+    hashes: Vec<u64>,
+    pessimistic: bool,
+}
+
+pub struct WriteResult {
+    pub ctx: Context,
+    pub to_be_write: WriteData,
+    pub rows: usize,
+    pub pr: ProcessResult,
+    // (lock, is_first_lock, wait_timeout)
+    pub lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
+    pub lock_guards: Vec<KeyHandleGuard>,
+}
+
+impl ReleasedLocks {
+    pub fn new(start_ts: TimeStamp, commit_ts: TimeStamp) -> Self {
+        Self {
+            start_ts,
+            commit_ts,
+            ..Default::default()
+        }
+    }
+
+    pub fn push(&mut self, lock: Option<ReleasedLock>) {
+        if let Some(lock) = lock {
+            self.hashes.push(lock.hash);
+            if !self.pessimistic {
+                self.pessimistic = lock.pessimistic;
+            }
+        }
+    }
+
+    // Wake up pessimistic transactions that waiting for these locks.
+    pub fn wake_up<L: LockManager>(self, lock_mgr: &L) {
+        lock_mgr.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
+    }
+}
+
+type LockWritesVals = (
+    Option<MvccLock>,
+    Vec<(TimeStamp, Write)>,
+    Vec<(TimeStamp, Value)>,
+);
+
+fn find_mvcc_infos_by_key<S: Snapshot>(
+    reader: &mut MvccReader<S>,
+    key: &Key,
+    mut ts: TimeStamp,
+) -> Result<LockWritesVals> {
+    let mut writes = vec![];
+    let mut values = vec![];
+    let lock = reader.load_lock(key)?;
+    loop {
+        let opt = reader.seek_write(key, ts)?;
+        match opt {
+            Some((commit_ts, write)) => {
+                ts = commit_ts.prev();
+                writes.push((commit_ts, write));
+            }
+            None => break,
+        };
+    }
+    for (ts, v) in reader.scan_values_in_default(key)? {
+        values.push((ts, v));
+    }
+    Ok((lock, writes, values))
+}
+
 pub trait CommandExt: Display {
     fn tag(&self) -> metrics::CommandKind;
 
@@ -319,10 +418,6 @@ pub trait CommandExt: Display {
         false
     }
 
-    fn requires_pessimistic_txn(&self) -> bool {
-        false
-    }
-
     fn can_be_pipelined(&self) -> bool {
         false
     }
@@ -330,6 +425,15 @@ pub trait CommandExt: Display {
     fn write_bytes(&self) -> usize;
 
     fn gen_lock(&self, _latches: &Latches) -> latch::Lock;
+}
+
+pub struct WriteContext<'a, L: LockManager> {
+    pub lock_mgr: &'a L,
+    pub concurrency_manager: ConcurrencyManager,
+    pub extra_op: ExtraOp,
+    pub statistics: &'a mut Statistics,
+    pub pipelined_pessimistic_lock: bool,
+    pub enable_async_commit: bool,
 }
 
 impl Command {
@@ -346,6 +450,7 @@ impl Command {
             Command::PessimisticRollback(t) => t,
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
+            Command::CheckSecondaryLocks(t) => t,
             Command::ScanLock(t) => t,
             Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,
@@ -367,6 +472,7 @@ impl Command {
             Command::PessimisticRollback(t) => t,
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
+            Command::CheckSecondaryLocks(t) => t,
             Command::ScanLock(t) => t,
             Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,
@@ -374,6 +480,43 @@ impl Command {
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
+        }
+    }
+
+    pub(super) fn process_read<S: Snapshot>(
+        self,
+        snapshot: S,
+        statistics: &mut Statistics,
+    ) -> Result<ProcessResult> {
+        match self {
+            Command::ScanLock(t) => t.process_read(snapshot, statistics),
+            Command::ResolveLockReadPhase(t) => t.process_read(snapshot, statistics),
+            Command::MvccByKey(t) => t.process_read(snapshot, statistics),
+            Command::MvccByStartTs(t) => t.process_read(snapshot, statistics),
+            _ => panic!("unsupported read command"),
+        }
+    }
+
+    pub(super) fn process_write<S: Snapshot, L: LockManager>(
+        self,
+        snapshot: S,
+        context: WriteContext<'_, L>,
+    ) -> Result<WriteResult> {
+        match self {
+            Command::Prewrite(t) => t.process_write(snapshot, context),
+            Command::PrewritePessimistic(t) => t.process_write(snapshot, context),
+            Command::AcquirePessimisticLock(t) => t.process_write(snapshot, context),
+            Command::Commit(t) => t.process_write(snapshot, context),
+            Command::Cleanup(t) => t.process_write(snapshot, context),
+            Command::Rollback(t) => t.process_write(snapshot, context),
+            Command::PessimisticRollback(t) => t.process_write(snapshot, context),
+            Command::ResolveLock(t) => t.process_write(snapshot, context),
+            Command::ResolveLockLite(t) => t.process_write(snapshot, context),
+            Command::TxnHeartBeat(t) => t.process_write(snapshot, context),
+            Command::CheckTxnStatus(t) => t.process_write(snapshot, context),
+            Command::CheckSecondaryLocks(t) => t.process_write(snapshot, context),
+            Command::Pause(t) => t.process_write(snapshot, context),
+            _ => panic!("unsupported write command"),
         }
     }
 
@@ -412,10 +555,6 @@ impl Command {
         self.command_ext().gen_lock(latches)
     }
 
-    pub fn requires_pessimistic_txn(&self) -> bool {
-        self.command_ext().requires_pessimistic_txn()
-    }
-
     pub fn can_be_pipelined(&self) -> bool {
         self.command_ext().can_be_pipelined()
     }
@@ -439,4 +578,12 @@ impl Debug for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.command_ext().fmt(f)
     }
+}
+
+pub trait ReadCommand<S: Snapshot>: CommandExt {
+    fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult>;
+}
+
+pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult>;
 }
