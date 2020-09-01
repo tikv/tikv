@@ -242,15 +242,13 @@ pub struct Worker<T> {
     batch_size: usize,
 }
 
-fn poll<R>(
+fn poll<R: RunnableWithTimer>(
     mut runner: R,
     rx: Receiver<Option<R::Task>>,
     counter: Arc<AtomicUsize>,
     batch_size: usize,
     mut timer: Timer<R::TimeoutTask>,
-) where
-    R: RunnableWithTimer,
-{
+) {
     tikv_alloc::add_thread_memory_accessor();
     let current_thread = thread::current();
     let name = current_thread.name().unwrap();
@@ -327,7 +325,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     /// Starts the worker.
     pub fn start<R>(&mut self, runner: R) -> Result<(), io::Error>
     where
-        R: Runnable<Task = T> + Send + 'static
+        R: Runnable<Task = T> + Send + 'static,
     {
         let runner = DefaultRunnerWithTimer(runner);
         let timer: Timer<()> = Timer::new(0);

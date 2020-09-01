@@ -433,15 +433,15 @@ where
     ctx: &'a mut PollContext<EK, ER, T, C>,
 }
 
-impl<'a, EK, ER, T: Transport, PC: PdClient> PeerFsmDelegate<'a, EK, ER, T, PC>
+impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
     pub fn new(
         fsm: &'a mut PeerFsm<EK, ER>,
-        ctx: &'a mut PollContext<EK, ER, T, PC>,
-    ) -> PeerFsmDelegate<'a, EK, ER, T, PC> {
+        ctx: &'a mut PollContext<EK, ER, T, C>,
+    ) -> PeerFsmDelegate<'a, EK, ER, T, C> {
         PeerFsmDelegate { fsm, ctx }
     }
 
@@ -3632,7 +3632,7 @@ where
     }
 }
 
-impl<'a, EK, ER, T: Transport, PC: PdClient> PeerFsmDelegate<'a, EK, ER, T, PC>
+impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -3875,7 +3875,7 @@ fn new_compact_log_request(
     request
 }
 
-impl<'a, EK, ER, T: Transport, PC: PdClient> PeerFsmDelegate<'a, EK, ER, T, PC>
+impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
 where
     EK: KvEngine,
     ER: RaftEngine,
