@@ -14,7 +14,7 @@ use futures03::executor::block_on;
 use futures03::future::{err, ok};
 use tokio_timer::timer::Handle;
 
-use kvproto::metapb::{self, Region};
+use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::replication_modepb::{
     DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
