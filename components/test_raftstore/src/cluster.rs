@@ -1287,6 +1287,16 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn must_try_merge(&mut self, source: u64, target: u64) {
+        let resp = self.try_merge(source, target);
+        if is_error_response(&resp) {
+            panic!(
+                "{} failed to try merge to {}, resp {:?}",
+                source, target, resp
+            );
+        }
+    }
+
     /// Make sure region exists on that store.
     pub fn must_region_exist(&mut self, region_id: u64, store_id: u64) {
         let mut try_cnt = 0;
