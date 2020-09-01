@@ -671,7 +671,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     });
 
                     if let Err(e) =
-                        engine.async_write_ext(&ctx, to_be_write, engine_cb, proposed_cb)
+                        engine.async_write_ext(&ctx, to_be_write, engine_cb, proposed_cb, None)
                     {
                         SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 

@@ -1723,7 +1723,8 @@ where
                 }
                 let committed_index = self.raft_group.raft.raft_log.committed;
                 let term = self.raft_group.raft.raft_log.term(committed_index).unwrap();
-                let cbs = self.proposals.take(committed_index, term);
+                let mut cbs = self.proposals.take(committed_index, term);
+                cbs.iter_mut().for_each(|p| p.cb.invoke_committed());
                 let apply = Apply::new(
                     self.peer_id(),
                     self.region_id,

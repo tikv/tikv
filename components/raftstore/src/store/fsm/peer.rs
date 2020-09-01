@@ -375,6 +375,25 @@ where
                     }
                 }))
             };
+            let committed_cbs: Vec<_> = cbs
+                .iter_mut()
+                .filter_map(|cb| {
+                    if let Callback::Write { committed_cb, .. } = &mut cb.0 {
+                        committed_cb.take()
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let committed_cb: Option<ExtCallback> = if committed_cbs.is_empty() {
+                None
+            } else {
+                Some(Box::new(move || {
+                    for committed_cb in committed_cbs {
+                        committed_cb();
+                    }
+                }))
+            };
             let cb = Callback::write_ext(
                 Box::new(move |resp| {
                     let mut last_index = 0;
@@ -393,6 +412,7 @@ where
                     }
                 }),
                 proposed_cb,
+                committed_cb,
             );
             return Some(RaftCommand::new(req, cb));
         }
@@ -4015,6 +4035,8 @@ mod tests {
                     flag.store(true, Ordering::Release);
                 }),
                 proposed_cb,
+                // TODO(MyonKeminta): Fill test for committed cb
+                None,
             );
             response.mut_responses().push(Response::default());
             let cmd = RaftCommand::new(req.clone(), cb);
