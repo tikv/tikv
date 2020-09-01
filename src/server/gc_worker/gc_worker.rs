@@ -802,7 +802,6 @@ mod tests {
 
     use engine_rocks::RocksSnapshot;
     use engine_traits::KvEngine;
-    use futures::Future;
     use futures03::executor::block_on;
     use kvproto::{kvrpcpb::Op, metapb};
     use raftstore::store::RegionSnapshot;
@@ -926,19 +925,17 @@ mod tests {
         storage: &Storage<E, DummyLockManager>,
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
-        let scan_res = storage
-            .scan(
-                Context::default(),
-                Key::from_encoded_slice(b""),
-                None,
-                expected_data.len() + 1,
-                0,
-                1.into(),
-                false,
-                false,
-            )
-            .wait()
-            .unwrap();
+        let scan_res = block_on(storage.scan(
+            Context::default(),
+            Key::from_encoded_slice(b""),
+            None,
+            expected_data.len() + 1,
+            0,
+            1.into(),
+            false,
+            false,
+        ))
+        .unwrap();
 
         let all_equal = scan_res
             .into_iter()

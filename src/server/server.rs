@@ -11,6 +11,7 @@ use grpcio::{
     ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
 };
 use kvproto::tikvpb::*;
+use tokio::runtime::{Handle as RuntimeHandle, Runtime};
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
@@ -64,6 +65,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     grpc_thread_load: Arc<ThreadLoad>,
     yatp_read_pool: Option<ReadPool>,
     readpool_normal_thread_load: Arc<ThreadLoad>,
+    debug_thread_pool: Arc<Runtime>,
     timer: Handle,
 }
 
@@ -79,6 +81,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         snap_mgr: SnapManager,
         gc_worker: GcWorker<E>,
         yatp_read_pool: Option<ReadPool>,
+        debug_thread_pool: Arc<Runtime>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.stats_concurrency > 0 {
@@ -165,10 +168,15 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
             grpc_thread_load,
             yatp_read_pool,
             readpool_normal_thread_load,
+            debug_thread_pool,
             timer: GLOBAL_TIMER_HANDLE.clone(),
         };
 
         Ok(svr)
+    }
+
+    pub fn get_debug_thread_pool(&self) -> &RuntimeHandle {
+        self.debug_thread_pool.handle()
     }
 
     pub fn transport(&self) -> ServerTransport<T, S> {
@@ -282,6 +290,7 @@ mod tests {
     use raftstore::store::*;
     use raftstore::Result as RaftStoreResult;
     use security::SecurityConfig;
+    use tokio::runtime::Builder as TokioBuilder;
     use txn_types::TxnExtra;
 
     use super::*;
@@ -438,7 +447,14 @@ mod tests {
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
         );
-
+        let debug_thread_pool = Arc::new(
+            TokioBuilder::new()
+                .threaded_scheduler()
+                .thread_name(thd_name!("debugger"))
+                .core_threads(1)
+                .build()
+                .unwrap(),
+        );
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
             &cfg,
@@ -453,6 +469,7 @@ mod tests {
             SnapManager::new(""),
             gc_worker,
             None,
+            debug_thread_pool,
         )
         .unwrap();
 
