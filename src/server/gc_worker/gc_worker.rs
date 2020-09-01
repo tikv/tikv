@@ -7,28 +7,26 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures03::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
-use raftstore::router::ServerRaftStoreRouter;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::fsm::RaftRouter;
 use raftstore::store::msg::StoreMsg;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
 use tikv_util::worker::{
     FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
 };
-use tokio_core::reactor::Handle;
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
 use crate::storage::kv::{Engine, ScanMode, Statistics};
-use crate::storage::{
-    concurrency_manager::ConcurrencyManager,
-    mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader, MvccTxn},
-};
+use crate::storage::mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader, MvccTxn};
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::config::{GcConfig, GcWorkerConfigManager};
@@ -131,7 +129,7 @@ impl Display for GcTask {
 struct GcRunner<E: Engine> {
     engine: E,
 
-    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
+    raft_store_router: Option<RaftRouter<RocksEngine, RocksEngine>>,
 
     /// Used to limit the write flow of GC.
     limiter: Limiter,
@@ -145,7 +143,7 @@ struct GcRunner<E: Engine> {
 impl<E: Engine> GcRunner<E> {
     pub fn new(
         engine: E,
-        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
+        raft_store_router: Option<RaftRouter<RocksEngine, RocksEngine>>,
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
     ) -> Self {
@@ -338,7 +336,7 @@ impl<E: Engine> GcRunner<E> {
 
         if let Some(router) = self.raft_store_router.as_ref() {
             router
-                .send_store(StoreMsg::ClearRegionSizeInRange {
+                .send_store_msg(StoreMsg::ClearRegionSizeInRange {
                     start_key: start_key.as_encoded().to_vec(),
                     end_key: end_key.as_encoded().to_vec(),
                 })
@@ -407,7 +405,7 @@ impl<E: Engine> GcRunner<E> {
 
 impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
     #[inline]
-    fn run(&mut self, task: GcTask, _handle: &Handle) {
+    fn run(&mut self, task: GcTask) {
         let enum_label = task.get_enum_label();
 
         GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();
@@ -534,7 +532,7 @@ pub struct GcWorker<E: Engine> {
     engine: E,
 
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
-    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
+    raft_store_router: Option<RaftRouter<RocksEngine, RocksEngine>>,
 
     config_manager: GcWorkerConfigManager,
 
@@ -592,7 +590,7 @@ impl<E: Engine> Drop for GcWorker<E> {
 impl<E: Engine> GcWorker<E> {
     pub fn new(
         engine: E,
-        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
+        raft_store_router: Option<RaftRouter<RocksEngine, RocksEngine>>,
         cfg: GcConfig,
         cluster_version: ClusterVersion,
     ) -> GcWorker<E> {
@@ -805,6 +803,7 @@ mod tests {
     use engine_rocks::RocksSnapshot;
     use engine_traits::KvEngine;
     use futures::Future;
+    use futures03::executor::block_on;
     use kvproto::{kvrpcpb::Op, metapb};
     use raftstore::store::RegionSnapshot;
     use tikv_util::codec::number::NumberEncoder;
@@ -1141,7 +1140,7 @@ mod tests {
             gc_worker
                 .physical_scan_lock(Context::default(), max_ts.into(), start_key, limit, cb)
                 .unwrap();
-            f.wait().unwrap()
+            block_on(f).unwrap()
         };
 
         let mut expected_lock_info = Vec::new();

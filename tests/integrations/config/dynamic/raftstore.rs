@@ -14,6 +14,7 @@ use raftstore::Result;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 
+use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, ALL_CFS};
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
@@ -50,12 +51,7 @@ fn create_tmp_engine(dir: &TempDir) -> Engines<RocksEngine, RocksEngine> {
         )
         .unwrap(),
     );
-    let shared_block_cache = false;
-    Engines::new(
-        RocksEngine::from_db(db),
-        RocksEngine::from_db(raft_db),
-        shared_block_cache,
-    )
+    Engines::new(RocksEngine::from_db(db), RocksEngine::from_db(raft_db))
 }
 
 fn start_raftstore(
@@ -112,6 +108,7 @@ fn start_raftstore(
             Worker::new("split"),
             AutoSplitController::default(),
             Arc::default(),
+            ConcurrencyManager::new(1.into()),
         )
         .unwrap();
     (cfg_controller, raft_router, system.apply_router(), system)

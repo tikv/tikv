@@ -1,7 +1,7 @@
 use crate::{RocksEngine, RocksWriteBatch};
 
 use engine_traits::{
-    Iterable, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
+    Iterable, KvEngine, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt, WriteOptions,
     CF_DEFAULT, MAX_DELETE_BATCH_SIZE,
 };
 use kvproto::raft_serverpb::RaftLocalState;
@@ -198,10 +198,14 @@ impl RaftEngine for RocksEngine {
         }
 
         // TODO: disable WAL here.
-        if !WriteBatch::is_empty(&raft_wb) {
+        if !Mutable::is_empty(&raft_wb) {
             self.write(&raft_wb).unwrap();
         }
         Ok((to - from) as usize)
+    }
+
+    fn purge_expired_files(&self) -> Result<Vec<u64>> {
+        Ok(vec![])
     }
 
     fn has_builtin_entry_cache(&self) -> bool {
@@ -210,6 +214,13 @@ impl RaftEngine for RocksEngine {
 
     fn flush_stats(&self) -> CacheStats {
         CacheStats::default()
+    }
+
+    fn flush_metrics(&self, instance: &str) {
+        KvEngine::flush_metrics(self, instance)
+    }
+    fn reset_statistics(&self) {
+        KvEngine::reset_statistics(self)
     }
 }
 
@@ -239,7 +250,7 @@ impl RaftLogBatch for RocksWriteBatch {
     }
 
     fn is_empty(&self) -> bool {
-        WriteBatch::is_empty(self)
+        Mutable::is_empty(self)
     }
 }
 

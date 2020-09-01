@@ -741,7 +741,8 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::{Future, Stream};
+    use futures03::executor::block_on;
+    use futures03::stream::StreamExt;
     use kvproto::errorpb::Error as ErrorHeader;
     use kvproto::metapb::Region;
     use std::cell::Cell;
@@ -776,10 +777,7 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
-            let (resps, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
-                Ok((resps, rx)) => (resps, rx),
-                Err(e) => panic!("unexpected recv error: {:?}", e.0),
-            };
+            let (resps, rx) = match block_on(rx_wrap.replace(None).unwrap().into_future());
             rx_wrap.set(Some(rx));
             let mut resps = resps.unwrap();
             assert_eq!(resps.len(), 1);
@@ -904,10 +902,7 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let check_event = |event_rows: Vec<EventRow>| {
-            let (resps, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
-                Ok((resps, rx)) => (resps, rx),
-                Err(e) => panic!("unexpected recv error: {:?}", e.0),
-            };
+            let (resps, rx) = match block_on(rx_wrap.replace(None).unwrap().into_future());
             rx_wrap.set(Some(rx));
             let mut resps = resps.unwrap();
             assert_eq!(resps.len(), 1);

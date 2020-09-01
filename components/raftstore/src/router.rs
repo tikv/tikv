@@ -1,28 +1,46 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
+
 use crossbeam::{SendError, TrySendError};
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
+use raft::SnapshotStatus;
+use raft_engine::RaftEngine;
+use tikv_util::time::ThreadReadId;
+use txn_types::TxnExtra;
 
 use crate::store::fsm::RaftRouter;
+use crate::store::transport::{CasualRouter, ProposalRouter, StoreRouter};
 use crate::store::{
     Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-use engine_rocks::RocksEngine;
-use engine_traits::KvEngine;
-use raft::SnapshotStatus;
-use std::cell::RefCell;
-use tikv_util::time::ThreadReadId;
-use txn_types::TxnExtra;
 
 /// Routes messages to the raftstore.
-pub trait RaftStoreRouter<EK>: Send + Clone
+pub trait RaftStoreRouter<EK>:
+    StoreRouter + ProposalRouter<EK::Snapshot> + CasualRouter<EK> + Send + Clone
 where
     EK: KvEngine,
 {
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
+
+    /// Sends a significant message. We should guarantee that the message can't be dropped.
+    fn significant_send(
+        &self,
+        region_id: u64,
+        msg: SignificantMsg<EK::Snapshot>,
+    ) -> RaftStoreResult<()>;
+
+    fn send_casual_msg(&self, region_id: u64, msg: CasualMessage<EK>) -> RaftStoreResult<()> {
+        <Self as CasualRouter<EK>>::send(self, region_id, msg)
+    }
+
+    fn send_store_msg(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+        <Self as StoreRouter>::send(self, msg)
+    }
 
     /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
@@ -35,39 +53,21 @@ where
         req: RaftCmdRequest,
         txn_extra: TxnExtra,
         cb: Callback<EK::Snapshot>,
-    ) -> RaftStoreResult<()>;
-
-    /// Sends Snapshot to local store.
-    fn read(
-        &self,
-        _read_id: Option<ThreadReadId>,
-        req: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
-        self.send_command(req, cb)
+        let region_id = req.get_header().get_region_id();
+        let cmd = RaftCommand::with_txn_extra(req, cb, txn_extra);
+        <Self as ProposalRouter<EK::Snapshot>>::send(self, cmd)
+            .map_err(|e| handle_send_error(region_id, e))
     }
-
-    fn release_snapshot_cache(&self) {}
-
-    /// Sends a significant message. We should guarantee that the message can't be dropped.
-    fn significant_send(
-        &self,
-        region_id: u64,
-        msg: SignificantMsg<EK::Snapshot>,
-    ) -> RaftStoreResult<()>;
 
     /// Reports the peer being unreachable to the Region.
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
-        self.significant_send(
+        let msg = SignificantMsg::Unreachable {
             region_id,
-            SignificantMsg::Unreachable {
-                region_id,
-                to_peer_id,
-            },
-        )
+            to_peer_id,
+        };
+        self.significant_send(region_id, msg)
     }
-
-    fn broadcast_unreachable(&self, store_id: u64);
 
     /// Reports the sending snapshot status to the peer of the Region.
     fn report_snapshot_status(
@@ -76,21 +76,53 @@ where
         to_peer_id: u64,
         status: SnapshotStatus,
     ) -> RaftStoreResult<()> {
-        self.significant_send(
+        let msg = SignificantMsg::SnapshotStatus {
             region_id,
-            SignificantMsg::SnapshotStatus {
-                region_id,
-                to_peer_id,
-                status,
-            },
-        )
+            to_peer_id,
+            status,
+        };
+        self.significant_send(region_id, msg)
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<EK>) -> RaftStoreResult<()>;
+    fn broadcast_unreachable(&self, store_id: u64) {
+        let _ = self.send_store_msg(StoreMsg::StoreUnreachable { store_id });
+    }
+}
+
+pub trait LocalReadRouter<EK>: Send + Clone
+where
+    EK: KvEngine,
+{
+    fn read(
+        &self,
+        read_id: Option<ThreadReadId>,
+        req: RaftCmdRequest,
+        cb: Callback<EK::Snapshot>,
+    ) -> RaftStoreResult<()>;
+
+    fn release_snapshot_cache(&self);
 }
 
 #[derive(Clone)]
 pub struct RaftStoreBlackHole;
+
+impl<EK: KvEngine> CasualRouter<EK> for RaftStoreBlackHole {
+    fn send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
+        Ok(())
+    }
+}
+
+impl<S: Snapshot> ProposalRouter<S> for RaftStoreBlackHole {
+    fn send(&self, _: RaftCommand<S>) -> std::result::Result<(), TrySendError<RaftCommand<S>>> {
+        Ok(())
+    }
+}
+
+impl StoreRouter for RaftStoreBlackHole {
+    fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        Ok(())
+    }
+}
 
 impl<EK> RaftStoreRouter<EK> for RaftStoreBlackHole
 where
@@ -101,41 +133,19 @@ where
         Ok(())
     }
 
-    /// Sends RaftCmdRequest to local store with txn extra.
-    fn send_command_txn_extra(
-        &self,
-        _: RaftCmdRequest,
-        _: TxnExtra,
-        _: Callback<EK::Snapshot>,
-    ) -> RaftStoreResult<()> {
-        Ok(())
-    }
-
     /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, _: u64, _: SignificantMsg<EK::Snapshot>) -> RaftStoreResult<()> {
-        Ok(())
-    }
-
-    fn broadcast_unreachable(&self, _: u64) {}
-
-    fn casual_send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
         Ok(())
     }
 }
 
 /// A router that routes messages to the raftstore
-pub struct ServerRaftStoreRouter<EK>
-where
-    EK: KvEngine,
-{
-    router: RaftRouter<EK, RocksEngine>,
-    local_reader: RefCell<LocalReader<RaftRouter<EK, RocksEngine>, EK>>,
+pub struct ServerRaftStoreRouter<EK: KvEngine, ER: RaftEngine> {
+    router: RaftRouter<EK, ER>,
+    local_reader: RefCell<LocalReader<RaftRouter<EK, ER>, EK>>,
 }
 
-impl<EK> Clone for ServerRaftStoreRouter<EK>
-where
-    EK: KvEngine,
-{
+impl<EK: KvEngine, ER: RaftEngine> Clone for ServerRaftStoreRouter<EK, ER> {
     fn clone(&self) -> Self {
         ServerRaftStoreRouter {
             router: self.router.clone(),
@@ -144,59 +154,57 @@ where
     }
 }
 
-impl<EK> ServerRaftStoreRouter<EK>
-where
-    EK: KvEngine,
-{
+impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
     /// Creates a new router.
     pub fn new(
-        router: RaftRouter<EK, RocksEngine>,
-        reader: LocalReader<RaftRouter<EK, RocksEngine>, EK>,
-    ) -> ServerRaftStoreRouter<EK> {
+        router: RaftRouter<EK, ER>,
+        reader: LocalReader<RaftRouter<EK, ER>, EK>,
+    ) -> ServerRaftStoreRouter<EK, ER> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
             local_reader,
         }
     }
+}
 
-    pub fn send_store(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        self.router.send_control(msg).map_err(|e| {
-            RaftStoreError::Transport(match e {
-                TrySendError::Full(_) => DiscardReason::Full,
-                TrySendError::Disconnected(_) => DiscardReason::Disconnected,
-            })
-        })
+impl<EK: KvEngine, ER: RaftEngine> StoreRouter for ServerRaftStoreRouter<EK, ER> {
+    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+        StoreRouter::send(&self.router, msg)
     }
 }
 
-#[inline]
-pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreError {
-    match e {
-        TrySendError::Full(_) => RaftStoreError::Transport(DiscardReason::Full),
-        TrySendError::Disconnected(_) => RaftStoreError::RegionNotFound(region_id),
+impl<EK: KvEngine, ER: RaftEngine> ProposalRouter<EK::Snapshot> for ServerRaftStoreRouter<EK, ER> {
+    fn send(
+        &self,
+        cmd: RaftCommand<EK::Snapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>> {
+        ProposalRouter::send(&self.router, cmd)
     }
 }
 
-impl<EK> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK>
-where
-    EK: KvEngine,
-{
+impl<EK: KvEngine, ER: RaftEngine> CasualRouter<EK> for ServerRaftStoreRouter<EK, ER> {
+    fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> RaftStoreResult<()> {
+        CasualRouter::send(&self.router, region_id, msg)
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK, ER> {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        let region_id = msg.get_region_id();
-        self.router
-            .send_raft_message(msg)
-            .map_err(|e| handle_send_error(region_id, e))
+        RaftStoreRouter::send_raft_msg(&self.router, msg)
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
-        let cmd = RaftCommand::new(req, cb);
-        let region_id = cmd.request.get_header().get_region_id();
-        self.router
-            .send_raft_command(cmd)
-            .map_err(|e| handle_send_error(region_id, e))
+    /// Sends a significant message. We should guarantee that the message can't be dropped.
+    fn significant_send(
+        &self,
+        region_id: u64,
+        msg: SignificantMsg<EK::Snapshot>,
+    ) -> RaftStoreResult<()> {
+        RaftStoreRouter::significant_send(&self.router, region_id, msg)
     }
+}
 
+impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter<EK, ER> {
     fn read(
         &self,
         read_id: Option<ThreadReadId>,
@@ -212,17 +220,20 @@ where
         let mut local_reader = self.local_reader.borrow_mut();
         local_reader.release_snapshot_cache();
     }
+}
 
-    fn send_command_txn_extra(
-        &self,
-        req: RaftCmdRequest,
-        txn_extra: TxnExtra,
-        cb: Callback<EK::Snapshot>,
-    ) -> RaftStoreResult<()> {
-        let cmd = RaftCommand::with_txn_extra(req, cb, txn_extra);
-        let region_id = cmd.request.get_header().get_region_id();
-        self.router
-            .send_raft_command(cmd)
+#[inline]
+pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreError {
+    match e {
+        TrySendError::Full(_) => RaftStoreError::Transport(DiscardReason::Full),
+        TrySendError::Disconnected(_) => RaftStoreError::RegionNotFound(region_id),
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for RaftRouter<EK, ER> {
+    fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
+        let region_id = msg.get_region_id();
+        self.send_raft_message(msg)
             .map_err(|e| handle_send_error(region_id, e))
     }
 
@@ -241,17 +252,5 @@ where
         }
 
         Ok(())
-    }
-
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<EK>) -> RaftStoreResult<()> {
-        self.router
-            .send(region_id, PeerMsg::CasualMessage(msg))
-            .map_err(|e| handle_send_error(region_id, e))
-    }
-
-    fn broadcast_unreachable(&self, store_id: u64) {
-        let _ = self
-            .router
-            .send_control(StoreMsg::StoreUnreachable { store_id });
     }
 }

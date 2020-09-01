@@ -13,7 +13,7 @@ use kvproto::{errorpb, metapb};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::result;
-use std::time::Duration;
+use std::{sync::atomic::Ordering, time::Duration};
 use txn_types::{Key, TxnExtra, Value};
 
 use super::metrics::*;
@@ -24,7 +24,7 @@ use crate::storage::kv::{
 };
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
-use raftstore::router::RaftStoreRouter;
+use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
 use tikv_util::time::Instant;
@@ -105,7 +105,10 @@ impl From<RaftServerError> for KvError {
 
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
-pub struct RaftKv<S: RaftStoreRouter<RocksEngine> + 'static> {
+pub struct RaftKv<S>
+where
+    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+{
     router: S,
     engine: RocksEngine,
 }
@@ -162,7 +165,10 @@ fn on_read_result(
     }
 }
 
-impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
+impl<S> RaftKv<S>
+where
+    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+{
     /// Create a RaftKv using specified configuration.
     pub fn new(router: S, engine: RocksEngine) -> RaftKv<S> {
         RaftKv { router, engine }
@@ -259,19 +265,28 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     ))
 }
 
-impl<S: RaftStoreRouter<RocksEngine>> Display for RaftKv<S> {
+impl<S> Display for RaftKv<S>
+where
+    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S: RaftStoreRouter<RocksEngine>> Debug for RaftKv<S> {
+impl<S> Debug for RaftKv<S>
+where
+    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
+impl<S> Engine for RaftKv<S>
+where
+    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+{
     type Snap = RegionSnapshot<RocksSnapshot>;
     type Local = RocksEngine;
 
@@ -509,6 +524,13 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
     #[inline]
     fn get_data_version(&self) -> Option<u64> {
         self.get_apply_index().ok()
+    }
+
+    fn is_max_ts_synced(&self) -> bool {
+        self.max_ts_sync_status
+            .as_ref()
+            .map(|v| v.load(Ordering::SeqCst) & 1 == 1)
+            .unwrap_or(false)
     }
 }
 

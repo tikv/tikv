@@ -122,7 +122,7 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RocksEngine>, region: &
 pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let common_test_cfg = manifest_dir.join("src/common-test.toml");
-    let mut cfg = TiKvConfig::from_file(common_test_cfg);
+    let mut cfg = TiKvConfig::from_file(&common_test_cfg, None);
     cfg.server.cluster_id = cluster_id;
     cfg
 }
@@ -560,11 +560,12 @@ pub fn create_test_engine(
         engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
     );
 
-    let engines = Engines::new(
-        RocksEngine::from_db(engine),
-        RocksEngine::from_db(raft_engine),
-        cache.is_some(),
-    );
+    let mut engine = RocksEngine::from_db(engine);
+    let mut raft_engine = RocksEngine::from_db(raft_engine);
+    let shared_block_cache = cache.is_some();
+    engine.set_shared_block_cache(shared_block_cache);
+    raft_engine.set_shared_block_cache(shared_block_cache);
+    let engines = Engines::new(engine, raft_engine);
     (engines, key_manager, dir)
 }
 

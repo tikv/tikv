@@ -9,7 +9,7 @@ use std::time::Instant;
 use std::{cmp, error, u64};
 
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, Mutable, Peekable, WriteBatch};
+use engine_traits::{Engines, KvEngine, Mutable, Peekable};
 use error_code::ErrorCodeExt;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
@@ -307,7 +307,7 @@ impl Drop for EntryCache {
 
 pub trait HandleRaftReadyContext<WK, WR>
 where
-    WK: WriteBatch,
+    WK: Mutable,
     WR: RaftLogBatch,
 {
     /// Returns the mutable references of WriteBatch for both KvDB and RaftDB in one interface.
@@ -380,7 +380,7 @@ impl InvokeContext {
     pub fn save_snapshot_raft_state_to(
         &self,
         snapshot_index: u64,
-        kv_wb: &mut impl WriteBatch,
+        kv_wb: &mut impl Mutable,
     ) -> Result<()> {
         let mut snapshot_raft_state = self.raft_state.clone();
         snapshot_raft_state
@@ -397,7 +397,7 @@ impl InvokeContext {
     }
 
     #[inline]
-    pub fn save_apply_state_to(&self, kv_wb: &mut impl WriteBatch) -> Result<()> {
+    pub fn save_apply_state_to(&self, kv_wb: &mut impl Mutable) -> Result<()> {
         kv_wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region_id),
@@ -1081,7 +1081,7 @@ where
             return;
         }
         let stats = self.engines.raft.flush_stats();
-        RAFT_ENTRIES_CACHES_GAUGE.add(stats.mem_size_change as i64);
+        RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
         RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as i64);
         RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as i64);
     }
@@ -1670,8 +1670,7 @@ mod tests {
         let kv_db = new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = path.path().join(Path::new("raft"));
         let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
-        let shared_block_cache = false;
-        let engines = Engines::new(kv_db, raft_db, shared_block_cache);
+        let engines = Engines::new(kv_db, raft_db);
         bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
@@ -2497,8 +2496,7 @@ mod tests {
         let kv_db = new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = td.path().join(Path::new("raft"));
         let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
-        let shared_block_cache = false;
-        let engines = Engines::new(kv_db, raft_db, shared_block_cache);
+        let engines = Engines::new(kv_db, raft_db);
         bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);

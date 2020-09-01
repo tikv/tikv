@@ -10,9 +10,8 @@ use crate::import::SSTImporter;
 use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
-use crate::storage::{
-    concurrency_manager::ConcurrencyManager, config::Config as StorageConfig, Storage,
-};
+use crate::storage::{config::Config as StorageConfig, Storage};
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, Peekable};
 use kvproto::metapb;
@@ -20,7 +19,7 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::router::RaftStoreRouter;
+use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::AutoSplitController;
@@ -44,7 +43,7 @@ pub fn create_raft_storage<S>(
     pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
-    S: RaftStoreRouter<RocksEngine> + 'static,
+    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
 {
     let store = Storage::from_engine(
         engine,
@@ -144,6 +143,7 @@ where
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
+        concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -185,6 +185,7 @@ where
             importer,
             split_check_worker,
             auto_split_controller,
+            concurrency_manager,
         )?;
 
         Ok(())
@@ -379,6 +380,7 @@ where
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
+        concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -406,6 +408,7 @@ where
             split_check_worker,
             auto_split_controller,
             self.state.clone(),
+            concurrency_manager,
         )?;
         Ok(())
     }
