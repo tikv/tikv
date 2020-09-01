@@ -62,7 +62,8 @@ use crate::store::util::{is_initial_msg, PerfContextStatistics};
 use crate::store::worker::{
     AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
-    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
+    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckRunner,
+    SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::{
@@ -268,7 +269,7 @@ where
     }
 }
 
-pub struct PollContext<EK, ER, T, C: 'static>
+pub struct PollContext<EK, ER, T, PC: 'static>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -303,7 +304,7 @@ where
     pub coprocessor_host: CoprocessorHost<EK>,
     pub timer: SteadyTimer,
     pub trans: T,
-    pub pd_client: Arc<C>,
+    pub pd_client: Arc<PC>,
     pub global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
@@ -505,14 +506,14 @@ struct StoreFsmDelegate<
     EK: KvEngine + 'static,
     ER: RaftEngine + 'static,
     T: 'static,
-    C: 'static,
+    PC: 'static,
 > {
     fsm: &'a mut StoreFsm,
-    ctx: &'a mut PollContext<EK, ER, T, C>,
+    ctx: &'a mut PollContext<EK, ER, T, PC>,
 }
 
-impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdClient>
-    StoreFsmDelegate<'a, EK, ER, T, C>
+impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, PC: PdClient>
+    StoreFsmDelegate<'a, EK, ER, T, PC>
 {
     fn on_tick(&mut self, tick: StoreTick) {
         let t = TiInstant::now_coarse();
@@ -588,18 +589,18 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
     }
 }
 
-pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'static, C: 'static> {
+pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'static, PC: 'static> {
     tag: String,
     store_msg_buf: Vec<StoreMsg>,
     peer_msg_buf: Vec<PeerMsg<EK>>,
     previous_metrics: RaftMetrics,
     timer: TiInstant,
-    poll_ctx: PollContext<EK, ER, T, C>,
+    poll_ctx: PollContext<EK, ER, T, PC>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER, T, C> {
+impl<EK: KvEngine, ER: RaftEngine, T: Transport, PC: PdClient> RaftPoller<EK, ER, T, PC> {
     fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
@@ -719,8 +720,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> PollHandler<PeerFsm<EK, ER>, StoreFsm>
-    for RaftPoller<EK, ER, T, C>
+impl<EK: KvEngine, ER: RaftEngine, T: Transport, PC: PdClient>
+    PollHandler<PeerFsm<EK, ER>, StoreFsm> for RaftPoller<EK, ER, T, PC>
 {
     fn begin(&mut self, _batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
@@ -1028,16 +1029,16 @@ impl<EK: KvEngine, ER: RaftEngine, T, C> RaftPollerBuilder<EK, ER, T, C> {
     }
 }
 
-impl<EK, ER, T, C> HandlerBuilder<PeerFsm<EK, ER>, StoreFsm> for RaftPollerBuilder<EK, ER, T, C>
+impl<EK, ER, T, PC> HandlerBuilder<PeerFsm<EK, ER>, StoreFsm> for RaftPollerBuilder<EK, ER, T, PC>
 where
     EK: KvEngine + 'static,
     ER: RaftEngine + 'static,
     T: Transport + 'static,
-    C: PdClient + 'static,
+    PC: PdClient + 'static,
 {
-    type Handler = RaftPoller<EK, ER, T, C>;
+    type Handler = RaftPoller<EK, ER, T, PC>;
 
-    fn build(&mut self) -> RaftPoller<EK, ER, T, C> {
+    fn build(&mut self) -> RaftPoller<EK, ER, T, PC> {
         let ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -1089,27 +1090,27 @@ where
     }
 }
 
-struct Workers<EK: KvEngine, ER: RaftEngine> {
+struct Workers<EK: KvEngine, ER: RaftEngine, PC: PdClient> {
     pd_worker: FutureWorker<PdTask<EK>>,
-    consistency_check_worker: Worker<ConsistencyCheckTask<EK::Snapshot>>,
-    split_check_worker: Worker<SplitCheckTask>,
+    consistency_check_worker: Worker<ConsistencyCheckRunner<EK, RaftRouter<EK, ER>>>,
+    split_check_worker: Worker<SplitCheckRunner<EK, RaftRouter<EK, ER>>>,
     // handle Compact, CleanupSST task
-    cleanup_worker: Worker<CleanupTask>,
-    raftlog_gc_worker: Worker<RaftlogGcTask<ER>>,
-    region_worker: Worker<RegionTask<EK::Snapshot>>,
+    cleanup_worker: Worker<CleanupRunner<EK, PC, RaftRouter<EK, ER>>>,
+    raftlog_gc_worker: Worker<RaftlogGcRunner<ER>>,
+    region_worker: Worker<RegionRunner<EK, ER, RaftRouter<EK, ER>>>,
     coprocessor_host: CoprocessorHost<EK>,
     future_poller: Runtime,
 }
 
-pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
+pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine, PC: PdClient> {
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm>,
     apply_router: ApplyRouter<EK>,
     apply_system: ApplyBatchSystem<EK>,
     router: RaftRouter<EK, ER>,
-    workers: Option<Workers<EK, ER>>,
+    workers: Option<Workers<EK, ER, PC>>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine, PC: PdClient + 'static> RaftBatchSystem<EK, ER, PC> {
     pub fn router(&self) -> RaftRouter<EK, ER> {
         self.router.clone()
     }
@@ -1119,19 +1120,19 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     }
 
     // TODO: reduce arguments
-    pub fn spawn<T: Transport + 'static, C: PdClient + 'static>(
+    pub fn spawn<T: Transport + 'static>(
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
         engines: Engines<EK, ER>,
         trans: T,
-        pd_client: Arc<C>,
+        pd_client: Arc<PC>,
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<EK>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<SplitCheckTask>,
+        split_check_worker: Worker<SplitCheckRunner<EK, RaftRouter<EK, ER>>>,
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
@@ -1186,7 +1187,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();
         if engine.support_write_batch_vec() {
-            self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatchVec>(
+            self.start_system::<T, <EK as WriteBatchExt>::WriteBatchVec>(
                 workers,
                 region_peers,
                 builder,
@@ -1195,7 +1196,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 concurrency_manager,
             )?;
         } else {
-            self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
+            self.start_system::<T, <EK as WriteBatchExt>::WriteBatch>(
                 workers,
                 region_peers,
                 builder,
@@ -1207,11 +1208,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         Ok(())
     }
 
-    fn start_system<T: Transport + 'static, C: PdClient + 'static, W: WriteBatch<EK> + 'static>(
+    fn start_system<T: Transport + 'static, W: WriteBatch<EK> + 'static>(
         &mut self,
-        mut workers: Workers<EK, ER>,
+        mut workers: Workers<EK, ER, PC>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
-        builder: RaftPollerBuilder<EK, ER, T, C>,
+        builder: RaftPollerBuilder<EK, ER, T, PC>,
         auto_split_controller: AutoSplitController,
         coprocessor_host: CoprocessorHost<EK>,
         concurrency_manager: ConcurrencyManager,
@@ -1349,9 +1350,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     }
 }
 
-pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
+pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine, PC: PdClient>(
     cfg: &Config,
-) -> (RaftRouter<EK, ER>, RaftBatchSystem<EK, ER>) {
+) -> (RaftRouter<EK, ER>, RaftBatchSystem<EK, ER, PC>) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
     let (router, system) =
@@ -1379,8 +1380,8 @@ enum CheckMsgStatus {
     NewPeerFirst,
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
-    StoreFsmDelegate<'a, EK, ER, T, C>
+impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, PC: PdClient>
+    StoreFsmDelegate<'a, EK, ER, T, PC>
 {
     /// Checks if the message is targeting a stale peer.
     fn check_msg(&mut self, msg: &RaftMessage) -> Result<CheckMsgStatus> {
@@ -2122,8 +2123,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
     }
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
-    StoreFsmDelegate<'a, EK, ER, T, C>
+impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, PC: PdClient>
+    StoreFsmDelegate<'a, EK, ER, T, PC>
 {
     fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
         if ssts.is_empty() {

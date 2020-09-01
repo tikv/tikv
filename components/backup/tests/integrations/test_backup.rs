@@ -12,7 +12,7 @@ use futures_executor::block_on;
 use futures_util::io::AsyncReadExt;
 use grpcio::{ChannelBuilder, Environment};
 
-use backup::Task;
+use backup::{Endpoint, Task};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
@@ -23,6 +23,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
+use raftstore::coprocessor::RegionInfoAccessor;
 use tempfile::Builder;
 use test_raftstore::*;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
@@ -30,6 +31,7 @@ use tidb_query_common::storage::{IntervalRange, Range};
 use tikv::config::BackupConfig;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
+
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv_util::collections::HashMap;
@@ -40,7 +42,7 @@ use txn_types::TimeStamp;
 
 struct TestSuite {
     cluster: Cluster<ServerCluster>,
-    endpoints: HashMap<u64, Worker<Task>>,
+    endpoints: HashMap<u64, Worker<Endpoint<SimulateEngine, RegionInfoAccessor>>>,
     tikv_cli: TikvClient,
     context: Context,
     ts: TimeStamp,

@@ -42,7 +42,7 @@ use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
 use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::lock_manager::LockManager;
-use tikv::server::resolve::{self, Task as ResolveTask};
+use tikv::server::resolve::{self, Runner as ResolveRunner};
 use tikv::server::service::DebugService;
 use tikv::server::Result as ServerResult;
 use tikv::server::{
@@ -56,7 +56,8 @@ use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 use tikv_util::HandyRwLock;
 
-type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
+pub type SimulateStoreTransport =
+    SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
 type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 
@@ -69,7 +70,7 @@ struct ServerMeta {
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
-    worker: Worker<ResolveTask>,
+    worker: Worker<ResolveRunner<TestPdClient>>,
     gc_worker: GcWorker<RaftKv<SimulateStoreTransport>>,
 }
 
@@ -153,7 +154,7 @@ impl Simulator for ServerCluster {
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem<RocksEngine, RocksEngine>,
+        system: RaftBatchSystem<RocksEngine, RocksEngine, TestPdClient>,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = Builder::new().prefix("test_cluster").tempdir().unwrap();

@@ -24,17 +24,20 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<E, C, S> {
-    compact: CompactRunner<E>,
-    cleanup_sst: CleanupSSTRunner<C, S>,
+pub struct Runner<KE, PC, SR> {
+    compact: CompactRunner<KE>,
+    cleanup_sst: CleanupSSTRunner<PC, SR>,
 }
 
-impl<E, C, S> Runner<E, C, S>
+impl<KE, PC, SR> Runner<KE, PC, SR>
 where
-    C: PdClient,
-    S: StoreRouter,
+    PC: PdClient,
+    SR: StoreRouter,
 {
-    pub fn new(compact: CompactRunner<E>, cleanup_sst: CleanupSSTRunner<C, S>) -> Runner<E, C, S> {
+    pub fn new(
+        compact: CompactRunner<KE>,
+        cleanup_sst: CleanupSSTRunner<PC, SR>,
+    ) -> Runner<KE, PC, SR> {
         Runner {
             compact,
             cleanup_sst,
@@ -42,12 +45,14 @@ where
     }
 }
 
-impl<E, C, S> Runnable<Task> for Runner<E, C, S>
+impl<KE, PC, SR> Runnable for Runner<KE, PC, SR>
 where
-    E: KvEngine,
-    C: PdClient,
-    S: StoreRouter,
+    KE: KvEngine,
+    PC: PdClient,
+    SR: StoreRouter,
 {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::Compact(t) => self.compact.run(t),

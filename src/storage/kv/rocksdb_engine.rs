@@ -51,7 +51,9 @@ impl Display for Task {
 
 struct Runner(Engines<BaseRocksEngine, BaseRocksEngine>);
 
-impl Runnable<Task> for Runner {
+impl Runnable for Runner {
+    type Task = Task;
+
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => {
@@ -66,7 +68,7 @@ impl Runnable<Task> for Runner {
 struct RocksEngineCore {
     // only use for memory mode
     temp_dir: Option<TempDir>,
-    worker: Worker<Task>,
+    worker: Worker<Runner>,
 }
 
 impl Drop for RocksEngineCore {

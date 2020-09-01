@@ -108,11 +108,13 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
     }
 }
 
-impl<EK, C> Runnable<Task<EK::Snapshot>> for Runner<EK, C>
+impl<EK, C> Runnable for Runner<EK, C>
 where
     EK: KvEngine,
     C: CasualRouter<EK>,
 {
+    type Task = Task<EK::Snapshot>;
+
     fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
             Task::ComputeHash {

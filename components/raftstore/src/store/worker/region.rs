@@ -630,12 +630,14 @@ where
     }
 }
 
-impl<EK, ER, R> Runnable<Task<EK::Snapshot>> for Runner<EK, ER, R>
+impl<EK, ER, R> Runnable for Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
+    type Task = Task<EK::Snapshot>;
+
     fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
             Task::Gen {
@@ -699,12 +701,14 @@ pub enum Event {
     CheckApply,
 }
 
-impl<EK, ER, R> RunnableWithTimer<Task<EK::Snapshot>, Event> for Runner<EK, ER, R>
+impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
+    type TimeoutTask = Event;
+
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
             Event::CheckApply => {
@@ -754,6 +758,7 @@ mod tests {
     use super::Event;
     use super::PendingDeleteRanges;
     use super::Task;
+    use std::sync::mpsc::SyncSender;
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -842,7 +847,9 @@ mod tests {
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = Worker::new("region-worker");
+        let mut worker = Worker::<
+            RegionRunner<RocksEngine, RocksEngine, SyncSender<(u64, CasualMessage<RocksEngine>)>>,
+        >::new("region-worker");
         let sched = worker.scheduler();
         let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let (router, _) = mpsc::sync_channel(1);
@@ -924,7 +931,9 @@ mod tests {
         let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = Worker::new("snap-manager");
+        let mut worker = Worker::<
+            RegionRunner<RocksEngine, RocksEngine, SyncSender<(u64, CasualMessage<RocksEngine>)>>,
+        >::new("snap-manager");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(

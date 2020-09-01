@@ -43,14 +43,14 @@ struct StoreAddr {
 }
 
 /// A runner for resolving store addresses.
-struct Runner<T: PdClient> {
-    pd_client: Arc<T>,
+pub struct Runner<C: PdClient> {
+    pd_client: Arc<C>,
     store_addrs: HashMap<u64, StoreAddr>,
     state: Arc<Mutex<GlobalReplicationState>>,
     router: Option<RaftRouter<RocksEngine, RocksEngine>>,
 }
 
-impl<T: PdClient> Runner<T> {
+impl<C: PdClient> Runner<C> {
     fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
@@ -103,7 +103,9 @@ impl<T: PdClient> Runner<T> {
     }
 }
 
-impl<T: PdClient> Runnable<Task> for Runner<T> {
+impl<C: PdClient> Runnable for Runner<C> {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         let store_id = task.store_id;
         let resp = self.resolve(store_id);
@@ -124,16 +126,17 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T>(
-    pd_client: Arc<T>,
+#[allow(clippy::type_complexity)]
+pub fn new_resolver<PC>(
+    pd_client: Arc<PC>,
     router: RaftRouter<RocksEngine, RocksEngine>,
 ) -> Result<(
-    Worker<Task>,
+    Worker<Runner<PC>>,
     PdStoreAddrResolver,
     Arc<Mutex<GlobalReplicationState>>,
 )>
 where
-    T: PdClient + 'static,
+    PC: PdClient + 'static,
 {
     let mut worker = Worker::new("addr-resolver");
     let state = Arc::new(Mutex::new(GlobalReplicationState::default()));

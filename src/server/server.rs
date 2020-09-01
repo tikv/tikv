@@ -30,7 +30,7 @@ use super::load_statistics::*;
 use super::raft_client::RaftClient;
 use super::resolve::StoreAddrResolver;
 use super::service::*;
-use super::snap::{Runner as SnapHandler, Task as SnapTask};
+use super::snap::Runner as SnapRunner;
 use super::transport::ServerTransport;
 use super::{Config, Result};
 use crate::read_pool::ReadPool;
@@ -57,7 +57,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     raft_router: T,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
-    snap_worker: Worker<SnapTask>,
+    snap_worker: Worker<SnapRunner<T>>,
 
     // Currently load statistics is done in the thread.
     stats_pool: Option<ThreadPool>,
@@ -206,7 +206,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
     /// Starts the TiKV server.
     /// Notice: Make sure call `build_and_bind` first.
     pub fn start(&mut self, cfg: Arc<Config>, security_mgr: Arc<SecurityManager>) -> Result<()> {
-        let snap_runner = SnapHandler::new(
+        let snap_runner = SnapRunner::new(
             Arc::clone(&self.env),
             self.snap_mgr.clone(),
             self.raft_router.clone(),

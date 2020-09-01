@@ -35,7 +35,7 @@ use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
 use tikv_util::keybuilder::KeyBuilder;
-use tikv_util::worker::Worker;
+use tikv_util::worker::dummy_scheduler;
 use txn_types::Key;
 
 pub type Result<T> = result::Result<T, Error>;
@@ -480,8 +480,6 @@ impl Debugger {
         let mut iter = box_try!(self.engines.kv.iterator_cf_opt(CF_RAFT, readopts));
         iter.seek(SeekKey::from(from.as_ref())).unwrap();
 
-        let fake_snap_worker = Worker::new("fake-snap-worker");
-
         let check_value = |value: &[u8]| -> Result<()> {
             let mut local_state = RegionLocalState::default();
             box_try!(local_state.merge_from_bytes(&value));
@@ -500,11 +498,13 @@ impl Debugger {
                     Error::Other("RegionLocalState doesn't contains peer itself".into())
                 })?;
 
+            let (fake_scheduler, _) = dummy_scheduler();
+
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
             let peer_storage = box_try!(PeerStorage::<RocksEngine, RocksEngine>::new(
                 self.engines.clone(),
                 region,
-                fake_snap_worker.scheduler(),
+                fake_scheduler,
                 peer_id,
                 tag,
             ));

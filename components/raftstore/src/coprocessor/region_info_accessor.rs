@@ -36,7 +36,7 @@ use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, S
 
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
 #[derive(Debug)]
-enum RaftStoreEvent {
+pub enum RaftStoreEvent {
     CreateRegion { region: Region, role: StateRole },
     UpdateRegion { region: Region, role: StateRole },
     DestroyRegion { region: Region },
@@ -74,7 +74,7 @@ pub type SeekRegionCallback = Box<dyn FnOnce(&mut dyn Iterator<Item = &RegionInf
 
 /// `RegionInfoAccessor` has its own thread. Queries and updates are done by sending commands to the
 /// thread.
-enum RegionInfoQuery {
+pub enum RegionInfoQuery {
     RaftStoreEvent(RaftStoreEvent),
     SeekRegion {
         from: Vec<u8>,
@@ -402,7 +402,9 @@ impl RegionCollector {
     }
 }
 
-impl Runnable<RegionInfoQuery> for RegionCollector {
+impl Runnable for RegionCollector {
+    type Task = RegionInfoQuery;
+
     fn run(&mut self, task: RegionInfoQuery) {
         match task {
             RegionInfoQuery::RaftStoreEvent(event) => {
@@ -427,7 +429,9 @@ impl Runnable<RegionInfoQuery> for RegionCollector {
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
-impl RunnableWithTimer<RegionInfoQuery, ()> for RegionCollector {
+impl RunnableWithTimer for RegionCollector {
+    type TimeoutTask = ();
+
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         let mut count = 0;
         let mut leader = 0;
@@ -450,7 +454,7 @@ impl RunnableWithTimer<RegionInfoQuery, ()> for RegionCollector {
 /// `RegionInfoAccessor` keeps all region information separately from raftstore itself.
 #[derive(Clone)]
 pub struct RegionInfoAccessor {
-    worker: Arc<Mutex<Worker<RegionInfoQuery>>>,
+    worker: Arc<Mutex<Worker<RegionCollector>>>,
     scheduler: Scheduler<RegionInfoQuery>,
 }
 

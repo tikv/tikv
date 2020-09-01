@@ -364,7 +364,9 @@ impl LockCollectorRunner {
     }
 }
 
-impl Runnable<LockCollectorTask> for LockCollectorRunner {
+impl Runnable for LockCollectorRunner {
+    type Task = LockCollectorTask;
+
     fn run(&mut self, task: LockCollectorTask) {
         match task {
             LockCollectorTask::ObservedLocks(locks) => self.handle_observed_locks(locks),
@@ -382,7 +384,7 @@ impl Runnable<LockCollectorTask> for LockCollectorRunner {
 }
 
 pub struct AppliedLockCollector {
-    worker: Mutex<Worker<LockCollectorTask>>,
+    worker: Mutex<Worker<LockCollectorRunner>>,
     scheduler: Scheduler<LockCollectorTask>,
 }
 
