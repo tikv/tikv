@@ -29,6 +29,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 use tikv_util::timer::{SteadyTimer, Timer};
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
+use tikv_util::Either;
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -645,45 +646,60 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
             // TODO: send a message to raftstore would consume too much cpu time,
             // try to handle it outside raftstore.
-            for (region_id, observe_id) in regions {
+            let regions: Vec<_> = regions.iter().copied().map(|(region_id, observe_id)| {
                 let scheduler_clone = scheduler.clone();
-                if let Err(e) = raft_router.significant_send(
-                    region_id,
-                    SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
-                        if !resp.response.get_header().has_error() {
-                            match scheduler_clone.schedule(Task::MinTS { region_id, min_ts }) {
-                                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                                Err(err) => panic!(
-                                    "failed to schedule min_ts event, min_ts: {}, error: {:?}",
-                                    min_ts, err
-                                ),
-                            }
-                        }
-                    }))),
-                ) {
-                    warn!(
-                        "send LeaderCallback for advancing resolved ts failed";
-                        "err" => ?e,
-                        "min_ts" => min_ts,
-                    );
-                    let deregister = Deregister::Region {
-                        observe_id,
+                let raft_router_clone = raft_router.clone();
+                async move {
+                    let (tx, rx) = futures03::channel::oneshot::channel();
+                    if let Err(e) = raft_router_clone.significant_send(
                         region_id,
-                        err: Error::Request(e.into()),
-                    };
-                    if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                        error!("schedule cdc task failed"; "error" => ?e);
+                        SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
+                            let resp = if !resp.response.get_header().has_error() {
+                                Either::Left(())
+                            } else {
+                                Either::Right(region_id)
+                            };
+                            if tx.send(resp).is_err() {
+                                error!("cdc send tso response failed");
+                            }
+                        }))),
+                    ) {
+                        warn!("cdc send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
+                        let deregister = Deregister::Region {
+                            observe_id,
+                            region_id,
+                            err: Error::Request(e.into()),
+                        };
+                        if let Err(e) = scheduler_clone.schedule(Task::Deregister(deregister)) {
+                            error!("schedule cdc task failed"; "error" => ?e);
+                        }
                     }
+                    rx.await.unwrap_or(Either::Left(()))
                 }
-            }
+            }).collect();
             match scheduler.schedule(Task::RegisterMinTsEvent) {
                 Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                 // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
                 // advance normally.
-                Err(err) => panic!(
-                    "failed to schedule regiester min ts event, error: {:?}",
-                    err
-                ),
+                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
+            }
+            let resps = futures03::future::join_all(regions).await;
+            let regions = resps
+                .into_iter()
+                .filter(|resp| match resp {
+                    Either::Left(()) => false,
+                    Either::Right(_) => true,
+                })
+                .map(|resp| match resp {
+                    Either::Left(()) => unreachable!(),
+                    Either::Right(region_id) => region_id,
+                })
+                .collect();
+            match scheduler.schedule(Task::MinTS { regions, min_ts }) {
+                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                // advance normally.
+                Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
             }
         };
         self.tso_worker.spawn(fut);

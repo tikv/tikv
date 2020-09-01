@@ -967,7 +967,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Make sure region 1 is registered.
-    let mut events = receive_event(false);
+    let mut events = receive_event().events;
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
@@ -980,32 +980,23 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
         _ => panic!("unknown event"),
     }
 
-    fn check_resolved_ts(events: Vec<Event>, check_fn: impl Fn(u64)) {
-        assert_ne!(events.len(), 0);
-        for event in events {
-            match event.event.unwrap() {
-                Event_oneof_event::ResolvedTs(ts) => check_fn(ts),
-                _ => panic!("unexpected event"),
-            }
+    fn check_resolved_ts(event: ChangeDataEvent, check_fn: impl Fn(u64)) {
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            check_fn(resolved_ts.ts)
         }
     };
 
-    check_resolved_ts(receive_event(true), |ts| assert_eq!(ts, 80));
+    check_resolved_ts(receive_event(), |ts| assert_eq!(ts, 80));
     assert!(cm.max_read_ts() >= 100.into());
 
     drop(guard);
-    'outer: for retry in 0.. {
-        let events = receive_event(true);
+    for retry in 0.. {
+        let event = receive_event();
         let mut current_rts = 0;
-        for event in events {
-            match event.event.unwrap() {
-                Event_oneof_event::ResolvedTs(ts) => {
-                    current_rts = ts;
-                    if ts >= 100 {
-                        break 'outer;
-                    }
-                }
-                _ => panic!("unexpected event"),
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            current_rts = resolved_ts.ts;
+            if resolved_ts.ts >= 100 {
+                break;
             }
         }
         if retry >= 5 {
@@ -1022,22 +1013,17 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
     // might be updated before acquiring the lock.
     let mut last_resolved_ts = 0;
     let mut success = false;
-    'outer_2: for _ in 0..5 {
-        let events = receive_event(true);
-        assert_ne!(events.len(), 0);
-        for event in events {
-            match event.event.unwrap() {
-                Event_oneof_event::ResolvedTs(ts) => {
-                    assert!(ts > 100);
-                    if ts == last_resolved_ts {
-                        success = true;
-                        break 'outer_2;
-                    }
-                    assert!(ts > last_resolved_ts);
-                    last_resolved_ts = ts;
-                }
-                _ => panic!("unexpected event"),
+    for _ in 0..5 {
+        let event = receive_event();
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            let ts = resolved_ts.ts;
+            assert!(ts > 100);
+            if ts == last_resolved_ts {
+                success = true;
+                break;
             }
+            assert!(ts > last_resolved_ts);
+            last_resolved_ts = ts;
         }
     }
     assert!(success, "resolved_ts not blocked by the memory lock");

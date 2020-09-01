@@ -201,7 +201,7 @@ impl ChangeData for Service {
                 let resps = resp_vecs
                     .into_iter()
                     .map(|resp| (resp, WriteFlags::default()));
-                stream::iter_ok(resps)
+                stream::iter(resps)
             })
             .flatten()
             .map(|item| GrpcResult::Ok(item));

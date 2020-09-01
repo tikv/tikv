@@ -777,7 +777,7 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
-            let (resps, rx) = match block_on(rx_wrap.replace(None).unwrap().into_future());
+            let (resps, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
             rx_wrap.set(Some(rx));
             let mut resps = resps.unwrap();
             assert_eq!(resps.len(), 1);
@@ -902,7 +902,7 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let check_event = |event_rows: Vec<EventRow>| {
-            let (resps, rx) = match block_on(rx_wrap.replace(None).unwrap().into_future());
+            let (resps, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
             rx_wrap.set(Some(rx));
             let mut resps = resps.unwrap();
             assert_eq!(resps.len(), 1);
