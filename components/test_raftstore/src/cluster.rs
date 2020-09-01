@@ -618,27 +618,32 @@ impl<T: Simulator> Cluster<T> {
     }
 
     // If the resp is "not leader error", get the real leader.
-    // Sometimes, we may still can't get leader even in "not leader error",
-    // returns a INVALID_PEER for this.
+    // Otherwise reset or refresh leader if needed.
+    // Returns if the request should retry.
     fn refresh_leader_if_needed(&mut self, resp: &RaftCmdResponse, region_id: u64) -> bool {
         if !is_error_response(resp) {
             return false;
         }
 
         let err = resp.get_header().get_error();
-        if err.has_stale_command() {
-            // command got truncated, leadership may have changed.
+        if err
+            .get_message()
+            .contains("peer has not applied to current term")
+        {
+            // leader peer has not applied to current term
+            return true;
+        }
+
+        // If command is stale, leadership may have changed.
+        // Or epoch not match, it can be introduced by wrong leader.
+        if err.has_stale_command() || err.has_epoch_not_match() {
             self.reset_leader_of_region(region_id);
             return true;
         }
-        // Not match epoch can be introduced by wrong leader.
-        if err.has_epoch_not_match() {
-            self.reset_leader_of_region(region_id);
-        }
+
         if !err.has_not_leader() {
             return false;
         }
-
         let err = err.get_not_leader();
         if !err.has_leader() {
             self.reset_leader_of_region(region_id);
@@ -1136,7 +1141,7 @@ impl<T: Simulator> Cluster<T> {
                             || error.has_stale_command()
                             || error
                                 .get_message()
-                                .contains("peer is not applied to current term")
+                                .contains("peer has not applied to current term")
                         {
                             warn!("fail to split: {:?}, ignore.", error);
                             return;
@@ -1202,6 +1207,7 @@ impl<T: Simulator> Cluster<T> {
             .unwrap()
             .unwrap();
         let prepare_merge = new_prepare_merge(region);
+<<<<<<< HEAD
         let source = self
             .pd_client
             .get_region_by_id(source)
@@ -1227,6 +1233,28 @@ impl<T: Simulator> Cluster<T> {
             Duration::from_secs(5),
         )
         .unwrap()
+    }
+
+    pub fn must_try_merge(&mut self, source: u64, target: u64) {
+        let resp = self.try_merge(source, target);
+        if is_error_response(&resp) {
+            panic!(
+                "{} failed to try merge to {}, resp {:?}",
+                source, target, resp
+            );
+        }
+=======
+        let source_region = block_on(self.pd_client.get_region_by_id(source))
+            .unwrap()
+            .unwrap();
+        let req = new_admin_request(
+            source_region.get_id(),
+            source_region.get_region_epoch(),
+            prepare_merge,
+        );
+        self.call_command_on_leader(req, Duration::from_secs(5))
+            .unwrap()
+>>>>>>> 296023b71... test: make try_merge reliable (#8559)
     }
 
     pub fn must_try_merge(&mut self, source: u64, target: u64) {

@@ -269,7 +269,7 @@ fn test_stale_read_during_merging() {
 
     //             merge into
     // region1000 ------------> region1
-    cluster.try_merge(region1000.get_id(), region1.get_id());
+    cluster.must_try_merge(region1000.get_id(), region1.get_id());
 
     // Pause the apply workers except for the peer 4.
     let apply_commit_merge = "apply_before_commit_merge_except_1_4";
