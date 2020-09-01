@@ -3249,9 +3249,9 @@ where
             if last_idx - first_idx < 3 {
                 return;
             }
-            self.fsm.skip_gc_raft_log_ticks += 1;
-            if self.fsm.skip_gc_raft_log_ticks <= self.ctx.cfg.raft_log_reserve_max_ticks {
-                // Logs will only be kept 6 * `raft_log_gc_tick_interval`.
+            if self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks {
+                // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
+                self.fsm.skip_gc_raft_log_ticks += 1;
                 self.register_raft_gc_log_tick();
                 return;
             }
