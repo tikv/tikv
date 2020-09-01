@@ -365,13 +365,13 @@ where
                 .iter_mut()
                 .filter_map(|cb| {
                     if let Callback::Write { proposed_cb, .. } = &mut cb.0 {
-                        cb.take()
+                        proposed_cb.take()
                     } else {
                         None
                     }
                 })
                 .collect();
-            let proposed_cb = if proposed_cbs.is_empty() {
+            let proposed_cb: Option<ExtCallback> = if proposed_cbs.is_empty() {
                 None
             } else {
                 Some(Box::new(move || {
