@@ -609,6 +609,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .iter()
             .map(|(region_id, delegate)| (*region_id, delegate.id))
             .collect();
+        let cm: ConcurrencyManager = self.concurrency_manager.clone();
         let fut = async move {
             let (tso, _) =
                 futures03::future::join(tso, timeout.compat().map_err(|_| unreachable!())).await;
