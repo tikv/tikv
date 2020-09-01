@@ -76,21 +76,11 @@ pub struct Config {
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_split_check_diff: ReadableSize,
-    /// Interval (ms) to check whether start compaction for a region.
-    pub region_compact_check_interval: ReadableDuration,
-    /// Number of regions for each time checking.
-    pub region_compact_check_step: u64,
-    /// Minimum number of tombstones to trigger manual compaction.
-    pub region_compact_min_tombstones: u64,
-    /// Minimum percentage of tombstones to trigger manual compaction.
-    /// Should between 1 and 100.
-    pub region_compact_tombstones_percent: u64,
+
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
     pub snap_gc_timeout: ReadableDuration,
-    pub lock_cf_compact_interval: ReadableDuration,
-    pub lock_cf_compact_bytes_threshold: ReadableSize,
 
     #[config(skip)]
     pub notify_capacity: usize,
@@ -183,6 +173,30 @@ pub struct Config {
     #[serde(with = "rocks_config::perf_level_serde")]
     #[config(skip)]
     pub perf_level: PerfLevel,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[config(skip)]
+    pub region_compact_check_interval: ReadableDuration,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[config(skip)]
+    pub region_compact_check_step: u64,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[config(skip)]
+    pub region_compact_min_tombstones: u64,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[config(skip)]
+    pub region_compact_tombstones_percent: u64,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[config(skip)]
+    pub lock_cf_compact_interval: ReadableDuration,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[config(skip)]
+    pub lock_cf_compact_bytes_threshold: ReadableSize,
 }
 
 impl Default for Config {
@@ -210,10 +224,6 @@ impl Default for Config {
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: split_size / 16,
-            region_compact_check_interval: ReadableDuration::minutes(5),
-            region_compact_check_step: 100,
-            region_compact_min_tombstones: 10000,
-            region_compact_tombstones_percent: 30,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             notify_capacity: 40960,
@@ -226,8 +236,6 @@ impl Default for Config {
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
             leader_transfer_max_log_lag: 10,
             snap_apply_batch_size: ReadableSize::mb(10),
-            lock_cf_compact_interval: ReadableDuration::minutes(10),
-            lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
             // Disable consistency check by default as it will hurt performance.
             // We should turn on this only in our tests.
             consistency_check_interval: ReadableDuration::secs(0),
@@ -254,6 +262,12 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             perf_level: PerfLevel::Disable,
+            region_compact_check_interval: ReadableDuration::minutes(5),
+            region_compact_check_step: 100,
+            region_compact_min_tombstones: 10000,
+            region_compact_tombstones_percent: 30,
+            lock_cf_compact_interval: ReadableDuration::minutes(10),
+            lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
         }
     }
 }

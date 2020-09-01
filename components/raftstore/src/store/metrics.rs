@@ -122,10 +122,8 @@ make_auto_flush_static_metric! {
         is_applying_snapshot,
     }
     pub label_enum RaftEventDurationType {
-        compact_check,
         pd_store_heartbeat,
         snap_gc,
-        compact_lock_cf,
         consistency_check,
         cleanup_import_sst,
     }

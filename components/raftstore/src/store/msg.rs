@@ -148,10 +148,8 @@ impl PeerTicks {
 
 #[derive(Debug, Clone, Copy)]
 pub enum StoreTick {
-    CompactCheck,
     PdStoreHeartbeat,
     SnapGc,
-    CompactLockCf,
     ConsistencyCheck,
     CleanupImportSST,
 }
@@ -160,10 +158,8 @@ impl StoreTick {
     #[inline]
     pub fn tag(self) -> RaftEventDurationType {
         match self {
-            StoreTick::CompactCheck => RaftEventDurationType::compact_check,
             StoreTick::PdStoreHeartbeat => RaftEventDurationType::pd_store_heartbeat,
             StoreTick::SnapGc => RaftEventDurationType::snap_gc,
-            StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
             StoreTick::CleanupImportSST => RaftEventDurationType::cleanup_import_sst,
         }

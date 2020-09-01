@@ -241,6 +241,8 @@ macro_rules! cf_config {
             pub enable_doubly_skiplist: bool,
             #[config(submodule)]
             pub titan: TitanCfConfig,
+            pub compact_check_sliding_window: usize,
+            pub compact_deletion_trigger: usize,
         }
 
         impl $name {
@@ -424,6 +426,10 @@ macro_rules! build_cf_opt {
         if $opt.enable_doubly_skiplist {
             cf_opts.set_doubly_skiplist();
         }
+        cf_opts.set_compact_on_deletion(
+            $opt.compact_check_sliding_window,
+            $opt.compact_deletion_trigger,
+        );
         cf_opts
     }};
 }
@@ -475,6 +481,8 @@ impl Default for DefaultCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             titan: TitanCfConfig::default(),
+            compact_check_sliding_window: 1000,
+            compact_deletion_trigger: 800,
         }
     }
 }
@@ -542,6 +550,8 @@ impl Default for WriteCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             titan,
+            compact_check_sliding_window: 1000,
+            compact_deletion_trigger: 600,
         }
     }
 }
@@ -617,6 +627,8 @@ impl Default for LockCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             titan,
+            compact_check_sliding_window: 1000,
+            compact_deletion_trigger: 500,
         }
     }
 }
@@ -681,6 +693,8 @@ impl Default for RaftCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             titan,
+            compact_check_sliding_window: 0,
+            compact_deletion_trigger: 0,
         }
     }
 }
@@ -745,6 +759,8 @@ impl Default for VersionCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             titan: TitanCfConfig::default(),
+            compact_check_sliding_window: 0,
+            compact_deletion_trigger: 0,
         }
     }
 }
@@ -1065,6 +1081,8 @@ impl Default for RaftDefaultCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             titan: TitanCfConfig::default(),
+            compact_check_sliding_window: 0,
+            compact_deletion_trigger: 0,
         }
     }
 }
