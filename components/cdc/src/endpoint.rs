@@ -892,7 +892,9 @@ impl Initializer {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
@@ -944,7 +946,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer<Task, ()> for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T> {
+    type TimeoutTask = ();
+
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         if self.min_resolved_ts != TimeStamp::max() {
@@ -1015,7 +1019,9 @@ mod tests {
         tx: Sender<T>,
     }
 
-    impl<T: Display> Runnable<T> for ReceiverRunnable<T> {
+    impl<T: Display> Runnable for ReceiverRunnable<T> {
+        type Task = T;
+
         fn run(&mut self, task: T) {
             self.tx.send(task).unwrap();
         }

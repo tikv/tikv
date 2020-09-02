@@ -630,12 +630,14 @@ where
     }
 }
 
-impl<EK, ER, R> Runnable<Task<EK::Snapshot>> for Runner<EK, ER, R>
+impl<EK, ER, R> Runnable for Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
+    type Task = Task<EK::Snapshot>;
+
     fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
             Task::Gen {
@@ -699,12 +701,14 @@ pub enum Event {
     CheckApply,
 }
 
-impl<EK, ER, R> RunnableWithTimer<Task<EK::Snapshot>, Event> for Runner<EK, ER, R>
+impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
+    type TimeoutTask = Event;
+
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
             Event::CheckApply => {
