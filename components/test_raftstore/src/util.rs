@@ -119,10 +119,16 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RocksEngine>, region: &
     );
 }
 
+lazy_static! {
+    static ref TEST_CONFIG: TiKvConfig = {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let common_test_cfg = manifest_dir.join("src/common-test.toml");
+        TiKvConfig::from_file(&common_test_cfg, None)
+    };
+}
+
 pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let common_test_cfg = manifest_dir.join("src/common-test.toml");
-    let mut cfg = TiKvConfig::from_file(&common_test_cfg, None);
+    let mut cfg = TEST_CONFIG.clone();
     cfg.server.cluster_id = cluster_id;
     cfg
 }

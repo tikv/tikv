@@ -523,6 +523,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
             StoreTick::CompactCheck => self.on_compact_check_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
+            StoreTick::RaftEnginePurge => self.on_raft_engine_purge_tick(),
         }
         let elapsed = t.elapsed();
         RAFT_EVENT_DURATION
@@ -583,6 +584,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
+        self.register_raft_engine_purge_tick();
     }
 }
 
@@ -1282,7 +1284,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let timer = region_runner.new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
 
-        let raftlog_gc_runner = RaftlogGcRunner::new(None);
+        let raftlog_gc_runner = RaftlogGcRunner::new(self.router());
         box_try!(workers.raftlog_gc_worker.start(raftlog_gc_runner));
 
         let compact_runner = CompactRunner::new(engines.kv.clone());
@@ -2356,6 +2358,20 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         state.set_status(status);
         drop(state);
         self.ctx.router.report_status_update()
+    }
+
+    fn register_raft_engine_purge_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::RaftEnginePurge,
+            self.ctx.cfg.raft_engine_purge_interval.0,
+        )
+    }
+
+    fn on_raft_engine_purge_tick(&self) {
+        let raft_engine = self.ctx.engines.raft.clone();
+        let scheduler = &self.ctx.raftlog_gc_scheduler;
+        let _ = scheduler.schedule(RaftlogGcTask::Purge { raft_engine });
+        self.register_raft_engine_purge_tick();
     }
 }
 
