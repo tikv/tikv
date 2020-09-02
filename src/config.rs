@@ -239,10 +239,10 @@ macro_rules! cf_config {
             pub prop_keys_index_distance: u64,
             #[config(skip)]
             pub enable_doubly_skiplist: bool,
-            #[config(submodule)]
-            pub titan: TitanCfConfig,
             pub compact_check_sliding_window: usize,
             pub compact_deletion_trigger: usize,
+            #[config(submodule)]
+            pub titan: TitanCfConfig,
         }
 
         impl $name {
