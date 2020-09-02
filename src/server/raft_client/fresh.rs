@@ -21,7 +21,7 @@ use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::{cmp, mem};
+use std::{cmp, mem, result};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future_pool::ThreadPool;
 use tikv_util::lru::LruCache;
@@ -35,6 +35,8 @@ const QUEUE_CAPACITY: usize = 4096;
 const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
+
+const _ON_RESOLVE_FP: &str = "";
 
 /// A quick queue for sending raft messages.
 struct Queue {
@@ -181,7 +183,6 @@ impl Buffer for BatchMessageBuffer {
             && (self.size + msg_size + GRPC_SEND_MSG_BUF >= self.cfg.max_grpc_send_msg_len as usize
                 || self.batch.get_msgs().len() >= RAFT_MSG_MAX_BATCH_SIZE)
         {
-            self.size += msg_size;
             self.overflowing = Some(msg);
             return;
         }
@@ -209,8 +210,9 @@ impl Buffer for BatchMessageBuffer {
                 Ok(false)
             }
             res => {
+                self.size = 0;
                 if let Some(more) = self.overflowing.take() {
-                    self.batch.mut_msgs().push(more);
+                    self.push(more);
                 }
                 res.map(|_| true)
             }
@@ -312,7 +314,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
             REPORT_FAILURE_MSG_COUNTER
                 .with_label_values(&["snapshot", &*store])
                 .inc();
-        };
+        }
 
         if let Err(e) =
             self.raft_router
@@ -327,6 +329,30 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
             );
         }
     }
+}
+
+fn report_unreachable<R>(router: &R, msg: &RaftMessage)
+where
+    R: RaftStoreRouter<RocksEngine>,
+{
+    let to_peer = msg.get_to_peer();
+    if msg.get_message().has_snapshot() {
+        let store = to_peer.store_id.to_string();
+        REPORT_FAILURE_MSG_COUNTER
+            .with_label_values(&["snapshot", &*store])
+            .inc();
+        let res = router.report_snapshot_status(msg.region_id, to_peer.id, SnapshotStatus::Failure);
+        if let Err(e) = res {
+            error!(
+                "reporting snapshot to peer fails";
+                "to_peer_id" => to_peer.id,
+                "to_store_id" => to_peer.store_id,
+                "region_id" => msg.region_id,
+                "err" => ?e
+            );
+        }
+    }
+    let _ = router.report_unreachable(msg.region_id, to_peer.id);
 }
 
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
@@ -402,11 +428,6 @@ where
     fn clean_up(&mut self, sink_err: &Option<grpcio::Error>, recv_err: &Option<grpcio::Error>) {
         error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.addr);
 
-        let router = &self.router;
-        self.buffer.clear(|msg| {
-            let _ = router.report_unreachable(msg.get_region_id(), msg.get_to_peer().get_id());
-        });
-
         if let Some(tx) = self.lifetime.take() {
             let should_fallback = [sink_err, recv_err]
                 .iter()
@@ -414,8 +435,11 @@ where
             if should_fallback {
                 // Asks backend to fallback.
                 let _ = tx.send(());
+                return;
             }
         }
+        let router = &self.router;
+        router.broadcast_unreachable(self.store_id);
     }
 }
 
@@ -507,9 +531,24 @@ where
 {
     fn resolve(&self) -> impl Future03<Output = server::Result<String>> {
         let (tx, rx) = futures03::channel::oneshot::channel();
+        let store_id = self.store_id;
         let res = self.builder.resolver.resolve(
-            self.store_id,
-            Box::new(move |addr| {
+            store_id,
+            Box::new(move |mut addr| {
+                {
+                    // Wrapping the fail point in a closure, so we can modify
+                    // local variables without return.
+                    let mut transport_on_resolve_fp = || {
+                        fail_point!(_ON_RESOLVE_FP, |sid| if let Some(sid) = sid {
+                            use std::mem;
+                            let sid: u64 = sid.parse().unwrap();
+                            if sid == store_id {
+                                mem::swap(&mut addr, &mut Err(box_err!("injected failure")));
+                            }
+                        })
+                    };
+                    transport_on_resolve_fp();
+                }
                 let _ = tx.send(addr);
             }),
         );
@@ -526,26 +565,7 @@ where
         let len = self.queue.len();
         for _ in 0..len {
             let msg = self.queue.pop().unwrap();
-            let region_id = msg.get_region_id();
-            let peer_id = msg.get_to_peer().get_id();
-            if msg.get_message().has_snapshot() {
-                let res = self.builder.router.report_snapshot_status(
-                    region_id,
-                    peer_id,
-                    SnapshotStatus::Failure,
-                );
-                if let Err(e) = res {
-                    error!(
-                        "reporting snapshot to peer fails";
-                        "to_peer_id" => peer_id,
-                        "to_store_id" => self.store_id,
-                        "region_id" => region_id,
-                        "err" => ?e
-                    );
-                }
-            } else {
-                let _ = self.builder.router.report_unreachable(region_id, peer_id);
-            }
+            report_unreachable(&self.builder.router, &msg)
         }
     }
 
@@ -660,6 +680,7 @@ async fn start<S, R>(
             Err(e) => {
                 RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
                 back_end.clear_pending_message();
+                error!("resolve store address failed"; "store_id" => back_end.store_id, "err" => ?e);
                 // TOMBSTONE
                 if format!("{}", e).contains("has been removed") {
                     let mut pool = pool.lock().unwrap();
@@ -684,10 +705,14 @@ async fn start<S, R>(
         }
         match res {
             Ok(()) => {
-                error!("connection fail"; "store_id" => back_end.store_id, "addr" => addr, "error" => "require fallback even with legacy API");
+                error!("connection fail"; "store_id" => back_end.store_id, "addr" => addr, "err" => "require fallback even with legacy API");
             }
             Err(_) => {
                 error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
+                if retry_times > 1 {
+                    // Clears pending messages to avoid consuming high memory when one node is shutdown.
+                    back_end.clear_pending_message();
+                }
                 back_end
                     .builder
                     .router
@@ -800,9 +825,29 @@ where
     /// If the message fails to be sent, false is returned. Returning true means the message is
     /// enqueued to buffer. Caller is expected to call `flush` to ensure all buffered messages
     /// are sent out.
-    pub fn send(&mut self, msg: RaftMessage) -> Option<DiscardReason> {
+    pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
         let conn_id = (msg.region_id % self.builder.cfg.grpc_raft_conn_num as u64) as usize;
+        let mut transport_on_send_store_fp = || {
+            fail_point!(
+                "transport_on_send_snapshot",
+                msg.get_message().get_msg_type() == raft::eraftpb::MessageType::MsgSnapshot,
+                |sid| if let Some(sid) = sid {
+                    let sid: u64 = sid.parse().unwrap();
+                    if sid == store_id {
+                        // Forbid building new connections.
+                        fail::cfg(_ON_RESOLVE_FP, &format!("1*return({})", sid)).unwrap();
+                        self.cache.remove(&(store_id, conn_id));
+                        self.pool
+                            .lock()
+                            .unwrap()
+                            .connections
+                            .remove(&(store_id, conn_id));
+                    }
+                }
+            )
+        };
+        transport_on_send_store_fp();
         loop {
             if let Some(s) = self.cache.get_mut(&(store_id, conn_id)) {
                 match s.queue.push(msg) {
@@ -811,23 +856,23 @@ where
                             s.dirty = true;
                             self.need_flush.push((store_id, conn_id));
                         }
-                        return None;
+                        return Ok(());
                     }
                     Err(DiscardReason::Full) => {
                         s.queue.notify();
                         s.dirty = false;
-                        return Some(DiscardReason::Full);
+                        return Err(DiscardReason::Full);
                     }
                     Err(DiscardReason::Disconnected) => break,
-                    Err(DiscardReason::Filtered) => return Some(DiscardReason::Filtered),
+                    Err(DiscardReason::Filtered) => return Err(DiscardReason::Filtered),
                 }
             }
             if !self.load_stream(store_id, conn_id) {
-                return Some(DiscardReason::Disconnected);
+                return Err(DiscardReason::Disconnected);
             }
         }
         self.cache.remove(&(store_id, conn_id));
-        Some(DiscardReason::Disconnected)
+        Err(DiscardReason::Disconnected)
     }
 
     /// Flushes all buffered messages.

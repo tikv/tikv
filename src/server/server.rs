@@ -262,55 +262,35 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::atomic::*;
+#[cfg(any(test, feature = "testexport"))]
+pub mod test_router {
     use std::sync::mpsc::*;
-    use std::sync::*;
-    use std::time::Duration;
 
     use super::*;
 
-    use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use super::super::{Config, Result};
-    use crate::config::CoprReadPoolConfig;
-    use crate::coprocessor::{self, readpool_impl};
-    use crate::storage::TestStorageBuilder;
-    use raftstore::store::transport::Transport;
     use raftstore::store::*;
     use raftstore::Result as RaftStoreResult;
 
-    use crate::storage::lock_manager::DummyLockManager;
     use engine_rocks::RocksSnapshot;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
-    use security::SecurityConfig;
     use txn_types::TxnExtra;
-
     #[derive(Clone)]
-    struct MockResolver {
-        quick_fail: Arc<AtomicBool>,
-        addr: Arc<Mutex<Option<String>>>,
-    }
-
-    impl StoreAddrResolver for MockResolver {
-        fn resolve(&self, _: u64, cb: ResolveCallback) -> Result<()> {
-            if self.quick_fail.load(Ordering::SeqCst) {
-                return Err(box_err!("quick fail"));
-            }
-            let addr = self.addr.lock().unwrap();
-            cb(addr
-                .as_ref()
-                .map(|s| s.to_owned())
-                .ok_or(box_err!("not set")));
-            Ok(())
-        }
-    }
-
-    #[derive(Clone)]
-    struct TestRaftStoreRouter {
+    pub struct TestRaftStoreRouter {
         tx: Sender<usize>,
         significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
+    }
+
+    impl TestRaftStoreRouter {
+        pub fn new(
+            tx: Sender<usize>,
+            significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
+        ) -> TestRaftStoreRouter {
+            TestRaftStoreRouter {
+                tx,
+                significant_msg_sender,
+            }
+        }
     }
 
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
@@ -356,6 +336,49 @@ mod tests {
             let _ = self.tx.send(1);
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::*;
+    use std::sync::*;
+    use std::time::Duration;
+
+    use super::*;
+
+    use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
+    use super::super::{Config, Result};
+    use crate::config::CoprReadPoolConfig;
+    use crate::coprocessor::{self, readpool_impl};
+    use crate::server::TestRaftStoreRouter;
+    use crate::storage::TestStorageBuilder;
+    use raftstore::store::transport::Transport;
+    use raftstore::store::*;
+
+    use crate::storage::lock_manager::DummyLockManager;
+    use engine_rocks::RocksSnapshot;
+    use kvproto::raft_serverpb::RaftMessage;
+    use security::SecurityConfig;
+
+    #[derive(Clone)]
+    struct MockResolver {
+        quick_fail: Arc<AtomicBool>,
+        addr: Arc<Mutex<Option<String>>>,
+    }
+
+    impl StoreAddrResolver for MockResolver {
+        fn resolve(&self, _: u64, cb: ResolveCallback) -> Result<()> {
+            if self.quick_fail.load(Ordering::SeqCst) {
+                return Err(box_err!("quick fail"));
+            }
+            let addr = self.addr.lock().unwrap();
+            cb(addr
+                .as_ref()
+                .map(|s| s.to_owned())
+                .ok_or(box_err!("not set")));
+            Ok(())
+        }
+    }
 
     fn is_unreachable_to(
         msg: &SignificantMsg<RocksSnapshot>,
@@ -392,10 +415,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
-        let router = TestRaftStoreRouter {
-            tx,
-            significant_msg_sender,
-        };
+        let router = TestRaftStoreRouter::new(tx, significant_msg_sender);
 
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(cfg);
@@ -440,7 +460,9 @@ mod tests {
         msg.set_region_id(1);
         trans.send(msg.clone()).unwrap();
         trans.flush();
-        resp = significant_msg_receiver.try_recv().unwrap();
+        resp = significant_msg_receiver
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
         assert!(is_unreachable_to(&resp, 1, 0), "{:?}", resp);
 
         *addr.lock().unwrap() = Some(format!("{}", server.listening_addr()));
@@ -454,7 +476,9 @@ mod tests {
         quick_fail.store(true, Ordering::SeqCst);
         trans.send(msg).unwrap();
         trans.flush();
-        resp = significant_msg_receiver.try_recv().unwrap();
+        resp = significant_msg_receiver
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
         assert!(is_unreachable_to(&resp, 2, 0), "{:?}", resp);
         server.stop().unwrap();
     }

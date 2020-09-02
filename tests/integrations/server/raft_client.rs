@@ -1,9 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
+use std::time::Duration;
 use std::{thread, time};
 
+use engine_rocks::RocksEngine;
 use futures::{Future, Stream};
 use grpcio::{
     ClientStreamingSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, Server,
@@ -11,25 +13,53 @@ use grpcio::{
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::BatchRaftMessage;
 use raft::eraftpb::Entry;
-use raftstore::router::RaftStoreBlackHole;
+use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter};
 use security::{SecurityConfig, SecurityManager};
-use tikv::server::{load_statistics::ThreadLoad, Config, RaftClient};
+use tikv::server::resolve::Callback;
+use tikv::server::{
+    self, load_statistics::ThreadLoad, Config, ConnectionBuilder, RaftClient, StoreAddrResolver,
+    TestRaftStoreRouter,
+};
+use tikv_util::worker::Worker;
 
 use super::{mock_kv_service, MockKv, MockKvService};
 
-pub fn get_raft_client(pool: &tokio_threadpool::ThreadPool) -> RaftClient<RaftStoreBlackHole> {
+#[derive(Clone)]
+pub struct StaticResolver {
+    port: u16,
+}
+
+impl StoreAddrResolver for StaticResolver {
+    fn resolve(&self, _store_id: u64, cb: Callback) -> server::Result<()> {
+        cb(Ok(format!("localhost:{}", self.port)));
+        Ok(())
+    }
+}
+
+pub fn get_raft_client_with_router<R>(
+    pool: &tokio_threadpool::ThreadPool,
+    router: R,
+    port: u16,
+) -> RaftClient<StaticResolver, R>
+where
+    R: RaftStoreRouter<RocksEngine> + 'static,
+{
     let env = Arc::new(Environment::new(2));
     let cfg = Arc::new(Config::default());
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(1000));
-    RaftClient::new(
-        env,
-        cfg,
-        security_mgr,
-        RaftStoreBlackHole,
-        grpc_thread_load,
-        Some(pool.sender().clone()),
-    )
+    let resolver = StaticResolver { port };
+    let worker = Worker::new("test-raftclient");
+    let builder =
+        ConnectionBuilder::new(env, cfg, security_mgr, resolver, router, worker.scheduler());
+    RaftClient::new(builder)
+}
+
+pub fn get_raft_client(
+    pool: &tokio_threadpool::ThreadPool,
+    port: u16,
+) -> RaftClient<StaticResolver, RaftStoreBlackHole> {
+    get_raft_client_with_router(pool, RaftStoreBlackHole, port)
 }
 
 #[derive(Clone)]
@@ -98,17 +128,15 @@ impl MockKvService for MockKvForRaft {
 
 #[test]
 fn test_batch_raft_fallback() {
-    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
-    let mut raft_client = get_raft_client(&pool);
-
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), false);
     let (mock_server, port) = create_mock_server(service, 60000, 60100).unwrap();
 
-    let addr = format!("localhost:{}", port);
+    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
+    let mut raft_client = get_raft_client(&pool, port);
     (0..100).for_each(|_| {
-        raft_client.send(1, &addr, RaftMessage::default()).unwrap();
+        raft_client.send(RaftMessage::default()).unwrap();
         thread::sleep(time::Duration::from_millis(10));
         raft_client.flush();
     });
@@ -122,37 +150,39 @@ fn test_batch_raft_fallback() {
 #[test]
 // Test raft_client auto reconnect to servers after connection break.
 fn test_raft_client_reconnect() {
-    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
-    let mut raft_client = get_raft_client(&pool);
-
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
     let (mock_server, port) = create_mock_server(service, 60100, 60200).unwrap();
 
-    // `send` should success.
-    let addr = format!("localhost:{}", port);
-    (0..50).for_each(|_| raft_client.send(1, &addr, RaftMessage::default()).unwrap());
+    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
+    let (tx, rx) = mpsc::channel();
+    let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
+    let router = TestRaftStoreRouter::new(tx, significant_msg_sender);
+    let mut raft_client = get_raft_client_with_router(&pool, router, port);
+    (0..50).for_each(|_| raft_client.send(RaftMessage::default()).unwrap());
     raft_client.flush();
 
     check_msg_count(500, &msg_count, 50);
 
-    // `send` should fail after the mock server stopped.
+    // `send` should be pending after the mock server stopped.
     drop(mock_server);
 
-    let send = |_| {
-        thread::sleep(time::Duration::from_millis(10));
-        raft_client.send(1, &addr, RaftMessage::default())
-    };
-    assert!((0..100).map(send).collect::<Result<(), _>>().is_err());
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+
+    for _ in 0..100 {
+        raft_client.send(RaftMessage::default()).unwrap();
+    }
+    raft_client.flush();
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     // `send` should success after the mock server restarted.
     let service = MockKvForRaft::new(Arc::clone(&msg_count), batch_msg_count, true);
     let mock_server = create_mock_server_on(service, port);
-    (0..50).for_each(|_| raft_client.send(1, &addr, RaftMessage::default()).unwrap());
+    (0..50).for_each(|_| raft_client.send(RaftMessage::default()).unwrap());
     raft_client.flush();
 
-    check_msg_count(500, &msg_count, 100);
+    check_msg_count(1000, &msg_count, 100);
 
     drop(mock_server);
     pool.shutdown().wait().unwrap();
@@ -160,15 +190,13 @@ fn test_raft_client_reconnect() {
 
 #[test]
 fn test_batch_size_limit() {
-    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
-    let mut raft_client = get_raft_client(&pool);
-
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
     let (mock_server, port) = create_mock_server(service, 60200, 60300).unwrap();
 
-    let addr = format!("localhost:{}", port);
+    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
+    let mut raft_client = get_raft_client(&pool, port);
 
     // `send` should success.
     for _ in 0..10 {
@@ -179,7 +207,7 @@ fn test_batch_size_limit() {
             e.set_data(vec![b'a'; 1024]);
             raft_m.mut_message().mut_entries().push(e);
         }
-        raft_client.send(1, &addr, raft_m).unwrap();
+        raft_client.send(raft_m).unwrap();
     }
     raft_client.flush();
 
@@ -226,7 +254,7 @@ fn check_msg_count(max_delay_ms: u64, count: &AtomicUsize, expected: usize) {
     let mut got = 0;
     for _delay_ms in 0..max_delay_ms / 10 {
         got = count.load(Ordering::SeqCst);
-        if got == expected {
+        if got >= expected {
             return;
         }
         thread::sleep(time::Duration::from_millis(10));

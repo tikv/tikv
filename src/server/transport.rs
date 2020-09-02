@@ -44,8 +44,8 @@ where
 {
     fn send(&mut self, msg: RaftMessage) -> RaftStoreResult<()> {
         match self.raft_client.send(msg) {
-            None => Ok(()),
-            Some(reason) => Err(raftstore::Error::Transport(reason)),
+            Ok(()) => Ok(()),
+            Err(reason) => Err(raftstore::Error::Transport(reason)),
         }
     }
 
