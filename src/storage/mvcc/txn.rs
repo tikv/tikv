@@ -2786,7 +2786,12 @@ mod tests {
             if check_old_value {
                 let extra = txn.take_extra();
                 let ts_key = key.clone().append_ts(start_ts.into());
-                assert!(extra.old_values.get(&ts_key).is_some(), "{}", start_ts);
+                assert!(
+                    extra.old_values.get(&ts_key).is_some(),
+                    "{}@{}",
+                    ts_key,
+                    start_ts
+                );
                 assert_eq!(extra.old_values[&ts_key], (old_value, mutation_type));
             }
             write(WriteData::from_modifies(txn.into_modifies()));
