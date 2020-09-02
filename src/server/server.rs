@@ -269,26 +269,27 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::*;
-    use std::sync::mpsc::*;
+    use std::sync::mpsc::Sender;
     use std::sync::*;
     use std::time::Duration;
 
-    use super::*;
-
-    use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use super::super::{Config, Result};
-    use crate::config::CoprReadPoolConfig;
-    use crate::coprocessor::{self, readpool_impl};
-    use crate::storage::TestStorageBuilder;
-    use raftstore::store::transport::Transport;
-    use raftstore::store::*;
-    use raftstore::Result as RaftStoreResult;
-
-    use crate::storage::lock_manager::DummyLockManager;
+    use crossbeam::channel::TrySendError;
     use engine_rocks::RocksSnapshot;
+    use engine_traits::{KvEngine, Snapshot};
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
+    use raftstore::store::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
+    use raftstore::store::*;
+    use raftstore::Result as RaftStoreResult;
     use security::SecurityConfig;
+
+    use super::*;
+    use crate::config::CoprReadPoolConfig;
+    use crate::coprocessor::{self, readpool_impl};
+    use crate::server::resolve::{Callback as ResolveCallback, StoreAddrResolver};
+    use crate::server::{Config, Result};
+    use crate::storage::lock_manager::DummyLockManager;
+    use crate::storage::TestStorageBuilder;
 
     #[derive(Clone)]
     struct MockResolver {
@@ -316,17 +317,26 @@ mod tests {
         significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
     }
 
-    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
+    impl StoreRouter for TestRaftStoreRouter {
+        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
             Ok(())
         }
+    }
 
-        fn send_command(
-            &self,
-            _: RaftCmdRequest,
-            _: Callback<RocksSnapshot>,
-        ) -> RaftStoreResult<()> {
+    impl<S: Snapshot> ProposalRouter<S> for TestRaftStoreRouter {
+        fn send(&self, _: RaftCommand<S>) -> std::result::Result<(), TrySendError<RaftCommand<S>>> {
+            Ok(())
+        }
+    }
+
+    impl<EK: KvEngine> CasualRouter<EK> for TestRaftStoreRouter {
+        fn send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
+            Ok(())
+        }
+    }
+
+    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
+        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
@@ -340,7 +350,21 @@ mod tests {
             Ok(())
         }
 
-        fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
+        fn send_casual_msg(&self, _: u64, _: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
+            self.tx.send(1).unwrap();
+            Ok(())
+        }
+
+        fn send_store_msg(&self, _: StoreMsg) -> RaftStoreResult<()> {
+            self.tx.send(1).unwrap();
+            Ok(())
+        }
+
+        fn send_command(
+            &self,
+            _: RaftCmdRequest,
+            _: Callback<RocksSnapshot>,
+        ) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }

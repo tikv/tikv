@@ -153,6 +153,7 @@ pub enum StoreTick {
     CompactLockCf,
     ConsistencyCheck,
     CleanupImportSST,
+    RaftEnginePurge,
 }
 
 impl StoreTick {
@@ -165,6 +166,7 @@ impl StoreTick {
             StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
             StoreTick::CleanupImportSST => RaftEventDurationType::cleanup_import_sst,
+            StoreTick::RaftEnginePurge => RaftEventDurationType::raft_engine_purge,
         }
     }
 }
@@ -274,6 +276,10 @@ pub enum CasualMessage<EK: KvEngine> {
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
 
+    /// Generally Raft leader keeps as more as possible logs for followers,
+    /// however `ForceCompactRaftLogs` only cares the leader itself.
+    ForceCompactRaftLogs,
+
     /// A message to access peer's internal state.
     AccessPeer(Box<dyn FnOnce(&mut dyn AbstractPeer) + Send + 'static>),
 }
@@ -318,6 +324,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
+            CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
         }
     }
