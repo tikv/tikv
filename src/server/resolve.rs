@@ -52,7 +52,7 @@ where
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
     state: Arc<Mutex<GlobalReplicationState>>,
-    router: Option<RR>,
+    router: RR,
 }
 
 impl<T, RR> Runner<T, RR>
@@ -94,8 +94,8 @@ where
             state.group.backup_store_labels(&mut s);
         }
         drop(state);
-        if let (Some(group_id), Some(router)) = (group_id, &self.router) {
-            router.report_resolved(store_id, group_id);
+        if let Some(group_id) = group_id {
+            self.router.report_resolved(store_id, group_id);
         }
         if s.get_state() == metapb::StoreState::Tombstone {
             RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
@@ -155,7 +155,7 @@ where
         pd_client,
         store_addrs: HashMap::default(),
         state: state.clone(),
-        router: Some(router),
+        router,
     };
     box_try!(worker.start(runner));
     let resolver = PdStoreAddrResolver::new(worker.scheduler());
@@ -182,6 +182,7 @@ mod tests {
 
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
+    use raftstore::router::RaftStoreBlackHole;
     use tikv_util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
@@ -210,7 +211,7 @@ mod tests {
         store
     }
 
-    fn new_runner(store: metapb::Store) -> Runner<MockPdClient> {
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RaftStoreBlackHole> {
         let client = MockPdClient {
             start: Instant::now(),
             store,
@@ -219,7 +220,7 @@ mod tests {
             pd_client: Arc::new(client),
             store_addrs: HashMap::default(),
             state: Default::default(),
-            router: None,
+            router: RaftStoreBlackHole,
         }
     }
 

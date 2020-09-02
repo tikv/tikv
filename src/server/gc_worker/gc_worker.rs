@@ -132,7 +132,7 @@ where
 {
     engine: E,
 
-    raft_store_router: Option<RR>,
+    raft_store_router: RR,
 
     /// Used to limit the write flow of GC.
     limiter: Limiter,
@@ -150,7 +150,7 @@ where
 {
     pub fn new(
         engine: E,
-        raft_store_router: Option<RR>,
+        raft_store_router: RR,
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
     ) -> Self {
@@ -312,16 +312,15 @@ where
                 .delete_files_in_range_cf(cf, &start_data_key, &end_data_key, false)
                 .map_err(|e| {
                     let e: Error = box_err!(e);
-                    warn!(
-                        "unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e
-                    );
+                    warn!("unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e);
                     e
                 })?;
         }
 
         info!(
             "unsafe destroy range finished deleting files in range";
-            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?delete_files_start_time.elapsed()
+            "start_key" => %start_key, "end_key" => %end_key,
+            "cost_time" => ?delete_files_start_time.elapsed(),
         );
 
         // Then, delete all remaining keys in the range.
@@ -332,31 +331,22 @@ where
                 .delete_all_in_range_cf(cf, &start_data_key, &end_data_key, false)
                 .map_err(|e| {
                     let e: Error = box_err!(e);
-                    warn!(
-                        "unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e
-                    );
+                    warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);
                     e
                 })?;
         }
 
         let cleanup_all_time_cost = cleanup_all_start_time.elapsed();
 
-        if let Some(router) = self.raft_store_router.as_ref() {
-            router
-                .send_store_msg(StoreMsg::ClearRegionSizeInRange {
-                    start_key: start_key.as_encoded().to_vec(),
-                    end_key: end_key.as_encoded().to_vec(),
-                })
-                .unwrap_or_else(|e| {
-                    // Warn and ignore it.
-                    warn!(
-                        "unsafe destroy range: failed sending ClearRegionSizeInRange";
-                        "err" => ?e
-                    );
-                });
-        } else {
-            warn!("unsafe destroy range: can't clear region size information: raft_store_router not set");
-        }
+        self.raft_store_router
+            .send_store_msg(StoreMsg::ClearRegionSizeInRange {
+                start_key: start_key.as_encoded().to_vec(),
+                end_key: end_key.as_encoded().to_vec(),
+            })
+            .unwrap_or_else(|e| {
+                // Warn and ignore it.
+                warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
+            });
 
         info!(
             "unsafe destroy range finished cleaning up all";
@@ -547,7 +537,7 @@ where
     engine: E,
 
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
-    raft_store_router: Option<RR>,
+    raft_store_router: RR,
 
     config_manager: GcWorkerConfigManager,
 
@@ -617,7 +607,7 @@ where
 {
     pub fn new(
         engine: E,
-        raft_store_router: Option<RR>,
+        raft_store_router: RR,
         cfg: GcConfig,
         cluster_version: ClusterVersion,
     ) -> GcWorker<E, RR> {
@@ -665,7 +655,7 @@ where
     pub fn start(&mut self) -> Result<()> {
         let runner = GcRunner::new(
             self.engine.clone(),
-            self.raft_store_router.take(),
+            self.raft_store_router.clone(),
             self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.config_manager.value().clone(),
         );
@@ -832,6 +822,7 @@ mod tests {
     use futures::Future;
     use futures03::executor::block_on;
     use kvproto::{kvrpcpb::Op, metapb};
+    use raftstore::router::RaftStoreBlackHole;
     use raftstore::store::RegionSnapshot;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::future::paired_future_callback;
@@ -991,7 +982,7 @@ mod tests {
                 .unwrap();
         let mut gc_worker = GcWorker::new(
             engine,
-            None,
+            RaftStoreBlackHole,
             GcConfig::default(),
             ClusterVersion::new(semver::Version::new(5, 0, 0)),
         );
@@ -1156,7 +1147,7 @@ mod tests {
         .unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
-            None,
+            RaftStoreBlackHole,
             GcConfig::default(),
             ClusterVersion::default(),
         );

@@ -478,7 +478,7 @@ impl TiKVServer {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
-            Some(self.router.clone()),
+            self.router.clone(),
             self.config.gc.clone(),
             self.pd_client.cluster_version(),
         );

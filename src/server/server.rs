@@ -279,6 +279,7 @@ mod tests {
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::store::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
+    use raftstore::store::PeerMsg;
     use raftstore::store::*;
     use raftstore::Result as RaftStoreResult;
     use security::SecurityConfig;
@@ -351,6 +352,8 @@ mod tests {
             Ok(())
         }
 
+        fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
+
         fn send_casual_msg(&self, _: u64, _: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
@@ -401,8 +404,8 @@ mod tests {
         }
     }
 
-    #[test]
     // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
+    #[test]
     fn test_peer_resolve() {
         let mut cfg = Config::default();
         cfg.addr = "127.0.0.1:0".to_owned();
@@ -410,13 +413,6 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
-        let mut gc_worker = GcWorker::new(
-            storage.get_engine(),
-            None,
-            Default::default(),
-            Default::default(),
-        );
-        gc_worker.start().unwrap();
 
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
@@ -424,6 +420,14 @@ mod tests {
             tx,
             significant_msg_sender,
         };
+
+        let mut gc_worker = GcWorker::new(
+            storage.get_engine(),
+            router.clone(),
+            Default::default(),
+            Default::default(),
+        );
+        gc_worker.start().unwrap();
 
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(cfg);
