@@ -14,7 +14,7 @@ use futures::executor::block_on;
 use futures::future::TryFutureExt;
 use tokio::task::spawn_local;
 
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, RaftEngine};
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
@@ -22,7 +22,6 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
-use raft_engine::RaftEngine;
 
 use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::cmd_resp::new_error;

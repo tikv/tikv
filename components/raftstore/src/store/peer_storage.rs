@@ -24,8 +24,8 @@ use crate::store::fsm::GenSnapTask;
 use crate::store::util;
 use crate::store::ProposalContext;
 use crate::{Error, Result};
+use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
-use raft_engine::{RaftEngine, RaftLogBatch};
 use tikv_util::worker::Scheduler;
 
 use super::metrics::*;

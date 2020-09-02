@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{Engines, KvEngine, Snapshot, WriteOptions};
+use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteOptions};
 use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -29,7 +29,6 @@ use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
-use raft_engine::RaftEngine;
 use smallvec::SmallVec;
 use time::Timespec;
 use txn_types::TxnExtra;

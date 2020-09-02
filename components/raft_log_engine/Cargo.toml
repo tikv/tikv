@@ -1,7 +1,6 @@
 [package]
-name = "engine_rocks"
+name = "raft_log_engine"
 version = "0.0.1"
-edition = "2018"
 publish = false
 
 [features]
@@ -11,18 +10,19 @@ protobuf-codec = [
   "raft/protobuf-codec",
   "kvproto/protobuf-codec",
 ]
+
 prost-codec = [
   "keys/prost-codec",
   "txn_types/prost-codec",
   "raft/prost-codec",
   "kvproto/prost-codec",
 ]
+
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 
 [dependencies]
-encryption = { path = "../encryption" }
 engine_traits = { path = "../engine_traits" }
 hex = "0.4"
 keys = { path = "../keys" }
@@ -52,6 +52,10 @@ features = ["encryption", "static_libcpp"]
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
 rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6"
+
+[dependencies.raft-engine]
+git = "https://github.com/Little-Wallace/raft-engine.git"
+branch = "no-raft"
 
 [dev-dependencies]
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }

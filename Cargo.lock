@@ -1079,7 +1079,6 @@ dependencies = [
  "prometheus-static-metric",
  "protobuf",
  "raft",
- "raft-engine",
  "rand",
  "rocksdb",
  "serde",
@@ -1100,9 +1099,10 @@ version = "0.0.1"
 dependencies = [
  "error_code",
  "hex 0.4.2",
+ "kvproto",
  "protobuf",
  "quick-error",
- "raft-engine",
+ "raft",
  "slog",
  "slog-global",
  "tikv_alloc",
@@ -3044,14 +3044,13 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine#16f8a37c88d758131740f492a1626f6016dfaafd"
+source = "git+https://github.com/Little-Wallace/raft-engine.git?branch=no-raft#4e31115f13949319ea224f2a73cebfda086e2851"
 dependencies = [
  "byteorder",
  "crc32fast",
  "crossbeam",
  "errno",
  "fxhash",
- "kvproto",
  "lazy_static",
  "libc",
  "log",
@@ -3060,7 +3059,6 @@ dependencies = [
  "prometheus",
  "protobuf",
  "quick-error",
- "raft",
  "serde",
  "serde_derive",
  "tempfile",
@@ -3076,6 +3074,37 @@ dependencies = [
  "prost",
  "protobuf",
  "protobuf-build",
+]
+
+[[package]]
+name = "raft_log_engine"
+version = "0.0.1"
+dependencies = [
+ "coarsetime",
+ "configuration",
+ "engine_traits",
+ "hex 0.4.2",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "num_cpus",
+ "prometheus",
+ "prometheus-static-metric",
+ "protobuf",
+ "raft",
+ "raft-engine",
+ "rand",
+ "rocksdb",
+ "serde",
+ "serde_derive",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "tikv_alloc",
+ "tikv_util",
+ "time 0.1.42",
+ "toml",
+ "txn_types",
 ]
 
 [[package]]
@@ -3114,7 +3143,6 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
- "raft-engine",
  "rand",
  "serde",
  "serde_derive",
@@ -4686,6 +4714,7 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
+ "raft_log_engine",
  "raftstore",
  "rand",
  "regex",

@@ -330,6 +330,7 @@ pub mod metrics_flusher;
 pub use crate::metrics_flusher::*;
 pub mod compaction_job;
 pub mod util;
+pub use crate::engine::{RaftEngine, RaftLogBatch};
 pub use compaction_job::*;
 
 // FIXME: This should live somewhere else

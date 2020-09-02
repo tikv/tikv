@@ -6,8 +6,7 @@ use std::marker::PhantomData;
 use std::sync::mpsc::Sender;
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine_traits::KvEngine;
-use raft_engine::RaftEngine;
+use engine_traits::{KvEngine, RaftEngine};
 use tikv_util::worker::Runnable;
 
 pub enum Task<ER: RaftEngine> {
