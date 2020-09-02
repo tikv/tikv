@@ -105,6 +105,15 @@ impl LockTable {
         None
     }
 
+    /// Iterates all handles and call a specified function on each of them.
+    pub fn for_each(&self, mut f: impl FnMut(Arc<KeyHandle>)) {
+        for (_, handle) in self.0.lock().iter() {
+            if let Some(handle) = handle.upgrade() {
+                f(handle);
+            }
+        }
+    }
+
     /// Removes the key and its key handle from the map.
     pub fn remove(&self, key: &Key) {
         self.0.lock().remove(key);
@@ -243,5 +252,61 @@ mod test {
             lock_table.check_range(None, None, |_, l| ts_check(l, 15)),
             Err(lock_l)
         );
+    }
+
+    #[tokio::test]
+    async fn test_lock_table_for_each() {
+        let lock_table: LockTable = LockTable::default();
+
+        let mut found_locks = Vec::new();
+        let mut expect_locks = Vec::new();
+
+        let collect = |h: Arc<KeyHandle>, to: &mut Vec<_>| {
+            let lock = h.with_lock(|l| l.clone());
+            to.push((h.key.clone(), lock));
+        };
+
+        lock_table.for_each(|h| collect(h, &mut found_locks));
+        assert!(found_locks.is_empty());
+
+        let lock_a = Lock::new(
+            LockType::Lock,
+            b"a".to_vec(),
+            20.into(),
+            100,
+            None,
+            20.into(),
+            1,
+            20.into(),
+        );
+        let guard_a = lock_table.lock_key(&Key::from_raw(b"a")).await;
+        guard_a.with_lock(|l| {
+            *l = Some(lock_a.clone());
+        });
+        expect_locks.push((Key::from_raw(b"a"), Some(lock_a.clone())));
+
+        lock_table.for_each(|h| collect(h, &mut found_locks));
+        assert_eq!(found_locks, expect_locks);
+        found_locks.clear();
+
+        let lock_b = Lock::new(
+            LockType::Lock,
+            b"b".to_vec(),
+            30.into(),
+            120,
+            None,
+            30.into(),
+            2,
+            30.into(),
+        )
+        .use_async_commit(vec![b"c".to_vec()]);
+        let guard_b = lock_table.lock_key(&Key::from_raw(b"b")).await;
+        guard_b.with_lock(|l| {
+            *l = Some(lock_b.clone());
+        });
+        expect_locks.push((Key::from_raw(b"b"), Some(lock_b.clone())));
+
+        lock_table.for_each(|h| collect(h, &mut found_locks));
+        assert_eq!(found_locks, expect_locks);
     }
 }

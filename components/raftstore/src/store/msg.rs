@@ -154,6 +154,7 @@ pub enum StoreTick {
     CompactLockCf,
     ConsistencyCheck,
     CleanupImportSST,
+    RaftEnginePurge,
 }
 
 impl StoreTick {
@@ -166,6 +167,7 @@ impl StoreTick {
             StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
             StoreTick::CleanupImportSST => RaftEventDurationType::cleanup_import_sst,
+            StoreTick::RaftEnginePurge => RaftEventDurationType::raft_engine_purge,
         }
     }
 }
@@ -243,6 +245,7 @@ pub enum CasualMessage<EK: KvEngine> {
     /// Hash result of ComputeHash command.
     ComputeHashResult {
         index: u64,
+        context: Vec<u8>,
         hash: Vec<u8>,
     },
 
@@ -274,6 +277,10 @@ pub enum CasualMessage<EK: KvEngine> {
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
 
+    /// Generally Raft leader keeps as more as possible logs for followers,
+    /// however `ForceCompactRaftLogs` only cares the leader itself.
+    ForceCompactRaftLogs,
+
     /// A message to access peer's internal state.
     AccessPeer(Box<dyn FnOnce(&mut dyn AbstractPeer) + Send + 'static>),
 }
@@ -281,10 +288,15 @@ pub enum CasualMessage<EK: KvEngine> {
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CasualMessage::ComputeHashResult { index, ref hash } => write!(
-                fmt,
-                "ComputeHashResult [index: {}, hash: {}]",
+            CasualMessage::ComputeHashResult {
                 index,
+                context,
+                ref hash,
+            } => write!(
+                fmt,
+                "ComputeHashResult [index: {}, context: {}, hash: {}]",
+                index,
+                hex::encode_upper(&context),
                 escape(hash)
             ),
             CasualMessage::SplitRegion { ref split_keys, .. } => write!(
@@ -313,6 +325,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
+            CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
         }
     }
