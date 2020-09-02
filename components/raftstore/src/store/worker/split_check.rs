@@ -321,11 +321,13 @@ where
     }
 }
 
-impl<E, S> Runnable<Task> for Runner<E, S>
+impl<E, S> Runnable for Runner<E, S>
 where
     E: KvEngine,
     S: CasualRouter<E>,
 {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::SplitCheckTask {
