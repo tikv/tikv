@@ -32,8 +32,12 @@ use raft::{Ready, StateRole};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
+<<<<<<< HEAD
 use tikv_util::{escape, is_zero_duration};
 use txn_types::TxnExtra;
+=======
+use tikv_util::{escape, is_zero_duration, Either};
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
@@ -109,8 +113,12 @@ pub struct BatchRaftCmdRequestBuilder {
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
+<<<<<<< HEAD
     callbacks: Vec<(Callback<RocksEngine>, usize)>,
     txn_extra: TxnExtra,
+=======
+    callbacks: Vec<(Callback<E::Snapshot>, usize)>,
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 }
 
 impl<E: KvEngine> Drop for PeerFsm<E> {
@@ -259,7 +267,6 @@ impl BatchRaftCmdRequestBuilder {
             request: None,
             batch_req_size: 0,
             callbacks: vec![],
-            txn_extra: TxnExtra::default(),
         }
     }
 
@@ -292,7 +299,6 @@ impl BatchRaftCmdRequestBuilder {
         let RaftCommand {
             mut request,
             callback,
-            mut txn_extra,
             ..
         } = cmd;
         if let Some(batch_req) = self.request.as_mut() {
@@ -305,7 +311,6 @@ impl BatchRaftCmdRequestBuilder {
         };
         self.callbacks.push((callback, req_num));
         self.batch_req_size += req_size;
-        self.txn_extra.extend(&mut txn_extra);
     }
 
     fn should_finish(&self) -> bool {
@@ -327,11 +332,7 @@ impl BatchRaftCmdRequestBuilder {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
                 let (cb, _) = self.callbacks.pop().unwrap();
-                return Some(RaftCommand::with_txn_extra(
-                    req,
-                    cb,
-                    std::mem::take(&mut self.txn_extra),
-                ));
+                return Some(RaftCommand::new(req, cb));
             }
             metric.batch += self.callbacks.len() - 1;
             let cbs = std::mem::replace(&mut self.callbacks, vec![]);
@@ -351,11 +352,7 @@ impl BatchRaftCmdRequestBuilder {
                     last_index = next_index;
                 }
             }));
-            return Some(RaftCommand::with_txn_extra(
-                req,
-                cb,
-                std::mem::take(&mut self.txn_extra),
-            ));
+            return Some(RaftCommand::new(req, cb));
         }
         None
     }
@@ -429,7 +426,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         }
                     } else {
                         self.propose_batch_raft_command();
-                        self.propose_raft_command(cmd.request, cmd.callback, cmd.txn_extra)
+                        self.propose_raft_command(cmd.request, cmd.callback)
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -457,7 +454,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .batch_req_builder
             .build(&mut self.ctx.raft_metrics.propose)
         {
-            self.propose_raft_command(cmd.request, cmd.callback, cmd.txn_extra)
+            self.propose_raft_command(cmd.request, cmd.callback)
         }
     }
 
@@ -674,7 +671,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     },
                 )
             })),
-            TxnExtra::default(),
         );
     }
 
@@ -753,7 +749,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.region().get_region_epoch().clone(),
             self.fsm.peer.peer.clone(),
         );
-        self.propose_raft_command(msg, cb, TxnExtra::default());
+        self.propose_raft_command(msg, cb);
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {
@@ -2107,7 +2103,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             request.set_admin_request(admin);
             request
         };
-        self.propose_raft_command(req, Callback::None, TxnExtra::default());
+        self.propose_raft_command(req, Callback::None);
     }
 
     fn on_check_merge(&mut self) {
@@ -2631,12 +2627,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
+<<<<<<< HEAD
     fn propose_raft_command(
         &mut self,
         mut msg: RaftCmdRequest,
         cb: Callback<RocksEngine>,
         txn_extra: TxnExtra,
     ) {
+=======
+    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<EK::Snapshot>) {
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -2681,7 +2681,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        if self.fsm.peer.propose(self.ctx, cb, msg, resp, txn_extra) {
+        if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
             self.fsm.has_ready = true;
         }
 
@@ -2812,9 +2812,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         // Create a compact log request and notify directly.
         let region_id = self.fsm.peer.region().get_id();
+<<<<<<< HEAD
         let request =
             new_compact_log_request(region_id, self.fsm.peer.peer.clone(), compact_idx, term);
         self.propose_raft_command(request, Callback::None, TxnExtra::default());
+=======
+        let peer = self.fsm.peer.peer.clone();
+        let term = self.fsm.peer.get_index_term(compact_idx);
+        let request = new_compact_log_request(region_id, peer, compact_idx, term);
+        self.propose_raft_command(request, Callback::None);
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 
         self.register_raft_gc_log_tick();
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
@@ -3180,7 +3187,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.fsm.peer.peer.clone(),
             &self.fsm.peer.consistency_state,
         );
-        self.propose_raft_command(req, Callback::None, TxnExtra::default());
+        self.propose_raft_command(req, Callback::None);
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SstMeta>) {

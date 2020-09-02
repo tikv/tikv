@@ -513,3 +513,4 @@ pipelined = true
 
 [cdc]
 min-ts-interval = "4s"
+old-value-cache-size = 512

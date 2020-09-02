@@ -27,7 +27,12 @@ use tikv::storage::kv::{
     Callback as EngineCallback, CbContext, Modify, Result as EngineResult, WriteData,
 };
 use tikv::storage::Engine;
+<<<<<<< HEAD
 use txn_types::{Key, TxnExtra};
+=======
+use tikv_util::time::ThreadReadId;
+use txn_types::Key;
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 
 #[derive(Clone)]
 struct SyncBenchRouter {
@@ -77,6 +82,7 @@ impl RaftStoreRouter for SyncBenchRouter {
         Ok(())
     }
 
+<<<<<<< HEAD
     fn send_command_txn_extra(
         &self,
         req: RaftCmdRequest,
@@ -84,6 +90,10 @@ impl RaftStoreRouter for SyncBenchRouter {
         cb: Callback<RocksEngine>,
     ) -> Result<()> {
         self.invoke(RaftCommand::with_txn_extra(req, cb, txn_extra));
+=======
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) -> Result<()> {
+        self.invoke(RaftCommand::new(req, cb));
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
         Ok(())
     }
 

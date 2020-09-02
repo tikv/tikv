@@ -277,6 +277,19 @@ mod tests {
     use std::sync::*;
     use std::time::Duration;
 
+<<<<<<< HEAD
+=======
+    use crossbeam::channel::TrySendError;
+    use engine_rocks::RocksSnapshot;
+    use engine_traits::{KvEngine, Snapshot};
+    use kvproto::raft_cmdpb::RaftCmdRequest;
+    use kvproto::raft_serverpb::RaftMessage;
+    use raftstore::store::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
+    use raftstore::store::*;
+    use raftstore::Result as RaftStoreResult;
+    use security::SecurityConfig;
+
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
     use super::*;
 
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
@@ -341,6 +354,7 @@ mod tests {
             Ok(())
         }
 
+<<<<<<< HEAD
         fn significant_send(&self, _: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
             self.significant_msg_sender.send(msg).unwrap();
             Ok(())
@@ -351,6 +365,8 @@ mod tests {
             Ok(())
         }
 
+=======
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
         fn broadcast_unreachable(&self, _: u64) {
             let _ = self.tx.send(1);
         }

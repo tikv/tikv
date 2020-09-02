@@ -18,7 +18,7 @@ mod metrics;
 mod observer;
 mod service;
 
-pub use endpoint::{Endpoint, Task};
+pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task};
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;
 pub use service::Service;

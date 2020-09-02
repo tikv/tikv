@@ -1150,4 +1150,186 @@ mod tests {
             false, false, false, true, false, false, true, true, false, false,
         ]);
     }
+<<<<<<< HEAD:components/tidb_query/src/batch/executors/table_scan_executor.rs
+=======
+
+    #[derive(Copy, Clone)]
+    struct Column {
+        is_primary_column: bool,
+        has_column_info: bool,
+    }
+
+    fn test_common_handle_impl(columns: &[Column]) {
+        const TABLE_ID: i64 = 2333;
+
+        // Prepare some table meta data
+        let mut columns_info = vec![];
+        let mut schema = vec![];
+        let mut handle = vec![];
+        let mut primary_column_ids = vec![];
+        let mut missed_columns_info = vec![];
+        let column_ids = (0..columns.len() as i64).collect::<Vec<_>>();
+        let mut row = vec![];
+
+        for (i, &column) in columns.iter().enumerate() {
+            let Column {
+                is_primary_column,
+                has_column_info,
+            } = column;
+
+            if has_column_info {
+                let mut ci = ColumnInfo::default();
+
+                ci.set_column_id(i as i64);
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+
+                columns_info.push(ci);
+                schema.push(FieldTypeTp::LongLong.into());
+            } else {
+                missed_columns_info.push(i as i64);
+            }
+
+            if is_primary_column {
+                handle.push(Datum::I64(i as i64));
+                primary_column_ids.push(i as i64);
+            }
+
+            row.push(Datum::I64(i as i64));
+        }
+
+        let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
+
+        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
+
+        // Constructs a range that includes the constructed key.
+        let mut key_range = KeyRange::default();
+        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        key_range.set_start(begin);
+        key_range.set_end(end);
+
+        let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
+
+        let mut executor = BatchTableScanExecutor::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info.clone(),
+            vec![key_range],
+            primary_column_ids,
+            false,
+            false,
+        )
+        .unwrap();
+
+        let mut result = executor.next_batch(10);
+        assert_eq!(result.is_drained.unwrap(), true);
+        assert_eq!(result.logical_rows.len(), 1);
+        assert_eq!(
+            result.physical_columns.columns_len(),
+            columns.len() - missed_columns_info.len()
+        );
+        // We expect we fill the primary column with the value embedded in the common handle.
+        for i in 0..result.physical_columns.columns_len() {
+            result.physical_columns[i]
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[i])
+                .unwrap();
+
+            assert_eq!(
+                result.physical_columns[i].decoded().to_int_vec(),
+                &[Some(columns_info[i].get_column_id())]
+            );
+        }
+    }
+    #[test]
+    fn test_common_handle() {
+        test_common_handle_impl(&[Column {
+            is_primary_column: true,
+            has_column_info: true,
+        }]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: false,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+            },
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+        ]);
+    }
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416):components/tidb_query_vec_executors/src/table_scan_executor.rs
 }

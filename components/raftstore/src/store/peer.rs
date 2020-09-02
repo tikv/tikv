@@ -31,7 +31,6 @@ use raft::{
     NO_LIMIT,
 };
 use time::Timespec;
-use txn_types::TxnExtra;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -1748,7 +1747,6 @@ impl Peer {
         cb: Callback<RocksEngine>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        txn_extra: TxnExtra,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -1794,7 +1792,11 @@ impl Peer {
                 let meta = ProposalMeta {
                     index: idx,
                     term: self.term(),
+<<<<<<< HEAD
                     txn_extra,
+=======
+                    cb,
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
                     renew_lease_time: None,
                 };
                 self.post_propose(ctx, meta, is_conf_change, cb);
@@ -2183,7 +2185,11 @@ impl Peer {
                 let meta = ProposalMeta {
                     index,
                     term: self.term(),
+<<<<<<< HEAD
                     txn_extra: TxnExtra::default(),
+=======
+                    cb: Callback::None,
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
                     renew_lease_time: Some(renew_lease_time),
                 };
                 self.post_propose(poll_ctx, meta, false, Callback::None);
@@ -3315,4 +3321,96 @@ mod tests {
             assert!(inspector.inspect(&req).is_err());
         }
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_propose_queue_find_propose_time() {
+        let mut pq: ProposalQueue<engine_panic::PanicSnapshot> = ProposalQueue::new();
+        let t = monotonic_raw_now();
+        for index in 1..=100 {
+            let renew_lease_time = if index % 3 == 1 { None } else { Some(t) };
+            pq.push(Proposal {
+                is_conf_change: false,
+                index,
+                term: (index / 10) + 1,
+                cb: Callback::None,
+                renew_lease_time,
+            });
+        }
+        for remove_i in &[0, 65, 98] {
+            let _ = pq.take(*remove_i, (*remove_i / 10) + 1);
+            for i in 1..=100 {
+                let pt = pq.find_propose_time(((i / 10) + 1, i));
+                if i <= *remove_i || i % 3 == 1 {
+                    assert!(pt.is_none())
+                } else {
+                    assert!(pt.is_some())
+                };
+            }
+        }
+    }
+
+    #[test]
+    fn test_cmd_epoch_checker() {
+        use engine_rocks::RocksSnapshot;
+        fn new_admin_request(cmd_type: AdminCmdType) -> RaftCmdRequest {
+            let mut request = RaftCmdRequest::default();
+            request.mut_admin_request().set_cmd_type(cmd_type);
+            request
+        }
+
+        let region = metapb::Region::default();
+        let normal_cmd = RaftCmdRequest::default();
+        let split_admin = new_admin_request(AdminCmdType::BatchSplit);
+        let prepare_merge_admin = new_admin_request(AdminCmdType::PrepareMerge);
+        let change_peer_admin = new_admin_request(AdminCmdType::ChangePeer);
+
+        let mut epoch_checker = CmdEpochChecker::<RocksSnapshot>::default();
+
+        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
+        assert_eq!(epoch_checker.term, 10);
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 5, 10);
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
+
+        // Both conflict with the split admin cmd
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
+            Some(5)
+        );
+
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&change_peer_admin, 10),
+            None
+        );
+        epoch_checker.post_propose(AdminCmdType::ChangePeer, 6, 10);
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
+
+        // Conflict with the split admin cmd
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
+        // Conflict with the change peer admin cmd
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
+            Some(6)
+        );
+
+        epoch_checker.advance_apply(4, 10, &region);
+        // Have no effect on `proposed_admin_cmd`
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
+
+        epoch_checker.advance_apply(5, 10, &region);
+        // Left one change peer admin cmd
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
+
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), None);
+
+        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), Some(6));
+        // Change term to 6
+        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 11), None);
+        assert_eq!(epoch_checker.term, 11);
+        // Should be empty
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 0);
+    }
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 }

@@ -15,9 +15,9 @@ use raftstore::Error as RaftStoreError;
 use tikv::storage::{Cursor, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::Scheduler;
-use txn_types::{Key, Lock, MutationType, TxnExtra, Value, WriteRef, WriteType};
+use txn_types::{Key, Lock, MutationType, Value, WriteRef, WriteType};
 
-use crate::endpoint::{Deregister, Task};
+use crate::endpoint::{Deregister, OldValueCache, Task};
 use crate::{Error as CdcError, Result};
 
 /// An Observer for CDC.
@@ -112,12 +112,12 @@ impl CmdObserver<RocksEngine> for CdcObserver {
             .push(observe_id, region_id, cmd);
     }
 
+<<<<<<< HEAD
     fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>, engine: RocksEngine) {
+=======
+    fn on_flush_apply(&self, engine: E) {
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
         fail_point!("before_cdc_flush_apply");
-        let mut txn_extra = TxnExtra::default();
-        txn_extras
-            .into_iter()
-            .for_each(|mut e| txn_extra.extend(&mut e));
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
             let mut region = Region::default();
@@ -125,8 +125,9 @@ impl CmdObserver<RocksEngine> for CdcObserver {
             // Create a snapshot here for preventing the old value was GC-ed.
             let snapshot = RegionSnapshot::from_snapshot(engine.snapshot().into_sync(), region);
             let mut reader = OldValueReader::new(snapshot);
-            let get_old_value = move |key| {
-                if let Some((old_value, mutation_type)) = txn_extra.mut_old_values().remove(&key) {
+            let get_old_value = move |key, old_value_cache: &mut OldValueCache| {
+                old_value_cache.access_count += 1;
+                if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
                     match mutation_type {
                         MutationType::Insert => {
                             assert!(old_value.is_none());
@@ -146,6 +147,8 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                         _ => unreachable!(),
                     }
                 }
+                // Cannot get old value from cache, seek for it in engine.
+                old_value_cache.miss_count += 1;
                 reader.near_seek_old_value(&key).unwrap_or_default()
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
@@ -327,7 +330,11 @@ mod tests {
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
+<<<<<<< HEAD
         observer.on_flush_apply(Vec::default(), RocksEngine::from_db(engine));
+=======
+        observer.on_flush_apply(engine);
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::MultiBatch { multi, .. } => {

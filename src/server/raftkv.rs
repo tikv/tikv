@@ -3,18 +3,32 @@
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::result;
+<<<<<<< HEAD
 use std::time::Duration;
 
 use engine::IterOption;
 use engine_rocks::{RocksEngine, RocksTablePropertiesCollection};
 use engine_traits::{CfName, Peekable, ReadOptions, CF_DEFAULT};
 use kvproto::errorpb;
+=======
+use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
+
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
+use engine_traits::CfName;
+use engine_traits::CF_DEFAULT;
+use engine_traits::{IterOptions, Peekable, ReadOptions, Snapshot, TablePropertiesExt};
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
 };
+<<<<<<< HEAD
 use txn_types::{Key, TxnExtra, Value};
+=======
+use kvproto::{errorpb, metapb};
+use txn_types::{Key, TxnExtraScheduler, Value};
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -105,6 +119,11 @@ impl From<RaftServerError> for KvError {
 #[derive(Clone)]
 pub struct RaftKv<S: RaftStoreRouter + 'static> {
     router: S,
+<<<<<<< HEAD
+=======
+    engine: RocksEngine,
+    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 }
 
 pub enum CmdRes {
@@ -161,8 +180,21 @@ fn on_read_result(
 
 impl<S: RaftStoreRouter> RaftKv<S> {
     /// Create a RaftKv using specified configuration.
+<<<<<<< HEAD
     pub fn new(router: S) -> RaftKv<S> {
         RaftKv { router }
+=======
+    pub fn new(router: S, engine: RocksEngine) -> RaftKv<S> {
+        RaftKv {
+            router,
+            engine,
+            txn_extra_scheduler: None,
+        }
+    }
+
+    pub fn set_txn_extra_scheduler(&mut self, txn_extra_scheduler: Arc<dyn TxnExtraScheduler>) {
+        self.txn_extra_scheduler = Some(txn_extra_scheduler);
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
@@ -205,7 +237,6 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
-        txn_extra: TxnExtra,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
@@ -237,9 +268,8 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         cmd.set_requests(reqs.into());
 
         self.router
-            .send_command_txn_extra(
+            .send_command(
                 cmd,
-                txn_extra,
                 StoreCallback::Write(Box::new(move |resp| {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
@@ -316,10 +346,15 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.write.start_coarse_timer();
 
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
+            if !batch.extra.is_empty() {
+                tx.schedule(batch.extra);
+            }
+        }
+
         self.exec_write_requests(
             ctx,
             reqs,
-            batch.extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     req_timer.observe_duration();

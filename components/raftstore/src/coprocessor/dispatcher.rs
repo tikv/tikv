@@ -11,7 +11,14 @@ use txn_types::TxnExtra;
 use std::mem;
 use std::ops::Deref;
 
+<<<<<<< HEAD
 use crate::store::CasualRouter;
+=======
+use engine_traits::{CfName, KvEngine};
+use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
+use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 
 use super::*;
 
@@ -440,7 +447,11 @@ impl CoprocessorHost {
             .on_apply_cmd(observe_id, region_id, cmd)
     }
 
+<<<<<<< HEAD
     pub fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>, engine: RocksEngine) {
+=======
+    pub fn on_flush_apply(&self, engine: E) {
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
         if self.registry.cmd_observers.is_empty() {
             return;
         }
@@ -452,7 +463,7 @@ impl CoprocessorHost {
                 .unwrap()
                 .observer
                 .inner()
-                .on_flush_apply(txn_extras.clone(), engine.clone())
+                .on_flush_apply(engine.clone())
         }
         self.registry
             .cmd_observers
@@ -460,7 +471,7 @@ impl CoprocessorHost {
             .unwrap()
             .observer
             .inner()
-            .on_flush_apply(txn_extras, engine)
+            .on_flush_apply(engine)
     }
 
     pub fn shutdown(&self) {
@@ -594,7 +605,11 @@ mod tests {
         fn on_apply_cmd(&self, _: ObserveID, _: u64, _: Cmd) {
             self.called.fetch_add(12, Ordering::SeqCst);
         }
+<<<<<<< HEAD
         fn on_flush_apply(&self, _: Vec<TxnExtra>, _: RocksEngine) {
+=======
+        fn on_flush_apply(&self, _: PanicEngine) {
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
             self.called.fetch_add(13, Ordering::SeqCst);
         }
     }
@@ -675,7 +690,11 @@ mod tests {
             Cmd::new(0, RaftCmdRequest::default(), query_resp),
         );
         assert_all!(&[&ob.called], &[78]);
+<<<<<<< HEAD
         host.on_flush_apply(Vec::default(), engine);
+=======
+        host.on_flush_apply(PanicEngine);
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
         assert_all!(&[&ob.called], &[91]);
     }
 

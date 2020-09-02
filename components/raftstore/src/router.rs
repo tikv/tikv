@@ -3,6 +3,12 @@
 use crossbeam::{SendError, TrySendError};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
+<<<<<<< HEAD
+=======
+use raft::SnapshotStatus;
+use raft_engine::RaftEngine;
+use tikv_util::time::ThreadReadId;
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 
 use crate::store::fsm::RaftRouter;
 use crate::store::{
@@ -19,6 +25,7 @@ pub trait RaftStoreRouter: Send + Clone {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
     /// Sends RaftCmdRequest to local store.
+<<<<<<< HEAD
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> RaftStoreResult<()> {
         self.send_command_txn_extra(req, TxnExtra::default(), cb)
     }
@@ -33,6 +40,14 @@ pub trait RaftStoreRouter: Send + Clone {
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
+=======
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
+        let region_id = req.get_header().get_region_id();
+        let cmd = RaftCommand::new(req, cb);
+        <Self as ProposalRouter<EK::Snapshot>>::send(self, cmd)
+            .map_err(|e| handle_send_error(region_id, e))
+    }
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 
     /// Reports the peer being unreachable to the Region.
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {

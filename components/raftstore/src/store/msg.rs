@@ -13,7 +13,6 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
-use txn_types::TxnExtra;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
@@ -287,28 +286,38 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
 pub struct RaftCommand<E: KvEngine> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
+<<<<<<< HEAD
     pub callback: Callback<E>,
     pub txn_extra: TxnExtra,
+=======
+    pub callback: Callback<S>,
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 }
 
 impl<E: KvEngine> RaftCommand<E> {
     #[inline]
+<<<<<<< HEAD
     pub fn with_txn_extra(
         request: RaftCmdRequest,
         callback: Callback<E>,
         txn_extra: TxnExtra,
     ) -> RaftCommand<E> {
+=======
+    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
         RaftCommand {
             request,
             callback,
-            txn_extra,
             send_time: Instant::now(),
         }
     }
+<<<<<<< HEAD
 
     pub fn new(request: RaftCmdRequest, callback: Callback<E>) -> RaftCommand<E> {
         Self::with_txn_extra(request, callback, TxnExtra::default())
     }
+=======
+>>>>>>> 35ebcb4... cdc: add old_value cache for removing Engine::send_command_txn_extra (#8416)
 }
 
 /// Message that can be sent to a peer.
