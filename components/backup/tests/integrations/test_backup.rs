@@ -639,7 +639,7 @@ fn test_backup_raw_meta() {
     assert_eq!(total_kvs, admin_total_kvs);
     assert_eq!(total_bytes, admin_total_bytes);
     assert_eq!(checksum, admin_checksum);
-    assert_eq!(total_size, 1611);
+    assert_eq!(total_size, 1638);
     // please update this number (must be > 0) when the test failed
 
     suite.stop();

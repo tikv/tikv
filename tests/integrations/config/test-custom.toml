@@ -246,6 +246,8 @@ force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 enable-doubly-skiplist = false
+compact-check-sliding-window = 10
+compact-deletion-trigger = 10
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -303,6 +305,8 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+compact-check-sliding-window = 10
+compact-deletion-trigger = 10
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -345,6 +349,8 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+compact-check-sliding-window = 10
+compact-deletion-trigger = 10
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -387,6 +393,8 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+compact-check-sliding-window = 10
+compact-deletion-trigger = 10
 
 [rocksdb.ver-defaultcf]
 block-size = "12KB"
@@ -430,6 +438,8 @@ force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 enable-doubly-skiplist = false
+compact-check-sliding-window = 10
+compact-deletion-trigger = 10
 
 [rocksdb.ver-defaultcf.titan]
 min-blob-size = "2018B"
@@ -519,6 +529,8 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+compact-check-sliding-window = 10
+compact-deletion-trigger = 10
 
 [raftdb.defaultcf.titan]
 min-blob-size = "2018B"
