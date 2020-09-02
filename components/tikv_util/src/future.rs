@@ -43,15 +43,15 @@ where
 
 /// Create a stream proxy with buffer representing the remote stream. The returned task
 /// will receive messages from the remote stream as much as possible.
-pub fn create_stream_with_buffer<T, ST>(
-    s: ST,
+pub fn create_stream_with_buffer<T, S>(
+    s: S,
     size: usize,
 ) -> (
     impl Stream<Item = T> + Send + 'static,
     impl Future<Output = ()> + Send + 'static,
 )
 where
-    ST: Stream<Item = T> + Send + 'static,
+    S: Stream<Item = T> + Send + 'static,
     T: Send + 'static,
 {
     let (tx, rx) = mpsc::channel::<T>(size);
