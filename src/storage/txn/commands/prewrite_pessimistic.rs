@@ -154,6 +154,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
             };
             (pr, WriteData::default(), 0, self.ctx, None, vec![])
         };
+        let response_policy = if async_commit_ts.is_zero() {
+            ResponsePolicy::OnApplied
+        } else {
+            ResponsePolicy::OnCommitted
+        };
         Ok(WriteResult {
             ctx,
             to_be_write,
@@ -161,7 +166,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
             pr,
             lock_info,
             lock_guards,
-            response_policy: ResponsePolicy::OnApplied,
+            response_policy,
         })
     }
 }
