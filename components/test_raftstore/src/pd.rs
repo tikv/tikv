@@ -622,29 +622,6 @@ fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) ->
     Ok(())
 }
 
-fn must_same_peers(left: &metapb::Region, right: &metapb::Region) {
-    assert_eq!(left.get_peers().len(), right.get_peers().len());
-    for peer in left.get_peers() {
-        let p = find_peer(right, peer.get_store_id()).unwrap();
-        assert_eq!(p, peer);
-    }
-}
-
-// Left - Right, left (1, 2, 3), right (1, 2), left - right = (3)
-fn setdiff_peers(left: &metapb::Region, right: &metapb::Region) -> Vec<metapb::Peer> {
-    let mut peers = vec![];
-    for peer in left.get_peers() {
-        if let Some(p) = find_peer(right, peer.get_store_id()) {
-            assert_eq!(p.get_id(), peer.get_id());
-            continue;
-        }
-
-        peers.push(peer.clone())
-    }
-
-    peers
-}
-
 // For test when a node is already bootstraped the cluster with the first region
 pub fn bootstrap_with_first_region(pd_client: Arc<TestPdClient>) -> Result<()> {
     let mut region = metapb::Region::default();
