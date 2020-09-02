@@ -452,15 +452,28 @@ impl Cluster {
         mut region: metapb::Region,
         leader: metapb::Peer,
     ) -> Result<pdpb::RegionHeartbeatResponse> {
-        // remove overlap regions
-        for r in self.check_put_region(region.clone())? {
-            self.remove_region(&r);
+        let overlaps = self.check_put_region(region.clone())?;
+        let same_region = {
+            let (ver, conf_ver) = (
+                region.get_region_epoch().get_version(),
+                region.get_region_epoch().get_conf_ver(),
+            );
+            overlaps.len() == 1
+                && overlaps[0].get_id() == region.get_id()
+                && overlaps[0].get_region_epoch().get_version() == ver
+                && overlaps[0].get_region_epoch().get_conf_ver() == conf_ver
+        };
+        if !same_region {
+            // remove overlap regions
+            for r in overlaps {
+                self.remove_region(&r);
+            }
+            // remove stale region that have same id but different key range
+            if let Some(o) = self.get_region_by_id(region.get_id())? {
+                self.remove_region(&o);
+            }
+            self.add_region(&region);
         }
-        // remove stale that have same id but different key range
-        if let Some(o) = self.get_region_by_id(region.get_id())? {
-            self.remove_region(&o);
-        }
-        self.add_region(&region);
         let resp = self
             .poll_heartbeat_responses(region.clone(), leader.clone())
             .unwrap_or_else(|| {
