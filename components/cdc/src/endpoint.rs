@@ -215,7 +215,6 @@ impl fmt::Debug for Task {
 }
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
-const OLD_VALUE_LRU_SIZE: usize = 1024;
 
 pub struct Endpoint<T> {
     capture_regions: HashMap<u64, Delegate>,
@@ -279,7 +278,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
-            old_value_cache: LruCache::with_capacity(OLD_VALUE_LRU_SIZE),
+            old_value_cache: LruCache::with_capacity(cfg.old_value_cache_size),
         };
         ep.register_min_ts_event();
         ep
