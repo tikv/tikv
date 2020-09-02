@@ -318,6 +318,16 @@ pub struct OldValue {
     pub start_ts: TimeStamp,
 }
 
+impl OldValue {
+    pub fn size(&self) -> usize {
+        let value_size = match self.short_value {
+            Some(ref v) => v.len(),
+            None => 0,
+        };
+        value_size + std::mem::size_of::<TimeStamp>()
+    }
+}
+
 // Returned by MvccTxn when extra_op is set to kvrpcpb::ExtraOp::ReadOldValue.
 // key with current ts -> (short value of the prev txn, start ts of the prev txn).
 // The value of the map will be None when the mutation is `Insert`.

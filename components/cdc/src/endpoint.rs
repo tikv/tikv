@@ -96,9 +96,24 @@ impl fmt::Debug for Deregister {
 }
 
 type InitCallback = Box<dyn FnOnce() + Send>;
-pub(crate) type OldValueCache = LruCache<Key, (Option<OldValue>, MutationType)>;
 pub(crate) type OldValueCallback =
     Box<dyn FnMut(Key, &mut OldValueCache) -> Option<Vec<u8>> + Send>;
+
+pub struct OldValueCache {
+    pub cache: LruCache<Key, (Option<OldValue>, MutationType)>,
+    pub miss_count: usize,
+    pub access_count: usize,
+}
+
+impl OldValueCache {
+    pub fn new(size: usize) -> OldValueCache {
+        OldValueCache {
+            cache: LruCache::with_capacity(size),
+            miss_count: 0,
+            access_count: 0,
+        }
+    }
+}
 
 pub enum Task {
     Register {
@@ -278,7 +293,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
-            old_value_cache: LruCache::with_capacity(cfg.old_value_cache_size),
+            old_value_cache: OldValueCache::new(cfg.old_value_cache_size),
         };
         ep.register_min_ts_event();
         ep
@@ -918,7 +933,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
             }
             Task::TxnExtra(txn_extra) => {
                 for (k, v) in txn_extra.old_values {
-                    self.old_value_cache.insert(k, v);
+                    self.old_value_cache.cache.insert(k, v);
                 }
             }
             Task::Validate(region_id, validate) => {
@@ -938,6 +953,18 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer<Task, ()> for 
         }
         self.min_resolved_ts = TimeStamp::max();
         self.min_ts_region_id = 0;
+
+        let cache_size: usize = self
+            .old_value_cache
+            .cache
+            .iter()
+            .map(|(k, v)| k.as_encoded().len() + v.0.as_ref().map_or(0, |v| v.size()))
+            .sum();
+        CDC_OLD_VALUE_CACHE_BYTES.set(cache_size as i64);
+        CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_cache.access_count as i64);
+        CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_cache.miss_count as i64);
+        self.old_value_cache.access_count = 0;
+        self.old_value_cache.miss_count = 0;
 
         timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
     }

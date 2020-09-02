@@ -46,4 +46,6 @@ lazy_static! {
         "Count of old value cache accessing"
     )
     .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_BYTES: IntGauge =
+        register_int_gauge!("tikv_cdc_old_value_cache_bytes", "Bytes of old value cache").unwrap();
 }
