@@ -52,11 +52,9 @@ fn test_node_bootstrap_with_prepared_data() {
         engine_rocks::raw_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None)
             .unwrap(),
     );
-    let shared_block_cache = false;
     let engines = Engines::new(
         RocksEngine::from_db(Arc::clone(&engine)),
         RocksEngine::from_db(Arc::clone(&raft_engine)),
-        shared_block_cache,
     );
     let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
 

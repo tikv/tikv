@@ -107,11 +107,26 @@ impl ConcurrencyManager {
     ) -> Result<(), E> {
         self.lock_table.check_range(start_key, end_key, check_fn)
     }
+
+    /// Find the minimum start_ts among all locks in memory.
+    pub fn global_min_lock_ts(&self) -> Option<TimeStamp> {
+        let mut min_lock_ts = None;
+        // TODO: The iteration looks not so efficient. It's better to be optimized.
+        self.lock_table.for_each(|handle| {
+            if let Some(curr_ts) = handle.with_lock(|lock| lock.as_ref().map(|l| l.ts)) {
+                if min_lock_ts.map(|ts| ts > curr_ts).unwrap_or(true) {
+                    min_lock_ts = Some(curr_ts);
+                }
+            }
+        });
+        min_lock_ts
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use txn_types::LockType;
 
     #[tokio::test]
     async fn test_lock_keys_order() {
@@ -137,5 +152,52 @@ mod tests {
 
         concurrency_manager.update_max_read_ts(TimeStamp::max());
         assert_eq!(concurrency_manager.max_read_ts(), 20.into());
+    }
+
+    fn new_lock(ts: impl Into<TimeStamp>, primary: &[u8], lock_type: LockType) -> Lock {
+        let ts = ts.into();
+        Lock::new(
+            lock_type,
+            primary.to_vec(),
+            ts.into(),
+            0,
+            None,
+            0.into(),
+            1,
+            ts.into(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_global_min_lock_ts() {
+        let concurrency_manager = ConcurrencyManager::new(1.into());
+
+        assert_eq!(concurrency_manager.global_min_lock_ts(), None);
+        let guard = concurrency_manager.lock_key(&Key::from_raw(b"a")).await;
+        assert_eq!(concurrency_manager.global_min_lock_ts(), None);
+        guard.with_lock(|l| *l = Some(new_lock(10, b"a", LockType::Put)));
+        assert_eq!(concurrency_manager.global_min_lock_ts(), Some(10.into()));
+        drop(guard);
+        assert_eq!(concurrency_manager.global_min_lock_ts(), None);
+
+        let ts_seqs = vec![
+            vec![20, 30, 40],
+            vec![40, 30, 20],
+            vec![20, 40, 30],
+            vec![30, 20, 40],
+        ];
+        let keys: Vec<_> = vec![b"a", b"b", b"c"]
+            .into_iter()
+            .map(|k| Key::from_raw(k))
+            .collect();
+
+        for ts_seq in ts_seqs {
+            let guards = concurrency_manager.lock_keys(keys.iter()).await;
+            assert_eq!(concurrency_manager.global_min_lock_ts(), None);
+            for (ts, guard) in ts_seq.into_iter().zip(guards.iter()) {
+                guard.with_lock(|l| *l = Some(new_lock(ts, b"pk", LockType::Put)));
+            }
+            assert_eq!(concurrency_manager.global_min_lock_ts(), Some(20.into()));
+        }
     }
 }

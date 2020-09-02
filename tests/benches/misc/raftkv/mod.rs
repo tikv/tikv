@@ -2,29 +2,30 @@
 
 use std::sync::Arc;
 
-use crate::test;
-use tempfile::{Builder, TempDir};
-
+use crossbeam::channel::TrySendError;
+use engine_rocks::raw::DB;
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{ALL_CFS, CF_DEFAULT};
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
-
-use engine_rocks::raw::DB;
-use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{ALL_CFS, CF_DEFAULT};
-use raftstore::router::RaftStoreRouter;
+use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{
-    cmd_resp, util, Callback, CasualMessage, RaftCommand, ReadResponse, RegionSnapshot,
-    SignificantMsg, WriteResponse,
+    cmd_resp, util, Callback, CasualMessage, CasualRouter, ProposalRouter, RaftCommand,
+    ReadResponse, RegionSnapshot, SignificantMsg, StoreMsg, StoreRouter, WriteResponse,
 };
 use raftstore::Result;
+use tempfile::{Builder, TempDir};
 use tikv::server::raftkv::{CmdRes, RaftKv};
 use tikv::storage::kv::{
     Callback as EngineCallback, CbContext, Modify, Result as EngineResult, WriteData,
 };
 use tikv::storage::Engine;
-use txn_types::{Key, TxnExtra};
+use tikv_util::time::ThreadReadId;
+use txn_types::Key;
+
+use crate::test;
 
 #[derive(Clone)]
 struct SyncBenchRouter {
@@ -64,8 +65,34 @@ impl SyncBenchRouter {
     }
 }
 
+impl CasualRouter<RocksEngine> for SyncBenchRouter {
+    fn send(&self, _: u64, _: CasualMessage<RocksEngine>) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl ProposalRouter<RocksSnapshot> for SyncBenchRouter {
+    fn send(
+        &self,
+        _: RaftCommand<RocksSnapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<RocksSnapshot>>> {
+        Ok(())
+    }
+}
+impl StoreRouter for SyncBenchRouter {
+    fn send(&self, _: StoreMsg) -> Result<()> {
+        Ok(())
+    }
+}
+
 impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
+    /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, _: RaftMessage) -> Result<()> {
+        Ok(())
+    }
+
+    /// Sends a significant message. We should guarantee that the message can't be dropped.
+    fn significant_send(&self, _: u64, _: SignificantMsg<RocksSnapshot>) -> Result<()> {
         Ok(())
     }
 
@@ -73,26 +100,19 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
         self.invoke(RaftCommand::new(req, cb));
         Ok(())
     }
+}
 
-    fn send_command_txn_extra(
+impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
+    fn read(
         &self,
+        _: Option<ThreadReadId>,
         req: RaftCmdRequest,
-        txn_extra: TxnExtra,
         cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
-        self.invoke(RaftCommand::with_txn_extra(req, cb, txn_extra));
-        Ok(())
+        self.send_command(req, cb)
     }
 
-    fn significant_send(&self, _: u64, _: SignificantMsg<RocksSnapshot>) -> Result<()> {
-        Ok(())
-    }
-
-    fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine>) -> Result<()> {
-        Ok(())
-    }
-
-    fn broadcast_unreachable(&self, _: u64) {}
+    fn release_snapshot_cache(&self) {}
 }
 
 fn new_engine() -> (TempDir, Arc<DB>) {
