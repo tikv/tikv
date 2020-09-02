@@ -42,12 +42,14 @@ where
     }
 }
 
-impl<E, C, S> Runnable<Task> for Runner<E, C, S>
+impl<E, C, S> Runnable for Runner<E, C, S>
 where
     E: KvEngine,
     C: PdClient,
     S: StoreRouter,
 {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::Compact(t) => self.compact.run(t),

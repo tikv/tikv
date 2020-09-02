@@ -291,7 +291,6 @@ mod tests {
     use raftstore::Result as RaftStoreResult;
     use security::SecurityConfig;
     use tokio::runtime::Builder as TokioBuilder;
-    use txn_types::TxnExtra;
 
     use super::*;
     use crate::config::CoprReadPoolConfig;
@@ -373,16 +372,6 @@ mod tests {
         fn send_command(
             &self,
             _: RaftCmdRequest,
-            _: Callback<RocksSnapshot>,
-        ) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
-            Ok(())
-        }
-
-        fn send_command_txn_extra(
-            &self,
-            _: RaftCmdRequest,
-            _: TxnExtra,
             _: Callback<RocksSnapshot>,
         ) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
