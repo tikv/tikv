@@ -641,6 +641,7 @@ dependencies = [
 name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
+ "crossbeam-skiplist",
  "parking_lot 0.10.0",
  "tokio 0.2.13",
  "txn_types",
@@ -836,6 +837,16 @@ checksum = "c695eeca1e7173472a32221542ae469b3e9aac3a4fc81f7696bcad82029493db"
 dependencies = [
  "cfg-if",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-skiplist"
+version = "0.0.0"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+ "rand",
+ "scopeguard",
 ]
 
 [[package]]
@@ -3654,9 +3665,9 @@ checksum = "332ffa32bf586782a3efaeb58f127980944bbc8c4d6913a86107ac2a5ab24b28"
 
 [[package]]
 name = "scopeguard"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b42e15e59b18a828bbf5c58ea01debb36b9b096346de35d941dcb89009f24a0d"
+checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
 
 [[package]]
 name = "security"

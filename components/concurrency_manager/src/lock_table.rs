@@ -2,28 +2,35 @@
 
 use super::key_handle::{KeyHandle, KeyHandleGuard};
 
-use parking_lot::Mutex;
+use crossbeam_skiplist::SkipMap;
 use std::{
-    collections::BTreeMap,
     ops::Bound,
     sync::{Arc, Weak},
 };
 use txn_types::{Key, Lock};
 
-#[derive(Clone, Default)]
-pub struct LockTable(pub Arc<Mutex<BTreeMap<Key, Weak<KeyHandle>>>>);
+#[derive(Clone)]
+pub struct LockTable(pub Arc<SkipMap<Key, Weak<KeyHandle>>>);
+
+impl Default for LockTable {
+    fn default() -> Self {
+        LockTable(Arc::new(SkipMap::new()))
+    }
+}
 
 impl LockTable {
     pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard {
         loop {
-            if let Some(handle) = self.get(key) {
-                return handle.lock().await;
+            let handle = Arc::new(KeyHandle::new(key.clone(), self.clone()));
+            let weak = Arc::downgrade(&handle);
+            let weak2 = weak.clone();
+            let guard = handle.lock().await;
+            let entry = self.0.get_or_insert(key.clone(), weak);
+            if entry.value().ptr_eq(&weak2) {
+                return guard;
             } else {
-                let handle = Arc::new(KeyHandle::new(key.clone(), self.clone()));
-                let weak = Arc::downgrade(&handle);
-                let guard = handle.lock().await;
-                if self.insert_if_not_exist(key.clone(), weak) {
-                    return guard;
+                if let Some(handle) = entry.value().upgrade() {
+                    return handle.lock().await;
                 }
             }
         }
@@ -64,23 +71,9 @@ impl LockTable {
         }
     }
 
-    /// Inserts a key handle to the map if the key does not exists in the map.
-    /// Returns whether the handle is successfully inserted into the map.
-    pub fn insert_if_not_exist(&self, key: Key, handle: Weak<KeyHandle>) -> bool {
-        use std::collections::btree_map::Entry;
-
-        match self.0.lock().entry(key) {
-            Entry::Vacant(entry) => {
-                entry.insert(handle);
-                true
-            }
-            Entry::Occupied(_) => false,
-        }
-    }
-
     /// Gets the handle of the key.
     pub fn get<'m>(&'m self, key: &Key) -> Option<Arc<KeyHandle>> {
-        self.0.lock().get(key).and_then(|handle| handle.upgrade())
+        self.0.get(key).and_then(|e| e.value().upgrade())
     }
 
     /// Finds the first handle in the given range that `pred` returns `Some`.
@@ -97,9 +90,10 @@ impl LockTable {
         let upper_bound = end_key
             .map(|k| Bound::Excluded(k))
             .unwrap_or(Bound::Unbounded);
-        for (_, handle) in self.0.lock().range::<Key, _>((lower_bound, upper_bound)) {
-            if let Some(v) = handle.upgrade().and_then(&mut pred) {
-                return Some(v);
+        for e in self.0.range((lower_bound, upper_bound)) {
+            let res = e.value().upgrade().and_then(&mut pred);
+            if res.is_some() {
+                return res;
             }
         }
         None
@@ -107,8 +101,8 @@ impl LockTable {
 
     /// Iterates all handles and call a specified function on each of them.
     pub fn for_each(&self, mut f: impl FnMut(Arc<KeyHandle>)) {
-        for (_, handle) in self.0.lock().iter() {
-            if let Some(handle) = handle.upgrade() {
+        for entry in self.0.iter() {
+            if let Some(handle) = entry.value().upgrade() {
                 f(handle);
             }
         }
@@ -116,7 +110,7 @@ impl LockTable {
 
     /// Removes the key and its key handle from the map.
     pub fn remove(&self, key: &Key) {
-        self.0.lock().remove(key);
+        self.0.remove(key);
     }
 }
 
