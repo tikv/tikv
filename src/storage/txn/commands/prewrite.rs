@@ -9,7 +9,7 @@ use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
 };
 use crate::storage::txn::actions::prewrite::prewrite;
-use crate::storage::txn::commands::{WriteCommand, WriteContext, WriteResult};
+use crate::storage::txn::commands::{ResponsePolicy, WriteCommand, WriteContext, WriteResult};
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{
     txn::commands::{Command, CommandExt, TypedCommand},
@@ -248,6 +248,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             pr,
             lock_info,
             lock_guards,
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }

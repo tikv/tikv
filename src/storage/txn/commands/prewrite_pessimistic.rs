@@ -7,7 +7,7 @@ use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::MvccTxn;
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::commands::{
-    Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::{pessimistic_prewrite, Error, ErrorInner, Result};
 use crate::storage::types::PrewriteResult;
@@ -161,6 +161,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
             pr,
             lock_info,
             lock_guards,
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }

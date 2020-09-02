@@ -147,6 +147,7 @@ make_auto_flush_static_metric! {
         error,
         pipelined_write,
         pipelined_write_finish,
+        resp_on_commit,
     }
 
     pub label_enum CommandPriority {

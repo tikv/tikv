@@ -333,6 +333,12 @@ struct ReleasedLocks {
     pessimistic: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum ResponsePolicy {
+    OnApplied,
+    OnCommitted,
+}
+
 pub struct WriteResult {
     pub ctx: Context,
     pub to_be_write: WriteData,
@@ -341,6 +347,7 @@ pub struct WriteResult {
     // (lock, is_first_lock, wait_timeout)
     pub lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
     pub lock_guards: Vec<KeyHandleGuard>,
+    pub response_policy: ResponsePolicy,
 }
 
 impl ReleasedLocks {
