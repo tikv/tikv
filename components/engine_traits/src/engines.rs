@@ -1,8 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use raft_engine::RaftEngine;
-
-use crate::engine::KvEngine;
+use crate::engine::{KvEngine, RaftEngine};
 use crate::errors::Result;
 use crate::options::WriteOptions;
 

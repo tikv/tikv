@@ -3044,7 +3044,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/Little-Wallace/raft-engine.git?branch=no-raft#4e31115f13949319ea224f2a73cebfda086e2851"
+source = "git+https://github.com/Little-Wallace/raft-engine.git?branch=no-raft#a3ecfb0b7b531e0df17cbac34dc5e16173073e4a"
 dependencies = [
  "byteorder",
  "crc32fast",

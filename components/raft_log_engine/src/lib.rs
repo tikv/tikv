@@ -20,10 +20,9 @@
 extern crate tikv_alloc;
 #[macro_use]
 extern crate tikv_util;
-#[macro_use]
+
 extern crate slog_global;
 
-#[macro_use]
 extern crate serde_derive;
 
 extern crate raft_engine;

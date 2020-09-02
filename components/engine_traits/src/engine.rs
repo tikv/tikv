@@ -80,10 +80,10 @@ pub trait RaftEngine: Clone + Sync + Send + 'static {
 
     /// Consume the write batch by moving the content into the engine itself
     /// and return written bytes.
-    fn write(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize>;
+    fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize>;
 
     /// Like `consume` but shrink `batch` if need.
-    fn write_and_shrink(
+    fn consume_and_shrink(
         &self,
         batch: &mut Self::LogBatch,
         sync: bool,
@@ -129,6 +129,9 @@ pub trait RaftEngine: Clone + Sync + Send + 'static {
     fn gc_entry_cache(&self, _raft_group_id: u64, _to: u64) {}
 
     fn flush_metrics(&self, _instance: &str) {}
+    fn flush_stats(&self) -> Option<CacheStats> {
+        None
+    }
     fn reset_statistics(&self) {}
 
     fn stop(&self) {}
@@ -149,4 +152,11 @@ pub trait RaftLogBatch: Send {
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
 
     fn is_empty(&self) -> bool;
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct CacheStats {
+    pub hit: usize,
+    pub miss: usize,
+    pub cache_size: usize,
 }

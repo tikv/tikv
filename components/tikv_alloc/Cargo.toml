@@ -29,7 +29,7 @@ features = ["unprefixed_malloc_on_supported_platforms", "stats"]
 [dependencies.tikv-jemalloc-sys]
 version = "0.4.0"
 optional = true
-features = ["stats"]
+features = ["stats", "debug"]
 
 [dependencies.tikv-jemalloc-ctl]
 version = "0.4.0"

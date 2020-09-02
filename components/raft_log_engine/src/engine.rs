@@ -1,40 +1,76 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::any::Any;
-use std::fs;
-use std::path::Path;
-use std::sync::Arc;
-
-use engine_traits::{RaftEngine, RaftLogBatch};
+use engine_traits::{RaftEngine, RaftLogBatch as RaftLogBatchTrait, Result};
+use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
-use raft_engine::{Entry as EntryTrait, LogBatch as LogBatchBase, RaftLogEngine as RawRaftEngine};
+use raft_engine::{EntryExt, LogBatch, RaftLogEngine as RawRaftEngine};
 
-impl EntryTrait for Entry {
-    fn index(&self) -> u64 {
-        self.get_index()
+#[derive(Clone)]
+pub struct EntryExtTyped;
+
+impl EntryExt<Entry> for EntryExtTyped {
+    fn index(e: &Entry) -> u64 {
+        e.index
     }
 }
 
-pub struct RaftLogEngine(RawRaftEngine<Entry>);
-pub type LogBatch = LogBatchBase<Entry>;
+#[derive(Clone)]
+pub struct RaftLogEngine(RawRaftEngine<Entry, EntryExtTyped>);
+
+#[derive(Default)]
+pub struct RaftLogBatch(LogBatch<Entry, EntryExtTyped>);
+
+#[derive(Clone, Copy, Default)]
+pub struct CacheStats {
+    pub hit: usize,
+    pub miss: usize,
+    pub cache_size: usize,
+}
+
+const RAFT_LOG_STATE_KEY: &[u8] = b"R";
+
+impl RaftLogBatchTrait for RaftLogBatch {
+    fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
+        self.0.add_entries(raft_group_id, entries);
+        Ok(())
+    }
+
+    fn cut_logs(&mut self, _: u64, _: u64, _: u64) {
+        // It's unnecessary because overlapped entries can be handled in `append`.
+    }
+
+    fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
+        box_try!(self
+            .0
+            .put_msg(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state));
+        Ok(())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.items.is_empty()
+    }
+}
 
 impl RaftEngine for RaftLogEngine {
-    type LogBatch = LogBatch;
+    type LogBatch = RaftLogBatch;
 
     fn log_batch(&self, _capacity: usize) -> Self::LogBatch {
-        LogBatch::default()
+        RaftLogBatch::default()
     }
 
     fn sync(&self) -> Result<()> {
-        self.0.sync()
+        box_try!(self.0.sync());
+        Ok(())
     }
 
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
-        self.0.get_msg(raft_group_id, RAFT_LOG_STATE_KEY)
+        let state = box_try!(self.0.get_msg(raft_group_id, RAFT_LOG_STATE_KEY));
+        Ok(state)
     }
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
-        self.0.get_entry(raft_group_id, index)
+        let e = box_try!(self.0.get_entry(raft_group_id, index));
+        Ok(e)
     }
 
     fn fetch_entries_to(
@@ -45,64 +81,57 @@ impl RaftEngine for RaftLogEngine {
         max_size: Option<usize>,
         to: &mut Vec<Entry>,
     ) -> Result<usize> {
-        self.0
-            .fetch_entries_to(raft_group_id, begin, end, max_size, to)
+        let ret = box_try!(self
+            .0
+            .fetch_entries_to(raft_group_id, begin, end, max_size, to));
+        Ok(ret)
     }
 
-    fn write(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {
-        self.0.write(std::mem::take(batch), sync)
+    fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {
+        let ret = box_try!(self.0.write(&mut batch.0, sync));
+        Ok(ret)
     }
 
-    fn write_and_shrink(
+    fn consume_and_shrink(
         &self,
         batch: &mut Self::LogBatch,
         sync: bool,
         _: usize,
         _: usize,
     ) -> Result<usize> {
-        self.write(batch, sync)
+        let ret = box_try!(self.0.write(&mut batch.0, sync));
+        Ok(ret)
     }
 
-    fn clean(&self, raft_group_id: u64, _: &RaftLocalState, batch: &mut LogBatch) -> Result<()> {
-        batch.clean_region(raft_group_id);
+    fn clean(
+        &self,
+        raft_group_id: u64,
+        _: &RaftLocalState,
+        batch: &mut RaftLogBatch,
+    ) -> Result<()> {
+        batch.0.clean_region(raft_group_id);
         Ok(())
     }
 
     fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
-        let mut batch = LogBatch::default();
-        batch.add_entries(raft_group_id, entries);
-        self.write(batch, false)
+        let mut batch = Self::LogBatch::default();
+        batch.0.add_entries(raft_group_id, entries);
+        let ret = box_try!(self.0.write(&mut batch.0, false));
+        Ok(ret)
     }
 
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        self.0.put_msg(raft_group_id, RAFT_LOG_STATE_KEY, state)
+        box_try!(self.0.put_msg(raft_group_id, RAFT_LOG_STATE_KEY, state));
+        Ok(())
     }
 
     fn gc(&self, raft_group_id: u64, _from: u64, to: u64) -> Result<usize> {
-        Ok(self.compact_to(raft_group_id, to) as usize)
+        Ok(self.0.compact_to(raft_group_id, to) as usize)
     }
 
     fn purge_expired_files(&self) -> Result<Vec<u64>> {
-        let _purge_mutex = match self.purge_mutex.try_lock() {
-            Ok(locked) if self.needs_purge_log_files() => locked,
-            _ => return Ok(vec![]),
-        };
-
-        let (rewrite_limit, compact_limit) = self.latest_inactive_file_num();
-        let mut will_force_compact = Vec::new();
-        self.regions_rewrite_or_force_compact(
-            rewrite_limit,
-            compact_limit,
-            &mut will_force_compact,
-        );
-
-        let min_file_num = self.memtables.fold(u64::MAX, |min, t| {
-            cmp::min(min, t.min_file_num().unwrap_or(u64::MAX))
-        });
-        let purged = self.pipe_log.purge_to(min_file_num)?;
-        info!("purged {} expired log files", purged);
-
-        Ok(will_force_compact)
+        let ret = box_try!(self.0.purge_expired_files());
+        Ok(ret)
     }
 
     fn has_builtin_entry_cache(&self) -> bool {
@@ -110,11 +139,19 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn gc_entry_cache(&self, raft_group_id: u64, to: u64) {
-        self.compact_cache_to(raft_group_id, to)
+        self.0.compact_cache_to(raft_group_id, to)
+    }
+    /// Flush current cache stats.
+    fn flush_stats(&self) -> Option<engine_traits::CacheStats> {
+        let stat = self.0.flush_stats();
+        Some(engine_traits::CacheStats {
+            hit: stat.hit,
+            miss: stat.miss,
+            cache_size: stat.cache_size,
+        })
     }
 
     fn stop(&self) {
-        let mut workers = self.workers.wl();
-        workers.cache_evict.stop();
+        self.0.stop();
     }
 }

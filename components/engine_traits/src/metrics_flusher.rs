@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
-use raft_engine::RaftEngine;
+use crate::engine::RaftEngine;
 
 use crate::*;
 

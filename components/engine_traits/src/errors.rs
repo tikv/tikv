@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use raft::{Error as RaftError, StorageError};
 use std::{error, result};
 
 quick_error! {
@@ -41,6 +42,10 @@ quick_error! {
             cause(err)
             display("Codec {}", err)
         }
+        DataUnavailable(region_id: u64) {
+            from()
+            display("The entries of region {} is unavailable", region_id)
+        }
     }
 }
 
@@ -56,6 +61,19 @@ impl ErrorCodeExt for Error {
             Error::CFName(_) => error_code::engine::CF_NAME,
             Error::Codec(_) => error_code::engine::CODEC,
             Error::Other(_) => error_code::engine::UNKNOWN,
+            Error::DataUnavailable(_) => error_code::engine::DATALOSS,
+        }
+    }
+}
+
+impl From<Error> for RaftError {
+    fn from(e: Error) -> RaftError {
+        match e {
+            Error::DataUnavailable(_) => RaftError::Store(StorageError::Unavailable),
+            e => {
+                let boxed = Box::new(e) as Box<dyn std::error::Error + Sync + Send>;
+                raft::Error::Store(StorageError::Other(boxed))
+            }
         }
     }
 }

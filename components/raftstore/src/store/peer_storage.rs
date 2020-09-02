@@ -1080,10 +1080,11 @@ where
             cache.flush_stats();
             return;
         }
-        let stats = self.engines.raft.flush_stats();
-        RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
-        RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as i64);
-        RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as i64);
+        if let Some(stats) = self.engines.raft.flush_stats() {
+            RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
+            RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as i64);
+            RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as i64);
+        }
     }
 
     // Apply the peer with given snapshot.
