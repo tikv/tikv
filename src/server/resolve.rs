@@ -112,11 +112,12 @@ where
     }
 }
 
-impl<T, RR> Runnable<Task> for Runner<T, RR>
+impl<T, RR> Runnable for Runner<T, RR>
 where
     T: PdClient,
     RR: RaftStoreRouter<RocksEngine>,
 {
+    type Task = Task;
     fn run(&mut self, task: Task) {
         let store_id = task.store_id;
         let resp = self.resolve(store_id);

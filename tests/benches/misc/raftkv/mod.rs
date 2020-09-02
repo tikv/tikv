@@ -23,7 +23,7 @@ use tikv::storage::kv::{
 };
 use tikv::storage::Engine;
 use tikv_util::time::ThreadReadId;
-use txn_types::{Key, TxnExtra};
+use txn_types::Key;
 
 use crate::test;
 
@@ -98,13 +98,8 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
 
     fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
 
-    fn send_command_txn_extra(
-        &self,
-        req: RaftCmdRequest,
-        txn_extra: TxnExtra,
-        cb: Callback<RocksSnapshot>,
-    ) -> Result<()> {
-        self.invoke(RaftCommand::with_txn_extra(req, cb, txn_extra));
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) -> Result<()> {
+        self.invoke(RaftCommand::new(req, cb));
         Ok(())
     }
 }
