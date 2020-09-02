@@ -18,6 +18,7 @@ use tikv_util::worker::Scheduler;
 use txn_types::{Key, Lock, MutationType, Value, WriteRef, WriteType};
 
 use crate::endpoint::{Deregister, OldValueCache, Task};
+use crate::metrics::*;
 use crate::{Error as CdcError, Result};
 
 /// An Observer for CDC.
@@ -123,6 +124,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
             let mut reader = OldValueReader::new(snapshot);
             let get_old_value = move |key, old_value_cache: &mut OldValueCache| {
+                CDC_OLD_VALUE_CACHE_ACCESS.inc();
                 if let Some((old_value, mutation_type)) = old_value_cache.remove(&key) {
                     match mutation_type {
                         MutationType::Insert => {
@@ -143,6 +145,8 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                         _ => unreachable!(),
                     }
                 }
+                // Cannot get old value from cache, seek for it in engine.
+                CDC_OLD_VALUE_CACHE_MISS.inc();
                 reader.near_seek_old_value(&key).unwrap_or_default()
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
