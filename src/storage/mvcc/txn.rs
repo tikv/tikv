@@ -802,6 +802,29 @@ impl<S: Snapshot> MvccTxn<S> {
         )
     }
 
+    pub(crate) fn commit_lock(
+        &mut self,
+        key: Key,
+        mut lock: Lock,
+        commit_ts: TimeStamp,
+    ) -> Result<Option<ReleasedLock>> {
+        let mut write = Write::new(
+            WriteType::from_lock_type(lock.lock_type).unwrap(),
+            self.start_ts,
+            lock.short_value.take(),
+        );
+
+        for ts in &lock.rollback_ts {
+            if *ts == commit_ts {
+                write = write.set_overlapped_rollback(true);
+                break;
+            }
+        }
+
+        self.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
+        Ok(self.unlock_key(key, lock.is_pessimistic_txn()))
+    }
+
     pub fn commit(&mut self, key: Key, commit_ts: TimeStamp) -> Result<Option<ReleasedLock>> {
         fail_point!("commit", |err| Err(make_txn_error(
             err,
@@ -810,7 +833,7 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        let mut lock = match self.reader.load_lock(&key)? {
+        let lock = match self.reader.load_lock(&key)? {
             Some(mut lock) if lock.ts == self.start_ts => {
                 // A lock with larger min_commit_ts than current commit_ts can't be committed
                 if commit_ts < lock.min_commit_ts {
@@ -880,21 +903,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         };
-        let mut write = Write::new(
-            WriteType::from_lock_type(lock.lock_type).unwrap(),
-            self.start_ts,
-            lock.short_value.take(),
-        );
-
-        for ts in &lock.rollback_ts {
-            if *ts == commit_ts {
-                write = write.set_overlapped_rollback(true);
-                break;
-            }
-        }
-
-        self.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
-        Ok(self.unlock_key(key, lock.is_pessimistic_txn()))
+        self.commit_lock(key, lock, commit_ts)
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<Option<ReleasedLock>> {
