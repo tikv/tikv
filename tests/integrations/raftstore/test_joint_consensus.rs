@@ -191,14 +191,15 @@ fn test_request_in_joint_state() {
 }
 
 /// test_replace_peer_joint_state testing that when replace peer, request can
-/// be handled as usual, even two nodes crashed
+/// be handled as usual, even two nodes crashed and leader can be replaced by
+/// in joint state
 #[test]
-fn test_replace_peer_joint_state() {
+fn test_joint_replace_peers() {
     let mut cluster = new_node_cluster(0, 4);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
-    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
 
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(region_id, new_peer(2, 2));
@@ -206,6 +207,7 @@ fn test_replace_peer_joint_state() {
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
+    // Replace peers
     // Enter joint, now we have C_old(1, 2, 3) and C_new(1, 2, 4)
     pd_client.must_joint_confchange(
         region_id,
@@ -222,9 +224,32 @@ fn test_replace_peer_joint_state() {
 
     // Request can be handle as usual
     cluster.must_put(b"k2", b"v2");
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
     must_get_none(&cluster.get_engine(3), b"k2");
     must_get_none(&cluster.get_engine(4), b"k2");
+
+    // Leave joint
+    pd_client.must_leave_joint(region_id);
+
+    cluster.clear_send_filters();
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
+
+    // Replace leader
+    // Enter joint, now we have C_old(1, 2, 4) and C_new(2, 3, 4)
+    pd_client.must_joint_confchange(
+        region_id,
+        vec![
+            (ConfChangeType::AddLearnerNode, new_learner_peer(1, 1)),
+            (ConfChangeType::AddNode, new_peer(3, 3)),
+        ],
+    );
+    cluster.must_transfer_leader(region_id, new_peer(3, 3));
+
+    cluster.must_put(b"k3", b"v3");
+    for id in 1..=4 {
+        must_get_equal(&cluster.get_engine(id), b"k3", b"v3");
+    }
 
     // Leave joint
     pd_client.must_leave_joint(region_id);
