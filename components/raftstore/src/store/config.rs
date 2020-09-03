@@ -66,6 +66,13 @@ pub struct Config {
     // When the approximate size of raft log entries exceed this value,
     // gc will be forced trigger.
     pub raft_log_gc_size_limit: ReadableSize,
+    // Old Raft logs could be reserved if `raft_log_gc_threshold` is not reached.
+    // GC them after ticks `raft_log_reserve_max_ticks` times.
+    #[doc(hidden)]
+    #[config(hidden)]
+    pub raft_log_reserve_max_ticks: usize,
+    // Old logs in Raft engine needs to be purged peridically.
+    pub raft_engine_purge_interval: ReadableDuration,
     // When a peer is not responding for this time, leader will not keep entry cache for it.
     pub raft_entry_cache_life_time: ReadableDuration,
     // When a peer is newly added, reject transferring leader to the peer for a while.
@@ -206,6 +213,8 @@ impl Default for Config {
             // Assume the average size of entries is 1k.
             raft_log_gc_count_limit: split_size * 3 / 4 / ReadableSize::kb(1),
             raft_log_gc_size_limit: split_size * 3 / 4,
+            raft_log_reserve_max_ticks: 6,
+            raft_engine_purge_interval: ReadableDuration::secs(10),
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),
@@ -454,6 +463,12 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_size_limit"])
             .set(self.raft_log_gc_size_limit.0 as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_log_reserve_max_ticks"])
+            .set(self.raft_log_reserve_max_ticks as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_engine_purge_interval"])
+            .set(self.raft_engine_purge_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_entry_cache_life_time"])
             .set(self.raft_entry_cache_life_time.as_secs() as f64);

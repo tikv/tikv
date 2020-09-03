@@ -628,7 +628,6 @@ mod tests {
     use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
     use tikv_util::worker::{FutureRunnable, FutureWorker};
-    use tokio_core::reactor::Handle;
 
     fn take_callback(t: &mut GcTask) -> Callback<()> {
         let callback = match t {
@@ -675,7 +674,7 @@ mod tests {
     }
 
     impl FutureRunnable<GcTask> for MockGcRunner {
-        fn run(&mut self, mut t: GcTask, _handle: &Handle) {
+        fn run(&mut self, mut t: GcTask) {
             let cb = take_callback(&mut t);
             self.tx.send(t).unwrap();
             cb(Ok(()));

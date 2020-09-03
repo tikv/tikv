@@ -36,4 +36,16 @@ lazy_static! {
         "Total number of CDC captured regions"
     )
     .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_MISS: IntGauge = register_int_gauge!(
+        "tikv_cdc_old_value_cache_miss",
+        "Count of old value cache missing"
+    )
+    .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_ACCESS: IntGauge = register_int_gauge!(
+        "tikv_cdc_old_value_cache_access",
+        "Count of old value cache accessing"
+    )
+    .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_BYTES: IntGauge =
+        register_int_gauge!("tikv_cdc_old_value_cache_bytes", "Bytes of old value cache").unwrap();
 }

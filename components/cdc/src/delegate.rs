@@ -35,7 +35,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
-use crate::endpoint::OldValueCallback;
+use crate::endpoint::{OldValueCache, OldValueCallback};
 use crate::metrics::*;
 use crate::service::ConnID;
 use crate::{Error, Result};
@@ -403,6 +403,7 @@ impl Delegate {
         &mut self,
         batch: CmdBatch,
         old_value_cb: Rc<RefCell<OldValueCallback>>,
+        old_value_cache: &mut OldValueCache,
     ) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
         if batch.observe_id != self.id {
@@ -416,7 +417,12 @@ impl Delegate {
             } = cmd;
             if !response.get_header().has_error() {
                 if !request.has_admin_request() {
-                    self.sink_data(index, request.requests.into(), old_value_cb.clone())?;
+                    self.sink_data(
+                        index,
+                        request.requests.into(),
+                        old_value_cb.clone(),
+                        old_value_cache,
+                    )?;
                 } else {
                     self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
                 }
@@ -529,6 +535,7 @@ impl Delegate {
         index: u64,
         requests: Vec<Request>,
         old_value_cb: Rc<RefCell<OldValueCallback>>,
+        old_value_cache: &mut OldValueCache,
     ) -> Result<()> {
         let mut rows = HashMap::default();
         let mut total_size = 0;
@@ -593,7 +600,8 @@ impl Delegate {
 
                     if self.txn_extra_op == TxnExtraOp::ReadOldValue {
                         let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-                        row.old_value = old_value_cb.borrow_mut()(key).unwrap_or_default();
+                        row.old_value =
+                            old_value_cb.borrow_mut()(key, old_value_cache).unwrap_or_default();
                     }
 
                     let occupied = rows.entry(row.key.clone()).or_default();
@@ -749,7 +757,8 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::{Future, Stream};
+    use futures03::executor::block_on;
+    use futures03::stream::StreamExt;
     use kvproto::errorpb::Error as ErrorHeader;
     use kvproto::metapb::Region;
     use std::cell::Cell;
@@ -784,10 +793,7 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
-            let (events, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
-                Ok((events, rx)) => (events, rx),
-                Err(e) => panic!("unexpected recv error: {:?}", e.0),
-            };
+            let (events, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
             rx_wrap.set(Some(rx));
             let mut events = events.unwrap();
             assert_eq!(events.len(), 1);
@@ -906,10 +912,7 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let check_event = |event_rows: Vec<EventRow>| {
-            let (events, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
-                Ok((events, rx)) => (events, rx),
-                Err(e) => panic!("unexpected recv error: {:?}", e.0),
-            };
+            let (events, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
             rx_wrap.set(Some(rx));
             let mut events = events.unwrap();
             assert_eq!(events.len(), 1);
