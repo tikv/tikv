@@ -1104,6 +1104,7 @@ struct SnapManagerCore {
     registry: Arc<RwLock<HashMap<SnapKey, Vec<SnapEntry>>>>,
     limiter: Limiter,
     snap_size: Arc<AtomicU64>,
+    temp_sst_id: Arc<AtomicU64>,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
 }
 
@@ -1219,6 +1220,16 @@ impl SnapManager {
         v.sort();
         v.dedup();
         Ok(v)
+    }
+
+    pub fn get_temp_path_for_ingest(&self) -> String {
+        let sst_id = self.core.temp_sst_id.fetch_add(1, Ordering::SeqCst);
+        let filename = format!(
+            "{}_{}{}{}",
+            DEL_RANGE_PREFIX, sst_id, SST_FILE_SUFFIX, TMP_FILE_SUFFIX
+        );
+        let path = PathBuf::from(&self.core.base).join(&filename);
+        path.to_str().unwrap().to_string()
     }
 
     #[inline]
@@ -1505,6 +1516,7 @@ impl SnapManagerBuilder {
                 registry: Arc::new(RwLock::new(map![])),
                 limiter,
                 snap_size: Arc::new(AtomicU64::new(0)),
+                temp_sst_id: Arc::new(AtomicU64::new(0)),
                 encryption_key_manager: self.key_manager,
             },
             max_total_size,
@@ -1689,6 +1701,7 @@ pub mod tests {
             registry: Arc::new(RwLock::new(map![])),
             limiter: Limiter::new(INFINITY),
             snap_size: Arc::new(AtomicU64::new(0)),
+            temp_sst_id: Arc::new(AtomicU64::new(0)),
             encryption_key_manager: None,
         }
     }

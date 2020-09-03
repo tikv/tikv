@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{DeleteStrategy, MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures03::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, PdClient};
@@ -328,7 +328,12 @@ where
         for cf in cfs {
             // TODO: set use_delete_range with config here.
             local_storage
-                .delete_all_in_range_cf(cf, &start_data_key, &end_data_key, false)
+                .delete_all_in_range_cf(
+                    cf,
+                    &start_data_key,
+                    &end_data_key,
+                    DeleteStrategy::DeleteByKey,
+                )
                 .map_err(|e| {
                     let e: Error = box_err!(e);
                     warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);

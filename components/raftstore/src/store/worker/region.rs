@@ -9,9 +9,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, Mutable};
-use error_code::ErrorCodeExt;
+use engine_rocks::RocksEngine;
+use engine_traits::{DeleteStrategy, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{
+    Engines, IngestExternalFileOptions, KvEngine, Mutable, SstWriter, SstWriterBuilder,
+};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use raft_engine::RaftEngine;
@@ -33,6 +35,7 @@ use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
+use tikv_util::collections::HashMap;
 
 const GENERATE_POOL_SIZE: usize = 2;
 
@@ -42,7 +45,7 @@ pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // 10000 milliseconds
 // used to periodically check whether schedule pending applies in region runner
 pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
 
-const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
+const CLEANUP_MAX_REGION_COUNT: usize = 128;
 
 /// Region related task
 #[derive(Debug)]
@@ -318,11 +321,8 @@ where
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        self.cleanup_overlap_ranges(&start_key, &end_key);
-        box_try!(self
-            .engines
-            .kv
-            .delete_all_in_range(&start_key, &end_key, self.use_delete_range));
+        self.cleanup_overlap_ranges(&start_key, &end_key)?;
+        self.delete_all_in_range(vec![(start_key, end_key)])?;
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
@@ -396,8 +396,7 @@ where
                 SNAP_COUNTER.apply.abort.inc();
             }
             Err(e) => {
-                error!("failed to apply snap!!!"; "err" => %e, "error_code" => %e.error_code());
-
+                error!("failed to apply snap!!!"; "err" => %e);
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.fail.inc();
             }
@@ -407,96 +406,92 @@ where
     }
 
     /// Cleans up the data within the range.
-    fn cleanup_range(
-        &self,
-        region_id: u64,
-        start_key: &[u8],
-        end_key: &[u8],
-        use_delete_files: bool,
-    ) {
-        if use_delete_files {
+    fn cleanup_range(&self, ranges: Vec<(Vec<u8>, Vec<u8>)>) -> Result<()> {
+        for (start_key, end_key) in ranges.iter() {
             if let Err(e) = self
                 .engines
                 .kv
-                .delete_all_files_in_range(start_key, end_key)
+                .delete_all_files_in_range(&start_key, &end_key)
             {
-                error!(
-                    "failed to delete files in range";
-                    "region_id" => region_id,
-                    "start_key" => log_wrappers::Key(start_key),
-                    "end_key" => log_wrappers::Key(end_key),
-                    "err" => %e,
-                    "error_code" => %e.error_code(),
-                );
-                return;
+                error!("failed to delete files in range";
+                    "start_key" => log_wrappers::Key(&start_key),
+                    "end_key" => log_wrappers::Key(&end_key),
+                    "err" => %e);
+                continue;
             }
         }
-        if let Err(e) =
-            self.engines
-                .kv
-                .delete_all_in_range(start_key, end_key, self.use_delete_range)
-        {
-            error!(
-                "failed to delete data in range";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Key(start_key),
-                "end_key" => log_wrappers::Key(end_key),
-                "err" => %e,
-                "error_code" => %e.error_code(),
-            );
-        } else {
-            info!(
-                "succeed in deleting data in range";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Key(start_key),
-                "end_key" => log_wrappers::Key(end_key),
-            );
-        }
+        self.delete_all_in_range(ranges)
     }
 
     /// Gets the overlapping ranges and cleans them up.
-    fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
+    fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
         let overlap_ranges = self
             .pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
         if overlap_ranges.is_empty() {
-            return;
+            return Ok(());
         }
         let oldest_sequence = self
             .engines
             .kv
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
-        for (region_id, s_key, e_key, stale_sequence) in overlap_ranges {
+        let mut ranges = Vec::with_capacity(overlap_ranges.len());
+        for (region_id, start_key, end_key, stale_sequence) in overlap_ranges {
             // `delete_files_in_range` may break current rocksdb snapshots consistency,
             // so do not use it unless we can make sure there is no reader of the destroyed peer anymore.
-            let use_delete_files = stale_sequence < oldest_sequence;
-            if !use_delete_files {
+            if stale_sequence < oldest_sequence {
+                if let Err(e) = self
+                    .engines
+                    .kv
+                    .delete_all_files_in_range(&start_key, &end_key)
+                {
+                    error!("failed to delete files in range";
+                        "region_id" => region_id,
+                        "start_key" => log_wrappers::Key(&start_key),
+                        "end_key" => log_wrappers::Key(&end_key),
+                        "err" => %e);
+                }
+            } else {
                 SNAP_COUNTER_VEC
                     .with_label_values(&["overlap", "not_delete_files"])
                     .inc();
             }
-            self.cleanup_range(region_id, &s_key, &e_key, use_delete_files);
+            ranges.push((start_key, end_key));
         }
+        self.delete_all_in_range(ranges)
     }
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
     fn insert_pending_delete_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
-        self.cleanup_overlap_ranges(start_key, end_key);
+        if let Err(e) = self.cleanup_overlap_ranges(start_key, end_key) {
+            info!("cleanup_overlap_ranges failed";
+                "region_id" => region_id,
+                "start_key" => log_wrappers::Key(start_key),
+                "end_key" => log_wrappers::Key(end_key),
+                "err" => %e,
+            );
+        } else {
+            info!("register deleting data in range";
+                "region_id" => region_id,
+                "start_key" => log_wrappers::Key(start_key),
+                "end_key" => log_wrappers::Key(end_key),
+            );
+        }
 
-        info!(
-            "register deleting data in range";
-            "region_id" => region_id,
-            "start_key" => log_wrappers::Key(start_key),
-            "end_key" => log_wrappers::Key(end_key),
-        );
+        let seq = self.engines.kv.get_latest_sequence_number();
+        self.pending_delete_ranges
+            .insert(region_id, start_key, end_key, seq);
+    }
 
-        self.pending_delete_ranges.insert(
-            region_id,
-            start_key,
-            end_key,
-            self.engines.kv.get_latest_sequence_number(),
-        );
+    fn get_destroy_peer_strategy(&self) -> DeleteStrategy {
+        if self.use_delete_range {
+            DeleteStrategy::DeleteByRange
+        } else {
+            DeleteStrategy::DeleteByWriter {
+                sst_path: self.mgr.get_temp_path_for_ingest(),
+            }
+        }
     }
 
     /// Cleans up stale ranges.
@@ -508,26 +503,21 @@ where
             .kv
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
-        let mut cleaned_range_keys = vec![];
-        {
-            let now = Instant::now();
-            for (region_id, start_key, end_key) in
-                self.pending_delete_ranges.stale_ranges(oldest_sequence)
-            {
-                self.cleanup_range(
-                    region_id, start_key, end_key, true, /* use_delete_files */
-                );
-                cleaned_range_keys.push(start_key.to_vec());
-                let elapsed = now.elapsed();
-                if elapsed >= CLEANUP_MAX_DURATION {
-                    let len = cleaned_range_keys.len();
-                    let elapsed = elapsed.as_millis() as f64 / 1000f64;
-                    info!("clean stale ranges, now backoff"; "key_count" => len, "time_takes" => elapsed);
-                    break;
-                }
-            }
+        let mut ranges: Vec<(Vec<u8>, Vec<u8>)> = self
+            .pending_delete_ranges
+            .stale_ranges(oldest_sequence)
+            .map(|(_, s, e)| (s.to_vec(), e.to_vec()))
+            .collect();
+        ranges.sort_by(|a, b| a.0.cmp(&b.0));
+        while ranges.len() > CLEANUP_MAX_REGION_COUNT {
+            ranges.pop();
         }
-        for key in cleaned_range_keys {
+        if let Err(e) = self.cleanup_range(ranges.clone()) {
+            error!("failed to cleanup stale range"; "err" => %e);
+            return;
+        }
+        for r in ranges.into_iter() {
+            let key = r.0;
             assert!(
                 self.pending_delete_ranges.remove(&key).is_some(),
                 "cleanup pending_delete_ranges {} should exist",
@@ -554,6 +544,71 @@ where
             }
         }
         false
+    }
+
+    fn delete_all_in_range(&self, mut ranges: Vec<(Vec<u8>, Vec<u8>)>) -> Result<()> {
+        if ranges.len() < 4 || self.use_delete_range {
+            for (start_key, end_key) in ranges {
+                for cf in self.engines.kv.cf_names() {
+                    let strategy = if cf == CF_LOCK {
+                        DeleteStrategy::DeleteByKey
+                    } else {
+                        self.get_destroy_peer_strategy()
+                    };
+                    box_try!(self
+                        .engines
+                        .kv
+                        .delete_all_in_range_cf(cf, strategy, &start_key, &end_key));
+                }
+            }
+        } else {
+            ranges.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut writers = HashMap::default();
+            for cf in &[CF_DEFAULT, CF_WRITE] {
+                let sst_path = self.mgr.get_temp_path_for_ingest();
+                let builder = EK::SstWriterBuilder::new()
+                    .set_db(&self.engines.kv)
+                    .set_cf(cf);
+                let writer = box_try!(builder.build(sst_path.as_str()));
+                writers.insert(cf.to_owned(), (writer, 0, sst_path));
+            }
+
+            for (start_key, end_key) in ranges {
+                for cf in self.engines.kv.cf_names() {
+                    if let Some((writer, count, _)) = writers.get_mut(cf) {
+                        // We write keys of multiple regions into one sst-writer to avoid ingest too many
+                        // files into engine.
+                        *count += box_try!(self
+                            .engines
+                            .kv
+                            .delete_all_in_range_cf_by_ingest(cf, &start_key, &end_key, writer));
+                    } else {
+                        box_try!(self.engines.kv.delete_all_in_range_cf(
+                            cf,
+                            DeleteStrategy::DeleteByKey,
+                            &start_key,
+                            &end_key
+                        ));
+                    }
+                }
+            }
+            for (cf, (writer, count, sst_path)) in writers.into_iter() {
+                if count == 0 {
+                    let _ = std::fs::remove_file(sst_path.as_str());
+                    continue;
+                }
+                box_try!(writer.finish());
+                let handle = self.engines.kv.cf_handle(&cf).unwrap();
+                let mut opt = EK::IngestExternalFileOptions::new();
+                opt.move_files(true);
+                box_try!(self.engines.kv.ingest_external_file_cf(
+                    handle,
+                    &opt,
+                    &[sst_path.as_str()]
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -587,7 +642,6 @@ where
             pool: Builder::new(thd_name!("snap-generator"))
                 .max_thread_count(GENERATE_POOL_SIZE)
                 .build_future_pool(),
-
             ctx: SnapContext {
                 engines,
                 mgr,
@@ -685,7 +739,9 @@ where
                     .insert_pending_delete_range(region_id, &start_key, &end_key);
 
                 // try to delete stale ranges if there are any
-                self.ctx.clean_stale_ranges();
+                if !self.ctx.ingest_maybe_stall() {
+                    self.ctx.clean_stale_ranges();
+                }
             }
         }
     }
@@ -845,23 +901,27 @@ mod tests {
         let engine = get_test_db_for_regions(&temp_dir, None, None, None, None, &[1]).unwrap();
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
-        let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
-        let (router, _) = mpsc::sync_channel(1);
+        let shared_block_cache = false;
+        let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
+        let (router, _) = mpsc::sync_channel(11);
         let runner = RegionRunner::new(
             engines,
             mgr,
             0,
-            true,
+            false,
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(100), Event::CheckStalePeer);
-        worker.start_with_timer(runner, timer).unwrap();
-
+        let mut ranges = vec![];
+        for i in 0..10 {
+            let mut key = b"k0".to_vec();
+            key.extend_from_slice(i.to_string().as_bytes());
+            engine.kv.put(&key, b"v1").unwrap();
+            ranges.push(key);
+        }
         engine.kv.put(b"k1", b"v1").unwrap();
         let snap = engine.kv.snapshot();
         engine.kv.put(b"k2", b"v2").unwrap();
@@ -873,11 +933,26 @@ mod tests {
                 end_key: b"k2".to_vec(),
             })
             .unwrap();
+        for i in 0..9 {
+            sched
+                .schedule(Task::Destroy {
+                    region_id: i as u64 + 2,
+                    start_key: ranges[i].clone(),
+                    end_key: ranges[i + 1].clone(),
+                })
+                .unwrap();
+        }
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_millis(100), Event::CheckStalePeer);
+        worker.start_with_timer(runner, timer).unwrap();
+        thread::sleep(Duration::from_millis(20));
         drop(snap);
-
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(200));
         assert!(engine.kv.get_value(b"k1").unwrap().is_none());
         assert_eq!(engine.kv.get_value(b"k2").unwrap().unwrap(), b"v2");
+        for i in 0..9 {
+            assert!(engine.kv.get_value(&ranges[i]).unwrap().is_none());
+        }
     }
 
     #[test]
@@ -886,6 +961,7 @@ mod tests {
             .prefix("test_pending_applies")
             .tempdir()
             .unwrap();
+
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
