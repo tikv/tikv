@@ -5,14 +5,10 @@ use std::mem;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-<<<<<<< HEAD
 use engine_traits::LARGE_CFS;
 use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-=======
-use engine_traits::{KvEngine, Range};
 use error_code::ErrorCodeExt;
->>>>>>> 787c490... raftstore: ouput error code to logs  (#8385)
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 

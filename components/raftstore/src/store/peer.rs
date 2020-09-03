@@ -9,14 +9,10 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-<<<<<<< HEAD
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{KvEngine, Peekable, Snapshot, WriteBatchExt, WriteOptions};
-=======
-use engine_traits::{KvEngine, KvEngines, Snapshot, WriteOptions};
 use error_code::ErrorCodeExt;
->>>>>>> 787c490... raftstore: ouput error code to logs  (#8385)
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;

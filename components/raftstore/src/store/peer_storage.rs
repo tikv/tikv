@@ -12,12 +12,8 @@ use engine::rocks::DB;
 use engine::Engines;
 use engine_rocks::{Compat, RocksSnapshot, RocksWriteBatch};
 use engine_traits::CF_RAFT;
-<<<<<<< HEAD
 use engine_traits::{Iterable, KvEngine, Mutable, Peekable, SyncMutable};
-=======
-use engine_traits::{KvEngine, KvEngines, Mutable, Peekable, WriteBatch};
 use error_code::ErrorCodeExt;
->>>>>>> 787c490... raftstore: ouput error code to logs  (#8385)
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1291,28 +1287,6 @@ impl PeerStorage {
             }
         }
 
-<<<<<<< HEAD
-=======
-        // Note that the correctness depends on the fact that these source regions MUST NOT
-        // serve read request otherwise a corrupt data may be returned.
-        // For now, it is ensured by
-        // 1. After `PrepareMerge` log is committed, the source region leader's lease will be
-        //    suspected immediately which makes the local reader not serve read request.
-        // 2. No read request can be responsed in peer fsm during merging.
-        // These conditions are used to prevent reading **stale** data in the past.
-        // At present, they are also used to prevent reading **corrupt** data.
-        for r in &ctx.destroyed_regions {
-            if let Err(e) = self.clear_extra_data(r, &snap_region) {
-                error!(
-                    "failed to cleanup data, may leave some dirty data";
-                    "region_id" => r.get_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
-                );
-            }
-        }
-
->>>>>>> 787c490... raftstore: ouput error code to logs  (#8385)
         self.schedule_applying_snapshot();
         let prev_region = self.region().clone();
         self.set_region(snap_region);

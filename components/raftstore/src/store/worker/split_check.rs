@@ -6,15 +6,10 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
 
-<<<<<<< HEAD
 use engine::DB;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, CF_WRITE, LARGE_CFS};
-=======
-use engine_rocks::RocksEngine;
-use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
 use error_code::ErrorCodeExt;
->>>>>>> 787c490... raftstore: ouput error code to logs  (#8385)
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;

@@ -12,12 +12,8 @@ use std::u64;
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-<<<<<<< HEAD
 use engine_traits::{MiscExt, Mutable, Peekable, WriteBatchExt};
-=======
-use engine_traits::{KvEngine, KvEngines, Mutable};
 use error_code::ErrorCodeExt;
->>>>>>> 787c490... raftstore: ouput error code to logs  (#8385)
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
