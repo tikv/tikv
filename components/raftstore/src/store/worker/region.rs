@@ -630,12 +630,14 @@ where
     }
 }
 
-impl<EK, ER, R> Runnable<Task<EK::Snapshot>> for Runner<EK, ER, R>
+impl<EK, ER, R> Runnable for Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
+    type Task = Task<EK::Snapshot>;
+
     fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
             Task::Gen {
@@ -699,12 +701,14 @@ pub enum Event {
     CheckApply,
 }
 
-impl<EK, ER, R> RunnableWithTimer<Task<EK::Snapshot>, Event> for Runner<EK, ER, R>
+impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
+    type TimeoutTask = Event;
+
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
             Event::CheckApply => {
@@ -844,8 +848,7 @@ mod tests {
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
-        let shared_block_cache = false;
-        let engines = Engines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
+        let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let (router, _) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
             engines,
@@ -922,8 +925,7 @@ mod tests {
             }
         }
 
-        let shared_block_cache = false;
-        let engines = Engines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
+        let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("snap-manager");

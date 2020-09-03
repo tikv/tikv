@@ -10,9 +10,8 @@ use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
 use std::{cmp, io};
 
-use futures::Future;
-use futures03::compat::Compat;
-use futures03::future::TryFutureExt;
+use futures::executor::block_on;
+use futures::future::TryFutureExt;
 use tokio::task::spawn_local;
 
 use engine_traits::KvEngine;
@@ -1026,7 +1025,7 @@ where
             Task::AutoSplit { split_infos } => {
                 for split_info in split_infos {
                     if let Ok(Some(region)) =
-                        Compat::new(self.pd_client.get_region_by_id(split_info.region_id)).wait()
+                        block_on(self.pd_client.get_region_by_id(split_info.region_id))
                     {
                         self.handle_ask_batch_split(
                             region,

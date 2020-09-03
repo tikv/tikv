@@ -272,9 +272,9 @@ pub mod test_router {
     use raftstore::Result as RaftStoreResult;
 
     use engine_rocks::RocksSnapshot;
-    use kvproto::raft_cmdpb::RaftCmdRequest;
+    use engine_traits::{KvEngine, Snapshot};
     use kvproto::raft_serverpb::RaftMessage;
-    use txn_types::TxnExtra;
+
     #[derive(Clone)]
     pub struct TestRaftStoreRouter {
         tx: Sender<usize>,
@@ -293,27 +293,32 @@ pub mod test_router {
         }
     }
 
+    impl StoreRouter for TestRaftStoreRouter {
+        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+            self.tx.send(1).unwrap();
+            Ok(())
+        }
+    }
+
+    impl<S: Snapshot> ProposalRouter<S> for TestRaftStoreRouter {
+        fn send(
+            &self,
+            _: RaftCommand<S>,
+        ) -> std::result::Result<(), crossbeam::channel::TrySendError<RaftCommand<S>>> {
+            self.tx.send(1).unwrap();
+            Ok(())
+        }
+    }
+
+    impl<EK: KvEngine> CasualRouter<EK> for TestRaftStoreRouter {
+        fn send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
+            self.tx.send(1).unwrap();
+            Ok(())
+        }
+    }
+
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
-            Ok(())
-        }
-
-        fn send_command(
-            &self,
-            _: RaftCmdRequest,
-            _: Callback<RocksSnapshot>,
-        ) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
-            Ok(())
-        }
-
-        fn send_command_txn_extra(
-            &self,
-            _: RaftCmdRequest,
-            _: TxnExtra,
-            _: Callback<RocksSnapshot>,
-        ) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
@@ -324,11 +329,6 @@ pub mod test_router {
             msg: SignificantMsg<RocksSnapshot>,
         ) -> RaftStoreResult<()> {
             self.significant_msg_sender.send(msg).unwrap();
-            Ok(())
-        }
-
-        fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
             Ok(())
         }
 

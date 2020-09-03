@@ -328,7 +328,9 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
     }
 }
 
-impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable<Task> for Runner<R> {
+impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable for Runner<R> {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::Recv { stream, sink } => {

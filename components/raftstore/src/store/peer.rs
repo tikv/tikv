@@ -32,7 +32,6 @@ use raft::{
 use raft_engine::RaftEngine;
 use smallvec::SmallVec;
 use time::Timespec;
-use txn_types::TxnExtra;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -2024,7 +2023,6 @@ where
         cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        txn_extra: TxnExtra,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -2079,7 +2077,6 @@ where
                     index: idx,
                     term: self.term(),
                     cb,
-                    txn_extra,
                     renew_lease_time: None,
                 };
                 if let Some(cmd_type) = req_admin_cmd_type {
@@ -2461,7 +2458,6 @@ where
                     index,
                     term: self.term(),
                     cb: Callback::None,
-                    txn_extra: TxnExtra::default(),
                     renew_lease_time: Some(renew_lease_time),
                 };
                 self.post_propose(poll_ctx, p);
@@ -2633,7 +2629,7 @@ where
             // The admin request is rejected because it may need to update epoch checker which
             // introduces an uncertainty and may breaks the correctness of epoch checker.
             return Err(box_err!(
-                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
                 self.get_store().applied_index_term(),
                 self.term()
@@ -2814,7 +2810,7 @@ where
         // `self.get_store().applied_index()` is passed.
         if self.get_store().applied_index_term() != self.term() {
             return Err(box_err!(
-                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
                 self.get_store().applied_index_term(),
                 self.term()
@@ -3639,7 +3635,6 @@ mod tests {
                 index,
                 term: (index / 10) + 1,
                 cb: Callback::None,
-                txn_extra: TxnExtra::default(),
                 renew_lease_time,
             });
         }

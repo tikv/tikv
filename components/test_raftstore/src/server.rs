@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
-use futures03::executor::block_on;
+use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::{create_debug, DebugClient};
@@ -25,7 +25,9 @@ use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
-use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
+use raftstore::router::{
+    LocalReadRouter, RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter,
+};
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::{
@@ -233,7 +235,7 @@ impl Simulator for ServerCluster {
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            Some(raft_router.clone()),
+            Some(router.clone()),
             cfg.gc.clone(),
             Default::default(),
         );
