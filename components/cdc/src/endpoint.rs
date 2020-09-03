@@ -698,7 +698,7 @@ impl Initializer {
         let downstream_id = self.downstream_id;
         let conn_id = self.conn_id;
         let region_id = region.get_id();
-        info!("async incremental scan";
+        debug!("async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
             "observe_id" => ?self.observe_id);
@@ -761,11 +761,12 @@ impl Initializer {
             }
         }
 
+        let takes = start.elapsed();
         if let Some(resolver) = resolver {
-            Self::finish_building_resolver(self.observe_id, resolver, region, self.sched.clone());
+            self.finish_building_resolver(resolver, region, takes);
         }
 
-        CDC_SCAN_DURATION_HISTOGRAM.observe(start.elapsed().as_secs_f64());
+        CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
     }
 
     fn scan_batch<S: Snapshot>(
@@ -804,32 +805,21 @@ impl Initializer {
         Ok(entries)
     }
 
-    fn finish_building_resolver(
-        observe_id: ObserveID,
-        mut resolver: Resolver,
-        region: Region,
-        sched: Scheduler<Task>,
-    ) {
+    fn finish_building_resolver(&self, mut resolver: Resolver, region: Region, takes: Duration) {
+        let observe_id = self.observe_id;
         resolver.init();
-        if resolver.locks().is_empty() {
-            info!(
-                "no lock found";
-                "region_id" => region.get_id()
-            );
-        } else {
-            let rts = resolver.resolve(TimeStamp::zero());
-            info!(
-                "resolver initialized";
-                "region_id" => region.get_id(),
-                "resolved_ts" => rts,
-                "lock_count" => resolver.locks().len(),
-                "observe_id" => ?observe_id,
-            );
-        }
+        let rts = resolver.resolve(TimeStamp::zero());
+        info!(
+            "resolver initialized and schedule resolver ready";
+            "region_id" => region.get_id(),
+            "resolved_ts" => rts,
+            "lock_count" => resolver.locks().len(),
+            "observe_id" => ?observe_id,
+            "takes" => ?takes,
+        );
 
         fail_point!("before_schedule_resolver_ready");
-        info!("schedule resolver ready"; "region_id" => region.get_id(), "observe_id" => ?observe_id);
-        if let Err(e) = sched.schedule(Task::ResolverReady {
+        if let Err(e) = self.sched.schedule(Task::ResolverReady {
             observe_id,
             resolver,
             region,
