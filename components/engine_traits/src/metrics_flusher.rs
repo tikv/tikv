@@ -49,7 +49,7 @@ impl<K: KvEngine, R: RaftEngine> MetricsFlusher<K, R> {
                     raft_db.flush_metrics("raft");
                     if last_reset.elapsed() >= FLUSHER_RESET_INTERVAL {
                         kv_db.reset_statistics();
-                        // raft_db.reset_statistics();
+                        raft_db.reset_statistics();
                         last_reset = Instant::now();
                     }
                 }
