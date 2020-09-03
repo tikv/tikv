@@ -22,6 +22,7 @@ use kvproto::raft_cmdpb::*;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::RocksEngine;
 use engine_traits::{SstExt, SstWriterBuilder};
+use error_code::ErrorCodeExt;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
 use security::{check_common_name, SecurityManager};
@@ -103,7 +104,9 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         };
         match res {
             Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
-            Err(ref e) => error!("switch mode failed"; "mode" => ?req.get_mode(), "err" => %e),
+            Err(ref e) => {
+                error!("switch mode failed"; "mode" => ?req.get_mode(), "err" => %e, "error_code" => %e.error_code())
+            }
         }
 
         ctx.spawn(
@@ -338,7 +341,9 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
                     "compact files in range failed";
                     "start" => start.map(log_wrappers::Key),
                     "end" => end.map(log_wrappers::Key),
-                    "output_level" => ?output_level, "err" => %e
+                    "output_level" => ?output_level,
+                    "err" => %e,
+                    "error_code" => %e.error_code()
                 ),
             }
 
@@ -416,7 +421,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
                         let writer = match import.new_writer::<RocksEngine>(default, write, meta) {
                             Ok(w) => w,
                             Err(e) => {
-                                error!("build writer failed {:?}", e);
+                                error!("build writer failed"; "err" => %e, "error_code" => %e.error_code());
                                 return Err(Error::InvalidChunk);
                             }
                         };

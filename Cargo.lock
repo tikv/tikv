@@ -199,6 +199,7 @@ dependencies = [
  "crc64fast",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "external_storage",
  "failure",
  "futures 0.1.29",

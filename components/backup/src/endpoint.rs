@@ -11,6 +11,7 @@ use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, IterOptions, SstCompressionType, DATA_KEY_PREFIX_LEN};
+use error_code::ErrorCodeExt;
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
@@ -180,7 +181,7 @@ impl BackupRange {
         let snapshot = match engine.snapshot(&ctx) {
             Ok(s) => s,
             Err(e) => {
-                error!("backup snapshot failed"; "error" => ?e);
+                error!("backup snapshot failed"; "error" => ?e, "error_code" => %e.error_code());
                 return Err(e.into());
             }
         };
@@ -204,7 +205,7 @@ impl BackupRange {
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
-                error!("backup scan entries failed"; "error" => ?e);
+                error!("backup scan entries failed"; "error" => ?e, "error_code" => %e.error_code());
                 return Err(e.into());
             };
             if batch.is_empty() {
@@ -238,7 +239,7 @@ impl BackupRange {
         let snapshot = match engine.snapshot(&ctx) {
             Ok(s) => s,
             Err(e) => {
-                error!("backup raw kv snapshot failed"; "error" => ?e);
+                error!("backup raw kv snapshot failed"; "error" => ?e, "error_code" => %e.error_code());
                 return Err(e.into());
             }
         };
@@ -488,7 +489,7 @@ impl<R: RegionInfoProvider> Progress<R> {
         );
         if let Err(e) = res {
             // TODO: handle error.
-            error!("backup seek region failed"; "error" => ?e);
+            error!("backup seek region failed"; "error" => ?e, "error_code" => %e.error_code());
         }
 
         let branges: Vec<_> = rx.iter().collect();

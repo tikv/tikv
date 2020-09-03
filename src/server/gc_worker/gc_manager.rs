@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use error_code::ErrorCodeExt;
 use pd_client::ClusterVersion;
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -349,7 +350,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             Ok(res) => res,
             // Return false directly so we will check it a while later.
             Err(e) => {
-                error!("failed to get safe point from pd"; "err" => ?e);
+                error!("failed to get safe point from pd"; "err" => ?e, "error_code" => %e.error_code());
                 return false;
             }
         };
@@ -583,7 +584,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
 
         if let Err(e) = res {
             error!(
-                "gc_worker: failed to get next region information"; "err" => ?e
+                "gc_worker: failed to get next region information"; "err" => ?e, "error_code" => %e.error_code()
             );
             return (None, None);
         };

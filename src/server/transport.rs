@@ -10,6 +10,7 @@ use crate::server::resolve::StoreAddrResolver;
 use crate::server::snap::Task as SnapTask;
 use crate::server::Result;
 use engine_rocks::RocksEngine;
+use error_code::ErrorCodeExt;
 use raft::SnapshotStatus;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Transport;
@@ -219,7 +220,8 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static>
                 "region_id" => region_id,
                 "to_store_id" => store_id,
                 "to_peer_id" => to_peer_id,
-                "err" => ?e
+                "err" => ?e,
+                "error_code" => %e.error_code()
             );
         }
     }
@@ -277,7 +279,8 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
                 "to_peer_id" => self.to_peer_id,
                 "to_store_id" => self.to_store_id,
                 "region_id" => self.region_id,
-                "err" => ?e
+                "err" => ?e,
+                "error_code" => %e.error_code()
             );
         }
     }

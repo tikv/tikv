@@ -5,6 +5,7 @@ use crate::server::snap::Task as SnapTask;
 use crate::server::{self, Config, StoreAddrResolver};
 use crossbeam::queue::{ArrayQueue, PushError};
 use engine_rocks::RocksEngine;
+use error_code::ErrorCodeExt;
 use futures::task::{self, Task};
 use futures::{Async, AsyncSink, Future, Poll, Sink};
 use futures03::compat::Future01CompatExt;
@@ -323,7 +324,8 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
                 "to_peer_id" => self.to_peer_id,
                 "to_store_id" => self.to_store_id,
                 "region_id" => self.region_id,
-                "err" => ?e
+                "err" => ?e,
+                "error_code" => %e.error_code()
             );
         }
     }
@@ -541,7 +543,8 @@ where
                         "to_peer_id" => peer_id,
                         "to_store_id" => self.store_id,
                         "region_id" => region_id,
-                        "err" => ?e
+                        "err" => ?e,
+                        "error_code" => %e.error_code()
                     );
                 }
             } else {

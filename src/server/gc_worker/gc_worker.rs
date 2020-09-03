@@ -10,6 +10,7 @@ use std::time::Instant;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use error_code::ErrorCodeExt;
 use futures03::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, PdClient};
@@ -243,7 +244,7 @@ impl<E: Engine> GcRunner<E> {
             let (mut next_gc_key, mut gc_info) = (keys.next(), GcInfo::default());
             while let Some(ref key) = next_gc_key {
                 if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn) {
-                    error!("GC meets failure"; "key" => %key, "err" => ?e);
+                    error!("GC meets failure"; "key" => %key, "err" => ?e, "error_code" => %e.error_code());
                     // Switch to the next key if meets failure.
                     gc_info.is_completed = true;
                 }
@@ -488,7 +489,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
 
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
 fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask>) -> Result<()> {
-    error!("failed to schedule gc task: {:?}", e);
+    error!("failed to schedule gc task"; "err" => %e);
     Err(box_err!("failed to schedule gc task: {:?}", e))
 }
 
@@ -582,7 +583,7 @@ impl<E: Engine> Drop for GcWorker<E> {
 
         let r = self.stop();
         if let Err(e) = r {
-            error!("Failed to stop gc_worker"; "err" => ?e);
+            error!("Failed to stop gc_worker"; "err" => ?e, "error_code" => %e.error_code());
         }
     }
 }

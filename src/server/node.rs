@@ -14,6 +14,7 @@ use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, Peekable};
+use error_code::ErrorCodeExt;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
@@ -341,7 +342,7 @@ where
                 },
                 // TODO: should we clean region for other errors too?
                 Err(e) => {
-                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e)
+                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e, "error_code" => %e.error_code())
                 }
             }
             retry += 1;

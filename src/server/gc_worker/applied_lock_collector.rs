@@ -9,6 +9,7 @@ use txn_types::Key;
 
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_LOCK};
+use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::CmdType;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
@@ -191,7 +192,8 @@ impl QueryObserver for LockObserver {
                     error!(
                         "cannot parse lock";
                         "value" => hex::encode_upper(put_request.get_value()),
-                        "err" => ?e
+                        "err" => ?e,
+                        "error_code" => %e.error_code()
                     );
                     self.state.mark_dirty();
                     return;
@@ -249,7 +251,8 @@ impl ApplySnapshotObserver for LockObserver {
             Err(e) => {
                 error!(
                     "cannot parse lock";
-                    "err" => ?e
+                    "err" => ?e,
+                    "error_code" => %e.error_code()
                 );
                 self.state.mark_dirty()
             }
@@ -452,7 +455,7 @@ impl Drop for AppliedLockCollector {
     fn drop(&mut self) {
         let r = self.stop();
         if let Err(e) = r {
-            error!("Failed to stop applied_lock_collector"; "err" => ?e);
+            error!("Failed to stop applied_lock_collector"; "err" => ?e, "error_code" => %e.error_code());
         }
     }
 }
