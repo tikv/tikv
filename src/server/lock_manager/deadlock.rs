@@ -9,6 +9,7 @@ use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
 use engine_rocks::RocksEngine;
 use futures::{Future, Sink, Stream};
+use futures03::compat::{Compat, Future01CompatExt};
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
     WriteFlags,
@@ -31,7 +32,7 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
-use tokio_core::reactor::Handle;
+use tokio::task::spawn_local;
 use txn_types::TimeStamp;
 
 /// `Locks` is a set of locks belonging to one transaction.
@@ -628,7 +629,7 @@ where
     }
 
     /// Reconnects the leader. The leader info must exist.
-    fn reconnect_leader(&mut self, handle: &Handle) {
+    fn reconnect_leader(&mut self) {
         assert!(self.leader_client.is_none() && self.leader_info.is_some());
         ERROR_COUNTER_METRICS.reconnect_leader.inc();
         let (leader_id, leader_addr) = self.leader_info.as_ref().unwrap();
@@ -656,9 +657,12 @@ where
                 resp.get_deadlock_key_hash(),
             )
         }));
-        handle.spawn(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
+        spawn_local(
+            send.map_err(|e| error!("leader client failed"; "err" => ?e))
+                .compat(),
+        );
         // No need to log it again.
-        handle.spawn(recv.map_err(|_| ()));
+        spawn_local(recv.map_err(|_| ()).compat());
 
         self.leader_client = Some(leader_client);
         info!("reconnect leader succeeded"; "leader_id" => leader_id);
@@ -668,17 +672,11 @@ where
     ///
     /// If the client is None, reconnects the leader first, then sends the request to the leader.
     /// If sends failed, sets the client to None for retry.
-    fn send_request_to_leader(
-        &mut self,
-        handle: &Handle,
-        tp: DetectType,
-        txn_ts: TimeStamp,
-        lock: Lock,
-    ) -> bool {
+    fn send_request_to_leader(&mut self, tp: DetectType, txn_ts: TimeStamp, lock: Lock) -> bool {
         assert!(!self.is_leader() && self.leader_info.is_some());
 
         if self.leader_client.is_none() {
-            self.reconnect_leader(handle);
+            self.reconnect_leader();
         }
         if let Some(leader_client) = &self.leader_client {
             let tp = match tp {
@@ -719,7 +717,7 @@ where
     }
 
     /// Handles detect requests of itself.
-    fn handle_detect(&mut self, handle: &Handle, tp: DetectType, txn_ts: TimeStamp, lock: Lock) {
+    fn handle_detect(&mut self, tp: DetectType, txn_ts: TimeStamp, lock: Lock) {
         if self.is_leader() {
             self.handle_detect_locally(tp, txn_ts, lock);
         } else {
@@ -731,7 +729,7 @@ where
                 if self.leader_client.is_none() && !self.refresh_leader_info() {
                     break;
                 }
-                if self.send_request_to_leader(handle, tp, txn_ts, lock) {
+                if self.send_request_to_leader(tp, txn_ts, lock) {
                     return;
                 }
                 // Because the client is asynchronous, it won't be closed until failing to send a
@@ -747,7 +745,6 @@ where
     /// Handles detect requests of other nodes.
     fn handle_detect_rpc(
         &self,
-        handle: &Handle,
         stream: RequestStream<DeadlockRequest>,
         sink: DuplexSink<DeadlockResponse>,
     ) {
@@ -756,7 +753,7 @@ where
                 RpcStatusCode::FAILED_PRECONDITION,
                 Some("I'm not the leader of deadlock detector".to_string()),
             );
-            handle.spawn(sink.fail(status).map_err(|_| ()));
+            spawn_local(sink.fail(status).map_err(|_| ()).compat());
             ERROR_COUNTER_METRICS.not_leader.inc();
             return;
         }
@@ -807,11 +804,12 @@ where
                 Ok(res)
             })
             .filter_map(|resp| resp);
-        handle.spawn(
+        spawn_local(
             sink.sink_map_err(Error::Grpc)
                 .send_all(s)
                 .map(|_| ())
-                .map_err(|_| ()),
+                .map_err(|_| ())
+                .compat(),
         );
     }
 
@@ -832,13 +830,13 @@ where
     S: StoreAddrResolver + 'static,
     P: PdClient + 'static,
 {
-    fn run(&mut self, task: Task, handle: &Handle) {
+    fn run(&mut self, task: Task) {
         match task {
             Task::Detect { tp, txn_ts, lock } => {
-                self.handle_detect(handle, tp, txn_ts, lock);
+                self.handle_detect(tp, txn_ts, lock);
             }
             Task::DetectRpc { stream, sink } => {
-                self.handle_detect_rpc(handle, stream, sink);
+                self.handle_detect_rpc(stream, sink);
             }
             Task::ChangeRole(role) => self.handle_change_role(role),
             Task::ChangeTTL(ttl) => self.handle_change_ttl(ttl),
@@ -891,7 +889,8 @@ impl Deadlock for Service {
             ctx.spawn(sink.fail(status).map_err(|_| ()))
         } else {
             ctx.spawn(
-                f.map_err(Error::from)
+                Compat::new(f)
+                    .map_err(Error::from)
                     .map(|v| {
                         let mut resp = WaitForEntriesResponse::default();
                         resp.set_entries(v.into());
@@ -930,6 +929,7 @@ impl Deadlock for Service {
 pub mod tests {
     use super::*;
     use crate::server::resolve::Callback;
+    use futures03::executor::block_on;
     use security::SecurityConfig;
     use tikv_util::worker::FutureWorker;
 
@@ -1141,7 +1141,7 @@ pub mod tests {
         let check_role = |role| {
             let (tx, f) = paired_future_callback();
             scheduler.get_role(tx);
-            assert_eq!(f.wait().unwrap(), role);
+            assert_eq!(block_on(f).unwrap(), role);
         };
 
         // Region changed

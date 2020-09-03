@@ -5,7 +5,6 @@ use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 
-use engine_rocks::RocksEngine;
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
 use error_code::ErrorCodeExt;
 use kvproto::metapb::Region;
@@ -163,20 +162,22 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<S> {
-    engine: RocksEngine,
+pub struct Runner<E, S>
+where
+    E: KvEngine,
+{
+    engine: E,
     router: S,
-    coprocessor: CoprocessorHost<RocksEngine>,
+    coprocessor: CoprocessorHost<E>,
     cfg: Config,
 }
 
-impl<S: CasualRouter<RocksEngine>> Runner<S> {
-    pub fn new(
-        engine: RocksEngine,
-        router: S,
-        coprocessor: CoprocessorHost<RocksEngine>,
-        cfg: Config,
-    ) -> Runner<S> {
+impl<E, S> Runner<E, S>
+where
+    E: KvEngine,
+    S: CasualRouter<E>,
+{
+    pub fn new(engine: E, router: S, coprocessor: CoprocessorHost<E>, cfg: Config) -> Runner<E, S> {
         Runner {
             engine,
             router,
@@ -266,13 +267,13 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
     /// Gets the split keys by scanning the range.
     fn scan_split_keys(
         &self,
-        host: &mut SplitCheckerHost<'_, RocksEngine>,
+        host: &mut SplitCheckerHost<'_, E>,
         region: &Region,
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<Vec<Vec<u8>>> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-        MergedIterator::<<RocksEngine as Iterable>::Iterator>::new(
+        MergedIterator::<<E as Iterable>::Iterator>::new(
             &self.engine,
             LARGE_CFS,
             start_key,
@@ -320,7 +321,13 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
     }
 }
 
-impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
+impl<E, S> Runnable for Runner<E, S>
+where
+    E: KvEngine,
+    S: CasualRouter<E>,
+{
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::SplitCheckTask {
@@ -335,10 +342,10 @@ impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
     }
 }
 
-fn new_split_region(
-    region_epoch: RegionEpoch,
-    split_keys: Vec<Vec<u8>>,
-) -> CasualMessage<RocksEngine> {
+fn new_split_region<E>(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage<E>
+where
+    E: KvEngine,
+{
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,

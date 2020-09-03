@@ -69,6 +69,7 @@ byteorder = "1.2"
 cache-size = "0.5"
 chrono = "0.4"
 codec = { path = "components/codec" }
+concurrency_manager = { path = "components/concurrency_manager" }
 configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
@@ -122,6 +123,7 @@ rev_lines = "0.2.1"
 security = { path = "components/security" }
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
+serde_ignored = "0.1"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
@@ -232,6 +234,7 @@ members = [
   "components/into_other",
   "components/encryption",
   "components/error_code",
+  "components/concurrency_manager",
 ]
 default-members = ["cmd"]
 

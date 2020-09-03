@@ -19,7 +19,6 @@ use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest,
 
 use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
-use crate::storage::concurrency_manager::ConcurrencyManager;
 use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
@@ -30,6 +29,7 @@ use crate::coprocessor::interceptors::track;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
+use concurrency_manager::ConcurrencyManager;
 use minitrace::prelude::*;
 use txn_types::Lock;
 

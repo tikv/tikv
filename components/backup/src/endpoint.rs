@@ -7,6 +7,7 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::{borrow::Cow, time::*};
 
+use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, IterOptions, SstCompressionType, DATA_KEY_PREFIX_LEN};
@@ -24,7 +25,7 @@ use tikv::storage::mvcc::Error as MvccError;
 use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
-use tikv::storage::{concurrency_manager::ConcurrencyManager, Statistics};
+use tikv::storage::Statistics;
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
@@ -795,7 +796,9 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
+impl<E: Engine, R: RegionInfoProvider> Runnable for Endpoint<E, R> {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         if task.has_canceled() {
             warn!("backup task has canceled"; "task" => %task);
@@ -807,7 +810,9 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer<Task, ()> for Endpoint<E, R> {
+impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer for Endpoint<E, R> {
+    type TimeoutTask = ();
+
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
         self.pool.borrow_mut().check_active(pool_idle_duration);

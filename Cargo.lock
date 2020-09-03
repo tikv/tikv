@@ -194,6 +194,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "concurrency_manager",
  "configuration",
  "crc64fast",
  "engine_rocks",
@@ -455,6 +456,7 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
+ "concurrency_manager",
  "crossbeam",
  "engine_rocks",
  "engine_traits",
@@ -480,7 +482,7 @@ dependencies = [
  "test_util",
  "tikv",
  "tikv_util",
- "tokio-threadpool",
+ "tokio 0.2.13",
  "txn_types",
 ]
 
@@ -573,6 +575,7 @@ dependencies = [
  "cdc",
  "chrono",
  "clap",
+ "concurrency_manager",
  "encryption",
  "engine_rocks",
  "engine_traits",
@@ -632,6 +635,15 @@ dependencies = [
  "rand",
  "static_assertions",
  "tikv_alloc",
+]
+
+[[package]]
+name = "concurrency_manager"
+version = "0.0.1"
+dependencies = [
+ "parking_lot 0.10.0",
+ "tokio 0.2.13",
+ "txn_types",
 ]
 
 [[package]]
@@ -1865,7 +1877,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#6157337686b1654f0bfb55920faf95b3d3e34d87"
+source = "git+https://github.com/pingcap/kvproto.git#d677e6fd224a9c59ff6b3e29426fc8818ebebfbd"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -1885,9 +1897,9 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
-version = "0.2.66"
+version = "0.2.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d515b1f41455adea1313a4a2ac8a8a477634fbae63cc6100e3aebb207ce61558"
+checksum = "755456fae044e6fa1ebbbd1b3e902ae19e73097ed4ed87bb79934a867c007bc3"
 
 [[package]]
 name = "libflate"
@@ -2319,6 +2331,18 @@ dependencies = [
  "cfg-if",
  "libc",
  "void",
+]
+
+[[package]]
+name = "nix"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83450fe6a6142ddd95fb064b746083fc4ef1705fe81f64a64e1d4b39f54a1055"
+dependencies = [
+ "bitflags",
+ "cc",
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]
@@ -3020,10 +3044,11 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine#8d45f51381ebf9941f9857474602cab2a5e9a0a2"
+source = "git+https://github.com/tikv/raft-engine#16f8a37c88d758131740f492a1626f6016dfaafd"
 dependencies = [
  "byteorder",
  "crc32fast",
+ "crossbeam",
  "errno",
  "fxhash",
  "kvproto",
@@ -3031,6 +3056,7 @@ dependencies = [
  "libc",
  "log",
  "lz4-sys",
+ "nix 0.18.0",
  "prometheus",
  "protobuf",
  "quick-error",
@@ -3038,6 +3064,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
@@ -3058,6 +3085,7 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
+ "concurrency_manager",
  "configuration",
  "crc32fast",
  "crossbeam",
@@ -3068,9 +3096,7 @@ dependencies = [
  "error_code",
  "fail",
  "fs2",
- "futures 0.1.29",
  "futures 0.3.4",
- "futures-executor",
  "futures-util",
  "hex 0.4.2",
  "into_other",
@@ -3105,9 +3131,6 @@ dependencies = [
  "tikv_util",
  "time 0.1.42",
  "tokio 0.2.13",
- "tokio-core",
- "tokio-threadpool",
- "tokio-timer",
  "txn_types",
  "uuid",
  "yatp",
@@ -3695,6 +3718,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_ignored"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c2c7d39d14f2f2ea82239de71594782f186fd03501ac81f0ce08e674819ff2f"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde_json"
 version = "1.0.51"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3905,9 +3937,8 @@ dependencies = [
  "engine_traits",
  "error_code",
  "external_storage",
- "futures 0.1.29",
+ "futures 0.3.4",
  "futures-cpupool",
- "futures-executor",
  "futures-util",
  "grpcio",
  "hex 0.4.2",
@@ -3926,7 +3957,6 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio 0.2.13",
- "tokio-sync",
  "txn_types",
  "uuid",
 ]
@@ -4197,6 +4227,7 @@ dependencies = [
 name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
+ "concurrency_manager",
  "futures 0.1.29",
  "kvproto",
  "protobuf",
@@ -4225,16 +4256,19 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
+ "concurrency_manager",
+ "crossbeam",
  "encryption",
  "engine_rocks",
  "engine_traits",
- "futures 0.1.29",
+ "fail",
  "futures 0.3.4",
  "futures-cpupool",
  "grpcio",
  "hex 0.4.2",
  "keys",
  "kvproto",
+ "lazy_static",
  "pd_client",
  "raft",
  "raftstore",
@@ -4303,6 +4337,7 @@ dependencies = [
  "batch-system",
  "byteorder",
  "cdc",
+ "concurrency_manager",
  "configuration",
  "crc64fast",
  "criterion",
@@ -4536,6 +4571,7 @@ name = "tidb_query_vec_executors"
 version = "0.0.1"
 dependencies = [
  "codec",
+ "fail",
  "failure",
  "hex 0.3.2",
  "kvproto",
@@ -4597,6 +4633,7 @@ dependencies = [
  "cache-size",
  "chrono",
  "codec",
+ "concurrency_manager",
  "configuration",
  "crc32fast",
  "crc64fast",
@@ -4658,6 +4695,7 @@ dependencies = [
  "semver 0.10.0",
  "serde",
  "serde_derive",
+ "serde_ignored",
  "serde_json",
  "slog",
  "slog-global",
@@ -4761,7 +4799,6 @@ dependencies = [
  "error_code",
  "fail",
  "fs2",
- "futures 0.1.29",
  "futures 0.3.4",
  "futures-cpupool",
  "fxhash",
@@ -4794,9 +4831,8 @@ dependencies = [
  "tikv_alloc",
  "time 0.1.42",
  "tipb",
- "tokio-core",
+ "tokio 0.2.13",
  "tokio-executor",
- "tokio-sync",
  "tokio-timer",
  "toml",
  "url",

@@ -17,7 +17,7 @@ use encryption::{
 };
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{EncryptionKeyManager, KvEngine};
-use futures_executor::block_on;
+use futures::executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::metapb::Region;
@@ -1625,11 +1625,9 @@ pub mod tests {
             kv.c()
                 .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
-        let shared_block_cache = false;
         Ok(Engines {
             kv: kv.c().clone(),
             raft: raft.c().clone(),
-            shared_block_cache,
         })
     }
 
