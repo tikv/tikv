@@ -116,7 +116,7 @@ impl<E: Engine> Endpoint<E> {
         }
 
         let start_ts = req_ctx.txn_start_ts;
-        self.concurrency_manager.update_max_read_ts(start_ts);
+        self.concurrency_manager.update_max_ts(start_ts);
         if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
             for range in key_ranges {
                 let start_key = txn_types::Key::from_raw(range.get_start());

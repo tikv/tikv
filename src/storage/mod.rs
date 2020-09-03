@@ -259,7 +259,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
 
                 if enable_async_commit {
-                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                    // Update max_ts and check the in-memory lock table before getting the snapshot
                     async_commit_check_keys(
                         &concurrency_manager,
                         iter::once(&key),
@@ -345,7 +345,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                         let region_id = ctx.get_region_id();
                         if enable_async_commit {
-                            // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                            // Update max_ts and check the in-memory lock table before getting the snapshot
                             if let Err(e) = async_commit_check_keys(
                                 &concurrency_manager,
                                 iter::once(&key),
@@ -461,7 +461,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
                 if enable_async_commit {
-                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                    // Update max_ts and check the in-memory lock table before getting the snapshot
                     async_commit_check_keys(
                         &concurrency_manager,
                         &keys,
@@ -576,8 +576,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
                 if enable_async_commit {
-                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                    concurrency_manager.update_max_read_ts(start_ts);
+                    // Update max_ts and check the in-memory lock table before getting the snapshot
+                    concurrency_manager.update_max_ts(start_ts);
                     if ctx.get_isolation_level() == IsolationLevel::Si {
                         concurrency_manager
                             .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
@@ -1385,7 +1385,7 @@ fn async_commit_check_keys<'a>(
     isolation_level: IsolationLevel,
     bypass_locks: &TsSet,
 ) -> Result<()> {
-    concurrency_manager.update_max_read_ts(ts);
+    concurrency_manager.update_max_ts(ts);
     if isolation_level == IsolationLevel::Si {
         for key in keys {
             concurrency_manager
@@ -4786,7 +4786,7 @@ mod tests {
             rx.recv().unwrap();
 
             if return_values {
-                assert_eq!(cm.max_read_ts(), 10.into());
+                assert_eq!(cm.max_ts(), 10.into());
             }
 
             // Duplicated command
@@ -4836,8 +4836,8 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)).unwrap_err();
         }
 
-        // Needn't update max_read_ts when failing to read value
-        assert_eq!(cm.max_read_ts(), 10.into());
+        // Needn't update max_ts when failing to read value
+        assert_eq!(cm.max_ts(), 10.into());
 
         // Put key and key2.
         storage
@@ -4894,8 +4894,8 @@ mod tests {
             rx.recv().unwrap();
         }
 
-        // Needn't update max_read_ts when failing to read value
-        assert_eq!(cm.max_read_ts(), 10.into());
+        // Needn't update max_ts when failing to read value
+        assert_eq!(cm.max_ts(), 10.into());
 
         // Return multiple values
         for &return_values in &[false, true] {
@@ -4922,7 +4922,7 @@ mod tests {
             rx.recv().unwrap();
 
             if return_values {
-                assert_eq!(cm.max_read_ts(), 30.into());
+                assert_eq!(cm.max_ts(), 30.into());
             }
 
             delete_pessimistic_lock(&storage, key.clone(), 30, 30);

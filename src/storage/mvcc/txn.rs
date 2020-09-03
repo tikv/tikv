@@ -296,9 +296,8 @@ impl<S: Snapshot> MvccTxn<S> {
                 });
 
             async_commit_ts = key_guard.with_lock(|l| {
-                let max_read_ts = self.concurrency_manager.max_read_ts();
-                let min_commit_ts =
-                    cmp::max(cmp::max(max_read_ts, self.start_ts), for_update_ts).next();
+                let max_ts = self.concurrency_manager.max_ts();
+                let min_commit_ts = cmp::max(cmp::max(max_ts, self.start_ts), for_update_ts).next();
                 lock.min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
                 *l = Some(lock.clone());
                 min_commit_ts
@@ -2847,7 +2846,7 @@ mod tests {
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
 
-        // max_read_ts in the concurrency manager is 42, so the min_commit_ts is 43.
+        // max_ts in the concurrency manager is 42, so the min_commit_ts is 43.
         assert_eq!(lock.min_commit_ts, TimeStamp::new(43));
 
         // A duplicate prewrite request should return the min_commit_ts in the primary key
@@ -2900,7 +2899,7 @@ mod tests {
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
 
-        // max_read_ts in the concurrency manager is 42, so the min_commit_ts is 43.
+        // max_ts in the concurrency manager is 42, so the min_commit_ts is 43.
         assert_eq!(lock.min_commit_ts, TimeStamp::new(43));
 
         // A duplicate prewrite request should return the min_commit_ts in the primary key

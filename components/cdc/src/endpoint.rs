@@ -646,7 +646,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             // like async commit is enabled.
             // Note: This step must be done before scheduling `Task::MinTS` task, and the
             // resolver must be checked in or after `Task::MinTS`' execution.
-            cm.update_max_read_ts(min_ts);
+            cm.update_max_ts(min_ts);
             if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
                 if min_mem_lock_ts < min_ts {
                     min_ts = min_mem_lock_ts;

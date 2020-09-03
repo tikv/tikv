@@ -159,8 +159,8 @@ impl BackupRange {
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
         ctx.set_peer(self.leader.clone());
 
-        // Update max_read_ts and check the in-memory lock table before getting the snapshot
-        concurrency_manager.update_max_read_ts(backup_ts);
+        // Update max_ts and check the in-memory lock table before getting the snapshot
+        concurrency_manager.update_max_ts(backup_ts);
         concurrency_manager
             .read_range_check(
                 self.start_key.as_ref(),
