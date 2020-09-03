@@ -105,7 +105,12 @@ pub fn init_log_for_test() {
     // We hardly ever read rocksdb log in tests.
     let drainer = CaseTraceLogger {
         f: writer,
-        skip_tags: vec!["rocksdb_log", "raftdb_log", "rocksdb_log_header", "raftdb_log_header"],
+        skip_tags: vec![
+            "rocksdb_log",
+            "raftdb_log",
+            "rocksdb_log_header",
+            "raftdb_log_header",
+        ],
     };
 
     // Default disabled log targets for test.
