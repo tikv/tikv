@@ -4759,6 +4759,7 @@ mod tests {
             .set_pipelined_pessimistic_lock(pipelined_pessimistic_lock)
             .build()
             .unwrap();
+        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
         let (key, val) = (Key::from_raw(b"key"), b"val".to_vec());
         let (key2, val2) = (Key::from_raw(b"key2"), b"val2".to_vec());
@@ -4783,6 +4784,10 @@ mod tests {
                 )
                 .unwrap();
             rx.recv().unwrap();
+
+            if return_values {
+                assert_eq!(cm.max_read_ts(), 10.into());
+            }
 
             // Duplicated command
             storage
@@ -4830,6 +4835,9 @@ mod tests {
             // The DummyLockManager consumes the Msg::WaitForLock.
             rx.recv_timeout(Duration::from_millis(100)).unwrap_err();
         }
+
+        // Needn't update max_read_ts when failing to read value
+        assert_eq!(cm.max_read_ts(), 10.into());
 
         // Put key and key2.
         storage
@@ -4886,6 +4894,9 @@ mod tests {
             rx.recv().unwrap();
         }
 
+        // Needn't update max_read_ts when failing to read value
+        assert_eq!(cm.max_read_ts(), 10.into());
+
         // Return multiple values
         for &return_values in &[false, true] {
             let pessimistic_lock_res = if return_values {
@@ -4909,6 +4920,10 @@ mod tests {
                 )
                 .unwrap();
             rx.recv().unwrap();
+
+            if return_values {
+                assert_eq!(cm.max_read_ts(), 30.into());
+            }
 
             delete_pessimistic_lock(&storage, key.clone(), 30, 30);
         }
