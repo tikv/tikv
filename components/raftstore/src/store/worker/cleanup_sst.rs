@@ -93,7 +93,9 @@ impl<C: PdClient, S: StoreRouter> Runner<C, S> {
     }
 }
 
-impl<C: PdClient, S: StoreRouter> Runnable<Task> for Runner<C, S> {
+impl<C: PdClient, S: StoreRouter> Runnable for Runner<C, S> {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::DeleteSST { ssts } => {

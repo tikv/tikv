@@ -10,7 +10,6 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures03::compat::Future01CompatExt;
-use futures03::future::TryFutureExt;
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
@@ -26,11 +25,14 @@ use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
 use tikv_util::collections::HashMap;
+use tikv_util::lru::LruCache;
 use tikv_util::time::Instant;
 use tikv_util::timer::{SteadyTimer, Timer};
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tokio::runtime::{Builder, Runtime};
-use txn_types::{Key, Lock, LockType, TimeStamp};
+use txn_types::{
+    Key, Lock, LockType, MutationType, OldValue, TimeStamp, TxnExtra, TxnExtraScheduler,
+};
 
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
@@ -93,7 +95,24 @@ impl fmt::Debug for Deregister {
 }
 
 type InitCallback = Box<dyn FnOnce() + Send>;
-pub(crate) type OldValueCallback = Box<dyn FnMut(Key) -> Option<Vec<u8>> + Send>;
+pub(crate) type OldValueCallback =
+    Box<dyn FnMut(Key, &mut OldValueCache) -> Option<Vec<u8>> + Send>;
+
+pub struct OldValueCache {
+    pub cache: LruCache<Key, (Option<OldValue>, MutationType)>,
+    pub miss_count: usize,
+    pub access_count: usize,
+}
+
+impl OldValueCache {
+    pub fn new(size: usize) -> OldValueCache {
+        OldValueCache {
+            cache: LruCache::with_capacity(size),
+            miss_count: 0,
+            access_count: 0,
+        }
+    }
+}
 
 pub enum Task {
     Register {
@@ -131,6 +150,7 @@ pub enum Task {
         downstream_state: Arc<AtomicCell<DownstreamState>>,
         cb: InitCallback,
     },
+    TxnExtra(TxnExtra),
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
 }
 
@@ -202,6 +222,7 @@ impl fmt::Debug for Task {
                 .field("type", &"init_downstream")
                 .field("downstream", &downstream_id)
                 .finish(),
+            Task::TxnExtra(_) => de.field("type", &"txn_extra").finish(),
             Task::Validate(region_id, _) => de.field("region_id", &region_id).finish(),
         }
     }
@@ -230,6 +251,7 @@ pub struct Endpoint<T> {
 
     min_resolved_ts: TimeStamp,
     min_ts_region_id: u64,
+    old_value_cache: OldValueCache,
 }
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
@@ -270,6 +292,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
+            old_value_cache: OldValueCache::new(cfg.old_value_cache_size),
         };
         ep.register_min_ts_event();
         ep
@@ -536,7 +559,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     // Skip the batch if the delegate has failed.
                     continue;
                 }
-                if let Err(e) = delegate.on_batch(batch, old_value_cb.clone()) {
+                if let Err(e) =
+                    delegate.on_batch(batch, old_value_cb.clone(), &mut self.old_value_cache)
+                {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
                     deregister = Some(Deregister::Region {
@@ -601,7 +626,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
     fn register_min_ts_event(&self) {
         let timeout = self.timer.delay(self.min_ts_interval);
-        let tso = self.pd_client.get_tso();
+        let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
         let regions: Vec<(u64, ObserveID)> = self
@@ -611,10 +636,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .collect();
         let cm: ConcurrencyManager = self.concurrency_manager.clone();
         let fut = async move {
-            let (tso, _) =
-                futures03::future::join(tso, timeout.compat().map_err(|_| unreachable!())).await;
+            let _ = timeout.compat().await;
             // Ignore get tso errors since we will retry every `min_ts_interval`.
-            let mut min_ts = tso.unwrap_or_default();
+            let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
 
             // Sync with concurrency manager so that it can work correctly when optimizations
             // like async commit is enabled.
@@ -866,7 +890,9 @@ impl Initializer {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
@@ -905,6 +931,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
                     .compare_and_swap(DownstreamState::Uninitialized, DownstreamState::Normal);
                 cb();
             }
+            Task::TxnExtra(txn_extra) => {
+                for (k, v) in txn_extra.old_values {
+                    self.old_value_cache.cache.insert(k, v);
+                }
+            }
             Task::Validate(region_id, validate) => {
                 validate(self.capture_regions.get(&region_id));
             }
@@ -913,7 +944,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer<Task, ()> for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T> {
+    type TimeoutTask = ();
+
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         if self.min_resolved_ts != TimeStamp::max() {
@@ -923,7 +956,37 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer<Task, ()> for 
         self.min_resolved_ts = TimeStamp::max();
         self.min_ts_region_id = 0;
 
+        let cache_size: usize = self
+            .old_value_cache
+            .cache
+            .iter()
+            .map(|(k, v)| k.as_encoded().len() + v.0.as_ref().map_or(0, |v| v.size()))
+            .sum();
+        CDC_OLD_VALUE_CACHE_BYTES.set(cache_size as i64);
+        CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_cache.access_count as i64);
+        CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_cache.miss_count as i64);
+        self.old_value_cache.access_count = 0;
+        self.old_value_cache.miss_count = 0;
+
         timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
+    }
+}
+
+pub struct CdcTxnExtraScheduler {
+    scheduler: Scheduler<Task>,
+}
+
+impl CdcTxnExtraScheduler {
+    pub fn new(scheduler: Scheduler<Task>) -> CdcTxnExtraScheduler {
+        CdcTxnExtraScheduler { scheduler }
+    }
+}
+
+impl TxnExtraScheduler for CdcTxnExtraScheduler {
+    fn schedule(&self, txn_extra: TxnExtra) {
+        if let Err(e) = self.scheduler.schedule(Task::TxnExtra(txn_extra)) {
+            error!("cdc schedule txn extra failed"; "err" => ?e);
+        }
     }
 }
 
@@ -954,7 +1017,9 @@ mod tests {
         tx: Sender<T>,
     }
 
-    impl<T: Display> Runnable<T> for ReceiverRunnable<T> {
+    impl<T: Display> Runnable for ReceiverRunnable<T> {
+        type Task = T;
+
         fn run(&mut self, task: T) {
             self.tx.send(task).unwrap();
         }
