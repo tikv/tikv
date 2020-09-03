@@ -43,10 +43,7 @@ pub enum CdcEvent {
 impl CdcEvent {
     pub fn size(&self) -> usize {
         match self {
-            CdcEvent::ResolvedTs(_) => {
-                // Ingore the size of resolved ts
-                0
-            }
+            CdcEvent::ResolvedTs(r) => r.compute_size() as usize,
             CdcEvent::Event(ref e) => e.compute_size() as usize,
         }
     }
