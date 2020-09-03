@@ -19,7 +19,7 @@ use engine_traits::{Engines, MiscExt, Peekable};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::errors::Error as RaftError;
-use raftstore::router::{RaftStoreRouter, ServerRaftStoreRouter};
+use raftstore::router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::config::RaftstoreConfigManager;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
@@ -37,7 +37,7 @@ use tikv_util::worker::{FutureWorker, Worker};
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine>>>,
+    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>>,
 }
 
 #[derive(Clone)]
@@ -123,7 +123,7 @@ type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
-    nodes: HashMap<u64, Node<TestPdClient>>,
+    nodes: HashMap<u64, Node<TestPdClient, RocksEngine>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     #[allow(clippy::type_complexity)]
     post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>>,
@@ -146,7 +146,7 @@ impl NodeCluster {
     pub fn get_node_router(
         &self,
         node_id: u64,
-    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine>> {
+    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>> {
         self.trans
             .core
             .lock()
@@ -168,7 +168,7 @@ impl NodeCluster {
         self.post_create_coprocessor_host = Some(op)
     }
 
-    pub fn get_node(&mut self, node_id: u64) -> Option<&mut Node<TestPdClient>> {
+    pub fn get_node(&mut self, node_id: u64) -> Option<&mut Node<TestPdClient, RocksEngine>> {
         self.nodes.get_mut(&node_id)
     }
 }

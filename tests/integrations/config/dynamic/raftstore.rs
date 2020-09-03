@@ -51,12 +51,7 @@ fn create_tmp_engine(dir: &TempDir) -> Engines<RocksEngine, RocksEngine> {
         )
         .unwrap(),
     );
-    let shared_block_cache = false;
-    Engines::new(
-        RocksEngine::from_db(db),
-        RocksEngine::from_db(raft_db),
-        shared_block_cache,
-    )
+    Engines::new(RocksEngine::from_db(db), RocksEngine::from_db(raft_db))
 }
 
 fn start_raftstore(

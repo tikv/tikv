@@ -7,11 +7,10 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, Snapshot, WriteBatchExt};
+use engine_traits::{Engines, KvEngine, WriteBatchExt};
 use error_code::ErrorCodeExt;
-use futures::Future;
+use futures::compat::Future01CompatExt;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -37,7 +36,6 @@ use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{escape, is_zero_duration, Either};
 use tokio::sync::mpsc::{channel as future_channel, Receiver as FutureReceiver};
-use txn_types::TxnExtra;
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
@@ -112,20 +110,23 @@ where
     pub receiver: Receiver<PeerMsg<EK>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
+    /// Sometimes applied raft logs won't be compacted in time, because less compact means less
+    /// sync-log in apply threads. Stale logs will be deleted if the skip time reaches this
+    /// `skip_gc_raft_log_ticks`.
+    skip_gc_raft_log_ticks: usize,
 
     // Batch raft command which has the same header into an entry
-    batch_req_builder: BatchRaftCmdRequestBuilder<EK::Snapshot>,
+    batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
 }
 
-pub struct BatchRaftCmdRequestBuilder<S>
+pub struct BatchRaftCmdRequestBuilder<E>
 where
-    S: Snapshot,
+    E: KvEngine,
 {
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<S>, usize)>,
-    txn_extra: TxnExtra,
+    callbacks: Vec<(Callback<E::Snapshot>, usize)>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -213,6 +214,7 @@ where
                 mailbox: None,
                 receiver: rx,
                 skip_split_count: 0,
+                skip_gc_raft_log_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
@@ -265,6 +267,7 @@ where
                 mailbox: None,
                 receiver: rx,
                 skip_split_count: 0,
+                skip_gc_raft_log_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
@@ -301,17 +304,16 @@ where
     }
 }
 
-impl<S> BatchRaftCmdRequestBuilder<S>
+impl<E> BatchRaftCmdRequestBuilder<E>
 where
-    S: Snapshot,
+    E: KvEngine,
 {
-    fn new(raft_entry_max_size: f64) -> BatchRaftCmdRequestBuilder<S> {
+    fn new(raft_entry_max_size: f64) -> BatchRaftCmdRequestBuilder<E> {
         BatchRaftCmdRequestBuilder {
             raft_entry_max_size,
             request: None,
             batch_req_size: 0,
             callbacks: vec![],
-            txn_extra: TxnExtra::default(),
         }
     }
 
@@ -339,12 +341,11 @@ where
         true
     }
 
-    fn add(&mut self, cmd: RaftCommand<S>, req_size: u32) {
+    fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
         let req_num = cmd.request.get_requests().len();
         let RaftCommand {
             mut request,
             callback,
-            mut txn_extra,
             ..
         } = cmd;
         if let Some(batch_req) = self.request.as_mut() {
@@ -357,7 +358,6 @@ where
         };
         self.callbacks.push((callback, req_num));
         self.batch_req_size += req_size;
-        self.txn_extra.extend(&mut txn_extra);
     }
 
     fn should_finish(&self) -> bool {
@@ -367,23 +367,19 @@ where
             if f64::from(self.batch_req_size) > self.raft_entry_max_size * 0.4 {
                 return true;
             }
-            if batch_req.get_requests().len() > RocksEngine::WRITE_BATCH_MAX_KEYS {
+            if batch_req.get_requests().len() > <E as WriteBatchExt>::WRITE_BATCH_MAX_KEYS {
                 return true;
             }
         }
         false
     }
 
-    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<S>> {
+    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<E::Snapshot>> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
                 let (cb, _) = self.callbacks.pop().unwrap();
-                return Some(RaftCommand::with_txn_extra(
-                    req,
-                    cb,
-                    std::mem::take(&mut self.txn_extra),
-                ));
+                return Some(RaftCommand::new(req, cb));
             }
             metric.batch += self.callbacks.len() - 1;
             let cbs = std::mem::replace(&mut self.callbacks, vec![]);
@@ -403,11 +399,7 @@ where
                     last_index = next_index;
                 }
             }));
-            return Some(RaftCommand::with_txn_extra(
-                req,
-                cb,
-                std::mem::take(&mut self.txn_extra),
-            ));
+            return Some(RaftCommand::new(req, cb));
         }
         None
     }
@@ -494,7 +486,7 @@ where
                         }
                     } else {
                         self.propose_batch_raft_command();
-                        self.propose_raft_command(cmd.request, cmd.callback, cmd.txn_extra)
+                        self.propose_raft_command(cmd.request, cmd.callback)
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -523,7 +515,7 @@ where
             .batch_req_builder
             .build(&mut self.ctx.raft_metrics.propose)
         {
-            self.propose_raft_command(cmd.request, cmd.callback, cmd.txn_extra)
+            self.propose_raft_command(cmd.request, cmd.callback)
         }
     }
 
@@ -552,8 +544,12 @@ where
                 );
                 self.on_prepare_split_region(region_epoch, split_keys, callback);
             }
-            CasualMessage::ComputeHashResult { index, hash } => {
-                self.on_hash_computed(index, hash);
+            CasualMessage::ComputeHashResult {
+                index,
+                context,
+                hash,
+            } => {
+                self.on_hash_computed(index, context, hash);
             }
             CasualMessage::RegionApproximateSize { size } => {
                 self.on_approximate_region_size(size);
@@ -594,6 +590,9 @@ where
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
+            CasualMessage::ForceCompactRaftLogs => {
+                self.on_raft_gc_log_tick(true);
+            }
             CasualMessage::AccessPeer(cb) => cb(&mut self.fsm.peer as &mut dyn AbstractPeer),
         }
     }
@@ -611,7 +610,7 @@ where
         self.fsm.tick_registry.remove(tick);
         match tick {
             PeerTicks::RAFT => self.on_raft_base_tick(),
-            PeerTicks::RAFT_LOG_GC => self.on_raft_gc_log_tick(),
+            PeerTicks::RAFT_LOG_GC => self.on_raft_gc_log_tick(false),
             PeerTicks::PD_HEARTBEAT => self.on_pd_heartbeat_tick(),
             PeerTicks::SPLIT_REGION_CHECK => self.on_split_region_check_tick(),
             PeerTicks::CHECK_MERGE => self.on_check_merge(),
@@ -749,7 +748,6 @@ where
                     cb,
                 });
             })),
-            TxnExtra::default(),
         );
     }
 
@@ -847,7 +845,7 @@ where
             self.region().get_region_epoch().clone(),
             self.fsm.peer.peer.clone(),
         );
-        self.propose_raft_command(msg, cb, TxnExtra::default());
+        self.propose_raft_command(msg, cb);
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {
@@ -974,36 +972,37 @@ where
             }
         };
         let peer_id = self.fsm.peer.peer_id();
-        let f = self
-            .ctx
-            .timer
-            .delay(timeout)
-            .map(move |_| {
-                fail_point!(
-                    "on_raft_log_gc_tick_1",
-                    peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
-                    |_| unreachable!()
-                );
-                // This can happen only when the peer is about to be destroyed
-                // or the node is shutting down. So it's OK to not to clean up
-                // registry.
-                if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
-                    debug!(
-                        "failed to schedule peer tick";
-                        "region_id" => region_id,
-                        "peer_id" => peer_id,
-                        "tick" => ?tick,
-                        "err" => %e,
+        let delay = self.ctx.timer.delay(timeout).compat();
+        let f = async move {
+            match delay.await {
+                Ok(_) => {
+                    fail_point!(
+                        "on_raft_log_gc_tick_1",
+                        peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
+                        |_| unreachable!()
+                    );
+                    // This can happen only when the peer is about to be destroyed
+                    // or the node is shutting down. So it's OK to not to clean up
+                    // registry.
+                    if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
+                        debug!(
+                            "failed to schedule peer tick";
+                            "region_id" => region_id,
+                            "peer_id" => peer_id,
+                            "tick" => ?tick,
+                            "err" => %e,
+                        );
+                    }
+                }
+                Err(e) => {
+                    panic!(
+                        "[region {}] {} tick {:?} is lost due to timeout error: {:?}",
+                        region_id, peer_id, tick, e
                     );
                 }
-            })
-            .map_err(move |e| {
-                panic!(
-                    "[region {}] {} tick {:?} is lost due to timeout error: {:?}",
-                    region_id, peer_id, tick, e
-                );
-            });
-        self.ctx.future_poller.spawn(f).unwrap();
+            }
+        };
+        self.ctx.poller_handle.spawn(f);
     }
 
     fn register_raft_base_tick(&mut self) {
@@ -1072,8 +1071,8 @@ where
 
         // Keep ticking if there are still pending read requests or this node is within hibernate timeout.
         if res.is_none() /* hibernate_region is false */ ||
-            (self.fsm.peer.is_leader() && !self.ctx.is_hibernate_timeout()) ||
-            !self.fsm.peer.check_after_tick(self.fsm.group_state, res.unwrap())
+            !self.fsm.peer.check_after_tick(self.fsm.group_state, res.unwrap()) ||
+            (self.fsm.peer.is_leader() && !self.ctx.is_hibernate_timeout())
         {
             self.register_raft_base_tick();
             return;
@@ -2008,13 +2007,14 @@ where
         let remain_cnt = self.fsm.peer.last_applying_idx - state.get_index() - 1;
         self.fsm.peer.raft_log_size_hint =
             self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
-        let task = RaftlogGcTask {
-            region_id: self.fsm.peer.get_store().get_region_id(),
-            start_idx: self.fsm.peer.last_compacted_idx,
-            end_idx: state.get_index() + 1,
-        };
-        self.fsm.peer.last_compacted_idx = task.end_idx;
-        self.fsm.peer.mut_store().compact_to(task.end_idx);
+        let compact_to = state.get_index() + 1;
+        let task = RaftlogGcTask::gc(
+            self.fsm.peer.get_store().get_region_id(),
+            self.fsm.peer.last_compacted_idx,
+            compact_to,
+        );
+        self.fsm.peer.last_compacted_idx = compact_to;
+        self.fsm.peer.mut_store().compact_to(compact_to);
         if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
             error!(
                 "failed to schedule compact task";
@@ -2426,7 +2426,7 @@ where
             request.set_admin_request(admin);
             request
         };
-        self.propose_raft_command(req, Callback::None, TxnExtra::default());
+        self.propose_raft_command(req, Callback::None);
     }
 
     fn on_check_merge(&mut self) {
@@ -2918,9 +2918,14 @@ where
                 ExecResult::ComputeHash {
                     region,
                     index,
+                    context,
                     snap,
-                } => self.on_ready_compute_hash(region, index, snap),
-                ExecResult::VerifyHash { index, hash } => self.on_ready_verify_hash(index, hash),
+                } => self.on_ready_compute_hash(region, index, context, snap),
+                ExecResult::VerifyHash {
+                    index,
+                    context,
+                    hash,
+                } => self.on_ready_verify_hash(index, context, hash),
                 ExecResult::DeleteRange { .. } => {
                     // TODO: clean user properties?
                 }
@@ -3086,12 +3091,7 @@ where
         }
     }
 
-    fn propose_raft_command(
-        &mut self,
-        mut msg: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
-        txn_extra: TxnExtra,
-    ) {
+    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<EK::Snapshot>) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -3137,7 +3137,7 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        if self.fsm.peer.propose(self.ctx, cb, msg, resp, txn_extra) {
+        if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
             self.fsm.has_ready = true;
         }
 
@@ -3172,7 +3172,7 @@ where
     }
 
     #[allow(clippy::if_same_then_else)]
-    fn on_raft_gc_log_tick(&mut self) {
+    fn on_raft_gc_log_tick(&mut self, force_compact: bool) {
         if !self.fsm.peer.get_store().is_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
@@ -3238,40 +3238,50 @@ where
             .peer
             .mut_store()
             .maybe_gc_cache(alive_cache_idx, applied_idx);
+
         let first_idx = self.fsm.peer.get_store().first_index();
-        let mut compact_idx;
-        if applied_idx > first_idx
-            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit
+
+        let mut compact_idx = if force_compact
+            // Too many logs between applied index and first index.
+            || (applied_idx > first_idx && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit)
+            // Raft log size ecceeds the limit.
+            || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0)
         {
-            compact_idx = applied_idx;
-        } else if self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0 {
-            compact_idx = applied_idx;
-        } else if replicated_idx < first_idx
-            || replicated_idx - first_idx <= self.ctx.cfg.raft_log_gc_threshold
+            applied_idx
+        } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
+            // In the current implementation one compaction can't delete all stale Raft logs.
+            // There will be at least 3 entries left after one compaction:
+            // |------------- entries needs to be compacted ----------|
+            // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
+            //             |-------------------- entries will be left ----------------------|
+            return;
+        } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold
+            && self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks
         {
+            // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
+            self.fsm.skip_gc_raft_log_ticks += 1;
+            self.register_raft_gc_log_tick();
             return;
         } else {
-            compact_idx = replicated_idx;
-        }
-
+            replicated_idx
+        };
+        assert!(compact_idx >= first_idx);
         // Have no idea why subtract 1 here, but original code did this by magic.
-        assert!(compact_idx > 0);
         compact_idx -= 1;
         if compact_idx < first_idx {
             // In case compact_idx == first_idx before subtraction.
             return;
         }
-
         total_gc_logs += compact_idx - first_idx;
-
-        let term = self.fsm.peer.get_index_term(compact_idx);
 
         // Create a compact log request and notify directly.
         let region_id = self.fsm.peer.region().get_id();
-        let request =
-            new_compact_log_request(region_id, self.fsm.peer.peer.clone(), compact_idx, term);
-        self.propose_raft_command(request, Callback::None, TxnExtra::default());
+        let peer = self.fsm.peer.peer.clone();
+        let term = self.fsm.peer.get_index_term(compact_idx);
+        let request = new_compact_log_request(region_id, peer, compact_idx, term);
+        self.propose_raft_command(request, Callback::None);
 
+        self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
     }
@@ -3631,9 +3641,15 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EK::Snapshot) {
+    fn on_ready_compute_hash(
+        &mut self,
+        region: metapb::Region,
+        index: u64,
+        context: Vec<u8>,
+        snap: EK::Snapshot,
+    ) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
-        let task = ConsistencyCheckTask::compute_hash(region, index, snap);
+        let task = ConsistencyCheckTask::compute_hash(region, index, context, snap);
         info!(
             "schedule compute hash task";
             "region_id" => self.fsm.region_id(),
@@ -3650,12 +3666,17 @@ where
         }
     }
 
-    fn on_ready_verify_hash(&mut self, expected_index: u64, expected_hash: Vec<u8>) {
-        self.verify_and_store_hash(expected_index, expected_hash);
+    fn on_ready_verify_hash(
+        &mut self,
+        expected_index: u64,
+        context: Vec<u8>,
+        expected_hash: Vec<u8>,
+    ) {
+        self.verify_and_store_hash(expected_index, context, expected_hash);
     }
 
-    fn on_hash_computed(&mut self, index: u64, hash: Vec<u8>) {
-        if !self.verify_and_store_hash(index, hash) {
+    fn on_hash_computed(&mut self, index: u64, context: Vec<u8>, hash: Vec<u8>) {
+        if !self.verify_and_store_hash(index, context, hash) {
             return;
         }
 
@@ -3664,7 +3685,7 @@ where
             self.fsm.peer.peer.clone(),
             &self.fsm.peer.consistency_state,
         );
-        self.propose_raft_command(req, Callback::None, TxnExtra::default());
+        self.propose_raft_command(req, Callback::None);
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SstMeta>) {
@@ -3689,7 +3710,13 @@ where
     }
 
     /// Verify and store the hash to state. return true means the hash has been stored successfully.
-    fn verify_and_store_hash(&mut self, expected_index: u64, expected_hash: Vec<u8>) -> bool {
+    // TODO: Consider context in the function.
+    fn verify_and_store_hash(
+        &mut self,
+        expected_index: u64,
+        _context: Vec<u8>,
+        expected_hash: Vec<u8>,
+    ) -> bool {
         if expected_index < self.fsm.peer.consistency_state.index {
             REGION_HASH_COUNTER.verify.miss.inc();
             warn!(
@@ -3830,6 +3857,7 @@ fn new_verify_hash_request(
     let mut admin = AdminRequest::default();
     admin.set_cmd_type(AdminCmdType::VerifyHash);
     admin.mut_verify_hash().set_index(state.index);
+    admin.mut_verify_hash().set_context(state.context.clone());
     admin.mut_verify_hash().set_hash(state.hash.clone());
     request.set_admin_request(admin);
     request
@@ -3910,7 +3938,7 @@ mod tests {
     use crate::store::local_metrics::RaftProposeMetrics;
     use crate::store::msg::{Callback, RaftCommand};
 
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::RocksEngine;
     use kvproto::raft_cmdpb::{
         AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
         StatusRequest,
@@ -3922,7 +3950,7 @@ mod tests {
     #[test]
     fn test_batch_raft_cmd_request_builder() {
         let max_batch_size = 1000.0;
-        let mut builder = BatchRaftCmdRequestBuilder::<RocksSnapshot>::new(max_batch_size);
+        let mut builder = BatchRaftCmdRequestBuilder::<RocksEngine>::new(max_batch_size);
         let mut q = Request::default();
         let mut metric = RaftProposeMetrics::default();
 
