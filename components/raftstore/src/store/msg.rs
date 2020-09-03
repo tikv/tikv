@@ -54,7 +54,7 @@ where
 
 pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
-pub type LeaseCallback = Box<dyn FnOnce(Option<RemoteLease>) + Send>;
+pub type LeaseCallback<S> = Box<dyn FnOnce(ReadResponse<S>, Option<RemoteLease>) + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callback for read only requests including `StatusRequest`,
@@ -69,7 +69,7 @@ pub enum Callback<S: Snapshot> {
     /// Write callback.
     Write(WriteCallback),
     /// Lease callback, returns remote lease to external service for checking leadership.
-    Lease(LeaseCallback),
+    Lease(LeaseCallback<S>),
 }
 
 impl<S> Callback<S>
@@ -98,18 +98,11 @@ where
     pub fn invoke_read(self, args: ReadResponse<S>, remote_lease: Option<RemoteLease>) {
         match self {
             Callback::Read(read) => read(args),
-            Callback::Lease(lease) => lease(remote_lease),
+            Callback::Lease(lease) => lease(args, remote_lease),
             other => panic!(
                 "expect Callback::Read(..) or Callback::Lease(..), got {:?}",
                 other
             ),
-        }
-    }
-
-    pub fn invoke_lease(self, remote_lease: Option<RemoteLease>) {
-        match self {
-            Callback::Lease(lease) => lease(remote_lease),
-            other => panic!("expect Callback::Lease(..), got {:?}", other),
         }
     }
 

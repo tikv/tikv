@@ -18,6 +18,7 @@ use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ChangeCmd, ObserveID, StoreMeta};
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
+use raftstore::store::util::{LeaseState, RemoteLease};
 use resolved_ts::Resolver;
 use tikv::config::CdcConfig;
 use tikv::storage::kv::Snapshot;
@@ -131,11 +132,13 @@ pub enum Task {
     MinTS {
         region_id: u64,
         min_ts: TimeStamp,
+        remote_lease: Option<RemoteLease>,
     },
     ResolverReady {
         observe_id: ObserveID,
         region: Region,
         resolver: Resolver,
+        remote_lease: Option<RemoteLease>,
     },
     IncrementalScan {
         region_id: u64,
@@ -191,6 +194,7 @@ impl fmt::Debug for Task {
             Task::MinTS {
                 ref region_id,
                 ref min_ts,
+                ..
             } => de
                 .field("type", &"mit_ts")
                 .field("region_id", region_id)
@@ -525,12 +529,12 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             SignificantMsg::CaptureChange {
                 cmd: change_cmd,
                 region_epoch: request.take_region_epoch(),
-                callback: Callback::Read(Box::new(move |resp| {
+                callback: Callback::Lease(Box::new(move |resp, remote_lease| {
                     if let Err(e) = scheduler.schedule(Task::InitDownstream {
                         downstream_id,
                         downstream_state,
                         cb: Box::new(move || {
-                            cb(resp);
+                            cb((resp, remote_lease));
                         }),
                     }) {
                         error!("schedule cdc task failed"; "error" => ?e);
@@ -543,7 +547,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         }
         self.workers.spawn(async move {
             match fut.await {
-                Ok(resp) => init.on_change_cmd(resp),
+                Ok((resp, remote_lease)) => init.on_change_cmd(resp, remote_lease),
                 Err(e) => deregister_downstream(Error::Other(box_err!(e))),
             }
         });
@@ -590,11 +594,17 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         }
     }
 
-    fn on_region_ready(&mut self, observe_id: ObserveID, resolver: Resolver, region: Region) {
+    fn on_region_ready(
+        &mut self,
+        observe_id: ObserveID,
+        resolver: Resolver,
+        region: Region,
+        remote_lease: Option<RemoteLease>,
+    ) {
         let region_id = region.get_id();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.id == observe_id {
-                for downstream in delegate.on_region_ready(resolver, region) {
+                for downstream in delegate.on_region_ready(resolver, region, remote_lease) {
                     let conn_id = downstream.get_conn_id();
                     if !delegate.subscribe(downstream) {
                         let conn = self.connections.get_mut(&conn_id).unwrap();
@@ -613,12 +623,22 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         }
     }
 
-    fn on_min_ts(&mut self, region_id: u64, min_ts: TimeStamp) {
+    fn on_min_ts(&mut self, region_id: u64, min_ts: TimeStamp, remote_lease: Option<RemoteLease>) {
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
                 if resolved_ts < self.min_resolved_ts {
                     self.min_resolved_ts = resolved_ts;
                     self.min_ts_region_id = region_id;
+                }
+            }
+            if let Some(lease) = remote_lease {
+                match delegate.remote_lease.as_ref() {
+                    Some(remote_lease) => {
+                        if lease.term() >= remote_lease.term() {
+                            delegate.remote_lease = Some(lease);
+                        }
+                    }
+                    None => delegate.remote_lease = Some(lease),
                 }
             }
         }
@@ -629,10 +649,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
-        let regions: Vec<(u64, ObserveID)> = self
+        let regions: Vec<(u64, ObserveID, Option<RemoteLease>)> = self
             .capture_regions
             .iter()
-            .map(|(region_id, delegate)| (*region_id, delegate.id))
+            .map(|(region_id, delegate)| (*region_id, delegate.id, delegate.remote_lease.clone()))
             .collect();
         let cm: ConcurrencyManager = self.concurrency_manager.clone();
         let fut = async move {
@@ -653,27 +673,37 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
             // TODO: send a message to raftstore would consume too much cpu time,
             // try to handle it outside raftstore.
-            for (region_id, observe_id) in regions {
+            for (region_id, observe_id, remote_lease) in regions {
                 let scheduler_clone = scheduler.clone();
+                let schedule_min_ts =
+                    move |remote_lease| match scheduler_clone.schedule(Task::MinTS {
+                        region_id,
+                        min_ts,
+                        remote_lease,
+                    }) {
+                        Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                        Err(err) => panic!(
+                            "failed to schedule min_ts event, min_ts: {}, error: {:?}",
+                            min_ts, err
+                        ),
+                    };
+                if let Some(lease) = remote_lease {
+                    if let LeaseState::Valid = lease.inspect(None) {
+                        schedule_min_ts(None);
+                        continue;
+                    }
+                }
                 if let Err(e) = raft_router.significant_send(
                     region_id,
-                    SignificantMsg::CheckLeader(Callback::Read(Box::new(move |resp| {
-                        if !resp.response.get_header().has_error() {
-                            match scheduler_clone.schedule(Task::MinTS { region_id, min_ts }) {
-                                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                                Err(err) => panic!(
-                                    "failed to schedule min_ts event, min_ts: {}, error: {:?}",
-                                    min_ts, err
-                                ),
+                    SignificantMsg::CheckLeader(Callback::Lease(Box::new(
+                        move |resp, remote_lease| {
+                            if !resp.response.get_header().has_error() {
+                                schedule_min_ts(remote_lease);
                             }
-                        }
-                    }))),
+                        },
+                    ))),
                 ) {
-                    warn!(
-                        "send LeaderCallback for advancing resolved ts failed";
-                        "err" => ?e,
-                        "min_ts" => min_ts,
-                    );
+                    warn!("send CheckLeader failed"; "err" => ?e, "region_id" => region_id, "min_ts" => min_ts);
                     let deregister = Deregister::Region {
                         observe_id,
                         region_id,
@@ -722,11 +752,15 @@ struct Initializer {
 }
 
 impl Initializer {
-    fn on_change_cmd(&self, mut resp: ReadResponse<RocksSnapshot>) {
+    fn on_change_cmd(
+        &self,
+        mut resp: ReadResponse<RocksSnapshot>,
+        remote_lease: Option<RemoteLease>,
+    ) {
         if let Some(region_snapshot) = resp.snapshot {
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
             let region = region_snapshot.get_region().clone();
-            self.async_incremental_scan(region_snapshot, region);
+            self.async_incremental_scan(region_snapshot, region, remote_lease);
         } else {
             assert!(
                 resp.response.get_header().has_error(),
@@ -745,7 +779,12 @@ impl Initializer {
         }
     }
 
-    fn async_incremental_scan<S: Snapshot + 'static>(&self, snap: S, region: Region) {
+    fn async_incremental_scan<S: Snapshot + 'static>(
+        &self,
+        snap: S,
+        region: Region,
+        remote_lease: Option<RemoteLease>,
+    ) {
         let downstream_id = self.downstream_id;
         let conn_id = self.conn_id;
         let region_id = region.get_id();
@@ -813,7 +852,13 @@ impl Initializer {
         }
 
         if let Some(resolver) = resolver {
-            Self::finish_building_resolver(self.observe_id, resolver, region, self.sched.clone());
+            Self::finish_building_resolver(
+                self.observe_id,
+                resolver,
+                region,
+                self.sched.clone(),
+                remote_lease,
+            );
         }
 
         CDC_SCAN_DURATION_HISTOGRAM.observe(start.elapsed().as_secs_f64());
@@ -860,6 +905,7 @@ impl Initializer {
         mut resolver: Resolver,
         region: Region,
         sched: Scheduler<Task>,
+        remote_lease: Option<RemoteLease>,
     ) {
         resolver.init();
         if resolver.locks().is_empty() {
@@ -884,6 +930,7 @@ impl Initializer {
             observe_id,
             resolver,
             region,
+            remote_lease,
         }) {
             error!("schedule task failed"; "error" => ?e);
         }
@@ -896,7 +943,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
-            Task::MinTS { region_id, min_ts } => self.on_min_ts(region_id, min_ts),
+            Task::MinTS {
+                region_id,
+                min_ts,
+                remote_lease,
+            } => self.on_min_ts(region_id, min_ts, remote_lease),
             Task::Register {
                 request,
                 downstream,
@@ -906,7 +957,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                 observe_id,
                 resolver,
                 region,
-            } => self.on_region_ready(observe_id, resolver, region),
+                remote_lease,
+            } => self.on_region_ready(observe_id, resolver, region, remote_lease),
             Task::Deregister(deregister) => self.on_deregister(deregister),
             Task::IncrementalScan {
                 region_id,
@@ -1102,22 +1154,22 @@ mod tests {
             }
         };
 
-        initializer.async_incremental_scan(snap.clone(), region.clone());
+        initializer.async_incremental_scan(snap.clone(), region.clone(), None);
         check_result();
         initializer.batch_size = 1000;
-        initializer.async_incremental_scan(snap.clone(), region.clone());
+        initializer.async_incremental_scan(snap.clone(), region.clone(), None);
         check_result();
 
         initializer.batch_size = 10;
-        initializer.async_incremental_scan(snap.clone(), region.clone());
+        initializer.async_incremental_scan(snap.clone(), region.clone(), None);
         check_result();
 
         initializer.batch_size = 11;
-        initializer.async_incremental_scan(snap.clone(), region.clone());
+        initializer.async_incremental_scan(snap.clone(), region.clone(), None);
         check_result();
 
         initializer.build_resolver = false;
-        initializer.async_incremental_scan(snap.clone(), region.clone());
+        initializer.async_incremental_scan(snap.clone(), region.clone(), None);
 
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));
@@ -1131,7 +1183,7 @@ mod tests {
 
         // Test cancellation.
         initializer.downstream_state.store(DownstreamState::Stopped);
-        initializer.async_incremental_scan(snap, region);
+        initializer.async_incremental_scan(snap, region, None);
 
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));

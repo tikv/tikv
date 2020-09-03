@@ -53,7 +53,7 @@ use crate::store::peer_storage::{
 };
 use crate::store::util::{
     check_region_epoch, compare_region_epoch, is_learner, KeysInfoFormatter, PerfContextStatistics,
-    ADMIN_CMD_EPOCH_MAP,
+    RemoteLease, ADMIN_CMD_EPOCH_MAP,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
 use crate::{observe_perf_context_type, report_perf_context, Error, Result};
@@ -2602,6 +2602,7 @@ where
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
+        remote_lease: Option<RemoteLease>,
     },
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
@@ -3001,6 +3002,7 @@ where
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
+        remote_lease: Option<RemoteLease>,
     ) {
         let (observe_id, region_id, enabled) = match cmd {
             ChangeCmd::RegisterObserver {
@@ -3050,7 +3052,7 @@ where
                         snapshot: None,
                         txn_extra_op: TxnExtraOp::Noop,
                     },
-                    None,
+                    remote_lease,
                 );
                 return;
             }
@@ -3074,7 +3076,7 @@ where
             });
         }
 
-        cb.invoke_read(resp, None);
+        cb.invoke_read(resp, remote_lease);
     }
 
     fn handle_tasks<W: WriteBatch<EK>>(
@@ -3105,7 +3107,8 @@ where
                     cmd,
                     region_epoch,
                     cb,
-                }) => self.handle_change(apply_ctx, cmd, region_epoch, cb),
+                    remote_lease,
+                }) => self.handle_change(apply_ctx, cmd, region_epoch, cb, remote_lease),
                 #[cfg(any(test, feature = "testexport"))]
                 Some(Msg::Validate(_, f)) => {
                     let delegate: *const u8 = unsafe { std::mem::transmute(&self.delegate) };
@@ -4511,6 +4514,7 @@ mod tests {
                     let snap = resp.snapshot.unwrap();
                     assert_eq!(snap.get_value(b"k0").unwrap().unwrap(), b"v0");
                 })),
+                remote_lease: None,
             },
         );
         // Unblock the apply worker
@@ -4598,6 +4602,7 @@ mod tests {
                         .has_region_not_found());
                     assert!(resp.snapshot.is_none());
                 })),
+                remote_lease: None,
             },
         );
 
@@ -4763,6 +4768,7 @@ mod tests {
                     assert!(!resp.response.get_header().has_error(), "{:?}", resp);
                     assert!(resp.snapshot.is_some());
                 })),
+                remote_lease: None,
             },
         );
 
@@ -4930,6 +4936,7 @@ mod tests {
                     assert!(resp.snapshot.is_none());
                     tx.send(()).unwrap();
                 })),
+                remote_lease: None,
             },
         );
         rx.recv_timeout(Duration::from_millis(500)).unwrap();

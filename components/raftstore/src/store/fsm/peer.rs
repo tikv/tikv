@@ -44,7 +44,7 @@ use crate::store::fsm::{
 };
 use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::metrics::*;
-use crate::store::msg::Callback;
+use crate::store::msg::{Callback, ReadResponse};
 use crate::store::peer::{ConsistencyState, Peer, RequestInspector, StaleState};
 use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
@@ -710,7 +710,7 @@ where
         let apply_router = self.ctx.apply_router.clone();
         self.propose_raft_command(
             msg,
-            Callback::Read(Box::new(move |resp| {
+            Callback::Lease(Box::new(move |resp, remote_lease| {
                 // Return the error
                 if resp.response.get_header().has_error() {
                     cb.invoke_read(resp, None);
@@ -722,6 +722,7 @@ where
                         cmd,
                         region_epoch,
                         cb,
+                        remote_lease,
                     },
                 )
             })),
@@ -818,7 +819,12 @@ where
 
     fn on_check_leader(&mut self, cb: Callback<EK::Snapshot>) {
         if let LeaseState::Valid = self.fsm.peer.inspect_lease() {
-            cb.invoke_lease(self.fsm.peer.leader_lease.remote());
+            let resp = ReadResponse {
+                response: RaftCmdResponse::default(),
+                snapshot: None,
+                txn_extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
+            };
+            cb.invoke_read(resp, self.fsm.peer.leader_lease.remote());
             return;
         }
         let msg = new_read_index_request(
