@@ -368,7 +368,8 @@ impl<
                 "err" => ?e
             );
             GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
-        });
+        })
+        .trace_task(Event::TiKvGrpcio as u32);
 
         ctx.spawn(Compat::new(task.boxed()));
     }
