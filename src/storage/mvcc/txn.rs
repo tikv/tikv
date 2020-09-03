@@ -114,7 +114,7 @@ pub struct MvccTxn<S: Snapshot> {
     // `concurrency_manager` is used to set memory locks for prewritten keys.
     // Prewritten locks of async commit transactions should be visible to
     // readers before they are written to the engine.
-    concurrency_manager: ConcurrencyManager,
+    pub(crate) concurrency_manager: ConcurrencyManager,
     // After locks are stored in memory in prewrite, the KeyHandleGuard
     // needs to be stored here.
     // When the locks are written to the underlying engine, subsequent

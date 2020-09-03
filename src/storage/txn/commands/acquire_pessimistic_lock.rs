@@ -106,6 +106,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             }
         }
 
+        // Some values are read, update max_read_ts
+        if let Ok(PessimisticLockRes::Values(values)) = &res {
+            if !values.is_empty() {
+                txn.concurrency_manager
+                    .update_max_read_ts(self.for_update_ts);
+            }
+        }
+
         context.statistics.add(&txn.take_statistics());
         // no conflict
         let (pr, to_be_write, rows, ctx, lock_info) = if res.is_ok() {
