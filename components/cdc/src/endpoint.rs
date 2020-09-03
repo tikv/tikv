@@ -10,7 +10,6 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures03::compat::Future01CompatExt;
-use futures03::future::TryFutureExt;
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
@@ -627,7 +626,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
     fn register_min_ts_event(&self) {
         let timeout = self.timer.delay(self.min_ts_interval);
-        let tso = self.pd_client.get_tso();
+        let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
         let regions: Vec<(u64, ObserveID)> = self
@@ -637,10 +636,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .collect();
         let cm: ConcurrencyManager = self.concurrency_manager.clone();
         let fut = async move {
-            let (tso, _) =
-                futures03::future::join(tso, timeout.compat().map_err(|_| unreachable!())).await;
+            let _ = timeout.compat().await;
             // Ignore get tso errors since we will retry every `min_ts_interval`.
-            let mut min_ts = tso.unwrap_or_default();
+            let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
 
             // Sync with concurrency manager so that it can work correctly when optimizations
             // like async commit is enabled.
