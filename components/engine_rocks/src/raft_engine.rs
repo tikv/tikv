@@ -19,8 +19,7 @@ impl RaftEngine for RocksEngine {
     }
 
     fn sync(&self) -> Result<()> {
-        self.sync_wal();
-        Ok(())
+        self.sync_wal()
     }
 
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -51,7 +50,7 @@ impl RaftEngine for RocksEngine {
                 }
                 let key = keys::raft_log_key(region_id, i);
                 match self.get_value(&key) {
-                    Ok(None) => return Err(Error::Engine("The Log has been compacted".into())),
+                    Ok(None) => return Err(Error::EntriesCompacted),
                     Ok(Some(v)) => {
                         let mut entry = Entry::default();
                         entry.merge_from_bytes(&v)?;
@@ -102,7 +101,7 @@ impl RaftEngine for RocksEngine {
         }
 
         // Here means we don't fetch enough entries.
-        Err(Error::DataUnavailable(region_id))
+        Err(Error::EntriesUnavailable)
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync_log: bool) -> Result<usize> {
@@ -257,7 +256,7 @@ impl RocksWriteBatch {
             let key = keys::raft_log_key(raft_group_id, entry.get_index());
             ser_buf.clear();
             entry.write_to_vec(&mut ser_buf).unwrap();
-            self.put(&key, &ser_buf);
+            self.put(&key, &ser_buf)?;
         }
         Ok(())
     }

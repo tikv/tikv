@@ -11,5 +11,6 @@ define_error_codes!(
     CODEC => ("Codec", "", ""),
 
     UNKNOWN => ("Unknown", "", ""),
-    DATALOSS => ("DataLoss", "", "")
+    DATALOSS => ("DataLoss", "", ""),
+    DATACOMPACTED => ("DataCompacted", "", "")
 );

@@ -3044,7 +3044,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/Little-Wallace/raft-engine.git?branch=no-raft#a3ecfb0b7b531e0df17cbac34dc5e16173073e4a"
+source = "git+https://github.com/tikv/raft-engine.git#5e305ec0db988a11df8dda296ae0a867eef28cdc"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3088,23 +3088,16 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "num_cpus",
- "prometheus",
- "prometheus-static-metric",
  "protobuf",
  "raft",
  "raft-engine",
- "rand",
- "rocksdb",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
  "tempfile",
- "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
- "toml",
- "txn_types",
 ]
 
 [[package]]

@@ -16,16 +16,12 @@
 
 #![cfg_attr(test, feature(test))]
 
-#[allow(unused_extern_crates)]
-extern crate tikv_alloc;
 #[macro_use]
 extern crate tikv_util;
 
 extern crate slog_global;
 
 extern crate serde_derive;
-
-extern crate raft_engine;
 
 extern crate raft;
 

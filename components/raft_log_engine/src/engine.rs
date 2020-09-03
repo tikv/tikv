@@ -3,7 +3,7 @@
 use engine_traits::{RaftEngine, RaftLogBatch as RaftLogBatchTrait, Result};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
-use raft_engine::{EntryExt, LogBatch, RaftLogEngine as RawRaftEngine};
+use raft_engine::{EntryExt, Error as RaftEngineError, LogBatch, RaftLogEngine as RawRaftEngine};
 
 #[derive(Clone)]
 pub struct EntryExtTyped;
@@ -51,6 +51,17 @@ impl RaftLogBatchTrait for RaftLogBatch {
     }
 }
 
+fn transfer_error(e: RaftEngineError) -> engine_traits::Error {
+    match e {
+        RaftEngineError::StorageCompacted => engine_traits::Error::EntriesCompacted,
+        RaftEngineError::StorageUnavailable => engine_traits::Error::EntriesUnavailable,
+        e => {
+            let e = box_err!(e);
+            engine_traits::Error::Other(e)
+        }
+    }
+}
+
 impl RaftEngine for RaftLogEngine {
     type LogBatch = RaftLogBatch;
 
@@ -69,8 +80,9 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
-        let e = box_try!(self.0.get_entry(raft_group_id, index));
-        Ok(e)
+        self.0
+            .get_entry(raft_group_id, index)
+            .map_err(|e| transfer_error(e))
     }
 
     fn fetch_entries_to(
@@ -81,10 +93,9 @@ impl RaftEngine for RaftLogEngine {
         max_size: Option<usize>,
         to: &mut Vec<Entry>,
     ) -> Result<usize> {
-        let ret = box_try!(self
-            .0
-            .fetch_entries_to(raft_group_id, begin, end, max_size, to));
-        Ok(ret)
+        self.0
+            .fetch_entries_to(raft_group_id, begin, end, max_size, to)
+            .map_err(|e| transfer_error(e))
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {

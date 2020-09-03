@@ -42,9 +42,13 @@ quick_error! {
             cause(err)
             display("Codec {}", err)
         }
-        DataUnavailable(region_id: u64) {
+        EntriesUnavailable {
             from()
-            display("The entries of region {} is unavailable", region_id)
+            display("The entries of region is unavailable")
+        }
+        EntriesCompacted {
+            from()
+            display("The entries of region is compacted")
         }
     }
 }
@@ -61,7 +65,8 @@ impl ErrorCodeExt for Error {
             Error::CFName(_) => error_code::engine::CF_NAME,
             Error::Codec(_) => error_code::engine::CODEC,
             Error::Other(_) => error_code::engine::UNKNOWN,
-            Error::DataUnavailable(_) => error_code::engine::DATALOSS,
+            Error::EntriesUnavailable => error_code::engine::DATALOSS,
+            Error::EntriesCompacted => error_code::engine::DATACOMPACTED,
         }
     }
 }
@@ -69,7 +74,8 @@ impl ErrorCodeExt for Error {
 impl From<Error> for RaftError {
     fn from(e: Error) -> RaftError {
         match e {
-            Error::DataUnavailable(_) => RaftError::Store(StorageError::Unavailable),
+            Error::EntriesUnavailable => RaftError::Store(StorageError::Unavailable),
+            Error::EntriesCompacted => RaftError::Store(StorageError::Compacted),
             e => {
                 let boxed = Box::new(e) as Box<dyn std::error::Error + Sync + Send>;
                 raft::Error::Store(StorageError::Other(boxed))
