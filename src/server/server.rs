@@ -77,7 +77,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        gc_worker: GcWorker<E>,
+        gc_worker: GcWorker<E, T>,
         yatp_read_pool: Option<ReadPool>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
@@ -332,8 +332,8 @@ pub mod test_router {
             Ok(())
         }
 
-        fn broadcast_unreachable(&self, _: u64) {
-            let _ = self.tx.send(1);
+        fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {
+            self.tx.send(1).unwrap();
         }
     }
 }
@@ -396,8 +396,8 @@ mod tests {
         }
     }
 
-    #[test]
     // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
+    #[test]
     fn test_peer_resolve() {
         let mut cfg = Config::default();
         cfg.addr = "127.0.0.1:0".to_owned();
@@ -405,17 +405,18 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
-        let mut gc_worker = GcWorker::new(
-            storage.get_engine(),
-            None,
-            Default::default(),
-            Default::default(),
-        );
-        gc_worker.start().unwrap();
 
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
         let router = TestRaftStoreRouter::new(tx, significant_msg_sender);
+
+        let mut gc_worker = GcWorker::new(
+            storage.get_engine(),
+            router.clone(),
+            Default::default(),
+            Default::default(),
+        );
+        gc_worker.start().unwrap();
 
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(cfg);
