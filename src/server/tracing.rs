@@ -106,7 +106,6 @@ impl JaegerReporter {
                 },
                 parent_id: if external_trace {
                     if s.state == State::Root {
-                        eprintln!("{}", trace_context.get_parent_span_id());
                         trace_context.get_parent_span_id() as _
                     } else {
                         (trace_context.get_span_id_prefix() as i64) << 32 | s.related_id as i64
@@ -114,13 +113,7 @@ impl JaegerReporter {
                 } else {
                     s.related_id as _
                 },
-                reference_type: match s.state {
-                    State::Root => ReferenceType::ChildOf,
-                    State::Local => ReferenceType::ChildOf,
-                    State::Spawning => ReferenceType::FollowFrom,
-                    State::Scheduling => ReferenceType::FollowFrom,
-                    State::Settle => ReferenceType::FollowFrom,
-                },
+                reference_type: ReferenceType::FollowFrom,
                 operation_name: {
                     #[cfg(feature = "protobuf-codec")]
                     {
