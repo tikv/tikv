@@ -14,7 +14,7 @@ use kvproto::cdcpb::*;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
     event::{row::OpType as EventRowOpType, Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataRequest, Event,
+    ChangeDataEvent, ChangeDataRequest,
 };
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;

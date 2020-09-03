@@ -29,7 +29,6 @@ use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 use tikv_util::timer::{SteadyTimer, Timer};
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
-use tikv_util::Either;
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -655,9 +654,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                         region_id,
                         SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
                             let resp = if !resp.response.get_header().has_error() {
-                                Either::Left(())
+                                None
                             } else {
-                                Either::Right(region_id)
+                                Some(region_id)
                             };
                             if tx.send(resp).is_err() {
                                 error!("cdc send tso response failed");
@@ -672,9 +671,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                         };
                         if let Err(e) = scheduler_clone.schedule(Task::Deregister(deregister)) {
                             error!("schedule cdc task failed"; "error" => ?e);
+                            return None;
                         }
                     }
-                    rx.await.unwrap_or(Either::Left(()))
+                    rx.await.unwrap_or(None)
                 }
             }).collect();
             match scheduler.schedule(Task::RegisterMinTsEvent) {
@@ -686,14 +686,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             let resps = futures03::future::join_all(regions).await;
             let regions = resps
                 .into_iter()
-                .filter(|resp| match resp {
-                    Either::Left(()) => false,
-                    Either::Right(_) => true,
-                })
-                .map(|resp| match resp {
-                    Either::Left(()) => unreachable!(),
-                    Either::Right(region_id) => region_id,
-                })
+                .filter(|resp| resp.is_some())
+                .map(|resp| resp.unwrap())
                 .collect();
             match scheduler.schedule(Task::MinTS { regions, min_ts }) {
                 Ok(_) | Err(ScheduleError::Stopped(_)) => (),
