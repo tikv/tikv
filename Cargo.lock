@@ -1876,7 +1876,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/zhongzc/kvproto.git?branch=tracing#cb07ef2e8d5160d95ab2f867bde5928c0b344777"
+source = "git+https://github.com/zhongzc/kvproto.git?rev=cb07ef2e8d5160d95ab2f867bde5928c0b344777#cb07ef2e8d5160d95ab2f867bde5928c0b344777"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2150,7 +2150,7 @@ dependencies = [
 [[package]]
 name = "minitrace"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace-rust.git?rev=d9218162a658ea5d9a9445485ae8ce6c8ccf5e08#d9218162a658ea5d9a9445485ae8ce6c8ccf5e08"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git?rev=9fe8544710a33caf6d5add86f67e62efce2375dc#9fe8544710a33caf6d5add86f67e62efce2375dc"
 dependencies = [
  "crossbeam",
  "futures 0.1.29",
@@ -2164,7 +2164,7 @@ dependencies = [
 [[package]]
 name = "minitrace-attribute"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace-rust.git?rev=d9218162a658ea5d9a9445485ae8ce6c8ccf5e08#d9218162a658ea5d9a9445485ae8ce6c8ccf5e08"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git?rev=9fe8544710a33caf6d5add86f67e62efce2375dc#9fe8544710a33caf6d5add86f67e62efce2375dc"
 dependencies = [
  "proc-macro-error 1.0.2",
  "quote",
@@ -4890,7 +4890,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/zhongzc/tipb.git?branch=tracing#fde6714c365593fd840fac451f4d6bf25fe21a30"
+source = "git+https://github.com/zhongzc/tipb.git?rev=37a64f86fd5ac9d074dcd9f4f51b9782ba2c8f8d#37a64f86fd5ac9d074dcd9f4f51b9782ba2c8f8d"
 dependencies = [
  "lazy_static",
  "prost",
