@@ -3,6 +3,7 @@
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, GetRequest, LockInfo};
 use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::router::RaftStoreBlackHole;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
@@ -60,7 +61,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         }
         let mut gc_worker = GcWorker::new(
             self.engine,
-            None,
+            RaftStoreBlackHole,
             self.gc_config.unwrap_or_default(),
             Default::default(),
         );
@@ -78,7 +79,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 /// Only used for test purpose.
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine> {
-    gc_worker: GcWorker<E>,
+    gc_worker: GcWorker<E, RaftStoreBlackHole>,
     store: Storage<E, DummyLockManager>,
 }
 

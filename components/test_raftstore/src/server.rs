@@ -64,14 +64,14 @@ type SimulateServerTransport =
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
 struct ServerMeta {
-    node: Node<TestPdClient>,
+    node: Node<TestPdClient, RocksEngine>,
     server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
     worker: Worker<ResolveTask>,
-    gc_worker: GcWorker<RaftKv<SimulateStoreTransport>>,
+    gc_worker: GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -136,7 +136,10 @@ impl ServerCluster {
     }
 
     /// To trigger GC manually.
-    pub fn get_gc_worker(&self, node_id: u64) -> &GcWorker<RaftKv<SimulateStoreTransport>> {
+    pub fn get_gc_worker(
+        &self,
+        node_id: u64,
+    ) -> &GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport> {
         &self.metas.get(&node_id).unwrap().gc_worker
     }
 
@@ -199,7 +202,7 @@ impl Simulator for ServerCluster {
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            Some(router.clone()),
+            sim_router.clone(),
             cfg.gc.clone(),
             Default::default(),
         );
