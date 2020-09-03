@@ -16,6 +16,7 @@ use engine_traits::{
     Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use futures::sync::mpsc as future_mpsc;
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -69,8 +70,8 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, Callback, CasualMessage, GlobalReplicationState, MergeResultKind, PeerMsg, RaftCommand,
-    SignificantMsg, SnapManager, StoreMsg, StoreTick,
+    util, Callback, CasualMessage, GlobalReplicationState, MergeResultKind, PeerCurrentState,
+    PeerMsg, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
 };
 use crate::Result;
 
@@ -540,6 +541,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
+                StoreMsg::CollectTotalPeerState(task) => self.on_collect_total_peer_state(task),
             }
         }
     }
@@ -2321,6 +2323,23 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         drop(state);
         self.ctx.router.report_status_update()
     }
+
+    fn on_collect_total_peer_state(&self, task: CollectPeerStateTask) {
+        let store_meta = self.ctx.store_meta.lock().unwrap();
+        {
+            let mut data = task.data.lock().unwrap();
+            for region_id in store_meta.regions.keys() {
+                data.states.insert(*region_id, None);
+                data.counter += 1;
+            }
+        }
+        for region_id in store_meta.regions.keys() {
+            let _ = self.ctx.router.force_send(
+                *region_id,
+                PeerMsg::CollectState(CollectPeerStateResult::new(*region_id, task.clone())),
+            );
+        }
+    }
 }
 
 fn calc_region_declined_bytes(
@@ -2364,6 +2383,76 @@ fn calc_region_declined_bytes(
     }
 
     region_declined_bytes
+}
+
+pub struct TotalPeerCurrentState {
+    pub states: HashMap<u64, Option<PeerCurrentState>>,
+    pub counter: u64,
+}
+
+impl TotalPeerCurrentState {
+    pub fn new() -> TotalPeerCurrentState {
+        TotalPeerCurrentState {
+            states: HashMap::default(),
+            counter: 0,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct CollectPeerStateTask {
+    pub data: Arc<Mutex<TotalPeerCurrentState>>,
+    sender: future_mpsc::Sender<()>,
+}
+
+impl CollectPeerStateTask {
+    pub fn new(sender: future_mpsc::Sender<()>) -> CollectPeerStateTask {
+        CollectPeerStateTask {
+            data: Arc::new(Mutex::new(TotalPeerCurrentState::new())),
+            sender,
+        }
+    }
+}
+
+pub struct CollectPeerStateResult {
+    region_id: u64,
+    task: CollectPeerStateTask,
+    finished: bool,
+}
+
+impl CollectPeerStateResult {
+    pub fn new(region_id: u64, task: CollectPeerStateTask) -> CollectPeerStateResult {
+        CollectPeerStateResult {
+            region_id,
+            task,
+            finished: false,
+        }
+    }
+
+    pub fn on_finish(&mut self, state: PeerCurrentState) {
+        let mut data = self.task.data.lock().unwrap();
+        assert_eq!(data.states.insert(self.region_id, Some(state)), None);
+        assert!(data.counter > 0);
+        data.counter -= 1;
+        if data.counter == 0 {
+            let _ = self.task.sender.try_send(());
+        }
+        self.finished = true;
+    }
+}
+
+impl Drop for CollectPeerStateResult {
+    fn drop(&mut self) {
+        if !self.finished {
+            info!("can not get peer current state due to channel close"; "region_id" => self.region_id);
+            let mut data = self.task.data.lock().unwrap();
+            assert!(data.counter > 0);
+            data.counter -= 1;
+            if data.counter == 0 {
+                let _ = self.task.sender.try_send(());
+            }
+        }
+    }
 }
 
 #[cfg(test)]

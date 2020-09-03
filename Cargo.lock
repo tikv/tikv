@@ -1865,7 +1865,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#6157337686b1654f0bfb55920faf95b3d3e34d87"
+source = "git+https://github.com/gengliqi/kvproto.git?branch=add-collect-peer-state#af12ea861cbf4473cdfcd0a1b2116ae490b750c6"
 dependencies = [
  "futures 0.1.29",
  "grpcio",

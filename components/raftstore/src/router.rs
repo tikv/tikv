@@ -6,7 +6,8 @@ use kvproto::raft_serverpb::RaftMessage;
 
 use crate::store::fsm::RaftRouter;
 use crate::store::{
-    Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
+    Callback, CasualMessage, CollectPeerStateTask, LocalReader, PeerMsg, RaftCommand,
+    SignificantMsg, StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use engine_rocks::RocksEngine;
@@ -69,6 +70,8 @@ where
 
     fn broadcast_unreachable(&self, store_id: u64);
 
+    fn collect_peer_current_state(&self, task: CollectPeerStateTask);
+
     /// Reports the sending snapshot status to the peer of the Region.
     fn report_snapshot_status(
         &self,
@@ -117,6 +120,8 @@ where
     }
 
     fn broadcast_unreachable(&self, _: u64) {}
+
+    fn collect_peer_current_state(&self, _: CollectPeerStateTask) {}
 
     fn casual_send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
         Ok(())
@@ -253,5 +258,11 @@ where
         let _ = self
             .router
             .send_control(StoreMsg::StoreUnreachable { store_id });
+    }
+
+    fn collect_peer_current_state(&self, task: CollectPeerStateTask) {
+        let _ = self
+            .router
+            .send_control(StoreMsg::CollectTotalPeerState(task));
     }
 }

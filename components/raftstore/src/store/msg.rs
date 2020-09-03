@@ -17,6 +17,7 @@ use txn_types::TxnExtra;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
+use crate::store::fsm::store::{CollectPeerStateResult, CollectPeerStateTask};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
@@ -376,6 +377,8 @@ pub enum PeerMsg<EK: KvEngine> {
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
+    /// Collect the current state then callback.
+    CollectState(CollectPeerStateResult),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -395,6 +398,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
+            PeerMsg::CollectState(_) => write!(fmt, "CollectState"),
         }
     }
 }
@@ -428,6 +432,7 @@ pub enum StoreMsg {
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
     /// Asks the store to update replication mode.
     UpdateReplicationMode(ReplicationStatus),
+    CollectTotalPeerState(CollectPeerStateTask),
 }
 
 impl fmt::Debug for StoreMsg {
@@ -452,6 +457,7 @@ impl fmt::Debug for StoreMsg {
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
+            StoreMsg::CollectTotalPeerState(_) => write!(fmt, "CollectTotalPeerState"),
         }
     }
 }

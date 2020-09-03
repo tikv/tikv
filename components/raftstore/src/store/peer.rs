@@ -10,6 +10,7 @@ use std::{cmp, mem, u64, usize};
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{Engines, KvEngine, Snapshot, WriteOptions};
 use error_code::ErrorCodeExt;
+use kvproto::debugpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
@@ -320,6 +321,29 @@ impl<S: Snapshot> Drop for CmdEpochChecker<S> {
                 apply::notify_stale_req(self.term, cb);
             }
         }
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct PeerCurrentState {
+    pub region: metapb::Region,
+    pub peer_id: u64,
+    pub leader_id: u64,
+    pub last_index: u64,
+    pub applied_index: u64,
+}
+
+impl PeerCurrentState {
+    pub fn into_proto(self) -> debugpb::PeerCurrentState {
+        let mut state_pb = debugpb::PeerCurrentState::new();
+        state_pb.set_region_id(self.region.get_id());
+        state_pb.set_valid(true);
+        state_pb.set_region(self.region);
+        state_pb.set_peer_id(self.peer_id);
+        state_pb.set_leader_id(self.leader_id);
+        state_pb.set_last_index(self.last_index);
+        state_pb.set_applied_index(self.applied_index);
+        state_pb
     }
 }
 

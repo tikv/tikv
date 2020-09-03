@@ -40,14 +40,14 @@ use txn_types::TxnExtra;
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
-use crate::store::fsm::store::{PollContext, StoreMeta};
+use crate::store::fsm::store::{CollectPeerStateResult, PollContext, StoreMeta};
 use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
 };
 use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::metrics::*;
 use crate::store::msg::Callback;
-use crate::store::peer::{ConsistencyState, Peer, StaleState};
+use crate::store::peer::{ConsistencyState, Peer, PeerCurrentState, StaleState};
 use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
@@ -486,6 +486,7 @@ where
                 }
                 PeerMsg::Noop => {}
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
+                PeerMsg::CollectState(result) => self.on_collect_state(result),
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -826,6 +827,17 @@ where
             self.fsm.peer.peer.clone(),
         );
         self.propose_raft_command(msg, cb, TxnExtra::default());
+    }
+
+    fn on_collect_state(&mut self, mut result: CollectPeerStateResult) {
+        let current_state = PeerCurrentState {
+            region: self.fsm.peer.region().clone(),
+            peer_id: self.fsm.peer_id(),
+            leader_id: self.fsm.peer.leader_id(),
+            last_index: self.fsm.peer.get_store().last_index(),
+            applied_index: self.fsm.peer.get_store().applied_index(),
+        };
+        result.on_finish(current_state);
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {

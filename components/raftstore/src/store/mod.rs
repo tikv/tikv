@@ -25,13 +25,16 @@ pub use self::bootstrap::{
     prepare_bootstrap_cluster,
 };
 pub use self::config::Config;
-pub use self::fsm::{DestroyPeerJob, RaftRouter, StoreInfo};
+pub use self::fsm::{
+    CollectPeerStateTask, DestroyPeerJob, RaftRouter, StoreInfo, TotalPeerCurrentState,
+};
 pub use self::msg::{
     Callback, CasualMessage, MergeResultKind, PeerMsg, PeerTicks, RaftCommand, ReadCallback,
     ReadResponse, SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{
-    AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy,
+    AbstractPeer, Peer, PeerCurrentState, PeerStat, ProposalContext, RequestInspector,
+    RequestPolicy,
 };
 pub use self::peer_storage::{
     clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state, write_peer_state,
