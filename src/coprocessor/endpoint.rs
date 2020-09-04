@@ -15,6 +15,7 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
+use tikv_util::minitrace::{self, prelude::*, Event};
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 
 use crate::read_pool::ReadPoolHandle;
@@ -374,6 +375,7 @@ impl<E: Engine> Endpoint<E> {
         let snapshot = unsafe {
             with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
         }
+        .trace_async(Event::TiKvCoprGetSnapshot as u32)
         .await?;
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
@@ -390,7 +392,7 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
 
-        let handle_request_future = track(handler.handle_request(), &mut tracker);
+        let handle_request_future = track(handler.handle_request().trace_async(Event::TiKvCoprHandleRequest as u32), &mut tracker);
         let result = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
@@ -432,7 +434,8 @@ impl<E: Engine> Endpoint<E> {
 
         self.read_pool
             .spawn_handle(
-                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder),
+                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                    .trace_task(tipb::TracingEvent::TiKvCoprScheduleTask as u32),
                 priority,
                 task_id,
             )
@@ -449,8 +452,10 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let result_of_future = self
-            .parse_request_and_check_memory_locks(req, peer, false)
+        let guard = minitrace::new_span(Event::TiKvCoprParseRequest as u32);
+        let req_builder_result = self.parse_request_and_check_memory_locks(req, peer, false);
+        drop(guard);
+        let result_of_future = req_builder_result
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
         future::result(result_of_future)
             .flatten()
