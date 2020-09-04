@@ -82,7 +82,7 @@ pub trait RaftEngine: Clone + Sync + Send + 'static {
 
     fn stop(&self) {}
 
-    fn is_rocks_engine(&self)
+    fn dump_stats(&self) -> Result<String>;
 }
 
 pub trait RaftLogBatch: Send {

@@ -165,4 +165,8 @@ impl RaftEngine for RaftLogEngine {
     fn stop(&self) {
         self.0.stop();
     }
+
+    fn dump_stats(&self) -> Result<String> {
+        Ok("".to_owned())
+    }
 }
