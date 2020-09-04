@@ -816,6 +816,7 @@ mod tests {
         TestEngineBuilder, WriteData,
     };
     use crate::storage::lock_manager::DummyLockManager;
+    use crate::storage::metrics::CommandKind;
     use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilder};
 
     use super::*;
@@ -880,6 +881,7 @@ mod tests {
             ctx: &Context,
             mut batch: WriteData,
             callback: EngineCallback<()>,
+            tag: Option<CommandKind>,
         ) -> EngineResult<()> {
             batch.modifies.iter_mut().for_each(|modify| match modify {
                 Modify::Delete(_, ref mut key) => {
@@ -893,7 +895,7 @@ mod tests {
                     *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
                 }
             });
-            self.0.async_write(ctx, batch, callback)
+            self.0.async_write(ctx, batch, callback, tag)
         }
 
         fn async_snapshot(

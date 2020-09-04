@@ -11,6 +11,7 @@ use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
+use crate::storage::metrics::CommandKind;
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{CfName, CF_DEFAULT};
 use engine_traits::{IterOptions, KvEngine as LocalEngine, ReadOptions};
@@ -111,11 +112,17 @@ pub trait Engine: Send + Clone + 'static {
         cb: Callback<Self::Snap>,
     ) -> Result<()>;
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
+    fn async_write(
+        &self,
+        ctx: &Context,
+        batch: WriteData,
+        callback: Callback<()>,
+        tag: Option<CommandKind>,
+    ) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {
+        match wait_op!(|cb| self.async_write(ctx, batch, cb, None), timeout) {
             Some((_, res)) => res,
             None => Err(Error::from(ErrorInner::Timeout(timeout))),
         }

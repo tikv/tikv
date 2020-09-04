@@ -213,6 +213,42 @@ make_auto_flush_static_metric! {
     pub struct SchedCommandPriCounterVec: LocalIntCounter {
         "priority" => CommandPriority,
     }
+
+    pub struct SchedWaitDurationVec: LocalHistogram {
+        "type" => CommandKind,
+    }
+
+    pub struct AsyncWriteDurationVec: LocalHistogram {
+        "type" => CommandKind,
+    }
+
+    pub struct PreAsyncWriteDurationVec: LocalHistogram {
+        "type" => CommandKind,
+    }
+
+    pub struct SchedAsyncSnapshotDurationVec: LocalHistogram {
+        "type" => CommandKind,
+    }
+
+    pub struct SchedWaitForThreadDurationVec: LocalHistogram {
+        "type" => CommandKind,
+    }
+
+    pub struct SchedProcessBeforeWriteDurationVec: LocalHistogram {
+        "type" => CommandKind,
+    }
+
+    pub struct SchedExecCallbackDurationVec: LocalHistogram {
+        "type" => CommandKind,
+    }
+
+    pub struct SchedPostHandleDurationVec: LocalHistogram {
+        "type" => CommandKind,
+    }
+
+    pub struct SchedPostWriteDurationVec: LocalHistogram {
+        "type" => CommandKind,
+    }
 }
 
 impl Into<GcKeysCF> for ServerGcKeysCF {
@@ -349,4 +385,91 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
+    pub static ref SCHED_WAIT_HISTOGRAM: HistogramVec = register_histogram_vec!(
+        "tikv_scheduler_wait_for_process_duration_seconds",
+        "Bucketed histogram of duration of wait-for-process",
+        &["type"],
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref SCHED_WAIT_HISTOGRAM_VEC: SchedWaitDurationVec =
+        auto_flush_from!(SCHED_WAIT_HISTOGRAM, SchedWaitDurationVec);
+    pub static ref ASYNC_WRITE_DURATIONS_VEC: AsyncWriteDurationVec =
+        auto_flush_from!(ASYNC_WRITE_DURATIONS, AsyncWriteDurationVec);
+    pub static ref ASYNC_WRITE_DURATIONS: HistogramVec = register_histogram_vec!(
+        "tikv_storage_engine_async_write_duration_seconds",
+        "Bucketed histogram of successful async-write requests.",
+        &["type"],
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref PRE_ASYNC_WRITE_DURATIONS_VEC: PreAsyncWriteDurationVec =
+        auto_flush_from!(PRE_ASYNC_WRITE_DURATIONS, PreAsyncWriteDurationVec);
+    pub static ref PRE_ASYNC_WRITE_DURATIONS: HistogramVec = register_histogram_vec!(
+        "tikv_storage_engine_pre_async_write_duration_seconds",
+        "Bucketed histogram of duration of pre-async-write requests.",
+        &["type"],
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref SCHED_ASYNC_SNAPSHOT_DURATIONS: HistogramVec = register_histogram_vec!(
+        "tikv_scheduler_async_snapshot_duration_seconds",
+        "Bucketed histogram of scheduler before-process duration.",
+        &["type"],
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref SCHED_ASYNC_SNAPSHOT_DURATIONS_VEC: SchedAsyncSnapshotDurationVec = auto_flush_from!(
+        SCHED_ASYNC_SNAPSHOT_DURATIONS,
+        SchedAsyncSnapshotDurationVec
+    );
+    pub static ref SCHED_WAIT_FOR_THREAD_DURATIONS: HistogramVec = register_histogram_vec!(
+        "tikv_scheduler_wait_for_thread_duration_seconds",
+        "Bucketed histogram of scheduler wait-for-thread duration.",
+        &["type"],
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref SCHED_WAIT_FOR_THREAD_DURATIONS_VEC: SchedWaitForThreadDurationVec = auto_flush_from!(
+        SCHED_WAIT_FOR_THREAD_DURATIONS,
+        SchedWaitForThreadDurationVec
+    );
+    pub static ref SCHED_PROCESS_BEFORE_WRITE_DURATIONS: HistogramVec = register_histogram_vec!(
+        "tikv_scheduler_process_before_write_duration_seconds",
+        "Bucketed histogram of scheduler process-before-write duration.",
+        &["type"],
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref SCHED_PROCESS_BEFORE_WRITE_DURATIONS_VEC: SchedProcessBeforeWriteDurationVec = auto_flush_from!(
+        SCHED_PROCESS_BEFORE_WRITE_DURATIONS,
+        SchedProcessBeforeWriteDurationVec
+    );
+    pub static ref SCHED_EXEC_CALLBACK_DURATIONS: HistogramVec = register_histogram_vec!(
+        "tikv_scheduler_exec_callback_duration_seconds",
+        "Bucketed histogram of scheduler executing callback.",
+        &["type"],
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref SCHED_EXEC_CALLBACK_DURATIONS_VEC: SchedExecCallbackDurationVec =
+        auto_flush_from!(SCHED_EXEC_CALLBACK_DURATIONS, SchedExecCallbackDurationVec);
+    pub static ref SCHED_POST_HANDLE_DURATIONS: HistogramVec = register_histogram_vec!(
+        "tikv_scheduler_post_handle_duration_seconds",
+        "Bucketed histogram of scheduler post-handle processing requests.",
+        &["type"],
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref SCHED_POST_HANDLE_DURATIONS_VEC: SchedPostHandleDurationVec =
+        auto_flush_from!(SCHED_POST_HANDLE_DURATIONS, SchedPostHandleDurationVec);
+    pub static ref SCHED_POST_WRITE_DURATIONS: HistogramVec = register_histogram_vec!(
+        "tikv_scheduler_post_write_duration_seconds",
+        "Bucketed histogram of scheduler post-write processing requests.",
+        &["type"],
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref SCHED_POST_WRITE_DURATIONS_VEC: SchedPostWriteDurationVec =
+        auto_flush_from!(SCHED_POST_WRITE_DURATIONS, SchedPostWriteDurationVec);
 }
