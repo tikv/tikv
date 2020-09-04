@@ -77,7 +77,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        gc_worker: GcWorker<E>,
+        gc_worker: GcWorker<E, T>,
         yatp_read_pool: Option<ReadPool>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
@@ -269,27 +269,28 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::*;
-    use std::sync::mpsc::*;
+    use std::sync::mpsc::Sender;
     use std::sync::*;
     use std::time::Duration;
 
-    use super::*;
-
-    use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use super::super::{Config, Result};
-    use crate::config::CoprReadPoolConfig;
-    use crate::coprocessor::{self, readpool_impl};
-    use crate::storage::TestStorageBuilder;
-    use raftstore::store::transport::Transport;
-    use raftstore::store::*;
-    use raftstore::Result as RaftStoreResult;
-
-    use crate::storage::lock_manager::DummyLockManager;
+    use crossbeam::channel::TrySendError;
     use engine_rocks::RocksSnapshot;
+    use engine_traits::{KvEngine, Snapshot};
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
+    use raftstore::store::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
+    use raftstore::store::PeerMsg;
+    use raftstore::store::*;
+    use raftstore::Result as RaftStoreResult;
     use security::SecurityConfig;
-    use txn_types::TxnExtra;
+
+    use super::*;
+    use crate::config::CoprReadPoolConfig;
+    use crate::coprocessor::{self, readpool_impl};
+    use crate::server::resolve::{Callback as ResolveCallback, StoreAddrResolver};
+    use crate::server::{Config, Result};
+    use crate::storage::lock_manager::DummyLockManager;
+    use crate::storage::TestStorageBuilder;
 
     #[derive(Clone)]
     struct MockResolver {
@@ -317,27 +318,26 @@ mod tests {
         significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
     }
 
+    impl StoreRouter for TestRaftStoreRouter {
+        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+            Ok(())
+        }
+    }
+
+    impl<S: Snapshot> ProposalRouter<S> for TestRaftStoreRouter {
+        fn send(&self, _: RaftCommand<S>) -> std::result::Result<(), TrySendError<RaftCommand<S>>> {
+            Ok(())
+        }
+    }
+
+    impl<EK: KvEngine> CasualRouter<EK> for TestRaftStoreRouter {
+        fn send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
+            Ok(())
+        }
+    }
+
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
-            Ok(())
-        }
-
-        fn send_command(
-            &self,
-            _: RaftCmdRequest,
-            _: Callback<RocksSnapshot>,
-        ) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
-            Ok(())
-        }
-
-        fn send_command_txn_extra(
-            &self,
-            _: RaftCmdRequest,
-            _: TxnExtra,
-            _: Callback<RocksSnapshot>,
-        ) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
@@ -351,7 +351,23 @@ mod tests {
             Ok(())
         }
 
-        fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
+        fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
+
+        fn send_casual_msg(&self, _: u64, _: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
+            self.tx.send(1).unwrap();
+            Ok(())
+        }
+
+        fn send_store_msg(&self, _: StoreMsg) -> RaftStoreResult<()> {
+            self.tx.send(1).unwrap();
+            Ok(())
+        }
+
+        fn send_command(
+            &self,
+            _: RaftCmdRequest,
+            _: Callback<RocksSnapshot>,
+        ) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
@@ -377,8 +393,8 @@ mod tests {
         }
     }
 
-    #[test]
     // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
+    #[test]
     fn test_peer_resolve() {
         let mut cfg = Config::default();
         cfg.addr = "127.0.0.1:0".to_owned();
@@ -386,13 +402,6 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
-        let mut gc_worker = GcWorker::new(
-            storage.get_engine(),
-            None,
-            Default::default(),
-            Default::default(),
-        );
-        gc_worker.start().unwrap();
 
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
@@ -400,6 +409,14 @@ mod tests {
             tx,
             significant_msg_sender,
         };
+
+        let mut gc_worker = GcWorker::new(
+            storage.get_engine(),
+            router.clone(),
+            Default::default(),
+            Default::default(),
+        );
+        gc_worker.start().unwrap();
 
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(cfg);

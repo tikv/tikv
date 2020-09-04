@@ -2,12 +2,12 @@
 
 //! Interact with persistent storage.
 //!
-//! The [`Storage`](storage::Storage) structure provides raw and transactional APIs on top of
-//! a lower-level [`Engine`](storage::kv::Engine).
+//! The [`Storage`](Storage) structure provides raw and transactional APIs on top of
+//! a lower-level [`Engine`](kv::Engine).
 //!
-//! There are multiple [`Engine`](storage::kv::Engine) implementations, [`RaftKv`](server::raftkv::RaftKv)
-//! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and
-//! [`RocksEngine`](storage::RocksEngine) are used for testing only.
+//! There are multiple [`Engine`](kv::Engine) implementations, [`RaftKv`](crate::server::raftkv::RaftKv)
+//! is used by the [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
+//! [`RocksEngine`](RocksEngine) are used for testing only.
 
 pub mod config;
 pub mod errors;
@@ -62,21 +62,22 @@ use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
-/// [`Storage`] implements transactional KV APIs and raw KV APIs on a given [`Engine`]. An [`Engine`]
-/// provides low level KV functionality. [`Engine`] has multiple implementations. When a TiKV server
-/// is running, a [`RaftKv`] will be the underlying [`Engine`] of [`Storage`]. The other two types of
-/// engines are for test purpose.
+/// [`Storage`](Storage) implements transactional KV APIs and raw KV APIs on a given [`Engine`].
+/// An [`Engine`] provides low level KV functionality. [`Engine`] has multiple implementations.
+/// When a TiKV server is running, a [`RaftKv`](crate::server::raftkv::RaftKv) will be the
+/// underlying [`Engine`] of [`Storage`]. The other two types of engines are for test purpose.
 ///
 ///[`Storage`] is reference counted and cloning [`Storage`] will just increase the reference counter.
 /// Storage resources (i.e. threads, engine) will be released when all references are dropped.
 ///
 /// Notice that read and write methods may not be performed over full data in most cases, i.e. when
-/// underlying engine is [`RaftKv`], which limits data access in the range of a single region
+/// underlying engine is [`RaftKv`](crate::server::raftkv::RaftKv),
+/// which limits data access in the range of a single region
 /// according to specified `ctx` parameter. However,
-/// [`unsafe_destroy_range`](Storage::unsafe_destroy_range) is the only exception. It's
-/// always performed on the whole TiKV.
+/// [`unsafe_destroy_range`](crate::server::gc_worker::GcTask::UnsafeDestroyRange) is the only exception.
+/// It's always performed on the whole TiKV.
 ///
-/// Operations of [`Storage`] can be divided into two types: MVCC operations and raw operations.
+/// Operations of [`Storage`](Storage) can be divided into two types: MVCC operations and raw operations.
 /// MVCC operations uses MVCC keys, which usually consist of several physical keys in different
 /// CFs. In default CF and write CF, the key will be memcomparable-encoded and append the timestamp
 /// to it, so that multiple versions can be saved at the same time.
@@ -693,7 +694,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// This means that deleted keys will not be retrievable by specifying an older timestamp.
     /// If `notify_only` is set, the data will not be immediately deleted, but the operation will
     /// still be replicated via Raft. This is used to notify that the data will be deleted by
-    /// `unsafe_destroy_range` soon.
+    /// [`unsafe_destroy_range`](crate::server::gc_worker::GcTask::UnsafeDestroyRange) soon.
     pub fn delete_range(
         &self,
         ctx: Context,
@@ -1624,6 +1625,7 @@ mod tests {
     };
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
+    use errors::extract_key_error;
     use futures03::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, LockInfo, Op};
     use std::{
@@ -4398,8 +4400,8 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
-                    vec![Mutation::Put((k.clone(), v))],
-                    k.as_encoded().to_vec(),
+                    vec![Mutation::Put((k.clone(), v.clone()))],
+                    b"k".to_vec(),
                     10.into(),
                     100,
                 ),
@@ -4408,15 +4410,24 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
+        let lock_with_ttl = |ttl| {
+            txn_types::Lock::new(
+                LockType::Put,
+                b"k".to_vec(),
+                10.into(),
+                ttl,
+                Some(v.clone()),
+                0.into(),
+                0,
+                0.into(),
+            )
+        };
+
         // `advise_ttl` = 90, which is less than current ttl 100. The lock's ttl will remains 100.
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 90, Context::default()),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    uncommitted(100, TimeStamp::zero(), false, vec![]),
-                ),
+                expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(100))),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4426,11 +4437,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 110, Context::default()),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    uncommitted(110, TimeStamp::zero(), false, vec![]),
-                ),
+                expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(110))),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4530,7 +4537,7 @@ mod tests {
                     100,
                     false,
                     3,
-                    TimeStamp::zero(),
+                    ts(10, 1),
                     Some(vec![b"k1".to_vec(), b"k2".to_vec()]),
                     Context::default(),
                 ),
@@ -4539,7 +4546,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        // If lock exists and not expired, returns the lock's TTL.
+        // If lock exists and not expired, returns the lock's information.
         storage
             .sched_txn_command(
                 commands::CheckTxnStatus::new(
@@ -4553,7 +4560,19 @@ mod tests {
                 expect_value_callback(
                     tx.clone(),
                     0,
-                    uncommitted(100, ts(10, 1), true, vec![b"k1".to_vec(), b"k2".to_vec()]),
+                    uncommitted(
+                        txn_types::Lock::new(
+                            LockType::Put,
+                            b"k".to_vec(),
+                            ts(10, 0),
+                            100,
+                            Some(v.clone()),
+                            0.into(),
+                            3,
+                            ts(10, 1),
+                        )
+                        .use_async_commit(vec![b"k1".to_vec(), b"k2".to_vec()]),
+                    ),
                 ),
             )
             .unwrap();
@@ -5354,7 +5373,16 @@ mod tests {
                 expect_value_callback(
                     tx.clone(),
                     0,
-                    TxnStatus::uncommitted(100, 0.into(), false, vec![]),
+                    TxnStatus::uncommitted(txn_types::Lock::new(
+                        LockType::Put,
+                        b"k".to_vec(),
+                        start_ts,
+                        100,
+                        Some(b"v".to_vec()),
+                        0.into(),
+                        0,
+                        0.into(),
+                    )),
                 ),
             )
             .unwrap();
@@ -5411,31 +5439,40 @@ mod tests {
         ctx.set_isolation_level(IsolationLevel::Si);
 
         // Test get
-        assert!(storage
-            .get(ctx.clone(), key.clone(), 100.into())
-            .wait()
-            .is_err());
+        let key_error = extract_key_error(
+            &storage
+                .get(ctx.clone(), key.clone(), 100.into())
+                .wait()
+                .unwrap_err(),
+        );
+        assert_eq!(key_error.get_locked().get_key(), b"key");
 
         // Test batch_get
-        assert!(storage
-            .batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into())
-            .wait()
-            .is_err());
+        let key_error = extract_key_error(
+            &storage
+                .batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into())
+                .wait()
+                .unwrap_err(),
+        );
+        assert_eq!(key_error.get_locked().get_key(), b"key");
 
         // Test scan
-        assert!(storage
-            .scan(
-                ctx.clone(),
-                Key::from_raw(b"a"),
-                None,
-                10,
-                0,
-                100.into(),
-                false,
-                false
-            )
-            .wait()
-            .is_err());
+        let key_error = extract_key_error(
+            &storage
+                .scan(
+                    ctx.clone(),
+                    Key::from_raw(b"a"),
+                    None,
+                    10,
+                    0,
+                    100.into(),
+                    false,
+                    false,
+                )
+                .wait()
+                .unwrap_err(),
+        );
+        assert_eq!(key_error.get_locked().get_key(), b"key");
 
         // Test batch_get_command
         let mut req1 = GetRequest::default();
@@ -5448,6 +5485,7 @@ mod tests {
         req2.set_version(100);
         let res = storage.batch_get_command(vec![req1, req2]).wait().unwrap();
         assert!(res[0].is_ok());
-        assert!(res[1].is_err());
+        let key_error = extract_key_error(&res[1].as_ref().unwrap_err());
+        assert_eq!(key_error.get_locked().get_key(), b"key");
     }
 }

@@ -1518,11 +1518,9 @@ mod tests {
             .unwrap(),
         );
 
-        let shared_block_cache = false;
         let engines = Engines::new(
             RocksEngine::from_db(Arc::clone(&engine)),
             RocksEngine::from_db(engine),
-            shared_block_cache,
         );
         Debugger::new(engines, ConfigController::default())
     }

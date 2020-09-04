@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod unicode_ci_data;
 mod utf8mb4;
 
 pub use self::utf8mb4::*;
@@ -20,6 +21,7 @@ pub macro match_template_collator($t:tt, $($tail:tt)*) {
             Utf8Mb4Bin => CollatorUtf8Mb4Bin,
             Utf8Mb4BinNoPadding => CollatorUtf8Mb4BinNoPadding,
             Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
+            Utf8Mb4UnicodeCi => CollatorUtf8Mb4UnicodeCi,
         ],
         $($tail)*
     }
