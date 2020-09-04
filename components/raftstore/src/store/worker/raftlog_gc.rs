@@ -2,12 +2,11 @@
 
 use std::error;
 use std::fmt::{self, Display, Formatter};
-use std::marker::PhantomData;
 use std::sync::mpsc::Sender;
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine_traits::{Engines, KvEngine};
-use raft_engine::RaftEngine;
+
+use engine_traits::{Engines, KvEngine, RaftEngine};
 use tikv_util::time::Duration;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
@@ -103,11 +102,6 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
         });
         let tasks = std::mem::replace(&mut self.tasks, vec![]);
         for t in tasks {
-            debug!(
-                "execute gc log";
-                "region_id" => t.region_id,
-                "end_index" => t.end_idx,
-            );
             match t {
                 Task::Gc {
                     region_id,
@@ -187,25 +181,13 @@ where
 use std::sync::mpsc::{sync_channel, SyncSender};
 
 #[cfg(test)]
-impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER, SyncSender<(u64, CasualMessage<EK>)>> {
-    fn new_for_test(
-        gc_entries: Sender<usize>,
-    ) -> Runner<EK, ER, SyncSender<(u64, CasualMessage<EK>)>> {
-        let (tx, _) = sync_channel(1);
-        Runner {
-            ch: tx,
-            _phantom: Default::default(),
-            gc_entries: Some(gc_entries),
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use engine_rocks::util::new_engine;
     use engine_rocks::RocksEngine;
-    use engine_traits::{kCF_DEFAULT, Engines, KvEngine, Mutable, WriteBatchExt, ALL_CFS};
+    use engine_traits::{
+        kCF_DEFAULT, Engines, KvEngine, Mutable, WriteBatchExt, ALL_CFS, CF_DEFAULT,
+    };
     use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
@@ -217,7 +199,7 @@ mod tests {
         let path_kv = dir.path().join("kv");
         let raft_db = new_engine(path_kv.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let kv_db = new_engine(path_raft.to_str().unwrap(), None, ALL_CFS, None).unwrap();
-        let engines = Engines::new(kv_db, raft_db.clone(), false);
+        let engines = Engines::new(kv_db, raft_db.clone());
 
         let (tx, rx) = mpsc::channel();
         let (r, _) = sync_channel(1);
@@ -241,7 +223,7 @@ mod tests {
             (Task::gc(region_id, 0, 10), 10, (0, 10), (10, 100)),
             (Task::gc(region_id, 0, 50), 40, (0, 50), (50, 100)),
             (Task::gc(region_id, 50, 50), 0, (0, 50), (50, 100)),
-            (Task::gc(raft_db, region_id, 50, 60), 10, (0, 60), (60, 100)),
+            (Task::gc(region_id, 50, 60), 10, (0, 60), (60, 100)),
         ];
 
         for (task, expected_collectd, not_exist_range, exist_range) in tbls {

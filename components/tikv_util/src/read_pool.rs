@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::future_pool::{self, FuturePool};
-use futures::channel::oneshot::{self, Canceled};
+use futures::channel::oneshot;
+use futures::future::TryFutureExt;
 use kvproto::kvrpcpb::CommandPri;
 use std::future::Future as StdFuture;
 use std::sync::Arc;
@@ -106,7 +107,6 @@ impl ReadPoolHandle {
     pub fn spawn<F>(&self, f: F, priority: CommandPri, task_id: u64) -> Result<(), ReadPoolError>
     where
         F: StdFuture<Output = ()> + Send + 'static,
-        F::Output: Send,
     {
         match self {
             ReadPoolHandle::FuturePools {
@@ -156,26 +156,29 @@ impl ReadPoolHandle {
         Ok(())
     }
 
-    pub fn spawn_handle<F>(
+    pub fn spawn_handle<F, T>(
         &self,
         f: F,
         priority: CommandPri,
         task_id: u64,
-    ) -> Result<impl StdFuture<Output = Result<F::Output, Canceled>>, ReadPoolError>
+    ) -> impl StdFuture<Output = Result<T, ReadPoolError>>
     where
-        F: StdFuture + Send + 'static,
-        F::Output: Send,
+        F: StdFuture<Output = T> + Send + 'static,
+        T: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-        self.spawn(
+        let (tx, rx) = oneshot::channel::<T>();
+        let res = self.spawn(
             async move {
                 let res = f.await;
                 let _ = tx.send(res);
             },
             priority,
             task_id,
-        )?;
-        Ok(rx)
+        );
+        async move {
+            res?;
+            rx.map_err(ReadPoolError::from).await
+        }
     }
 }
 

@@ -27,10 +27,10 @@ use time::{self, Timespec};
 use tokio::runtime::{self, Handle, Runtime};
 
 use engine_rocks::CompactedEvent;
+use engine_traits::{RaftEngine, RaftLogBatch};
 use error_code::ErrorCodeExt;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
-use raft_engine::{RaftEngine, RaftLogBatch};
 use sst_importer::SSTImporter;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
@@ -1211,6 +1211,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             region_peers,
             builder,
             auto_split_controller,
+            coprocessor_host,
             concurrency_manager,
         )?;
         Ok(())
@@ -2373,9 +2374,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
     }
 
     fn on_raft_engine_purge_tick(&self) {
-        let raft_engine = self.ctx.engines.raft.clone();
-        let scheduler = &self.ctx.raftlog_gc_scheduler;
-        let _ = scheduler.schedule(RaftlogGcTask::Purge { raft_engine });
+        let _ = self.ctx.raftlog_gc_scheduler.schedule(RaftlogGcTask::Purge);
         self.register_raft_engine_purge_tick();
     }
 }

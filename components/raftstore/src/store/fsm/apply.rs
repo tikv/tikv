@@ -13,7 +13,7 @@ use std::vec::Drain;
 use std::{cmp, usize};
 
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{KvEngine, Snapshot, WriteBatch};
+use engine_traits::{KvEngine, RaftEngine, Snapshot, WriteBatch};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use error_code::ErrorCodeExt;
 use kvproto::import_sstpb::SstMeta;
@@ -27,14 +27,13 @@ use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
-use raft_engine::RaftEngine;
 use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
-use tikv_util::future::paired_std_future_callback;
+use tikv_util::escape;
+use tikv_util::future::paired_future_callback;
 use tikv_util::read_pool::{DefaultTicker, ReadPoolBuilder};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
-use tikv_util::{escape, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
@@ -1921,7 +1920,7 @@ where
         );
         fail_point!("before_handle_catch_up_logs_for_merge");
         // Sends message to the source peer fsm and pause `exec_commit_merge` process
-        let (callback, f) = paired_std_future_callback::<u64>();
+        let (callback, f) = paired_future_callback::<u64>();
         let msg = SignificantMsg::CatchUpLogs(CatchUpLogs {
             target_region_id: self.region_id(),
             merge: merge.to_owned(),
@@ -3019,7 +3018,7 @@ async fn handle_normal<EK, W>(
                 TryRecvError::Empty => {
                     let mut ctx = apply_ctx.take().unwrap();
                     let msg = if fsm.uncommit_data {
-                        let (callback, f) = paired_std_future_callback();
+                        let (callback, f) = paired_future_callback();
                         ctx.flush_notifier.push(callback);
                         set_tls_ctx(ctx);
                         let (ret, msg) = tokio::join!(f, receiver.recv());
