@@ -1625,6 +1625,7 @@ mod tests {
     };
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
+    use errors::extract_key_error;
     use futures03::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, LockInfo, Op};
     use std::{
@@ -5438,31 +5439,40 @@ mod tests {
         ctx.set_isolation_level(IsolationLevel::Si);
 
         // Test get
-        assert!(storage
-            .get(ctx.clone(), key.clone(), 100.into())
-            .wait()
-            .is_err());
+        let key_error = extract_key_error(
+            &storage
+                .get(ctx.clone(), key.clone(), 100.into())
+                .wait()
+                .unwrap_err(),
+        );
+        assert_eq!(key_error.get_locked().get_key(), b"key");
 
         // Test batch_get
-        assert!(storage
-            .batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into())
-            .wait()
-            .is_err());
+        let key_error = extract_key_error(
+            &storage
+                .batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into())
+                .wait()
+                .unwrap_err(),
+        );
+        assert_eq!(key_error.get_locked().get_key(), b"key");
 
         // Test scan
-        assert!(storage
-            .scan(
-                ctx.clone(),
-                Key::from_raw(b"a"),
-                None,
-                10,
-                0,
-                100.into(),
-                false,
-                false
-            )
-            .wait()
-            .is_err());
+        let key_error = extract_key_error(
+            &storage
+                .scan(
+                    ctx.clone(),
+                    Key::from_raw(b"a"),
+                    None,
+                    10,
+                    0,
+                    100.into(),
+                    false,
+                    false,
+                )
+                .wait()
+                .unwrap_err(),
+        );
+        assert_eq!(key_error.get_locked().get_key(), b"key");
 
         // Test batch_get_command
         let mut req1 = GetRequest::default();
@@ -5475,6 +5485,7 @@ mod tests {
         req2.set_version(100);
         let res = storage.batch_get_command(vec![req1, req2]).wait().unwrap();
         assert!(res[0].is_ok());
-        assert!(res[1].is_err());
+        let key_error = extract_key_error(&res[1].as_ref().unwrap_err());
+        assert_eq!(key_error.get_locked().get_key(), b"key");
     }
 }

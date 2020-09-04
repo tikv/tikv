@@ -153,6 +153,8 @@ fn test_serde_custom_tikv_config() {
         raft_log_gc_threshold: 12,
         raft_log_gc_count_limit: 12,
         raft_log_gc_size_limit: ReadableSize::kb(1),
+        raft_log_reserve_max_ticks: 100,
+        raft_engine_purge_interval: ReadableDuration::minutes(20),
         raft_entry_cache_life_time: ReadableDuration::secs(12),
         raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
         split_region_check_tick_interval: ReadableDuration::secs(12),
@@ -654,6 +656,7 @@ fn test_serde_custom_tikv_config() {
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
+        old_value_cache_size: 512,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
