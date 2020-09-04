@@ -30,6 +30,7 @@ prost-codec = [
   "raftstore/prost-codec",
   "sst_importer/prost-codec",
   "tidb_query_datatype/prost-codec",
+  "raft-engine/prost-codec",
   "tipb/prost-codec",
   "txn_types/prost-codec",
   "encryption/prost-codec",
@@ -44,6 +45,7 @@ protobuf-codec = [
   "raft/protobuf-codec",
   "raftstore/protobuf-codec",
   "sst_importer/protobuf-codec",
+  "raft-engine/protobuf-codec",
   "tidb_query_datatype/protobuf-codec",
   "tipb/protobuf-codec",
   "txn_types/protobuf-codec",
@@ -81,6 +83,7 @@ engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
 error_code = { path = "components/error_code" }
 fail = "0.3"
+raft-engine = { git = "https://github.com/tikv/raft-engine", default-features = false }
 failure = "0.1"
 fs2 = "0.4"
 futures = "0.1"

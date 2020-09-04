@@ -797,7 +797,9 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
+impl<E: Engine, R: RegionInfoProvider> Runnable for Endpoint<E, R> {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         if task.has_canceled() {
             warn!("backup task has canceled"; "task" => %task);
@@ -809,7 +811,9 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer<Task, ()> for Endpoint<E, R> {
+impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer for Endpoint<E, R> {
+    type TimeoutTask = ();
+
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
         self.pool.borrow_mut().check_active(pool_idle_duration);

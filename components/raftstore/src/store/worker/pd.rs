@@ -10,7 +10,6 @@ use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
 use std::{cmp, io};
 
-use futures::executor::block_on;
 use futures::future::TryFutureExt;
 use tokio::task::spawn_local;
 
@@ -528,8 +527,12 @@ where
         spawn_local(f);
     }
 
+    // Note: The parameter doesn't contain `self` because this function may
+    // be called in an asynchronous context.
     fn handle_ask_batch_split(
-        &self,
+        router: RaftRouter<EK, ER>,
+        scheduler: Scheduler<Task<EK>>,
+        pd_client: Arc<T>,
         mut region: metapb::Region,
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
@@ -542,11 +545,7 @@ where
                 "region_id" => region.get_id());
             return;
         }
-        let router = self.router.clone();
-        let scheduler = self.scheduler.clone();
-        let resp = self
-            .pd_client
-            .ask_batch_split(region.clone(), split_keys.len());
+        let resp = pd_client.ask_batch_split(region.clone(), split_keys.len());
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1014,7 +1013,10 @@ where
                 peer,
                 right_derive,
                 callback,
-            } => self.handle_ask_batch_split(
+            } => Self::handle_ask_batch_split(
+                self.router.clone(),
+                self.scheduler.clone(),
+                self.pd_client.clone(),
                 region,
                 split_keys,
                 peer,
@@ -1023,20 +1025,30 @@ where
                 String::from("batch_split"),
             ),
             Task::AutoSplit { split_infos } => {
-                for split_info in split_infos {
-                    if let Ok(Some(region)) =
-                        block_on(self.pd_client.get_region_by_id(split_info.region_id))
-                    {
-                        self.handle_ask_batch_split(
-                            region,
-                            vec![split_info.split_key],
-                            split_info.peer,
-                            true,
-                            Callback::None,
-                            String::from("auto_split"),
-                        );
+                let pd_client = self.pd_client.clone();
+                let router = self.router.clone();
+                let scheduler = self.scheduler.clone();
+
+                let f = async move {
+                    for split_info in split_infos {
+                        if let Ok(Some(region)) =
+                            pd_client.get_region_by_id(split_info.region_id).await
+                        {
+                            Self::handle_ask_batch_split(
+                                router.clone(),
+                                scheduler.clone(),
+                                pd_client.clone(),
+                                region,
+                                vec![split_info.split_key],
+                                split_info.peer,
+                                true,
+                                Callback::None,
+                                String::from("auto_split"),
+                            );
+                        }
                     }
-                }
+                };
+                spawn_local(f);
             }
 
             Task::Heartbeat {
