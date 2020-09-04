@@ -12,21 +12,23 @@ use std::time::Duration;
 use std::{error, ptr, result};
 
 use engine_rocks::RocksTablePropertiesCollection;
-use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT};
+use engine_traits::{IterOptions, KvEngine as LocalEngine, ReadOptions};
 use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::{Context, ExtraOp};
+use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
 use txn_types::{Key, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
+pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot, TestEngineBuilder};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
+use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -37,14 +39,14 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(Debug)]
 pub struct CbContext {
     pub term: Option<u64>,
-    pub extra_op: ExtraOp,
+    pub txn_extra_op: TxnExtraOp,
 }
 
 impl CbContext {
     pub fn new() -> CbContext {
         CbContext {
             term: None,
-            extra_op: ExtraOp::Noop,
+            txn_extra_op: TxnExtraOp::Noop,
         }
     }
 }
@@ -92,9 +94,24 @@ impl WriteData {
 
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
+    type Local: LocalEngine;
+
+    /// Local storage engine.
+    fn kv_engine(&self) -> Self::Local;
+
+    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap>;
+
+    /// Write modifications into internal local engine directly.
+    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
+
+    fn async_snapshot(
+        &self,
+        ctx: &Context,
+        read_id: Option<ThreadReadId>,
+        cb: Callback<Self::Snap>,
+    ) -> Result<()>;
 
     fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
-    fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
@@ -104,9 +121,11 @@ pub trait Engine: Send + Clone + 'static {
         }
     }
 
+    fn release_snapshot(&self) {}
+
     fn snapshot(&self, ctx: &Context) -> Result<Self::Snap> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
+        match wait_op!(|cb| self.async_snapshot(ctx, None, cb), timeout) {
             Some((_, res)) => res,
             None => Err(Error::from(ErrorInner::Timeout(timeout))),
         }
@@ -145,11 +164,12 @@ pub trait Engine: Send + Clone + 'static {
     }
 }
 
-pub trait Snapshot: Send + Clone {
+pub trait Snapshot: Sync + Send + Clone {
     type Iter: Iterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>>;
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     fn iter_cf(
         &self,
@@ -175,6 +195,12 @@ pub trait Snapshot: Send + Clone {
     #[inline]
     fn get_data_version(&self) -> Option<u64> {
         None
+    }
+
+    fn is_max_ts_synced(&self) -> bool {
+        // If the snapshot does not come from a multi-raft engine, max ts
+        // needn't be updated.
+        true
     }
 }
 
@@ -283,6 +309,17 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     }
 }
 
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Request(e) => e.error_code(),
+            ErrorInner::Timeout(_) => error_code::storage::TIMEOUT,
+            ErrorInner::EmptyRequest => error_code::storage::EMPTY_REQUEST,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
+        }
+    }
+}
+
 thread_local! {
     // A pointer to thread local engine. Use raw pointer and `UnsafeCell` to reduce runtime check.
     static TLS_ENGINE_ANY: UnsafeCell<*mut ()> = UnsafeCell::new(ptr::null_mut());
@@ -340,11 +377,12 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
 /// Get a snapshot of `engine`.
 pub fn snapshot<E: Engine>(
     engine: &E,
+    read_id: Option<ThreadReadId>,
     ctx: &Context,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let (callback, future) =
-        tikv_util::future::paired_must_called_std_future_callback(drop_snapshot_callback::<E>);
-    let val = engine.async_snapshot(ctx, callback);
+        tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
+    let val = engine.async_snapshot(ctx, read_id, callback);
     // make engine not cross yield point
     async move {
         val?; // propagate error

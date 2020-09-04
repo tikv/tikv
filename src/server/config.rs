@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{i32, isize};
+use std::{cmp, i32, isize};
 
 use super::Result;
 use grpcio::CompressionAlgorithms;
@@ -31,6 +31,9 @@ const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 
 // Number of rows in each chunk for streaming coprocessor.
 const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
+
+// At least 4 long coprocessor requests are allowed to run concurrently.
+const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
 
 const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
 
@@ -91,16 +94,16 @@ pub struct Config {
     pub end_point_enable_batch_if_possible: bool,
     pub end_point_request_max_handle_duration: ReadableDuration,
     pub end_point_max_concurrency: usize,
+    // Memory locks must be checked if async commit is enabled.
+    // CAUTION: The current lock table implementation doesn't have good performance. Enabling
+    // it may slow down TiKV. This option may be removed in the future.
+    pub end_point_check_memory_locks: bool,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
     pub stats_concurrency: usize,
     pub heavy_load_threshold: usize,
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
-    // Whether to collect batch across commands under heavy workload.
-    pub request_batch_enable_cross_command: bool,
-    // Wait duration before each request batch is processed.
-    pub request_batch_wait_duration: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
@@ -156,7 +159,8 @@ impl Default for Config {
             end_point_request_max_handle_duration: ReadableDuration::secs(
                 DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
-            end_point_max_concurrency: cpu_num,
+            end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
+            end_point_check_memory_locks: false,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
@@ -166,8 +170,6 @@ impl Default for Config {
             // The resolution of timer in tokio is 1ms.
             heavy_load_wait_duration: ReadableDuration::millis(1),
             enable_request_batch: true,
-            request_batch_enable_cross_command: false,
-            request_batch_wait_duration: ReadableDuration::millis(1),
         }
     }
 }

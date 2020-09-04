@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use raftstore::router::RaftStoreBlackHole;
 use std::f64::INFINITY;
 use std::sync::mpsc::channel;
 use std::time::Duration;
@@ -23,9 +24,17 @@ fn test_gc_config_validate() {
 
 fn setup_cfg_controller(
     cfg: TiKvConfig,
-) -> (GcWorker<tikv::storage::kv::RocksEngine>, ConfigController) {
+) -> (
+    GcWorker<tikv::storage::kv::RocksEngine, RaftStoreBlackHole>,
+    ConfigController,
+) {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let mut gc_worker = GcWorker::new(engine, None, None, None, cfg.gc.clone(), Default::default());
+    let mut gc_worker = GcWorker::new(
+        engine,
+        RaftStoreBlackHole,
+        cfg.gc.clone(),
+        Default::default(),
+    );
     gc_worker.start().unwrap();
 
     let cfg_controller = ConfigController::new(cfg);

@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{mpsc::channel, Arc};
+use std::sync::{atomic::Ordering, mpsc::channel, Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -8,10 +8,12 @@ use grpcio::*;
 use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
 use kvproto::tikvpb::TikvClient;
 
-use test_raftstore::{must_get_equal, must_get_none, new_server_cluster};
+use errors::extract_region_error;
+use test_raftstore::{must_get_equal, must_get_none, new_peer, new_server_cluster};
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
+use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
-use tikv::storage::{self, lock_manager::DummyLockManager, test_util::*, *};
+use tikv::storage::{self, test_util::*, *};
 use tikv_util::{collections::HashMap, HandyRwLock};
 use txn_types::Key;
 use txn_types::{Mutation, TimeStamp};
@@ -25,9 +27,12 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let storage0 = TestStorageBuilder::<_, DummyLockManager>::from_engine(engine0)
-        .build()
-        .unwrap();
+    let storage0 = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine0,
+        DummyLockManager {},
+    )
+    .build()
+    .unwrap();
 
     let mut ctx0 = Context::default();
     ctx0.set_region_id(region0.get_id());
@@ -45,6 +50,7 @@ fn test_scheduler_leader_change_twice() {
                 false,
                 0,
                 TimeStamp::default(),
+                None,
                 ctx0,
             ),
             Box::new(move |res: storage::Result<_>| {
@@ -202,8 +208,7 @@ fn test_pipelined_pessimistic_lock() {
     let scheduler_async_write_finish_fp = "scheduler_async_write_finish";
     let scheduler_pipelined_write_finish_fp = "scheduler_pipelined_write_finish";
 
-    let storage = TestStorageBuilder::new()
-        .set_lock_mgr(DummyLockManager {})
+    let storage = TestStorageBuilder::new(DummyLockManager {})
         .set_pipelined_pessimistic_lock(true)
         .build()
         .unwrap();
@@ -237,6 +242,7 @@ fn test_pipelined_pessimistic_lock() {
                 10.into(),
                 1,
                 11.into(),
+                None,
                 Context::default(),
             ),
             expect_ok_callback(tx.clone(), 0),
@@ -321,4 +327,115 @@ fn test_pipelined_pessimistic_lock() {
     rx.recv().unwrap();
     fail::remove(scheduler_pipelined_write_finish_fp);
     delete_pessimistic_lock(&storage, key, 60, 60);
+}
+
+#[test]
+fn test_async_commit_prewrite_with_stale_max_ts() {
+    let mut cluster = new_server_cluster(0, 2);
+    cluster.run();
+
+    let engine = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine.clone(),
+        DummyLockManager {},
+    )
+    .build()
+    .unwrap();
+
+    // Fail to get timestamp from PD at first
+    fail::cfg("test_raftstore_get_tso", "pause").unwrap();
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(1);
+    ctx.set_region_epoch(cluster.get_region_epoch(1));
+    ctx.set_peer(cluster.leader_of_region(1).unwrap());
+
+    let check_max_timestamp_not_synced = |expected: bool| {
+        // prewrite
+        let (prewrite_tx, prewrite_rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec()))],
+                    b"k1".to_vec(),
+                    10.into(),
+                    100,
+                    false,
+                    2,
+                    TimeStamp::default(),
+                    Some(vec![b"k2".to_vec()]),
+                    ctx.clone(),
+                ),
+                Box::new(move |res: storage::Result<_>| {
+                    prewrite_tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = prewrite_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let region_error = extract_region_error(&res);
+        assert_eq!(
+            region_error
+                .map(|e| e.has_max_timestamp_not_synced())
+                .unwrap_or(false),
+            expected
+        );
+
+        // pessimistic prewrite
+        let (prewrite_tx, prewrite_rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![(Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())), true)],
+                    b"k1".to_vec(),
+                    10.into(),
+                    100,
+                    20.into(),
+                    2,
+                    TimeStamp::default(),
+                    Some(vec![b"k2".to_vec()]),
+                    ctx.clone(),
+                ),
+                Box::new(move |res: storage::Result<_>| {
+                    prewrite_tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = prewrite_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let region_error = extract_region_error(&res);
+        assert_eq!(
+            region_error
+                .map(|e| e.has_max_timestamp_not_synced())
+                .unwrap_or(false),
+            expected
+        );
+    };
+
+    // should get max timestamp not synced error
+    check_max_timestamp_not_synced(true);
+
+    // can get timestamp from PD
+    fail::remove("test_raftstore_get_tso");
+
+    // wait for timestamp synced
+    let snapshot = engine.snapshot(&ctx).unwrap();
+    let max_ts_sync_status = snapshot.max_ts_sync_status.clone().unwrap();
+    for retry in 0..10 {
+        if max_ts_sync_status.load(Ordering::SeqCst) & 1 == 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1 << retry));
+    }
+    assert!(snapshot.is_max_ts_synced());
+
+    // should NOT get max timestamp not synced error
+    check_max_timestamp_not_synced(false);
 }

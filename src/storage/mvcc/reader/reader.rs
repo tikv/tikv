@@ -1,15 +1,72 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Cursor, Engine, ScanMode, Snapshot, Statistics};
+use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
 use engine_rocks::properties::MvccProperties;
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{IterOptions, TableProperties, TablePropertiesCollection};
 use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
+use std::borrow::Cow;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
+
+/// The result of `get_txn_commit_record`, which is used to get the status of a specified
+/// transaction from write cf.
+#[derive(Debug)]
+pub enum TxnCommitRecord {
+    /// The commit record of the given transaction is not found. But it's possible that there's
+    /// another transaction's commit record, whose `commit_ts` equals to the current transaction's
+    /// `start_ts`. That kind of record will be returned via the `overlapped_write` field.
+    /// In this case, if the current transaction is to be rolled back, the `overlapped_write` must not
+    /// be overwritten.
+    None { overlapped_write: Option<Write> },
+    /// Found the transaction's write record.
+    SingleRecord { commit_ts: TimeStamp, write: Write },
+    /// The transaction's status is found in another transaction's record's `overlapped_rollback`
+    /// field. This may happen when the current transaction's `start_ts` is the same as the
+    /// `commit_ts` of another transaction on this key.
+    OverlappedRollback { commit_ts: TimeStamp },
+}
+
+impl TxnCommitRecord {
+    pub fn exist(&self) -> bool {
+        match self {
+            Self::None { .. } => false,
+            Self::SingleRecord { .. } | Self::OverlappedRollback { .. } => true,
+        }
+    }
+
+    pub fn info(&self) -> Option<(TimeStamp, WriteType)> {
+        match self {
+            Self::None { .. } => None,
+            Self::SingleRecord { commit_ts, write } => Some((*commit_ts, write.write_type)),
+            Self::OverlappedRollback { commit_ts } => Some((*commit_ts, WriteType::Rollback)),
+        }
+    }
+
+    pub fn unwrap_single_record(self) -> (TimeStamp, WriteType) {
+        match self {
+            Self::SingleRecord { commit_ts, write } => (commit_ts, write.write_type),
+            _ => panic!("not a single record: {:?}", self),
+        }
+    }
+
+    pub fn unwrap_overlapped_rollback(self) -> TimeStamp {
+        match self {
+            Self::OverlappedRollback { commit_ts } => commit_ts,
+            _ => panic!("not an overlapped rollback record: {:?}", self),
+        }
+    }
+
+    pub fn unwrap_none(self) -> Option<Write> {
+        match self {
+            Self::None { overlapped_write } => overlapped_write,
+            _ => panic!("txn record found but not expected: {:?}", self),
+        }
+    }
+}
 
 pub struct MvccReader<S: Snapshot> {
     snapshot: S,
@@ -81,10 +138,12 @@ impl<S: Snapshot> MvccReader<S> {
             self.statistics.data.get += 1;
             self.snapshot.get(&k)?
         };
-        self.statistics.data.processed += 1;
 
         match val {
-            Some(val) => Ok(val),
+            Some(val) => {
+                self.statistics.data.processed_keys += 1;
+                Ok(val)
+            }
             None => Err(default_not_found_error(key.to_raw()?, "get")),
         }
     }
@@ -110,10 +169,6 @@ impl<S: Snapshot> MvccReader<S> {
                 None => None,
             }
         };
-
-        if res.is_some() {
-            self.statistics.lock.processed += 1;
-        }
 
         Ok(res)
     }
@@ -155,7 +210,6 @@ impl<S: Snapshot> MvccReader<S> {
             return Ok(None);
         }
         let write = WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned();
-        self.statistics.write.processed += 1;
         Ok(Some((commit_ts, write)))
     }
 
@@ -163,9 +217,11 @@ impl<S: Snapshot> MvccReader<S> {
     /// Returns the blocking lock as the `Err` variant.
     fn check_lock(&mut self, key: &Key, ts: TimeStamp) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
-            return lock
-                .check_ts_conflict(key, ts, &Default::default())
-                .map_err(From::from);
+            if let Err(e) = Lock::check_ts_conflict(Cow::Owned(lock), key, ts, &Default::default())
+            {
+                self.statistics.lock.processed_keys += 1;
+                return Err(e.into());
+            }
         }
         Ok(())
     }
@@ -207,11 +263,11 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    pub fn get_txn_commit_info(
+    pub fn get_txn_commit_record(
         &mut self,
         key: &Key,
         start_ts: TimeStamp,
-    ) -> Result<Option<(TimeStamp, WriteType)>> {
+    ) -> Result<TxnCommitRecord> {
         // It's possible a txn with a small `start_ts` has a greater `commit_ts` than a txn with
         // a greater `start_ts` in pessimistic transaction.
         // I.e., txn_1.commit_ts > txn_2.commit_ts > txn_2.start_ts > txn_1.start_ts.
@@ -220,14 +276,24 @@ impl<S: Snapshot> MvccReader<S> {
         let mut seek_ts = TimeStamp::max();
         while let Some((commit_ts, write)) = self.seek_write(key, seek_ts)? {
             if write.start_ts == start_ts {
-                return Ok(Some((commit_ts, write.write_type)));
+                return Ok(TxnCommitRecord::SingleRecord { commit_ts, write });
             }
-            if commit_ts <= start_ts {
+            if commit_ts == start_ts {
+                if write.has_overlapped_rollback {
+                    return Ok(TxnCommitRecord::OverlappedRollback { commit_ts });
+                }
+                return Ok(TxnCommitRecord::None {
+                    overlapped_write: Some(write),
+                });
+            }
+            if commit_ts < start_ts {
                 break;
             }
             seek_ts = commit_ts.prev();
         }
-        Ok(None)
+        Ok(TxnCommitRecord::None {
+            overlapped_write: None,
+        })
     }
 
     fn create_data_cursor(&mut self) -> Result<()> {
@@ -316,7 +382,7 @@ impl<S: Snapshot> MvccReader<S> {
             }
             cursor.next(&mut self.statistics.lock);
         }
-        self.statistics.lock.processed += locks.len();
+        self.statistics.lock.processed_keys += locks.len();
         // If we reach here, `cursor.valid()` is `false`, so there MUST be no more locks.
         Ok((locks, false))
     }
@@ -339,7 +405,7 @@ impl<S: Snapshot> MvccReader<S> {
                 return Ok((keys, None));
             }
             if keys.len() >= limit {
-                self.statistics.write.processed += keys.len();
+                self.statistics.write.processed_keys += keys.len();
                 return Ok((keys, start));
             }
             let key =
@@ -433,30 +499,13 @@ fn get_mvcc_properties(
     Some(props)
 }
 
-pub fn check_region_need_gc<E: Engine, S: Snapshot>(
-    engine: &E,
-    snap: S,
-    safe_point: TimeStamp,
-    ratio_threshold: f64,
-) -> bool {
-    let start = snap.lower_bound();
-    let end = snap.upper_bound();
-    if start.is_none() || end.is_none() {
-        return true;
-    }
-    let prop = match engine.get_properties_cf(CF_WRITE, start.unwrap(), end.unwrap()) {
-        Ok(v) => v,
-        Err(_) => return true,
-    };
-    check_need_gc(safe_point, ratio_threshold, &prop)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
+    use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::raw::DB;
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
@@ -524,8 +573,11 @@ mod tests {
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            txn.prewrite(m, pk, false, 0, 0, TimeStamp::default())
+            let start_ts = start_ts.into();
+            let cm = ConcurrencyManager::new(start_ts);
+            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
+
+            txn.prewrite(m, pk, &None, false, 0, 0, TimeStamp::default())
                 .unwrap();
             self.write(txn.into_modifies());
         }
@@ -538,10 +590,14 @@ mod tests {
         ) {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts.into(), true);
+            let start_ts = start_ts.into();
+            let cm = ConcurrencyManager::new(start_ts);
+            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
+
             txn.pessimistic_prewrite(
                 m,
                 pk,
+                &None,
                 true,
                 0,
                 TimeStamp::default(),
@@ -562,17 +618,11 @@ mod tests {
         ) {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            txn.acquire_pessimistic_lock(
-                k,
-                pk,
-                false,
-                0,
-                for_update_ts.into(),
-                false,
-                TimeStamp::zero(),
-            )
-            .unwrap();
+            let for_update_ts = for_update_ts.into();
+            let cm = ConcurrencyManager::new(for_update_ts);
+            let mut txn = MvccTxn::new(snap, start_ts.into(), true, cm);
+            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts, false, TimeStamp::zero())
+                .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -584,7 +634,9 @@ mod tests {
         ) {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts.into(), true);
+            let start_ts = start_ts.into();
+            let cm = ConcurrencyManager::new(start_ts);
+            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
             txn.commit(Key::from_raw(pk), commit_ts.into()).unwrap();
             self.write(txn.into_modifies());
         }
@@ -592,19 +644,34 @@ mod tests {
         fn rollback(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts.into(), true);
+            let start_ts = start_ts.into();
+            let cm = ConcurrencyManager::new(start_ts);
+            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
             txn.collapse_rollback(false);
             txn.rollback(Key::from_raw(pk)).unwrap();
             self.write(txn.into_modifies());
         }
 
+        fn rollback_protected(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
+            let snap =
+                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
+            let start_ts = start_ts.into();
+            let cm = ConcurrencyManager::new(start_ts);
+            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
+            txn.collapse_rollback(false);
+            txn.cleanup(Key::from_raw(pk), TimeStamp::zero(), true)
+                .unwrap();
+            self.write(txn.into_modifies());
+        }
+
         fn gc(&mut self, pk: &[u8], safe_point: impl Into<TimeStamp> + Copy) {
+            let cm = ConcurrencyManager::new(safe_point.into());
             loop {
                 let snap = RegionSnapshot::<RocksSnapshot>::from_raw(
                     self.db.c().clone(),
                     self.region.clone(),
                 );
-                let mut txn = MvccTxn::new(snap, safe_point.into(), true);
+                let mut txn = MvccTxn::new(snap, safe_point.into(), true, cm.clone());
                 txn.gc(Key::from_raw(pk), safe_point.into()).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
@@ -925,9 +992,9 @@ mod tests {
     }
 
     #[test]
-    fn test_get_txn_commit_info() {
+    fn test_get_txn_commit_record() {
         let path = tempfile::Builder::new()
-            .prefix("_test_storage_mvcc_reader_get_txn_commit_info")
+            .prefix("_test_storage_mvcc_reader_get_txn_commit_record")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
@@ -951,6 +1018,9 @@ mod tests {
         engine.prewrite(m, k, 35);
         engine.commit(k, 35, 40);
 
+        // Overlapped rollback on the commit record at 40.
+        engine.rollback_protected(k, 40);
+
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 45, 45);
         engine.prewrite_pessimistic_lock(m, k, 45);
@@ -963,57 +1033,85 @@ mod tests {
         // is 50.
         // Commit versions: [50_45 PUT, 45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
         let key = Key::from_raw(k);
-        let (commit_ts, write_type) = reader
-            .get_txn_commit_info(&key, 45.into())
+        let overlapped_write = reader
+            .get_txn_commit_record(&key, 55.into())
             .unwrap()
+            .unwrap_none();
+        assert!(overlapped_write.is_none());
+
+        // When no such record is found but a record of another txn has a write record with
+        // its commit_ts equals to current start_ts, it
+        let overlapped_write = reader
+            .get_txn_commit_record(&key, 50.into())
+            .unwrap()
+            .unwrap_none()
             .unwrap();
+        assert_eq!(overlapped_write.start_ts, 45.into());
+        assert_eq!(overlapped_write.write_type, WriteType::Put);
+
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 45.into())
+            .unwrap()
+            .unwrap_single_record();
         assert_eq!(commit_ts, 50.into());
         assert_eq!(write_type, WriteType::Put);
 
-        let (commit_ts, write_type) = reader
-            .get_txn_commit_info(&key, 35.into())
+        let commit_ts = reader
+            .get_txn_commit_record(&key, 40.into())
             .unwrap()
-            .unwrap();
+            .unwrap_overlapped_rollback();
+        assert_eq!(commit_ts, 40.into());
+
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 35.into())
+            .unwrap()
+            .unwrap_single_record();
         assert_eq!(commit_ts, 40.into());
         assert_eq!(write_type, WriteType::Put);
 
         let (commit_ts, write_type) = reader
-            .get_txn_commit_info(&key, 25.into())
+            .get_txn_commit_record(&key, 25.into())
             .unwrap()
-            .unwrap();
+            .unwrap_single_record();
         assert_eq!(commit_ts, 30.into());
         assert_eq!(write_type, WriteType::Put);
 
         let (commit_ts, write_type) = reader
-            .get_txn_commit_info(&key, 20.into())
+            .get_txn_commit_record(&key, 20.into())
             .unwrap()
-            .unwrap();
+            .unwrap_single_record();
         assert_eq!(commit_ts, 20.into());
         assert_eq!(write_type, WriteType::Rollback);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 1.into()).unwrap().unwrap();
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 1.into())
+            .unwrap()
+            .unwrap_single_record();
         assert_eq!(commit_ts, 10.into());
         assert_eq!(write_type, WriteType::Put);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 5.into()).unwrap().unwrap();
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 5.into())
+            .unwrap()
+            .unwrap_single_record();
         assert_eq!(commit_ts, 5.into());
         assert_eq!(write_type, WriteType::Rollback);
 
         let seek_old = reader.get_statistics().write.seek;
-        assert!(reader
-            .get_txn_commit_info(&key, 30.into())
+        assert!(!reader
+            .get_txn_commit_record(&key, 30.into())
             .unwrap()
-            .is_none());
+            .exist());
         let seek_new = reader.get_statistics().write.seek;
 
-        // `get_txn_commit_info(&key, 30)` stopped at `30_25 PUT`.
+        // `get_txn_commit_record(&key, 30)` stopped at `30_25 PUT`.
         assert_eq!(seek_new - seek_old, 3);
     }
 
     #[test]
-    fn test_get_txn_commit_info_of_pessimistic_txn() {
+    fn test_get_txn_commit_record_of_pessimistic_txn() {
         let path = tempfile::Builder::new()
-            .prefix("_test_storage_mvcc_reader_get_txn_commit_info_of_pessimistic_txn")
+            .prefix("_test_storage_mvcc_reader_get_txn_commit_record_of_pessimistic_txn")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
@@ -1036,11 +1134,17 @@ mod tests {
 
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 2.into()).unwrap().unwrap();
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 2.into())
+            .unwrap()
+            .unwrap_single_record();
         assert_eq!(commit_ts, 3.into());
         assert_eq!(write_type, WriteType::Put);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 1.into()).unwrap().unwrap();
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 1.into())
+            .unwrap()
+            .unwrap_single_record();
         assert_eq!(commit_ts, 4.into());
         assert_eq!(write_type, WriteType::Put);
     }

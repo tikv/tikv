@@ -18,7 +18,7 @@ use crate::coprocessor::Endpoint;
 use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksEngine;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::SnapManager;
 use security::SecurityManager;
@@ -45,7 +45,7 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
-pub struct Server<T: RaftStoreRouter<RocksSnapshot> + 'static, S: StoreAddrResolver + 'static> {
+pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
@@ -56,7 +56,7 @@ pub struct Server<T: RaftStoreRouter<RocksSnapshot> + 'static, S: StoreAddrResol
     trans: ServerTransport<T, S>,
     raft_router: T,
     // For sending/receiving snapshots.
-    snap_mgr: SnapManager<RocksEngine>,
+    snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
@@ -67,7 +67,7 @@ pub struct Server<T: RaftStoreRouter<RocksSnapshot> + 'static, S: StoreAddrResol
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter<RocksSnapshot>, S: StoreAddrResolver + 'static> Server<T, S> {
+impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine, L: LockManager>(
         cfg: &Arc<Config>,
@@ -76,8 +76,8 @@ impl<T: RaftStoreRouter<RocksSnapshot>, S: StoreAddrResolver + 'static> Server<T
         cop: Endpoint<E>,
         raft_router: T,
         resolver: S,
-        snap_mgr: SnapManager<RocksEngine>,
-        gc_worker: GcWorker<E>,
+        snap_mgr: SnapManager,
+        gc_worker: GcWorker<E, T>,
         yatp_read_pool: Option<ReadPool>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
@@ -112,11 +112,6 @@ impl<T: RaftStoreRouter<RocksSnapshot>, S: StoreAddrResolver + 'static> Server<T
             Arc::clone(&grpc_thread_load),
             Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
-            if cfg.enable_request_batch && cfg.request_batch_enable_cross_command {
-                Some(Duration::from(cfg.request_batch_wait_duration))
-            } else {
-                None
-            },
             security_mgr.clone(),
         );
 
@@ -274,25 +269,28 @@ impl<T: RaftStoreRouter<RocksSnapshot>, S: StoreAddrResolver + 'static> Server<T
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::*;
-    use std::sync::mpsc::*;
+    use std::sync::mpsc::Sender;
     use std::sync::*;
     use std::time::Duration;
 
-    use super::*;
-
-    use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use super::super::{Config, Result};
-    use crate::config::CoprReadPoolConfig;
-    use crate::coprocessor::{self, readpool_impl};
-    use crate::storage::TestStorageBuilder;
-    use raftstore::store::transport::Transport;
-    use raftstore::store::*;
-    use raftstore::Result as RaftStoreResult;
-
+    use crossbeam::channel::TrySendError;
     use engine_rocks::RocksSnapshot;
+    use engine_traits::{KvEngine, Snapshot};
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
+    use raftstore::store::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
+    use raftstore::store::PeerMsg;
+    use raftstore::store::*;
+    use raftstore::Result as RaftStoreResult;
     use security::SecurityConfig;
+
+    use super::*;
+    use crate::config::CoprReadPoolConfig;
+    use crate::coprocessor::{self, readpool_impl};
+    use crate::server::resolve::{Callback as ResolveCallback, StoreAddrResolver};
+    use crate::server::{Config, Result};
+    use crate::storage::lock_manager::DummyLockManager;
+    use crate::storage::TestStorageBuilder;
 
     #[derive(Clone)]
     struct MockResolver {
@@ -317,11 +315,50 @@ mod tests {
     #[derive(Clone)]
     struct TestRaftStoreRouter {
         tx: Sender<usize>,
-        significant_msg_sender: Sender<SignificantMsg>,
+        significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
     }
 
-    impl RaftStoreRouter<RocksSnapshot> for TestRaftStoreRouter {
+    impl StoreRouter for TestRaftStoreRouter {
+        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+            Ok(())
+        }
+    }
+
+    impl<S: Snapshot> ProposalRouter<S> for TestRaftStoreRouter {
+        fn send(&self, _: RaftCommand<S>) -> std::result::Result<(), TrySendError<RaftCommand<S>>> {
+            Ok(())
+        }
+    }
+
+    impl<EK: KvEngine> CasualRouter<EK> for TestRaftStoreRouter {
+        fn send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
+            Ok(())
+        }
+    }
+
+    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
+            self.tx.send(1).unwrap();
+            Ok(())
+        }
+
+        fn significant_send(
+            &self,
+            _: u64,
+            msg: SignificantMsg<RocksSnapshot>,
+        ) -> RaftStoreResult<()> {
+            self.significant_msg_sender.send(msg).unwrap();
+            Ok(())
+        }
+
+        fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
+
+        fn send_casual_msg(&self, _: u64, _: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
+            self.tx.send(1).unwrap();
+            Ok(())
+        }
+
+        fn send_store_msg(&self, _: StoreMsg) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
@@ -335,22 +372,16 @@ mod tests {
             Ok(())
         }
 
-        fn significant_send(&self, _: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
-            self.significant_msg_sender.send(msg).unwrap();
-            Ok(())
-        }
-
-        fn casual_send(&self, _: u64, _: CasualMessage<RocksSnapshot>) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
-            Ok(())
-        }
-
         fn broadcast_unreachable(&self, _: u64) {
             let _ = self.tx.send(1);
         }
     }
 
-    fn is_unreachable_to(msg: &SignificantMsg, region_id: u64, to_peer_id: u64) -> bool {
+    fn is_unreachable_to(
+        msg: &SignificantMsg<RocksSnapshot>,
+        region_id: u64,
+        to_peer_id: u64,
+    ) -> bool {
         if let SignificantMsg::Unreachable {
             region_id: r_id,
             to_peer_id: p_id,
@@ -362,22 +393,15 @@ mod tests {
         }
     }
 
-    #[test]
     // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
+    #[test]
     fn test_peer_resolve() {
         let mut cfg = Config::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let storage = TestStorageBuilder::new().build().unwrap();
-        let mut gc_worker = GcWorker::new(
-            storage.get_engine(),
-            None,
-            None,
-            None,
-            Default::default(),
-            Default::default(),
-        );
-        gc_worker.start().unwrap();
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .build()
+            .unwrap();
 
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
@@ -385,6 +409,14 @@ mod tests {
             tx,
             significant_msg_sender,
         };
+
+        let mut gc_worker = GcWorker::new(
+            storage.get_engine(),
+            router.clone(),
+            Default::default(),
+            Default::default(),
+        );
+        gc_worker.start().unwrap();
 
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(cfg);
@@ -394,7 +426,11 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             storage.get_engine(),
         ));
-        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool.handle());
+        let cop = coprocessor::Endpoint::new(
+            &cfg,
+            cop_read_pool.handle(),
+            storage.get_concurrency_manager(),
+        );
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
@@ -407,7 +443,7 @@ mod tests {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
             },
-            SnapManager::new("", None),
+            SnapManager::new(""),
             gc_worker,
             None,
         )

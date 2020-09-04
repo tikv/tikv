@@ -13,7 +13,7 @@ use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::SqlMode;
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn date_format(
     ctx: &mut EvalContext,
@@ -40,7 +40,7 @@ pub fn date_format(
     Ok(Some(t.unwrap().into_bytes()))
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn week_with_mode(
     ctx: &mut EvalContext,
@@ -60,7 +60,7 @@ pub fn week_with_mode(
     Ok(Some(i64::from(week)))
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn week_day(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     if t.is_none() {
@@ -76,7 +76,7 @@ pub fn week_day(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<In
     Ok(Some(i64::from(day)))
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn day_of_week(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     if t.is_none() {
@@ -92,7 +92,7 @@ pub fn day_of_week(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option
     Ok(Some(Int::from(day)))
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn day_of_year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     if t.is_none() {
@@ -108,7 +108,7 @@ pub fn day_of_year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option
     Ok(Some(Int::from(day)))
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn week_of_year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     if t.is_none() {
@@ -124,7 +124,7 @@ pub fn week_of_year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Optio
     Ok(Some(Int::from(week)))
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn to_days(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     let t = match t {
@@ -141,6 +141,17 @@ pub fn to_days(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
+pub fn to_seconds(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<Int>> {
+    if t.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
+            .map(|_| Ok(None))?;
+    }
+    Ok(Some(t.second_number()))
+}
+
+#[rpn_fn(nullable, capture = [ctx])]
+#[inline]
 pub fn from_days(ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<Time>> {
     arg.cloned().map_or(Ok(None), |daynr: Int| {
         let time = Time::from_days(ctx, daynr as u32)?;
@@ -148,7 +159,7 @@ pub fn from_days(ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<Time
     })
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn make_date(
     ctx: &mut EvalContext,
@@ -185,43 +196,43 @@ pub fn make_date(
     Ok(Some(ret))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn month(t: Option<&DateTime>) -> Result<Option<Int>> {
     t.map_or(Ok(None), |time| Ok(Some(Int::from(time.month()))))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn hour(t: Option<&Duration>) -> Result<Option<Int>> {
     Ok(t.as_ref().map(|t| i64::from(t.hours())))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn minute(t: Option<&Duration>) -> Result<Option<Int>> {
     Ok(t.as_ref().map(|t| i64::from(t.minutes())))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn second(t: Option<&Duration>) -> Result<Option<Int>> {
     Ok(t.as_ref().map(|t| i64::from(t.secs())))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn time_to_sec(t: Option<&Duration>) -> Result<Option<Int>> {
     Ok(t.as_ref().map(|t| t.to_secs()))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn micro_second(t: Option<&Duration>) -> Result<Option<Int>> {
     Ok(t.as_ref().map(|t| i64::from(t.subsec_micros())))
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     let t = match t {
@@ -240,7 +251,7 @@ pub fn year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> 
     Ok(Some(Int::from(t.year())))
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn day_of_month(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     let t = match t {
@@ -259,7 +270,7 @@ pub fn day_of_month(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Optio
     Ok(Some(Int::from(t.day())))
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn day_name(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Bytes>> {
     match t {
@@ -275,7 +286,7 @@ pub fn day_name(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<By
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn period_add(p: Option<&Int>, n: Option<&Int>) -> Result<Option<Int>> {
     Ok(match (p, n) {
@@ -292,7 +303,7 @@ pub fn period_add(p: Option<&Int>, n: Option<&Int>) -> Result<Option<Int>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn period_diff(p1: Option<&Int>, p2: Option<&Int>) -> Result<Option<Int>> {
     match (p1, p2) {
@@ -304,7 +315,7 @@ pub fn period_diff(p1: Option<&Int>, p2: Option<&Int>) -> Result<Option<Int>> {
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn last_day(ctx: &mut EvalContext, t: Option<&Time>) -> Result<Option<Time>> {
     if t.is_none() {
@@ -646,6 +657,28 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .evaluate(ScalarFuncSig::ToDays)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_to_seconds() {
+        let cases = vec![
+            ("950501", Some(62966505600)),
+            ("2009-11-29", Some(63426672000)),
+            ("2009-11-29 13:43:32", Some(63426721412)),
+            ("09-11-29 13:43:32", Some(63426721412)),
+            ("99-11-29 13:43:32", Some(63111102212)),
+            ("0000-00-00 00:00:00", None),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let time = Time::parse_datetime(&mut ctx, arg, 6, true).unwrap();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(time)
+                .evaluate(ScalarFuncSig::ToSeconds)
                 .unwrap();
             assert_eq!(output, exp);
         }

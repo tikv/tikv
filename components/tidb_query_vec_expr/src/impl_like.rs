@@ -9,19 +9,10 @@ use tidb_query_shared_expr::*;
 
 #[rpn_fn]
 #[inline]
-pub fn like<C: Collator>(
-    target: Option<BytesRef>,
-    pattern: Option<BytesRef>,
-    escape: Option<&i64>,
-) -> Result<Option<i64>> {
-    match (target, pattern, escape) {
-        (Some(target), Some(pattern), Some(escape)) => {
-            Ok(Some(
-                like::like::<C>(target, pattern, *escape as u32)? as i64
-            ))
-        }
-        _ => Ok(None),
-    }
+pub fn like<C: Collator>(target: BytesRef, pattern: BytesRef, escape: &i64) -> Result<Option<i64>> {
+    Ok(Some(
+        like::like::<C>(target, pattern, *escape as u32)? as i64
+    ))
 }
 
 #[cfg(test)]
@@ -163,6 +154,20 @@ mod tests {
                 '\\',
                 Collation::Utf8Mb4Bin,
                 Some(1),
+            ),
+            (
+                r#"ßssß"#,
+                r#"_sSß"#,
+                '\\',
+                Collation::Utf8Mb4GeneralCi,
+                Some(1),
+            ),
+            (
+                r#"ßssß"#,
+                r#"_ßß"#,
+                '\\',
+                Collation::Utf8Mb4GeneralCi,
+                Some(0),
             ),
         ];
         for (target, pattern, escape, collation, expected) in cases {

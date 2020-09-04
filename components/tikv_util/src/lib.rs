@@ -2,11 +2,10 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
+#![feature(box_patterns)]
 
 #[macro_use(fail_point)]
 extern crate fail;
-#[macro_use]
-extern crate futures;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
@@ -47,6 +46,7 @@ pub mod callback;
 pub mod deadline;
 pub mod keybuilder;
 pub mod logger;
+pub mod lru;
 pub mod metrics;
 pub mod mpsc;
 pub mod sys;
@@ -491,7 +491,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
         if let Some(level) = log::max_level().to_level() {
-            let drainer = logger::term_drainer();
+            let drainer = logger::text_format(logger::term_writer());
             let _ = logger::init_log(
                 drainer,
                 logger::convert_log_level_to_slog_level(level),

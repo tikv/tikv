@@ -6,6 +6,7 @@ use std::sync::Arc;
 use engine_traits::{name_to_cf, CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
+use futures03::compat::Compat;
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::errorpb;
@@ -19,7 +20,7 @@ use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksEngine;
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
@@ -49,7 +50,7 @@ pub struct ImportSSTService<Router> {
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksEngine>> ImportSSTService<Router> {
     pub fn new(
         cfg: Config,
         router: Router,
@@ -59,6 +60,8 @@ impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSSTService<Router> {
     ) -> ImportSSTService<Router> {
         let threads = Builder::new()
             .name_prefix("sst-importer")
+            .after_start(move || tikv_alloc::add_thread_memory_accessor())
+            .before_stop(move || tikv_alloc::remove_thread_memory_accessor())
             .pool_size(cfg.num_threads)
             .create();
         let switcher = ImportModeSwitcher::new(&cfg, &threads, engine.clone());
@@ -75,7 +78,7 @@ impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSSTService<Router> {
     }
 }
 
-impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSst for ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router> {
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
@@ -278,7 +281,7 @@ impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSst for ImportSSTService<Rout
         }
 
         ctx.spawn(
-            future
+            Compat::new(future)
                 .map_err(Error::from)
                 .then(|res| match res {
                     Ok(mut res) => {

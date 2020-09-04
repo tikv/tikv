@@ -41,6 +41,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         key_ranges: Vec<KeyRange>,
         primary_column_ids: Vec<i64>,
         is_backward: bool,
+        is_scanned_range_aware: bool,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
@@ -73,6 +74,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             // columns with the same column id are given, we will only preserve the *last* one.
         }
 
+        let no_common_handle = primary_column_ids.is_empty();
         let imp = TableScanExecutorImpl {
             context: EvalContext::new(config),
             schema,
@@ -88,7 +90,8 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             key_ranges,
             is_backward,
             is_key_only,
-            accept_point_range: true,
+            accept_point_range: no_common_handle,
+            is_scanned_range_aware,
         })?;
         Ok(Self(wrapper))
     }
@@ -302,6 +305,15 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
 
+        if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
+            // Do nothing
+        } else {
+            match value[0] {
+                row::v2::CODEC_VERSION => self.process_v2(value, columns, &mut decoded_columns)?,
+                _ => self.process_v1(key, value, columns, &mut decoded_columns)?,
+            }
+        }
+
         if !self.handle_indices.is_empty() {
             // In this case, An int handle is expected.
             let handle = table::decode_int_handle(key)?;
@@ -309,9 +321,11 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             for handle_index in &self.handle_indices {
                 // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
                 // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
-                columns[*handle_index].mut_decoded().push_int(Some(handle));
-                decoded_columns += 1;
-                self.is_column_filled[*handle_index] = true;
+                if !self.is_column_filled[*handle_index] {
+                    columns[*handle_index].mut_decoded().push_int(Some(handle));
+                    decoded_columns += 1;
+                    self.is_column_filled[*handle_index] = true;
+                }
             }
         } else if !self.primary_column_ids.is_empty() {
             // Otherwise, if `primary_column_ids` is not empty, we try to extract the values of the columns from the common handle.
@@ -327,24 +341,11 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                         columns[index].mut_raw().push(datum);
                         decoded_columns += 1;
                         self.is_column_filled[index] = true;
-                    } else {
-                        return Err(other_err!(
-                            "duplicated column ids are meet in `primary_column_ids`"
-                        ));
                     }
                 }
             }
         } else {
             table::check_record_key(key)?;
-        }
-
-        if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
-            // Do nothing
-        } else {
-            match value[0] {
-                row::v2::CODEC_VERSION => self.process_v2(value, columns, &mut decoded_columns)?,
-                _ => self.process_v1(key, value, columns, &mut decoded_columns)?,
-            }
         }
 
         // Some fields may be missing in the row, we push corresponding default value to make all
@@ -656,6 +657,7 @@ mod tests {
             ranges,
             vec![],
             false,
+            false,
         )
         .unwrap();
 
@@ -737,6 +739,7 @@ mod tests {
             helper.columns_info_by_idx(&[0]),
             vec![helper.whole_table_range()],
             vec![],
+            false,
             false,
         )
         .unwrap()
@@ -876,6 +879,7 @@ mod tests {
                 ],
                 vec![],
                 false,
+                false,
             )
             .unwrap();
 
@@ -885,7 +889,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(0), Some(1)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -893,7 +897,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(5), None]
             );
             assert!(result.physical_columns[2].is_raw());
@@ -901,7 +905,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[2])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[2].decoded().as_int_slice(),
+                result.physical_columns[2].decoded().to_int_vec(),
                 &[Some(7), None]
             );
         }
@@ -981,6 +985,7 @@ mod tests {
                 ],
                 vec![],
                 false,
+                false,
             )
             .unwrap();
 
@@ -990,7 +995,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(0)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -998,7 +1003,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(7)]
             );
         }
@@ -1016,6 +1021,7 @@ mod tests {
                 ],
                 vec![],
                 false,
+                false,
             )
             .unwrap();
 
@@ -1025,7 +1031,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(0)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -1033,7 +1039,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(7)]
             );
 
@@ -1052,6 +1058,7 @@ mod tests {
                 columns_info.clone(),
                 vec![key_range_point[1].clone(), key_range_point[2].clone()],
                 vec![],
+                false,
                 false,
             )
             .unwrap();
@@ -1072,6 +1079,7 @@ mod tests {
                 vec![key_range_point[2].clone(), key_range_point[0].clone()],
                 vec![],
                 false,
+                false,
             )
             .unwrap();
 
@@ -1081,7 +1089,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(2), Some(0)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -1089,7 +1097,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(5), Some(7)]
             );
         }
@@ -1103,6 +1111,7 @@ mod tests {
                 columns_info,
                 vec![key_range_point[1].clone()],
                 vec![],
+                false,
                 false,
             )
             .unwrap();
@@ -1152,6 +1161,7 @@ mod tests {
             vec![key_range],
             vec![],
             false,
+            false,
         )
         .unwrap();
 
@@ -1165,12 +1175,12 @@ mod tests {
                 .unwrap();
             if columns_is_pk[i] {
                 assert_eq!(
-                    result.physical_columns[i].decoded().as_int_slice(),
+                    result.physical_columns[i].decoded().to_int_vec(),
                     &[Some(1)]
                 );
             } else {
                 assert_eq!(
-                    result.physical_columns[i].decoded().as_int_slice(),
+                    result.physical_columns[i].decoded().to_int_vec(),
                     &[Some(i as i64 + 10)]
                 );
             }
@@ -1206,7 +1216,7 @@ mod tests {
         let mut primary_column_ids = vec![];
         let mut missed_columns_info = vec![];
         let column_ids = (0..columns.len() as i64).collect::<Vec<_>>();
-        let row = column_ids.iter().map(|_| Datum::Null).collect();
+        let mut row = vec![];
 
         for (i, &column) in columns.iter().enumerate() {
             let Column {
@@ -1230,6 +1240,8 @@ mod tests {
                 handle.push(Datum::I64(i as i64));
                 primary_column_ids.push(i as i64);
             }
+
+            row.push(Datum::I64(i as i64));
         }
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
@@ -1251,7 +1263,8 @@ mod tests {
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
             vec![key_range],
-            primary_column_ids.clone(),
+            primary_column_ids,
+            false,
             false,
         )
         .unwrap();
@@ -1269,15 +1282,10 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[i])
                 .unwrap();
 
-            let column_id = columns_info[i].get_column_id();
-            if primary_column_ids.contains(&column_id) {
-                assert_eq!(
-                    result.physical_columns[i].decoded().as_int_slice(),
-                    &[Some(column_id)]
-                );
-            } else {
-                assert_eq!(result.physical_columns[i].decoded().as_int_slice(), &[None]);
-            }
+            assert_eq!(
+                result.physical_columns[i].decoded().to_int_vec(),
+                &[Some(columns_info[i].get_column_id())]
+            );
         }
     }
     #[test]

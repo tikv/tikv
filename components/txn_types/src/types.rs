@@ -245,11 +245,11 @@ pub enum Mutation {
     Lock(Key),
     /// Put `Value` into `Key` if `Key` does not yet exist.
     ///
-    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
+    /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
     Insert((Key, Value)),
     /// Check `key` must be not exist.
     ///
-    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
+    /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
     CheckNotExists(Key),
 }
 
@@ -318,6 +318,16 @@ pub struct OldValue {
     pub start_ts: TimeStamp,
 }
 
+impl OldValue {
+    pub fn size(&self) -> usize {
+        let value_size = match self.short_value {
+            Some(ref v) => v.len(),
+            None => 0,
+        };
+        value_size + std::mem::size_of::<TimeStamp>()
+    }
+}
+
 // Returned by MvccTxn when extra_op is set to kvrpcpb::ExtraOp::ReadOldValue.
 // key with current ts -> (short value of the prev txn, start ts of the prev txn).
 // The value of the map will be None when the mutation is `Insert`.
@@ -327,7 +337,7 @@ pub type OldValues = HashMap<Key, (Option<OldValue>, MutationType)>;
 // Extra data fields filled by kvrpcpb::ExtraOp.
 #[derive(Default, Debug, Clone)]
 pub struct TxnExtra {
-    old_values: OldValues,
+    pub old_values: OldValues,
 }
 
 impl TxnExtra {
@@ -340,7 +350,7 @@ impl TxnExtra {
         self.old_values.insert(key, (value, mutation_type));
     }
 
-    pub fn is_empty(&mut self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.old_values.is_empty()
     }
 
@@ -348,10 +358,10 @@ impl TxnExtra {
         self.old_values
             .extend(std::mem::take(&mut other.old_values))
     }
+}
 
-    pub fn get_old_values(&self) -> &OldValues {
-        &self.old_values
-    }
+pub trait TxnExtraScheduler: Send + Sync {
+    fn schedule(&self, txn_extra: TxnExtra);
 }
 
 #[cfg(test)]

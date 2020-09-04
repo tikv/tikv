@@ -4,7 +4,10 @@ use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use futures::{stream, Future, Sink, Stream};
+use futures::{Future, Sink, Stream};
+use futures03::compat::Compat;
+use futures03::stream::{self, StreamExt};
+use grpcio::Result as GrpcResult;
 use grpcio::*;
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event};
 use security::{check_common_name, SecurityManager};
@@ -154,8 +157,8 @@ impl ChangeData for Service {
         });
 
         let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, VecCollector);
-        let send_resp = sink.send_all(
-            rx.map(|events| {
+        let rx = rx
+            .map(|events| {
                 // The size of the response should not exceed CDC_MAX_RESP_SIZE.
                 // Split the events into multiple responses by CDC_MAX_RESP_SIZE here.
                 let events_len = events.len();
@@ -174,32 +177,32 @@ impl ChangeData for Service {
                     resp.set_events(events.into());
                     (resp, WriteFlags::default())
                 });
-                stream::iter_ok(resps)
+                stream::iter(resps)
             })
             .flatten()
-            .map_err(|_: ()| {
-                Error::RpcFailure(RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, None))
-            }),
-        );
+            .map(|item| GrpcResult::Ok(item));
+        let send_resp = sink.send_all(Compat::new(rx));
 
+        let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
         ctx.spawn(recv_req.then(move |res| {
             // Unregister this downstream only.
             let deregister = Deregister::Conn(conn_id);
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                error!("cdc deregister failed"; "error" => ?e);
+                error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
             }
             match res {
                 Ok(_s) => {
-                    info!("cdc send half closed");
+                    info!("cdc send half closed"; "remote" => peer, "conn_id" => ?conn_id);
                 }
                 Err(e) => {
-                    error!("cdc send failed"; "error" => ?e);
+                    warn!("cdc send failed"; "error" => ?e, "remote" => peer, "conn_id" => ?conn_id);
                 }
             }
             Ok(())
         }));
 
+        let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
         ctx.spawn(send_resp.then(move |res| {
             // Unregister this downstream only.
@@ -209,10 +212,10 @@ impl ChangeData for Service {
             }
             match res {
                 Ok(_s) => {
-                    info!("cdc send half closed");
+                    info!("cdc send half closed"; "remote" => peer, "conn_id" => ?conn_id);
                 }
                 Err(e) => {
-                    error!("cdc send failed"; "error" => ?e);
+                    warn!("cdc send failed"; "error" => ?e, "remote" => peer, "conn_id" => ?conn_id);
                 }
             }
             Ok(())

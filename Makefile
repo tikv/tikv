@@ -51,6 +51,11 @@ ROCKSDB_SYS_PORTABLE=0
 RUST_TEST_THREADS ?= 2
 endif
 
+# Disable SSE on ARM
+ifeq ($(shell uname -p),aarch64)
+ROCKSDB_SYS_SSE=0
+endif
+
 # Build portable binary by default unless disable explicitly
 ifneq ($(ROCKSDB_SYS_PORTABLE),0)
 ENABLE_FEATURES += portable
@@ -263,6 +268,11 @@ pre-format: unset-override
 format: pre-format
 	@cargo fmt --all -- --check >/dev/null || \
 	cargo fmt --all
+
+doc: 
+	@cargo doc --workspace --document-private-items \
+		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		--no-default-features --features "${ENABLE_FEATURES}"
 
 pre-clippy: unset-override
 	@rustup component add clippy
