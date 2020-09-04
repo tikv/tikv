@@ -116,15 +116,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
                     }
 
-                    Ok((
-                        TxnStatus::uncommitted(
-                            lock.ttl,
-                            lock.min_commit_ts,
-                            lock.use_async_commit,
-                            lock.secondaries,
-                        ),
-                        None,
-                    ))
+                    Ok((TxnStatus::uncommitted(lock), None))
                 }
             }
             // The rollback must be protected, see more on
@@ -171,7 +163,7 @@ pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use txn_types::WriteType;
-    use txn_types::{Key, Mutation};
+    use txn_types::{Key, Lock, LockType, Mutation};
 
     pub fn must_success<E: Engine>(
         engine: &E,
@@ -180,7 +172,7 @@ pub mod tests {
         caller_start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
         rollback_if_not_exist: bool,
-        expect_status: TxnStatus,
+        status_pred: impl FnOnce(TxnStatus) -> bool,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -211,7 +203,7 @@ pub mod tests {
             )
             .unwrap();
         if let ProcessResult::TxnStatus { txn_status } = result.pr {
-            assert_eq!(txn_status, expect_status);
+            assert!(status_pred(txn_status));
         } else {
             unreachable!();
         }
@@ -267,10 +259,11 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
 
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+        let secondaries = vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()];
         txn.prewrite(
             mutation,
             b"key",
-            &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+            &Some(secondaries.clone()),
             false,
             0,
             4,
@@ -310,10 +303,17 @@ pub mod tests {
                 assert_eq!(
                     txn_status,
                     TxnStatus::uncommitted(
-                        0,
-                        43.into(), // min_commit_ts calculated from max_read_ts
-                        true,
-                        vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()],
+                        Lock::new(
+                            LockType::Put,
+                            b"key".to_vec(),
+                            2.into(),
+                            0,
+                            Some(b"value".to_vec()),
+                            0.into(),
+                            4,
+                            43.into()
+                        )
+                        .use_async_commit(secondaries.clone())
                     )
                 );
             } else {
@@ -338,13 +338,23 @@ pub mod tests {
 
         // Shortcuts
         use super::TxnStatus::*;
-        let committed = TxnStatus::committed;
-        let uncommitted = TxnStatus::uncommitted;
+        let committed = |commit_ts| move |s| s == TxnStatus::Committed { commit_ts };
+        let uncommitted = |ttl, min_commit_ts| {
+            move |s| {
+                if let TxnStatus::Uncommitted { lock } = s {
+                    lock.ttl == ttl && lock.min_commit_ts == min_commit_ts
+                } else {
+                    false
+                }
+            }
+        };
         let r = rollback_if_not_exist;
 
         // Try to check a not exist thing.
         if r {
-            must_success(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r, LockNotExist);
+            must_success(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r, |s| {
+                s == LockNotExist
+            });
             // A protected rollback record will be written.
             must_get_rollback_protected(&engine, k, ts(3, 0), true);
         } else {
@@ -358,15 +368,7 @@ pub mod tests {
 
         // CheckTxnStatus with caller_start_ts = 0 and current_ts = 0 should just return the
         // information of the lock without changing it.
-        must_success(
-            &engine,
-            k,
-            ts(5, 0),
-            0,
-            0,
-            r,
-            uncommitted(100, ts(5, 1), false, vec![]),
-        );
+        must_success(&engine, k, ts(5, 0), 0, 0, r, uncommitted(100, ts(5, 1)));
 
         // Update min_commit_ts to current_ts.
         must_success(
@@ -376,7 +378,7 @@ pub mod tests {
             ts(6, 0),
             ts(7, 0),
             r,
-            uncommitted(100, ts(7, 0), false, vec![]),
+            uncommitted(100, ts(7, 0)),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(7, 0), false);
 
@@ -389,7 +391,7 @@ pub mod tests {
             ts(9, 0),
             ts(8, 0),
             r,
-            uncommitted(100, ts(9, 1), false, vec![]),
+            uncommitted(100, ts(9, 1)),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
@@ -402,7 +404,7 @@ pub mod tests {
             ts(8, 0),
             ts(10, 0),
             r,
-            uncommitted(100, ts(9, 1), false, vec![]),
+            uncommitted(100, ts(9, 1)),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
@@ -414,7 +416,7 @@ pub mod tests {
             ts(11, 0),
             ts(9, 0),
             r,
-            uncommitted(100, ts(11, 1), false, vec![]),
+            uncommitted(100, ts(11, 1)),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(11, 1), false);
 
@@ -426,7 +428,7 @@ pub mod tests {
             ts(12, 0),
             ts(12, 0),
             r,
-            uncommitted(100, ts(12, 1), false, vec![]),
+            uncommitted(100, ts(12, 1)),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(12, 1), false);
 
@@ -438,7 +440,7 @@ pub mod tests {
             ts(13, 1),
             ts(13, 3),
             r,
-            uncommitted(100, ts(13, 3), false, vec![]),
+            uncommitted(100, ts(13, 3)),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(13, 3), false);
 
@@ -473,7 +475,9 @@ pub mod tests {
         // Check a not existing transaction, the result depends on whether `rollback_if_not_exist`
         // is set.
         if r {
-            must_success(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r, LockNotExist);
+            must_success(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r, |s| {
+                s == LockNotExist
+            });
             // And a rollback record will be written.
             must_seek_write(
                 &engine,
@@ -496,12 +500,14 @@ pub mod tests {
             ts(21, 105),
             ts(21, 105),
             r,
-            uncommitted(100, ts(21, 106), false, vec![]),
+            uncommitted(100, ts(21, 106)),
         );
         must_large_txn_locked(&engine, k, ts(20, 0), 100, ts(21, 106), false);
 
         // If physical time's difference exceeds TTL, lock will be resolved.
-        must_success(&engine, k, ts(20, 0), ts(121, 0), ts(121, 0), r, TtlExpire);
+        must_success(&engine, k, ts(20, 0), ts(121, 0), ts(121, 0), r, |s| {
+            s == TtlExpire
+        });
         must_unlocked(&engine, k);
         must_seek_write(
             &engine,
@@ -522,7 +528,7 @@ pub mod tests {
             ts(135, 0),
             ts(135, 0),
             r,
-            uncommitted(200, ts(135, 1), false, vec![]),
+            uncommitted(200, ts(135, 1)),
         );
         must_large_txn_locked(&engine, k, ts(4, 0), 200, ts(135, 1), true);
 
@@ -554,7 +560,9 @@ pub mod tests {
             r,
             committed(ts(15, 0)),
         );
-        must_success(&engine, k, ts(20, 0), ts(10, 0), ts(10, 0), r, RolledBack);
+        must_success(&engine, k, ts(20, 0), ts(10, 0), ts(10, 0), r, |s| {
+            s == RolledBack
+        });
 
         // Rollback expired pessimistic lock.
         must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(150, 0), ts(150, 0), 100);
@@ -565,10 +573,12 @@ pub mod tests {
             ts(160, 0),
             ts(160, 0),
             r,
-            uncommitted(100, ts(160, 1), false, vec![]),
+            uncommitted(100, ts(160, 1)),
         );
         must_large_txn_locked(&engine, k, ts(150, 0), 100, ts(160, 1), true);
-        must_success(&engine, k, ts(150, 0), ts(160, 0), ts(260, 0), r, TtlExpire);
+        must_success(&engine, k, ts(150, 0), ts(160, 0), ts(260, 0), r, |s| {
+            s == TtlExpire
+        });
         must_unlocked(&engine, k);
         // Rolling back a pessimistic lock should leave Rollback mark.
         must_seek_write(
@@ -590,7 +600,7 @@ pub mod tests {
             ts(271, 0),
             TimeStamp::max(),
             r,
-            TtlExpire,
+            |s| s == TtlExpire,
         );
         must_unlocked(&engine, k);
         must_seek_write(
@@ -611,7 +621,7 @@ pub mod tests {
             ts(281, 0),
             TimeStamp::max(),
             r,
-            TtlExpire,
+            |s| s == TtlExpire,
         );
         must_unlocked(&engine, k);
         must_seek_write(
@@ -632,7 +642,7 @@ pub mod tests {
             ts(300, 0),
             ts(300, 0),
             r,
-            uncommitted(100, TimeStamp::zero(), false, vec![]),
+            uncommitted(100, TimeStamp::zero()),
         );
         must_large_txn_locked(&engine, k, ts(290, 0), 100, TimeStamp::zero(), true);
         pessimistic_rollback::tests::must_success(&engine, k, ts(290, 0), ts(290, 0));
@@ -658,7 +668,7 @@ pub mod tests {
             ts(310, 0),
             ts(310, 0),
             r,
-            uncommitted(100, TimeStamp::zero(), false, vec![]),
+            uncommitted(100, TimeStamp::zero()),
         );
         must_large_txn_locked(&engine, k, ts(300, 0), 100, TimeStamp::zero(), false);
         must_rollback(&engine, k, ts(300, 0));
@@ -673,7 +683,7 @@ pub mod tests {
             TimeStamp::max(),
             ts(320, 0),
             r,
-            uncommitted(100, ts(310, 1), false, vec![]),
+            uncommitted(100, ts(310, 1)),
         );
         must_commit(&engine, k, ts(310, 0), ts(315, 0));
         must_success(

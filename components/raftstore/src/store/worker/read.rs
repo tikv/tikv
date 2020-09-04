@@ -14,7 +14,6 @@ use kvproto::metapb;
 use kvproto::raft_cmdpb::{
     CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
 };
-use raft_engine::RaftEngine;
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
@@ -25,7 +24,7 @@ use crate::store::{
 };
 use crate::Result;
 
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
@@ -370,13 +369,10 @@ where
         // Check region id.
         let region_id = req.get_header().get_region_id();
         let delegate = match self.delegates.get_mut(&region_id) {
-            Some(delegate) => {
-                fail_point!("localreader_on_find_delegate");
-                match delegate.take() {
-                    Some(d) => d,
-                    None => return Ok(None),
-                }
-            }
+            Some(delegate) => match delegate.take() {
+                Some(d) => d,
+                None => return Ok(None),
+            },
             None => {
                 self.metrics.rejected_by_cache_miss += 1;
                 debug!("rejected by cache miss"; "region_id" => region_id);
@@ -388,6 +384,8 @@ where
             self.delegates.remove(&region_id);
             return Ok(None);
         }
+
+        fail_point!("localreader_on_find_delegate");
 
         // Check peer id.
         if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
