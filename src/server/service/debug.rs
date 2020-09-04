@@ -519,9 +519,9 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
         request: CollectPeerCurrentStateRequest,
         sink: UnarySink<CollectPeerCurrentStateResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+        /*if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
-        }
+        }*/
         const TAG: &str = "debug_collect_peer_current_state";
 
         let f = self.pool.spawn(collect_peer_current_state(
