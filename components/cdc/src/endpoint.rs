@@ -10,7 +10,6 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures03::compat::Future01CompatExt;
-use futures03::future::TryFutureExt;
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
@@ -627,7 +626,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
     fn register_min_ts_event(&self) {
         let timeout = self.timer.delay(self.min_ts_interval);
-        let tso = self.pd_client.get_tso();
+        let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
         let regions: Vec<(u64, ObserveID)> = self
@@ -637,10 +636,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .collect();
         let cm: ConcurrencyManager = self.concurrency_manager.clone();
         let fut = async move {
-            let (tso, _) =
-                futures03::future::join(tso, timeout.compat().map_err(|_| unreachable!())).await;
+            let _ = timeout.compat().await;
             // Ignore get tso errors since we will retry every `min_ts_interval`.
-            let mut min_ts = tso.unwrap_or_default();
+            let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
 
             // Sync with concurrency manager so that it can work correctly when optimizations
             // like async commit is enabled.
@@ -751,7 +749,7 @@ impl Initializer {
         let downstream_id = self.downstream_id;
         let conn_id = self.conn_id;
         let region_id = region.get_id();
-        info!("async incremental scan";
+        debug!("async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
             "observe_id" => ?self.observe_id);
@@ -814,11 +812,12 @@ impl Initializer {
             }
         }
 
+        let takes = start.elapsed();
         if let Some(resolver) = resolver {
-            Self::finish_building_resolver(self.observe_id, resolver, region, self.sched.clone());
+            self.finish_building_resolver(resolver, region, takes);
         }
 
-        CDC_SCAN_DURATION_HISTOGRAM.observe(start.elapsed().as_secs_f64());
+        CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
     }
 
     fn scan_batch<S: Snapshot>(
@@ -857,32 +856,21 @@ impl Initializer {
         Ok(entries)
     }
 
-    fn finish_building_resolver(
-        observe_id: ObserveID,
-        mut resolver: Resolver,
-        region: Region,
-        sched: Scheduler<Task>,
-    ) {
+    fn finish_building_resolver(&self, mut resolver: Resolver, region: Region, takes: Duration) {
+        let observe_id = self.observe_id;
         resolver.init();
-        if resolver.locks().is_empty() {
-            info!(
-                "no lock found";
-                "region_id" => region.get_id()
-            );
-        } else {
-            let rts = resolver.resolve(TimeStamp::zero());
-            info!(
-                "resolver initialized";
-                "region_id" => region.get_id(),
-                "resolved_ts" => rts,
-                "lock_count" => resolver.locks().len(),
-                "observe_id" => ?observe_id,
-            );
-        }
+        let rts = resolver.resolve(TimeStamp::zero());
+        info!(
+            "resolver initialized and schedule resolver ready";
+            "region_id" => region.get_id(),
+            "resolved_ts" => rts,
+            "lock_count" => resolver.locks().len(),
+            "observe_id" => ?observe_id,
+            "takes" => ?takes,
+        );
 
         fail_point!("before_schedule_resolver_ready");
-        info!("schedule resolver ready"; "region_id" => region.get_id(), "observe_id" => ?observe_id);
-        if let Err(e) = sched.schedule(Task::ResolverReady {
+        if let Err(e) = self.sched.schedule(Task::ResolverReady {
             observe_id,
             resolver,
             region,
