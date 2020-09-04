@@ -367,7 +367,7 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
             if req.get_all() {
                 let engines = debugger.get_engine();
                 resp.set_rocksdb_kv(box_try!(MiscExt::dump_stats(&engines.kv)));
-                resp.set_rocksdb_raft(box_try!(RaftEngine::dump_stats(&engines.kv)));
+                resp.set_rocksdb_raft(box_try!(RaftEngine::dump_stats(&engines.raft)));
                 resp.set_jemalloc(tikv_alloc::dump_stats());
             }
             Ok(resp)
