@@ -1158,6 +1158,7 @@ name = "error_code"
 version = "0.0.1"
 dependencies = [
  "kvproto",
+ "lazy_static",
  "raft",
  "tikv_alloc",
 ]
