@@ -1,8 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{RaftEngine, RaftLogBatch as RaftLogBatchTrait, Result};
+use engine_traits::{CacheStats, RaftEngine, RaftLogBatch as RaftLogBatchTrait, Result};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
+pub use raft_engine::Config as RaftEngineConfig;
 use raft_engine::{EntryExt, Error as RaftEngineError, LogBatch, RaftLogEngine as RawRaftEngine};
 
 #[derive(Clone)]
@@ -17,15 +18,14 @@ impl EntryExt<Entry> for EntryExtTyped {
 #[derive(Clone)]
 pub struct RaftLogEngine(RawRaftEngine<Entry, EntryExtTyped>);
 
+impl RaftLogEngine {
+    pub fn new(config: RaftEngineConfig) -> Self {
+        RaftLogEngine(RawRaftEngine::new(config))
+    }
+}
+
 #[derive(Default)]
 pub struct RaftLogBatch(LogBatch<Entry, EntryExtTyped>);
-
-#[derive(Clone, Copy, Default)]
-pub struct CacheStats {
-    pub hit: usize,
-    pub miss: usize,
-    pub cache_size: usize,
-}
 
 const RAFT_LOG_STATE_KEY: &[u8] = b"R";
 
@@ -48,17 +48,6 @@ impl RaftLogBatchTrait for RaftLogBatch {
 
     fn is_empty(&self) -> bool {
         self.0.items.is_empty()
-    }
-}
-
-fn transfer_error(e: RaftEngineError) -> engine_traits::Error {
-    match e {
-        RaftEngineError::StorageCompacted => engine_traits::Error::EntriesCompacted,
-        RaftEngineError::StorageUnavailable => engine_traits::Error::EntriesUnavailable,
-        e => {
-            let e = box_err!(e);
-            engine_traits::Error::Other(e)
-        }
     }
 }
 
@@ -153,7 +142,7 @@ impl RaftEngine for RaftLogEngine {
         self.0.compact_cache_to(raft_group_id, to)
     }
     /// Flush current cache stats.
-    fn flush_stats(&self) -> Option<engine_traits::CacheStats> {
+    fn flush_stats(&self) -> Option<CacheStats> {
         let stat = self.0.flush_stats();
         Some(engine_traits::CacheStats {
             hit: stat.hit,
@@ -167,6 +156,18 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn dump_stats(&self) -> Result<String> {
+        // Raft engine won't dump anything.
         Ok("".to_owned())
+    }
+}
+
+fn transfer_error(e: RaftEngineError) -> engine_traits::Error {
+    match e {
+        RaftEngineError::StorageCompacted => engine_traits::Error::EntriesCompacted,
+        RaftEngineError::StorageUnavailable => engine_traits::Error::EntriesUnavailable,
+        e => {
+            let e = box_err!(e);
+            engine_traits::Error::Other(e)
+        }
     }
 }
