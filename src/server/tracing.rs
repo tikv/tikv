@@ -157,11 +157,31 @@ impl JaegerReporter {
 impl Reporter for JaegerReporter {
     fn report(&self, trace_context: TraceContext, collector: Option<Collector>) {
         if let Some(collector) = collector {
-            let trace_details = collector.collect();
+            let mut trace_details = collector.collect();
+            if trace_details.spans.is_empty() {
+                // Request is run too fast to collect spans
+                return;
+            }
+
+            let total_cycles = (trace_details.elapsed_ns as u128
+                * trace_details.cycles_per_second as u128)
+                / 1_000_000_000u128;
+
+            let mut root_index = 0;
+            for (i, span) in trace_details.spans.iter().enumerate() {
+                if span.state == State::Root {
+                    root_index = i;
+                }
+            }
+            trace_details.spans.swap(0, root_index);
+
+            // reuse root span to represent the whole process
+            trace_details.spans[0].elapsed_cycles = total_cycles as u64;
 
             // Check if duration reaches `duration_threshold`
             if Duration::from_nanos(trace_details.elapsed_ns) < self.duration_threshold {
-                return;
+                // keep root span
+                trace_details.spans.truncate(1);
             }
 
             self.runtime.spawn(Self::report(

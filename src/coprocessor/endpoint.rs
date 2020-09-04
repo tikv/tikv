@@ -392,7 +392,12 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
 
-        let handle_request_future = track(handler.handle_request().trace_async(Event::TiKvCoprHandleRequest as u32), &mut tracker);
+        let handle_request_future = track(
+            handler
+                .handle_request()
+                .trace_async(Event::TiKvCoprHandleRequest as u32),
+            &mut tracker,
+        );
         let result = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
