@@ -330,7 +330,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let key = get.key.to_owned();
                         let region_id = get.get_context().get_region_id();
                         let peer = get.get_context().get_peer();
-                        tls_collect_qps(region_id, peer, key, key, false);
+                        tls_collect_qps(region_id, peer, &key, &key, false);
                     }
                     KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
