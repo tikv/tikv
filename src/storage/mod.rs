@@ -326,6 +326,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res =
             self.read_pool.spawn_handle(
                 async move {
+                    for get in &requests {
+                        let key = get.key.to_owned();
+                        let region_id = get.get_context().get_region_id();
+                        let peer = get.get_context().get_peer();
+                        tls_collect_qps(region_id, peer, key, key, false);
+                    }
                     KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
@@ -800,6 +806,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
+                for get in &gets {
+                    let key = get.key.to_owned();
+                    let region_id = get.get_context().get_region_id();
+                    let peer = get.get_context().get_peer();
+                    tls_collect_qps(region_id, peer, &key, &key, false);
+                }
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
