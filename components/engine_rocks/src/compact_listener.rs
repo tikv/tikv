@@ -185,6 +185,10 @@ impl CompactedEvent for RocksCompactedEvent {
 
         region_declined_bytes
     }
+
+    fn cf(&self) -> &str {
+        &*self.cf
+    }
 }
 
 pub type Filter = fn(&RocksCompactionJobInfo) -> bool;
