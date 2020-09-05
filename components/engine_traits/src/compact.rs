@@ -42,7 +42,7 @@ pub trait CompactExt {
     ) -> Result<()>;
 }
 
-pub trait CompactedEvent {
+pub trait CompactedEvent: Send {
     fn total_bytes_declined(&self) -> u64;
 
     fn is_size_declining_trivial(&self, split_check_diff: u64) -> bool;
