@@ -471,11 +471,11 @@ struct Store {
 
 pub struct StoreFsm {
     store: Store,
-    receiver: Receiver<StoreMsg>,
+    receiver: Receiver<StoreMsg<engine_rocks::RocksEngine>>,
 }
 
 impl StoreFsm {
-    pub fn new(cfg: &Config) -> (LooseBoundedSender<StoreMsg>, Box<StoreFsm>) {
+    pub fn new(cfg: &Config) -> (LooseBoundedSender<StoreMsg<engine_rocks::RocksEngine>>, Box<StoreFsm>) {
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         let fsm = Box::new(StoreFsm {
             store: Store {
@@ -493,7 +493,7 @@ impl StoreFsm {
 }
 
 impl Fsm for StoreFsm {
-    type Message = StoreMsg;
+    type Message = StoreMsg<engine_rocks::RocksEngine>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -538,7 +538,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
         );
     }
 
-    fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg>) {
+    fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg<engine_rocks::RocksEngine>>) {
         for m in msgs.drain(..) {
             match m {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
@@ -591,7 +591,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
 
 pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'static, C: 'static> {
     tag: String,
-    store_msg_buf: Vec<StoreMsg>,
+    store_msg_buf: Vec<StoreMsg<engine_rocks::RocksEngine>>,
     peer_msg_buf: Vec<PeerMsg<EK>>,
     previous_metrics: RaftMetrics,
     timer: TiInstant,

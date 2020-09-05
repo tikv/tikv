@@ -319,7 +319,7 @@ mod tests {
     }
 
     impl StoreRouter for TestRaftStoreRouter {
-        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
             Ok(())
         }
     }
@@ -358,7 +358,7 @@ mod tests {
             Ok(())
         }
 
-        fn send_store_msg(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        fn send_store_msg(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }

@@ -41,7 +41,7 @@ where
     }
 
     /// Send a store message to the backend raft batch system.
-    fn send_store_msg(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+    fn send_store_msg(&self, msg: StoreMsg<engine_rocks::RocksEngine>) -> RaftStoreResult<()> {
         <Self as StoreRouter>::send(self, msg)
     }
 
@@ -120,7 +120,7 @@ impl<S: Snapshot> ProposalRouter<S> for RaftStoreBlackHole {
 }
 
 impl StoreRouter for RaftStoreBlackHole {
-    fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+    fn send(&self, _: StoreMsg<engine_rocks::RocksEngine>) -> RaftStoreResult<()> {
         Ok(())
     }
 }
@@ -172,7 +172,7 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> StoreRouter for ServerRaftStoreRouter<EK, ER> {
-    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+    fn send(&self, msg: StoreMsg<engine_rocks::RocksEngine>) -> RaftStoreResult<()> {
         StoreRouter::send(&self.router, msg)
     }
 }

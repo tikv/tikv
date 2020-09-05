@@ -32,7 +32,7 @@ impl MockRaftStoreRouter {
 }
 
 impl StoreRouter for MockRaftStoreRouter {
-    fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+    fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
         unimplemented!();
     }
 }

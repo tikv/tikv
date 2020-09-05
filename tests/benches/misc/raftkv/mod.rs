@@ -80,7 +80,7 @@ impl ProposalRouter<RocksSnapshot> for SyncBenchRouter {
     }
 }
 impl StoreRouter for SyncBenchRouter {
-    fn send(&self, _: StoreMsg) -> Result<()> {
+    fn send(&self, _: StoreMsg<RocksEngine>) -> Result<()> {
         Ok(())
     }
 }

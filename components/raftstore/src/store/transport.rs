@@ -36,7 +36,7 @@ where
 ///
 /// Messages are not guaranteed to be delivered by this trait.
 pub trait StoreRouter {
-    fn send(&self, msg: StoreMsg) -> Result<()>;
+    fn send(&self, msg: StoreMsg<engine_rocks::RocksEngine>) -> Result<()>;
 }
 
 impl<EK, ER> CasualRouter<EK> for RaftRouter<EK, ER>
@@ -74,7 +74,7 @@ where
     ER: RaftEngine,
 {
     #[inline]
-    fn send(&self, msg: StoreMsg) -> Result<()> {
+    fn send(&self, msg: StoreMsg<engine_rocks::RocksEngine>) -> Result<()> {
         match self.send_control(msg) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
@@ -110,8 +110,8 @@ impl<S: Snapshot> ProposalRouter<S> for mpsc::SyncSender<RaftCommand<S>> {
     }
 }
 
-impl StoreRouter for mpsc::Sender<StoreMsg> {
-    fn send(&self, msg: StoreMsg) -> Result<()> {
+impl StoreRouter for mpsc::Sender<StoreMsg<engine_rocks::RocksEngine>> {
+    fn send(&self, msg: StoreMsg<engine_rocks::RocksEngine>) -> Result<()> {
         match self.send(msg) {
             Ok(()) => Ok(()),
             Err(mpsc::SendError(_)) => Err(Error::Transport(DiscardReason::Disconnected)),

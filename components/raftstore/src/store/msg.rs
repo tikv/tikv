@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_traits::{KvEngine, Snapshot};
+use engine_traits::{KvEngine, Snapshot, CompactedEvent};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -19,7 +19,6 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
-use engine_rocks::RocksCompactedEvent;
 use tikv_util::escape;
 
 use super::{AbstractPeer, RegionSnapshot};
@@ -401,7 +400,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     }
 }
 
-pub enum StoreMsg {
+pub enum StoreMsg<EK> where EK: KvEngine {
     RaftMessage(RaftMessage),
 
     ValidateSSTResult {
@@ -419,7 +418,7 @@ pub enum StoreMsg {
     },
 
     // Compaction finished event
-    CompactedEvent(RocksCompactedEvent),
+    CompactedEvent(EK::CompactedEvent),
     Tick(StoreTick),
     Start {
         store: metapb::Store,
@@ -432,14 +431,14 @@ pub enum StoreMsg {
     UpdateReplicationMode(ReplicationStatus),
 }
 
-impl fmt::Debug for StoreMsg {
+impl<EK> fmt::Debug for StoreMsg<EK> where EK: KvEngine {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             StoreMsg::StoreUnreachable { store_id } => {
                 write!(fmt, "Store {}  is unreachable", store_id)
             }
-            StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
+            StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
             StoreMsg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
             StoreMsg::ClearRegionSizeInRange {
                 ref start_key,
