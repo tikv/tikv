@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::future::Future as StdFuture;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::{borrow::Cow, time::Duration};
@@ -432,7 +432,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl StdFuture<Output = Result<coppb::Response>> {
+    ) -> impl Future<Output = Result<coppb::Response>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
         // box the tracker so that moving it is cheap.
@@ -458,7 +458,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl StdFuture<Output = coppb::Response> {
+    ) -> impl Future<Output = coppb::Response> {
         let (_guard, collector) = minitrace::trace_may_enable(
             req.is_trace_enabled,
             tipb::Event::TiKvCoprGetRequest as u32,
