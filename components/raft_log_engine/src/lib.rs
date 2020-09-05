@@ -26,4 +26,4 @@ extern crate serde_derive;
 extern crate raft;
 
 mod engine;
-pub use engine::{RaftLogEngine, RaftLogBatch};
+pub use engine::{RaftLogBatch, RaftLogEngine};
