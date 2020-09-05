@@ -12,6 +12,7 @@ use rocksdb::{
 use tikv_util::collections::hash_set_with_capacity;
 use engine_traits::CompactedEvent;
 use std::collections::BTreeMap;
+use std::collections::Bound::{Excluded, Included, Unbounded};
 
 pub struct RocksCompactionJobInfo<'a>(&'a RawCompactionJobInfo);
 
@@ -124,19 +125,65 @@ impl RocksCompactedEvent {
 
 impl CompactedEvent for RocksCompactedEvent {
     fn total_bytes_declined(&self) -> u64 {
-        panic!()
+        if self.total_input_bytes > self.total_output_bytes {
+            self.total_input_bytes - self.total_output_bytes
+        } else {
+            0
+        }
     }
 
     fn is_size_declining_trivial(&self, split_check_diff: u64) -> bool {
-        panic!()
+        let total_bytes_declined = self.total_bytes_declined();
+        if total_bytes_declined < split_check_diff
+            || total_bytes_declined * 10 < self.total_input_bytes
+        {
+            true
+        } else {
+            false
+        }
     }
 
     fn output_level_label(&self) -> String {
-        panic!()
+        self.output_level.to_string()
     }
 
     fn calc_ranges_declined_bytes(self, ranges: &BTreeMap<Vec<u8>, u64>, bytes_threshold: u64) -> Vec<(u64, u64)> {
-        panic!()
+        // Calculate influenced regions.
+        let mut influenced_regions = vec![];
+        for (end_key, region_id) in
+            ranges.range((Excluded(self.start_key), Included(self.end_key.clone())))
+        {
+            influenced_regions.push((region_id, end_key.clone()));
+        }
+        if let Some((end_key, region_id)) = ranges
+            .range((Included(self.end_key), Unbounded))
+            .next()
+        {
+            influenced_regions.push((region_id, end_key.clone()));
+        }
+
+        // Calculate declined bytes for each region.
+        // `end_key` in influenced_regions are in incremental order.
+        let mut region_declined_bytes = vec![];
+        let mut last_end_key: Vec<u8> = vec![];
+        for (region_id, end_key) in influenced_regions {
+            let mut old_size = 0;
+            for prop in &self.input_props {
+                old_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+            }
+            let mut new_size = 0;
+            for prop in &self.output_props {
+                new_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+            }
+            last_end_key = end_key;
+
+            // Filter some trivial declines for better performance.
+            if old_size > new_size && old_size - new_size > bytes_threshold {
+                region_declined_bytes.push((*region_id, old_size - new_size));
+            }
+        }
+
+        region_declined_bytes
     }
 }
 

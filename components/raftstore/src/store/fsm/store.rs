@@ -28,6 +28,7 @@ use tokio::runtime::{self, Handle, Runtime};
 
 use engine_traits::{RaftEngine, RaftLogBatch};
 use engine_rocks::RocksCompactedEvent;
+use engine_traits::CompactedEvent;
 use error_code::ErrorCodeExt;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
@@ -1784,28 +1785,19 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
     }
 
     fn on_compaction_finished(&mut self, event: RocksCompactedEvent) {
-        // If size declining is trivial, skip.
-        let total_bytes_declined = if event.total_input_bytes > event.total_output_bytes {
-            event.total_input_bytes - event.total_output_bytes
-        } else {
-            0
-        };
-        if total_bytes_declined < self.ctx.cfg.region_split_check_diff.0
-            || total_bytes_declined * 10 < event.total_input_bytes
-        {
+        if event.is_size_declining_trivial(self.ctx.cfg.region_split_check_diff.0) {
             return;
         }
 
-        let output_level_str = event.output_level.to_string();
+        let output_level_str = event.output_level_label();
         COMPACTION_DECLINED_BYTES
             .with_label_values(&[&output_level_str])
-            .observe(total_bytes_declined as f64);
+            .observe(event.total_bytes_declined() as f64);
 
         // self.cfg.region_split_check_diff.0 / 16 is an experienced value.
         let mut region_declined_bytes = {
             let meta = self.ctx.store_meta.lock().unwrap();
-            calc_region_declined_bytes(
-                event,
+            event.calc_ranges_declined_bytes(
                 &meta.region_ranges,
                 self.ctx.cfg.region_split_check_diff.0 / 16,
             )
@@ -2375,48 +2367,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
     }
 }
 
-fn calc_region_declined_bytes(
-    event: RocksCompactedEvent,
-    region_ranges: &BTreeMap<Key, u64>,
-    bytes_threshold: u64,
-) -> Vec<(u64, u64)> {
-    // Calculate influenced regions.
-    let mut influenced_regions = vec![];
-    for (end_key, region_id) in
-        region_ranges.range((Excluded(event.start_key), Included(event.end_key.clone())))
-    {
-        influenced_regions.push((region_id, end_key.clone()));
-    }
-    if let Some((end_key, region_id)) = region_ranges
-        .range((Included(event.end_key), Unbounded))
-        .next()
-    {
-        influenced_regions.push((region_id, end_key.clone()));
-    }
-
-    // Calculate declined bytes for each region.
-    // `end_key` in influenced_regions are in incremental order.
-    let mut region_declined_bytes = vec![];
-    let mut last_end_key: Vec<u8> = vec![];
-    for (region_id, end_key) in influenced_regions {
-        let mut old_size = 0;
-        for prop in &event.input_props {
-            old_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
-        }
-        let mut new_size = 0;
-        for prop in &event.output_props {
-            new_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
-        }
-        last_end_key = end_key;
-
-        // Filter some trivial declines for better performance.
-        if old_size > new_size && old_size - new_size > bytes_threshold {
-            region_declined_bytes.push((*region_id, old_size - new_size));
-        }
-    }
-
-    region_declined_bytes
-}
 
 #[cfg(test)]
 mod tests {
@@ -2468,7 +2418,7 @@ mod tests {
         region_ranges.insert(b"b".to_vec(), 2);
         region_ranges.insert(b"c".to_vec(), 3);
 
-        let declined_bytes = calc_region_declined_bytes(event, &region_ranges, 1024);
+        let declined_bytes = event.calc_ranges_declined_bytes(&region_ranges, 1024);
         let expected_declined_bytes = vec![(2, 8192), (3, 4096)];
         assert_eq!(declined_bytes, expected_declined_bytes);
     }
