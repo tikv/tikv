@@ -13,7 +13,6 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
-use txn_types::TxnExtra;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
@@ -177,6 +176,7 @@ pub enum StoreTick {
     CompactLockCf,
     ConsistencyCheck,
     CleanupImportSST,
+    RaftEnginePurge,
 }
 
 impl StoreTick {
@@ -189,6 +189,7 @@ impl StoreTick {
             StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
             StoreTick::CleanupImportSST => RaftEventDurationType::cleanup_import_sst,
+            StoreTick::RaftEnginePurge => RaftEventDurationType::raft_engine_purge,
         }
     }
 }
@@ -298,6 +299,10 @@ pub enum CasualMessage<EK: KvEngine> {
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
 
+    /// Generally Raft leader keeps as more as possible logs for followers,
+    /// however `ForceCompactRaftLogs` only cares the leader itself.
+    ForceCompactRaftLogs,
+
     /// A message to access peer's internal state.
     AccessPeer(Box<dyn FnOnce(&mut dyn AbstractPeer) + Send + 'static>),
 }
@@ -342,6 +347,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
+            CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
         }
     }
@@ -354,26 +360,16 @@ pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
-    pub txn_extra: TxnExtra,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
     #[inline]
-    pub fn with_txn_extra(
-        request: RaftCmdRequest,
-        callback: Callback<S>,
-        txn_extra: TxnExtra,
-    ) -> RaftCommand<S> {
+    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
         RaftCommand {
             request,
             callback,
-            txn_extra,
             send_time: Instant::now(),
         }
-    }
-
-    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
-        Self::with_txn_extra(request, callback, TxnExtra::default())
     }
 }
 

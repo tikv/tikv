@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 define_error_codes!(
-    "KV:Engine:",
+    "Engine:",
 
     ENGINE => ("Engine", "", ""),
     NOT_IN_RANGE => ("NotInRange", "", ""),
@@ -10,5 +10,7 @@ define_error_codes!(
     CF_NAME => ("CFName", "", ""),
     CODEC => ("Codec", "", ""),
 
-    UNKNOWN => ("Unknown", "", "")
+    UNKNOWN => ("Unknown", "", ""),
+    DATALOSS => ("DataLoss", "", ""),
+    DATACOMPACTED => ("DataCompacted", "", "")
 );

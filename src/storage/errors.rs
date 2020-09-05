@@ -233,7 +233,8 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
     match err {
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
-        ))))) => {
+        )))))
+        | Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info)))) => {
             key_error.set_locked(info.clone());
         }
         // failed in prewrite or pessimistic lock

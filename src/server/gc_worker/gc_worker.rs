@@ -14,7 +14,7 @@ use futures03::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
-use raftstore::router::ServerRaftStoreRouter;
+use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
@@ -125,10 +125,14 @@ impl Display for GcTask {
 }
 
 /// Used to perform GC operations on the engine.
-struct GcRunner<E: Engine> {
+struct GcRunner<E, RR>
+where
+    E: Engine,
+    RR: RaftStoreRouter<RocksEngine>,
+{
     engine: E,
 
-    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine, RocksEngine>>,
+    raft_store_router: RR,
 
     /// Used to limit the write flow of GC.
     limiter: Limiter,
@@ -139,10 +143,14 @@ struct GcRunner<E: Engine> {
     stats: Statistics,
 }
 
-impl<E: Engine> GcRunner<E> {
+impl<E, RR> GcRunner<E, RR>
+where
+    E: Engine,
+    RR: RaftStoreRouter<RocksEngine>,
+{
     pub fn new(
         engine: E,
-        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine, RocksEngine>>,
+        raft_store_router: RR,
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
     ) -> Self {
@@ -304,16 +312,15 @@ impl<E: Engine> GcRunner<E> {
                 .delete_files_in_range_cf(cf, &start_data_key, &end_data_key, false)
                 .map_err(|e| {
                     let e: Error = box_err!(e);
-                    warn!(
-                        "unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e
-                    );
+                    warn!("unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e);
                     e
                 })?;
         }
 
         info!(
             "unsafe destroy range finished deleting files in range";
-            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?delete_files_start_time.elapsed()
+            "start_key" => %start_key, "end_key" => %end_key,
+            "cost_time" => ?delete_files_start_time.elapsed(),
         );
 
         // Then, delete all remaining keys in the range.
@@ -324,31 +331,22 @@ impl<E: Engine> GcRunner<E> {
                 .delete_all_in_range_cf(cf, &start_data_key, &end_data_key, false)
                 .map_err(|e| {
                     let e: Error = box_err!(e);
-                    warn!(
-                        "unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e
-                    );
+                    warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);
                     e
                 })?;
         }
 
         let cleanup_all_time_cost = cleanup_all_start_time.elapsed();
 
-        if let Some(router) = self.raft_store_router.as_ref() {
-            router
-                .send_store(StoreMsg::ClearRegionSizeInRange {
-                    start_key: start_key.as_encoded().to_vec(),
-                    end_key: end_key.as_encoded().to_vec(),
-                })
-                .unwrap_or_else(|e| {
-                    // Warn and ignore it.
-                    warn!(
-                        "unsafe destroy range: failed sending ClearRegionSizeInRange";
-                        "err" => ?e
-                    );
-                });
-        } else {
-            warn!("unsafe destroy range: can't clear region size information: raft_store_router not set");
-        }
+        self.raft_store_router
+            .send_store_msg(StoreMsg::ClearRegionSizeInRange {
+                start_key: start_key.as_encoded().to_vec(),
+                end_key: end_key.as_encoded().to_vec(),
+            })
+            .unwrap_or_else(|e| {
+                // Warn and ignore it.
+                warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
+            });
 
         info!(
             "unsafe destroy range finished cleaning up all";
@@ -402,7 +400,11 @@ impl<E: Engine> GcRunner<E> {
     }
 }
 
-impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
+impl<E, RR> FutureRunnable<GcTask> for GcRunner<E, RR>
+where
+    E: Engine,
+    RR: RaftStoreRouter<RocksEngine>,
+{
     #[inline]
     fn run(&mut self, task: GcTask) {
         let enum_label = task.get_enum_label();
@@ -527,11 +529,15 @@ pub fn sync_gc(
 }
 
 /// Used to schedule GC operations.
-pub struct GcWorker<E: Engine> {
+pub struct GcWorker<E, RR>
+where
+    E: Engine,
+    RR: RaftStoreRouter<RocksEngine> + 'static,
+{
     engine: E,
 
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
-    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine, RocksEngine>>,
+    raft_store_router: RR,
 
     config_manager: GcWorkerConfigManager,
 
@@ -550,7 +556,11 @@ pub struct GcWorker<E: Engine> {
     cluster_version: ClusterVersion,
 }
 
-impl<E: Engine> Clone for GcWorker<E> {
+impl<E, RR> Clone for GcWorker<E, RR>
+where
+    E: Engine,
+    RR: RaftStoreRouter<RocksEngine>,
+{
     #[inline]
     fn clone(&self) -> Self {
         self.refs.fetch_add(1, Ordering::SeqCst);
@@ -570,7 +580,11 @@ impl<E: Engine> Clone for GcWorker<E> {
     }
 }
 
-impl<E: Engine> Drop for GcWorker<E> {
+impl<E, RR> Drop for GcWorker<E, RR>
+where
+    E: Engine,
+    RR: RaftStoreRouter<RocksEngine> + 'static,
+{
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, Ordering::SeqCst);
@@ -586,13 +600,17 @@ impl<E: Engine> Drop for GcWorker<E> {
     }
 }
 
-impl<E: Engine> GcWorker<E> {
+impl<E, RR> GcWorker<E, RR>
+where
+    E: Engine,
+    RR: RaftStoreRouter<RocksEngine>,
+{
     pub fn new(
         engine: E,
-        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine, RocksEngine>>,
+        raft_store_router: RR,
         cfg: GcConfig,
         cluster_version: ClusterVersion,
-    ) -> GcWorker<E> {
+    ) -> GcWorker<E, RR> {
         let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
         let worker_scheduler = worker.lock().unwrap().scheduler();
         GcWorker {
@@ -637,7 +655,7 @@ impl<E: Engine> GcWorker<E> {
     pub fn start(&mut self) -> Result<()> {
         let runner = GcRunner::new(
             self.engine.clone(),
-            self.raft_store_router.take(),
+            self.raft_store_router.clone(),
             self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.config_manager.value().clone(),
         );
@@ -804,6 +822,7 @@ mod tests {
     use futures::Future;
     use futures03::executor::block_on;
     use kvproto::{kvrpcpb::Op, metapb};
+    use raftstore::router::RaftStoreBlackHole;
     use raftstore::store::RegionSnapshot;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::future::paired_future_callback;
@@ -963,7 +982,7 @@ mod tests {
                 .unwrap();
         let mut gc_worker = GcWorker::new(
             engine,
-            None,
+            RaftStoreBlackHole,
             GcConfig::default(),
             ClusterVersion::new(semver::Version::new(5, 0, 0)),
         );
@@ -1128,7 +1147,7 @@ mod tests {
         .unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
-            None,
+            RaftStoreBlackHole,
             GcConfig::default(),
             ClusterVersion::default(),
         );

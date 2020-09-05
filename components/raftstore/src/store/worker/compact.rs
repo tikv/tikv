@@ -119,10 +119,12 @@ where
     }
 }
 
-impl<E> Runnable<Task> for Runner<E>
+impl<E> Runnable for Runner<E>
 where
     E: KvEngine,
 {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::Compact {

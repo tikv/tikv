@@ -81,6 +81,7 @@ engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
 error_code = { path = "components/error_code" }
 fail = "0.3"
+raft-engine = { git = "https://github.com/tikv/raft-engine", default-features = false }
 failure = "0.1"
 fs2 = "0.4"
 futures = "0.1"
@@ -117,6 +118,7 @@ protobuf = "2.8"
 quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "components/raftstore" }
+raft_log_engine = { path = "components/raft_log_engine" }
 rand = "0.7.3"
 regex = "1.3"
 rev_lines = "0.2.1"

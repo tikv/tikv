@@ -19,7 +19,6 @@ prost-codec = [
   "sst_importer/prost-codec",
   "tidb_query_datatype/prost-codec",
   "txn_types/prost-codec",
-  "raft-engine/prost-codec",
 ]
 protobuf-codec = [
   "engine_rocks/protobuf-codec",
@@ -31,7 +30,6 @@ protobuf-codec = [
   "sst_importer/protobuf-codec",
   "tidb_query_datatype/protobuf-codec",
   "txn_types/protobuf-codec",
-  "raft-engine/protobuf-codec",
 ]
 testexport = []
 
@@ -50,8 +48,7 @@ error_code = { path = "../error_code" }
 fail = "0.3"
 openssl = "0.10"
 fs2 = "0.4"
-futures = "0.1"
-futures03 = { package = "futures", version = "0.3", features = ["compat"] }
+futures = { version = "0.3", features = ["compat"] }
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
 hex = "0.4"
 into_other = { path = "../into_other" }
@@ -79,13 +76,9 @@ tidb_query_datatype = { path = "../tidb_query_datatype" }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
-tokio = { version = "0.2", features = ["sync"] }
-tokio-core = "0.1"
-tokio-threadpool = "0.1.13"
-tokio-timer = "0.2"
+tokio = { version = "0.2", features = ["sync", "rt-threaded"] }
 txn_types = { path = "../txn_types" }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
-raft-engine = { git = "https://github.com/tikv/raft-engine", default-features = false }
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
