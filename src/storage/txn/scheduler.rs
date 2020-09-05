@@ -557,9 +557,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         stage: metrics::CommandStageKind,
     ) {
         // TODO: This and pipelined write can be merged together
-        debug!("early return response"; "cid" => cid);
-        SCHED_STAGE_COUNTER_VEC.get(tag).get(stage).inc();
         if let Some((cb, pr)) = self.inner.take_task_cb_and_process_result(cid) {
+            debug!("early return response"; "cid" => cid);
+            SCHED_STAGE_COUNTER_VEC.get(tag).get(stage).inc();
             cb.execute(pr);
         }
         // It won't release locks here until write finished.
