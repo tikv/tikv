@@ -221,7 +221,9 @@ mod tests {
         ch: Sender<&'static str>,
     }
 
-    impl Runnable<&'static str> for Runner {
+    impl Runnable for Runner {
+        type Task = &'static str;
+
         fn run(&mut self, msg: &'static str) {
             self.ch.send(msg).unwrap();
         }
@@ -230,7 +232,9 @@ mod tests {
         }
     }
 
-    impl RunnableWithTimer<&'static str, Task> for Runner {
+    impl RunnableWithTimer for Runner {
+        type TimeoutTask = Task;
+
         fn on_timeout(&mut self, timer: &mut Timer<Task>, task: Task) {
             let timeout = match task {
                 Task::A => {

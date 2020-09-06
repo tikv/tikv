@@ -51,7 +51,9 @@ impl Display for Task {
 
 struct Runner(Engines<BaseRocksEngine, BaseRocksEngine>);
 
-impl Runnable<Task> for Runner {
+impl Runnable for Runner {
+    type Task = Task;
+
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => {
