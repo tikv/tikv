@@ -181,7 +181,7 @@ impl BackupRange {
         let snapshot = match engine.snapshot(&ctx) {
             Ok(s) => s,
             Err(e) => {
-                error!("backup snapshot failed"; "error" => ?e, "error_code" => %e.error_code());
+                error!(?e; "backup snapshot failed");
                 return Err(e.into());
             }
         };
@@ -205,7 +205,7 @@ impl BackupRange {
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
-                error!("backup scan entries failed"; "error" => ?e, "error_code" => %e.error_code());
+                error!(?e; "backup scan entries failed");
                 return Err(e.into());
             };
             if batch.is_empty() {
@@ -214,7 +214,7 @@ impl BackupRange {
             debug!("backup scan entries"; "len" => batch.len());
             // Build sst files.
             if let Err(e) = writer.write(batch.drain(), true) {
-                error!("backup build sst failed"; "error" => ?e);
+                error!(?e; "backup build sst failed");
                 return Err(e);
             }
         }

@@ -8,7 +8,5 @@ define_error_codes!(
     PROTOBUF => ("Protobuf", "", ""),
     IO => ("IO", "", ""),
     CF_NAME => ("CFName", "", ""),
-    CODEC => ("Codec", "", ""),
-
-    UNKNOWN => ("Unknown", "", "")
+    CODEC => ("Codec", "", "")
 );

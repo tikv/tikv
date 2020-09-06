@@ -55,7 +55,7 @@ impl ErrorCodeExt for Error {
             Error::Io(_) => error_code::engine::IO,
             Error::CFName(_) => error_code::engine::CF_NAME,
             Error::Codec(_) => error_code::engine::CODEC,
-            Error::Other(_) => error_code::engine::UNKNOWN,
+            Error::Other(_) => error_code::UNKNOWN,
         }
     }
 }
