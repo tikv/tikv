@@ -97,6 +97,7 @@ impl WriteData {
     }
 }
 
+/// Engine defines the common behaviour for a storage engine type.
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
     type Local: LocalEngine;
