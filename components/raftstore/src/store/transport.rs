@@ -35,7 +35,10 @@ where
 /// Routes message to store FSM.
 ///
 /// Messages are not guaranteed to be delivered by this trait.
-pub trait StoreRouter<EK> where EK: KvEngine {
+pub trait StoreRouter<EK>
+where
+    EK: KvEngine,
+{
     fn send(&self, msg: StoreMsg<EK>) -> Result<()>;
 }
 
@@ -110,7 +113,10 @@ impl<S: Snapshot> ProposalRouter<S> for mpsc::SyncSender<RaftCommand<S>> {
     }
 }
 
-impl<EK> StoreRouter<EK> for mpsc::Sender<StoreMsg<EK>> where EK: KvEngine {
+impl<EK> StoreRouter<EK> for mpsc::Sender<StoreMsg<EK>>
+where
+    EK: KvEngine,
+{
     fn send(&self, msg: StoreMsg<EK>) -> Result<()> {
         match self.send(msg) {
             Ok(()) => Ok(()),

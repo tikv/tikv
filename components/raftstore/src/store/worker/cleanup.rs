@@ -24,7 +24,11 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<E, C, S> where E: KvEngine, S: StoreRouter<E> {
+pub struct Runner<E, C, S>
+where
+    E: KvEngine,
+    S: StoreRouter<E>,
+{
     compact: CompactRunner<E>,
     cleanup_sst: CleanupSSTRunner<E, C, S>,
 }
@@ -35,7 +39,10 @@ where
     C: PdClient,
     S: StoreRouter<E>,
 {
-    pub fn new(compact: CompactRunner<E>, cleanup_sst: CleanupSSTRunner<E, C, S>) -> Runner<E, C, S> {
+    pub fn new(
+        compact: CompactRunner<E>,
+        cleanup_sst: CleanupSSTRunner<E, C, S>,
+    ) -> Runner<E, C, S> {
         Runner {
             compact,
             cleanup_sst,

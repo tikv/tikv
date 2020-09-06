@@ -119,7 +119,10 @@ impl<S: Snapshot> ProposalRouter<S> for RaftStoreBlackHole {
     }
 }
 
-impl<EK> StoreRouter<EK> for RaftStoreBlackHole where EK: KvEngine {
+impl<EK> StoreRouter<EK> for RaftStoreBlackHole
+where
+    EK: KvEngine,
+{
     fn send(&self, _: StoreMsg<EK>) -> RaftStoreResult<()> {
         Ok(())
     }

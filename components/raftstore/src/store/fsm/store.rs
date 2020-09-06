@@ -26,8 +26,8 @@ use raft::{Ready, StateRole};
 use time::{self, Timespec};
 use tokio::runtime::{self, Handle, Runtime};
 
-use engine_traits::{RaftEngine, RaftLogBatch};
 use engine_traits::CompactedEvent;
+use engine_traits::{RaftEngine, RaftLogBatch};
 use error_code::ErrorCodeExt;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
@@ -468,12 +468,18 @@ struct Store {
     last_unreachable_report: HashMap<u64, Instant>,
 }
 
-pub struct StoreFsm<EK> where EK: KvEngine {
+pub struct StoreFsm<EK>
+where
+    EK: KvEngine,
+{
     store: Store,
     receiver: Receiver<StoreMsg<EK>>,
 }
 
-impl<EK> StoreFsm<EK> where EK: KvEngine {
+impl<EK> StoreFsm<EK>
+where
+    EK: KvEngine,
+{
     pub fn new(cfg: &Config) -> (LooseBoundedSender<StoreMsg<EK>>, Box<StoreFsm<EK>>) {
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         let fsm = Box::new(StoreFsm {
@@ -491,7 +497,10 @@ impl<EK> StoreFsm<EK> where EK: KvEngine {
     }
 }
 
-impl<EK> Fsm for StoreFsm<EK> where EK: KvEngine {
+impl<EK> Fsm for StoreFsm<EK>
+where
+    EK: KvEngine,
+{
     type Message = StoreMsg<EK>;
 
     #[inline]
@@ -719,8 +728,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> PollHandler<PeerFsm<EK, ER>, StoreFsm<EK>>
-    for RaftPoller<EK, ER, T, C>
+impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
+    PollHandler<PeerFsm<EK, ER>, StoreFsm<EK>> for RaftPoller<EK, ER, T, C>
 {
     fn begin(&mut self, _batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
@@ -2365,7 +2374,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         self.register_raft_engine_purge_tick();
     }
 }
-
 
 #[cfg(test)]
 mod tests {

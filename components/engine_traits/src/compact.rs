@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 pub trait CompactExt {
     type CompactedEvent: CompactedEvent;
-    
+
     /// Checks whether any column family sets `disable_auto_compactions` to `True` or not.
     fn auto_compactions_is_disabled(&self) -> Result<bool>;
 
@@ -51,8 +51,11 @@ pub trait CompactedEvent: Send {
 
     /// This takes self by value so that engine_rocks can move keys out of the
     /// CompactedEvent
-    fn calc_ranges_declined_bytes(self, ranges: &BTreeMap<Vec<u8>, u64>, bytes_threshold: u64) -> Vec<(u64, u64)>;
+    fn calc_ranges_declined_bytes(
+        self,
+        ranges: &BTreeMap<Vec<u8>, u64>,
+        bytes_threshold: u64,
+    ) -> Vec<(u64, u64)>;
 
     fn cf(&self) -> &str;
 }
-

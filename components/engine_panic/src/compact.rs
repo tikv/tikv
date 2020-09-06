@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::PanicEngine;
-use engine_traits::{CompactExt, Result, CompactedEvent};
+use engine_traits::{CompactExt, CompactedEvent, Result};
 use std::collections::BTreeMap;
 
 impl CompactExt for PanicEngine {
@@ -57,7 +57,11 @@ impl CompactedEvent for PanicCompactedEvent {
         panic!()
     }
 
-    fn calc_ranges_declined_bytes(self, ranges: &BTreeMap<Vec<u8>, u64>, bytes_threshold: u64) -> Vec<(u64, u64)> {
+    fn calc_ranges_declined_bytes(
+        self,
+        ranges: &BTreeMap<Vec<u8>, u64>,
+        bytes_threshold: u64,
+    ) -> Vec<(u64, u64)> {
         panic!()
     }
 

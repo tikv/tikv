@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_traits::{KvEngine, Snapshot, CompactedEvent};
+use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -400,7 +400,10 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     }
 }
 
-pub enum StoreMsg<EK> where EK: KvEngine {
+pub enum StoreMsg<EK>
+where
+    EK: KvEngine,
+{
     RaftMessage(RaftMessage),
 
     ValidateSSTResult {
@@ -431,7 +434,10 @@ pub enum StoreMsg<EK> where EK: KvEngine {
     UpdateReplicationMode(ReplicationStatus),
 }
 
-impl<EK> fmt::Debug for StoreMsg<EK> where EK: KvEngine {
+impl<EK> fmt::Debug for StoreMsg<EK>
+where
+    EK: KvEngine,
+{
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),

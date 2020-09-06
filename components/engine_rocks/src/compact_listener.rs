@@ -5,14 +5,14 @@ use std::path::Path;
 
 use crate::properties::{RangeProperties, UserCollectedPropertiesDecoder};
 use crate::raw::EventListener;
+use engine_traits::CompactedEvent;
 use engine_traits::CompactionJobInfo;
 use rocksdb::{
     CompactionJobInfo as RawCompactionJobInfo, CompactionReason, TablePropertiesCollectionView,
 };
-use tikv_util::collections::hash_set_with_capacity;
-use engine_traits::CompactedEvent;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
+use tikv_util::collections::hash_set_with_capacity;
 
 pub struct RocksCompactionJobInfo<'a>(&'a RawCompactionJobInfo);
 
@@ -147,7 +147,11 @@ impl CompactedEvent for RocksCompactedEvent {
         self.output_level.to_string()
     }
 
-    fn calc_ranges_declined_bytes(self, ranges: &BTreeMap<Vec<u8>, u64>, bytes_threshold: u64) -> Vec<(u64, u64)> {
+    fn calc_ranges_declined_bytes(
+        self,
+        ranges: &BTreeMap<Vec<u8>, u64>,
+        bytes_threshold: u64,
+    ) -> Vec<(u64, u64)> {
         // Calculate influenced regions.
         let mut influenced_regions = vec![];
         for (end_key, region_id) in
@@ -155,9 +159,7 @@ impl CompactedEvent for RocksCompactedEvent {
         {
             influenced_regions.push((region_id, end_key.clone()));
         }
-        if let Some((end_key, region_id)) = ranges
-            .range((Included(self.end_key), Unbounded))
-            .next()
+        if let Some((end_key, region_id)) = ranges.range((Included(self.end_key), Unbounded)).next()
         {
             influenced_regions.push((region_id, end_key.clone()));
         }

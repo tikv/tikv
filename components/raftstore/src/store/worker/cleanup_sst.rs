@@ -7,12 +7,12 @@ use kvproto::import_sstpb::SstMeta;
 
 use crate::store::util::is_epoch_stale;
 use crate::store::{StoreMsg, StoreRouter};
+use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
-use tikv_util::worker::Runnable;
-use engine_traits::KvEngine;
 use std::marker::PhantomData;
+use tikv_util::worker::Runnable;
 
 pub enum Task {
     DeleteSST { ssts: Vec<SstMeta> },
@@ -28,7 +28,11 @@ impl fmt::Display for Task {
     }
 }
 
-pub struct Runner<EK, C, S> where EK: KvEngine, S: StoreRouter<EK> {
+pub struct Runner<EK, C, S>
+where
+    EK: KvEngine,
+    S: StoreRouter<EK>,
+{
     store_id: u64,
     store_router: S,
     importer: Arc<SSTImporter>,
@@ -37,9 +41,10 @@ pub struct Runner<EK, C, S> where EK: KvEngine, S: StoreRouter<EK> {
 }
 
 impl<EK, C, S> Runner<EK, C, S>
-where EK: KvEngine,
-      C: PdClient,
-      S: StoreRouter<EK>,
+where
+    EK: KvEngine,
+    C: PdClient,
+    S: StoreRouter<EK>,
 {
     pub fn new(
         store_id: u64,
@@ -101,7 +106,12 @@ where EK: KvEngine,
     }
 }
 
-impl<EK, C, S> Runnable for Runner<EK, C, S> where EK: KvEngine, C: PdClient, S: StoreRouter<EK> {
+impl<EK, C, S> Runnable for Runner<EK, C, S>
+where
+    EK: KvEngine,
+    C: PdClient,
+    S: StoreRouter<EK>,
+{
     type Task = Task;
 
     fn run(&mut self, task: Task) {
