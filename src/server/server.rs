@@ -318,7 +318,7 @@ mod tests {
         significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
     }
 
-    impl StoreRouter for TestRaftStoreRouter {
+    impl StoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
             Ok(())
         }

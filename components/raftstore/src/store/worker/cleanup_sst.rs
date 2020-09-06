@@ -11,6 +11,8 @@ use error_code::ErrorCodeExt;
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use tikv_util::worker::Runnable;
+use engine_traits::KvEngine;
+use std::marker::PhantomData;
 
 pub enum Task {
     DeleteSST { ssts: Vec<SstMeta> },
@@ -26,25 +28,31 @@ impl fmt::Display for Task {
     }
 }
 
-pub struct Runner<C, S> {
+pub struct Runner<EK, C, S> where EK: KvEngine, S: StoreRouter<EK> {
     store_id: u64,
     store_router: S,
     importer: Arc<SSTImporter>,
     pd_client: Arc<C>,
+    _engine: PhantomData<EK>,
 }
 
-impl<C: PdClient, S: StoreRouter> Runner<C, S> {
+impl<EK, C, S> Runner<EK, C, S>
+where EK: KvEngine,
+      C: PdClient,
+      S: StoreRouter<EK>,
+{
     pub fn new(
         store_id: u64,
         store_router: S,
         importer: Arc<SSTImporter>,
         pd_client: Arc<C>,
-    ) -> Runner<C, S> {
+    ) -> Runner<EK, C, S> {
         Runner {
             store_id,
             store_router,
             importer,
             pd_client,
+            _engine: PhantomData,
         }
     }
 
@@ -93,7 +101,7 @@ impl<C: PdClient, S: StoreRouter> Runner<C, S> {
     }
 }
 
-impl<C: PdClient, S: StoreRouter> Runnable for Runner<C, S> {
+impl<EK, C, S> Runnable for Runner<EK, C, S> where EK: KvEngine, C: PdClient, S: StoreRouter<EK> {
     type Task = Task;
 
     fn run(&mut self, task: Task) {

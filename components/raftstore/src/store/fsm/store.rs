@@ -27,7 +27,6 @@ use time::{self, Timespec};
 use tokio::runtime::{self, Handle, Runtime};
 
 use engine_traits::{RaftEngine, RaftLogBatch};
-use engine_rocks::RocksCompactedEvent;
 use engine_traits::CompactedEvent;
 use error_code::ErrorCodeExt;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -153,7 +152,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm>,
+    pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
 }
 
 impl<EK, ER> Clone for RaftRouter<EK, ER>
@@ -173,9 +172,9 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    type Target = BatchRouter<PeerFsm<EK, ER>, StoreFsm>;
+    type Target = BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>;
 
-    fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm> {
+    fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>> {
         &self.router
     }
 }
@@ -469,13 +468,13 @@ struct Store {
     last_unreachable_report: HashMap<u64, Instant>,
 }
 
-pub struct StoreFsm {
+pub struct StoreFsm<EK> where EK: KvEngine {
     store: Store,
-    receiver: Receiver<StoreMsg<engine_rocks::RocksEngine>>,
+    receiver: Receiver<StoreMsg<EK>>,
 }
 
-impl StoreFsm {
-    pub fn new(cfg: &Config) -> (LooseBoundedSender<StoreMsg<engine_rocks::RocksEngine>>, Box<StoreFsm>) {
+impl<EK> StoreFsm<EK> where EK: KvEngine {
+    pub fn new(cfg: &Config) -> (LooseBoundedSender<StoreMsg<EK>>, Box<StoreFsm<EK>>) {
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         let fsm = Box::new(StoreFsm {
             store: Store {
@@ -492,8 +491,8 @@ impl StoreFsm {
     }
 }
 
-impl Fsm for StoreFsm {
-    type Message = StoreMsg<engine_rocks::RocksEngine>;
+impl<EK> Fsm for StoreFsm<EK> where EK: KvEngine {
+    type Message = StoreMsg<EK>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -508,7 +507,7 @@ struct StoreFsmDelegate<
     T: 'static,
     C: 'static,
 > {
-    fsm: &'a mut StoreFsm,
+    fsm: &'a mut StoreFsm<EK>,
     ctx: &'a mut PollContext<EK, ER, T, C>,
 }
 
@@ -538,7 +537,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
         );
     }
 
-    fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg<engine_rocks::RocksEngine>>) {
+    fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg<EK>>) {
         for m in msgs.drain(..) {
             match m {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
@@ -591,7 +590,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
 
 pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'static, C: 'static> {
     tag: String,
-    store_msg_buf: Vec<StoreMsg<engine_rocks::RocksEngine>>,
+    store_msg_buf: Vec<StoreMsg<EK>>,
     peer_msg_buf: Vec<PeerMsg<EK>>,
     previous_metrics: RaftMetrics,
     timer: TiInstant,
@@ -720,7 +719,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> PollHandler<PeerFsm<EK, ER>, StoreFsm>
+impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> PollHandler<PeerFsm<EK, ER>, StoreFsm<EK>>
     for RaftPoller<EK, ER, T, C>
 {
     fn begin(&mut self, _batch_size: usize) {
@@ -752,7 +751,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> PollHandler<PeerFs
         }
     }
 
-    fn handle_control(&mut self, store: &mut StoreFsm) -> Option<usize> {
+    fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {
         let mut expected_msg_count = None;
         while self.store_msg_buf.len() < self.messages_per_tick {
             match store.receiver.try_recv() {
@@ -1029,7 +1028,7 @@ impl<EK: KvEngine, ER: RaftEngine, T, C> RaftPollerBuilder<EK, ER, T, C> {
     }
 }
 
-impl<EK, ER, T, C> HandlerBuilder<PeerFsm<EK, ER>, StoreFsm> for RaftPollerBuilder<EK, ER, T, C>
+impl<EK, ER, T, C> HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK>> for RaftPollerBuilder<EK, ER, T, C>
 where
     EK: KvEngine + 'static,
     ER: RaftEngine + 'static,
@@ -1103,7 +1102,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 }
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
-    system: BatchSystem<PeerFsm<EK, ER>, StoreFsm>,
+    system: BatchSystem<PeerFsm<EK, ER>, StoreFsm<EK>>,
     apply_router: ApplyRouter<EK>,
     apply_system: ApplyBatchSystem<EK>,
     router: RaftRouter<EK, ER>,
@@ -1784,7 +1783,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         Ok(true)
     }
 
-    fn on_compaction_finished(&mut self, event: RocksCompactedEvent) {
+    fn on_compaction_finished(&mut self, event: EK::CompactedEvent) {
         if event.is_size_declining_trivial(self.ctx.cfg.region_split_check_diff.0) {
             return;
         }
@@ -2372,6 +2371,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
 mod tests {
     use engine_rocks::RangeOffsets;
     use engine_rocks::RangeProperties;
+    use engine_rocks::RocksCompactedEvent;
 
     use super::*;
 

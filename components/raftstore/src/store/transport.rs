@@ -35,8 +35,8 @@ where
 /// Routes message to store FSM.
 ///
 /// Messages are not guaranteed to be delivered by this trait.
-pub trait StoreRouter {
-    fn send(&self, msg: StoreMsg<engine_rocks::RocksEngine>) -> Result<()>;
+pub trait StoreRouter<EK> where EK: KvEngine {
+    fn send(&self, msg: StoreMsg<EK>) -> Result<()>;
 }
 
 impl<EK, ER> CasualRouter<EK> for RaftRouter<EK, ER>
@@ -68,13 +68,13 @@ where
     }
 }
 
-impl<EK, ER> StoreRouter for RaftRouter<EK, ER>
+impl<EK, ER> StoreRouter<EK> for RaftRouter<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
     #[inline]
-    fn send(&self, msg: StoreMsg<engine_rocks::RocksEngine>) -> Result<()> {
+    fn send(&self, msg: StoreMsg<EK>) -> Result<()> {
         match self.send_control(msg) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
@@ -110,8 +110,8 @@ impl<S: Snapshot> ProposalRouter<S> for mpsc::SyncSender<RaftCommand<S>> {
     }
 }
 
-impl StoreRouter for mpsc::Sender<StoreMsg<engine_rocks::RocksEngine>> {
-    fn send(&self, msg: StoreMsg<engine_rocks::RocksEngine>) -> Result<()> {
+impl<EK> StoreRouter<EK> for mpsc::Sender<StoreMsg<EK>> where EK: KvEngine {
+    fn send(&self, msg: StoreMsg<EK>) -> Result<()> {
         match self.send(msg) {
             Ok(()) => Ok(()),
             Err(mpsc::SendError(_)) => Err(Error::Transport(DiscardReason::Disconnected)),
