@@ -6,8 +6,7 @@ use std::marker::PhantomData;
 use std::sync::mpsc::Sender;
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine_traits::KvEngine;
-use raft_engine::RaftEngine;
+use engine_traits::{KvEngine, RaftEngine};
 use tikv_util::worker::Runnable;
 
 pub enum Task<ER: RaftEngine> {
@@ -68,14 +67,14 @@ quick_error! {
     }
 }
 
-pub struct Runner<EK: KvEngine, R: CasualRouter<EK>> {
+pub struct Runner<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> {
     ch: R,
-    _phantom: PhantomData<EK>,
+    _phantom: PhantomData<(EK, ER)>,
     gc_entries: Option<Sender<usize>>,
 }
 
-impl<EK: KvEngine, R: CasualRouter<EK>> Runner<EK, R> {
-    pub fn new(ch: R) -> Runner<EK, R> {
+impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
+    pub fn new(ch: R) -> Runner<EK, ER, R> {
         Runner {
             ch,
             _phantom: Default::default(),
@@ -84,7 +83,7 @@ impl<EK: KvEngine, R: CasualRouter<EK>> Runner<EK, R> {
     }
 
     /// Does the GC job and returns the count of logs collected.
-    fn gc_raft_log<ER: RaftEngine>(
+    fn gc_raft_log(
         &mut self,
         raft_engine: ER,
         region_id: u64,
@@ -102,12 +101,14 @@ impl<EK: KvEngine, R: CasualRouter<EK>> Runner<EK, R> {
     }
 }
 
-impl<EK, ER, R> Runnable<Task<ER>> for Runner<EK, R>
+impl<EK, ER, R> Runnable for Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: RaftEngine,
     R: CasualRouter<EK>,
 {
+    type Task = Task<ER>;
+
     fn run(&mut self, task: Task<ER>) {
         match task {
             Task::Gc {
@@ -148,8 +149,10 @@ where
 use std::sync::mpsc::{sync_channel, SyncSender};
 
 #[cfg(test)]
-impl<EK: KvEngine> Runner<EK, SyncSender<(u64, CasualMessage<EK>)>> {
-    fn new_for_test(gc_entries: Sender<usize>) -> Runner<EK, SyncSender<(u64, CasualMessage<EK>)>> {
+impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER, SyncSender<(u64, CasualMessage<EK>)>> {
+    fn new_for_test(
+        gc_entries: Sender<usize>,
+    ) -> Runner<EK, ER, SyncSender<(u64, CasualMessage<EK>)>> {
         let (tx, _) = sync_channel(1);
         Runner {
             ch: tx,
@@ -175,7 +178,7 @@ mod tests {
         let raft_db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
 
         let (tx, rx) = mpsc::channel();
-        let mut runner = Runner::<RocksEngine, _>::new_for_test(tx);
+        let mut runner = Runner::<RocksEngine, RocksEngine, _>::new_for_test(tx);
 
         // generate raft logs
         let region_id = 1;
