@@ -343,6 +343,9 @@ ctl:
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
+error-code:
+	cargo run --manifest-path components/error_code/Cargo.toml --features protobuf-codec
+
 # A special target for building TiKV docker image.
 .PHONY: docker
 docker:

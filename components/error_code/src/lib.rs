@@ -4,6 +4,8 @@ extern crate tikv_alloc;
 #[macro_use]
 extern crate lazy_static;
 
+use serde::ser::{Serialize, SerializeStruct, Serializer};
+
 macro_rules! define_error_codes {
     ($prefix:literal,
         $($name:ident => ($suffix:literal, $description:literal, $workaround:literal)),+
@@ -15,7 +17,7 @@ macro_rules! define_error_codes {
             workaround: $workaround,
         };)+
         lazy_static! {
-            static ref ALL_ERROR_CODES: Vec<ErrorCode> = vec![$($name,)+];
+           pub static ref ALL_ERROR_CODES: Vec<ErrorCode> = vec![$($name,)+];
         }
     };
 }
@@ -42,6 +44,19 @@ pub struct ErrorCode {
 impl Display for ErrorCode {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.code)
+    }
+}
+
+impl Serialize for ErrorCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("ErrorCode", 3)?;
+        state.serialize_field("error", &self.code)?;
+        state.serialize_field("description", &self.description)?;
+        state.serialize_field("workaround", &self.workaround)?;
+        state.end()
     }
 }
 

@@ -1157,10 +1157,13 @@ dependencies = [
 name = "error_code"
 version = "0.0.1"
 dependencies = [
+ "grpcio",
  "kvproto",
  "lazy_static",
  "raft",
+ "serde",
  "tikv_alloc",
+ "toml",
 ]
 
 [[package]]
