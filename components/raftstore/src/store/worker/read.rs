@@ -14,7 +14,6 @@ use kvproto::metapb;
 use kvproto::raft_cmdpb::{
     CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
 };
-use raft_engine::RaftEngine;
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
@@ -25,7 +24,7 @@ use crate::store::{
 };
 use crate::Result;
 
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
