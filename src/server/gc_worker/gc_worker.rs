@@ -330,9 +330,9 @@ where
             local_storage
                 .delete_all_in_range_cf(
                     cf,
+                    DeleteStrategy::DeleteByKey,
                     &start_data_key,
                     &end_data_key,
-                    DeleteStrategy::DeleteByKey,
                 )
                 .map_err(|e| {
                     let e: Error = box_err!(e);

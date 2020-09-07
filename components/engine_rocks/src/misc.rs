@@ -152,7 +152,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use engine_traits::ALL_CFS;
+    use engine_traits::{DeleteStrategy, ALL_CFS};
     use engine_traits::{Iterable, Iterator, Mutable, SeekKey, SyncMutable, WriteBatchExt};
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
@@ -214,7 +214,7 @@ mod tests {
         // Delete all in ["k2", "k4").
         let start = b"k2";
         let end = b"k4";
-        db.delete_all_in_range(start, end, use_delete_range)
+        db.delete_all_in_range(DeleteStrategy::DeleteByKey, start, end)
             .unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }

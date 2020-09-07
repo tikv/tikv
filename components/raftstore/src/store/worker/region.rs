@@ -9,10 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-use engine_rocks::RocksEngine;
 use engine_traits::{DeleteStrategy, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
-    Engines, IngestExternalFileOptions, KvEngine, Mutable, SstWriter, SstWriterBuilder,
+    Engines, IngestExternalFileOptions, KvEngine, Mutable, RaftEngine, SstWriter, SstWriterBuilder,
 };
 use error_code::ErrorCodeExt;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};

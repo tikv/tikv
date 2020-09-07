@@ -60,6 +60,7 @@ pub const SNAPSHOT_VERSION: u64 = 2;
 const SNAP_GEN_PREFIX: &str = "gen";
 /// Name prefix for the received snapshot file.
 const SNAP_REV_PREFIX: &str = "rev";
+const DEL_RANGE_PREFIX: &str = "del_range";
 
 const TMP_FILE_SUFFIX: &str = ".tmp";
 const SST_FILE_SUFFIX: &str = ".sst";

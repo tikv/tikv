@@ -9,11 +9,10 @@ use crate::cf_names::CFNamesExt;
 use crate::errors::Result;
 use crate::import::{ImportExt, IngestExternalFileOptions};
 use crate::iterable::{Iterable, Iterator};
-use crate::mutable::Mutable;
 use crate::options::IterOptions;
 use crate::range::Range;
 use crate::sst::{SstExt, SstWriter, SstWriterBuilder};
-use crate::write_batch::{WriteBatch, WriteBatchExt};
+use crate::write_batch::{Mutable, WriteBatch, WriteBatchExt};
 
 use tikv_util::keybuilder::KeyBuilder;
 
@@ -121,7 +120,7 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt + SstExt + ImportExt {
                 let mut it_valid = it.seek(start_key.into())?;
                 while it_valid {
                     wb.delete_cf(cf, it.key())?;
-                    if wb.count() >= MAX_DELETE_BATCH_SIZE {
+                    if wb.count() >= MAX_DELETE_BATCH_COUNT {
                         // Can't use write_without_wal here.
                         // Otherwise it may cause dirty data when applying snapshot.
                         self.write(&wb)?;
@@ -166,7 +165,7 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt + SstExt + ImportExt {
                 }
                 for key in data.iter() {
                     wb.delete_cf(cf, key)?;
-                    if wb.count() >= MAX_DELETE_BATCH_SIZE {
+                    if wb.count() >= MAX_DELETE_BATCH_COUNT {
                         self.write(&wb)?;
                         wb.clear();
                     }

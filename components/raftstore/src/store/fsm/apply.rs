@@ -18,7 +18,7 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{KvEngine, RaftEngine, Snapshot, WriteBatch};
+use engine_traits::{DeleteStrategy, KvEngine, RaftEngine, Snapshot, WriteBatch};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use error_code::ErrorCodeExt;
 use kvproto::import_sstpb::SstMeta;
@@ -1463,9 +1463,14 @@ where
                     )
                 });
 
+            let strategy = if use_delete_range {
+                DeleteStrategy::DeleteByRange
+            } else {
+                DeleteStrategy::DeleteByKey
+            };
             // Delete all remaining keys.
             engine
-                .delete_all_in_range_cf(cf, &start_key, &end_key, use_delete_range)
+                .delete_all_in_range_cf(cf, strategy, &start_key, &end_key)
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
