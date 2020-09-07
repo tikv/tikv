@@ -236,7 +236,6 @@ members = [
   "components/encryption",
   "components/error_code",
   "components/concurrency_manager",
-  "components/crossbeam-skiplist",
 ]
 default-members = ["cmd"]
 

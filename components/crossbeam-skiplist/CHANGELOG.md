@@ -1,3 +1,0 @@
-# Unreleased
-
-- Initial implementation.
