@@ -1079,7 +1079,6 @@ dependencies = [
  "prometheus-static-metric",
  "protobuf",
  "raft",
- "raft-engine",
  "rand",
  "rocksdb",
  "serde",
@@ -1100,9 +1099,10 @@ version = "0.0.1"
 dependencies = [
  "error_code",
  "hex 0.4.2",
+ "kvproto",
  "protobuf",
  "quick-error",
- "raft-engine",
+ "raft",
  "slog",
  "slog-global",
  "tikv_alloc",
@@ -1952,7 +1952,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
+source = "git+https://github.com/tikv/rust-rocksdb.git#ee6c08ad9fe9634301d1ac2bbfe64194ed4167db"
 dependencies = [
  "cc",
  "cmake",
@@ -1961,7 +1961,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
+source = "git+https://github.com/tikv/rust-rocksdb.git#ee6c08ad9fe9634301d1ac2bbfe64194ed4167db"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1981,7 +1981,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
+source = "git+https://github.com/tikv/rust-rocksdb.git#ee6c08ad9fe9634301d1ac2bbfe64194ed4167db"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3044,14 +3044,13 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine#16f8a37c88d758131740f492a1626f6016dfaafd"
+source = "git+https://github.com/tikv/raft-engine.git#5e305ec0db988a11df8dda296ae0a867eef28cdc"
 dependencies = [
  "byteorder",
  "crc32fast",
  "crossbeam",
  "errno",
  "fxhash",
- "kvproto",
  "lazy_static",
  "libc",
  "log",
@@ -3060,7 +3059,6 @@ dependencies = [
  "prometheus",
  "protobuf",
  "quick-error",
- "raft",
  "serde",
  "serde_derive",
  "tempfile",
@@ -3076,6 +3074,30 @@ dependencies = [
  "prost",
  "protobuf",
  "protobuf-build",
+]
+
+[[package]]
+name = "raft_log_engine"
+version = "0.0.1"
+dependencies = [
+ "coarsetime",
+ "configuration",
+ "engine_traits",
+ "hex 0.4.2",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "num_cpus",
+ "protobuf",
+ "raft",
+ "raft-engine",
+ "serde",
+ "serde_derive",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "tikv_util",
+ "time 0.1.42",
 ]
 
 [[package]]
@@ -3114,7 +3136,6 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
- "raft-engine",
  "rand",
  "serde",
  "serde_derive",
@@ -3383,7 +3404,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
+source = "git+https://github.com/tikv/rust-rocksdb.git#ee6c08ad9fe9634301d1ac2bbfe64194ed4167db"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4686,6 +4707,7 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
+ "raft_log_engine",
  "raftstore",
  "rand",
  "regex",

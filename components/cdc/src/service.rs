@@ -183,24 +183,26 @@ impl ChangeData for Service {
             .map(|item| GrpcResult::Ok(item));
         let send_resp = sink.send_all(Compat::new(rx));
 
+        let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
         ctx.spawn(recv_req.then(move |res| {
             // Unregister this downstream only.
             let deregister = Deregister::Conn(conn_id);
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                error!("cdc deregister failed"; "error" => ?e);
+                error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
             }
             match res {
                 Ok(_s) => {
-                    info!("cdc send half closed");
+                    info!("cdc send half closed"; "remote" => peer, "conn_id" => ?conn_id);
                 }
                 Err(e) => {
-                    error!("cdc send failed"; "error" => ?e);
+                    warn!("cdc send failed"; "error" => ?e, "remote" => peer, "conn_id" => ?conn_id);
                 }
             }
             Ok(())
         }));
 
+        let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
         ctx.spawn(send_resp.then(move |res| {
             // Unregister this downstream only.
@@ -210,10 +212,10 @@ impl ChangeData for Service {
             }
             match res {
                 Ok(_s) => {
-                    info!("cdc send half closed");
+                    info!("cdc send half closed"; "remote" => peer, "conn_id" => ?conn_id);
                 }
                 Err(e) => {
-                    error!("cdc send failed"; "error" => ?e);
+                    warn!("cdc send failed"; "error" => ?e, "remote" => peer, "conn_id" => ?conn_id);
                 }
             }
             Ok(())
