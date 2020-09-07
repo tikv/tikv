@@ -895,7 +895,13 @@ impl Initializer {
         Ok(entries)
     }
 
-    fn finish_building_resolver(&self, mut resolver: Resolver, region: Region, remote_lease: Option<RemoteLease>, takes: Duration) {
+    fn finish_building_resolver(
+        &self,
+        mut resolver: Resolver,
+        region: Region,
+        remote_lease: Option<RemoteLease>,
+        takes: Duration,
+    ) {
         let observe_id = self.observe_id;
         resolver.init();
         let rts = resolver.resolve(TimeStamp::zero());
