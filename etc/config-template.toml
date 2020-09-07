@@ -747,6 +747,12 @@
 # optimize-filters-for-hits = false
 
 [raftdb]
+## TiKV supports 2 type raft engines: `rocks` and `raft-engine`.
+## `rocks` is the traditional one, which is RocksDB exactly.
+## `raft-engine` is a new file-based implementation.
+type = "rocks"
+
+## For rocks. 
 # max-background-jobs = 4
 # max-sub-compactions = 2
 # max-open-files = 40960
@@ -794,6 +800,15 @@
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
+
+## For raft-engine
+## Recovery mode. Candidates are `tolerate-corrupted-tail-records` and `absolute-consistency`.
+# recovery_mode = "tolerate-corrupted-tail-records"
+# bytes-per-sync = "256KB"
+# target-file-size = "128MB"
+# purge-threshold = "10GB"
+## Raft engine has builtin entry cache. `cache-limit` limits the memory usage of the cache.
+# cache-limit = "1GB"
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.

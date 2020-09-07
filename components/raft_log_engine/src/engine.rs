@@ -3,6 +3,7 @@
 use engine_traits::{CacheStats, RaftEngine, RaftLogBatch as RaftLogBatchTrait, Result};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
+pub use raft_engine::config::RecoveryMode;
 pub use raft_engine::Config as RaftEngineConfig;
 use raft_engine::{EntryExt, Error as RaftEngineError, LogBatch, RaftLogEngine as RawRaftEngine};
 

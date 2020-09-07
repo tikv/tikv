@@ -44,6 +44,7 @@ use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
+use raft_log_engine::RaftEngineConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
@@ -1238,6 +1239,84 @@ impl RaftDbConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "kebab-case", tag = "type")]
+pub enum MixedRaftDbConfig {
+    Rocks {
+        #[serde(flatten)]
+        config: RaftDbConfig,
+    },
+    RaftEngine {
+        #[serde(flatten)]
+        config: RaftEngineConfig,
+    },
+}
+
+impl MixedRaftDbConfig {
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        match self {
+            MixedRaftDbConfig::Rocks { config } => config.validate(),
+            MixedRaftDbConfig::RaftEngine { config } => {
+                config.validate().map_err(|e| Box::new(e))?;
+                if !config.dir.is_empty() {
+                    return Err("RaftEngineConfig.dir shouldn't be set explicitly".into());
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub fn rocks(&self) -> Option<&RaftDbConfig> {
+        match self {
+            MixedRaftDbConfig::Rocks { ref config } => Some(config),
+            _ => None,
+        }
+    }
+
+    pub fn raft_engine(&self) -> Option<&RaftEngineConfig> {
+        match self {
+            MixedRaftDbConfig::RaftEngine { ref config } => Some(config),
+            _ => None,
+        }
+    }
+
+    pub fn rocks_mut(&mut self) -> Option<&mut RaftDbConfig> {
+        match self {
+            MixedRaftDbConfig::Rocks { ref mut config } => Some(config),
+            _ => None,
+        }
+    }
+
+    pub fn must_rocks(&self) -> &RaftDbConfig {
+        self.rocks().unwrap()
+    }
+
+    pub fn must_rocks_mut(&mut self) -> &mut RaftDbConfig {
+        self.rocks_mut().unwrap()
+    }
+
+    pub fn info_log_dir(&self) -> &str {
+        match self {
+            MixedRaftDbConfig::Rocks { config } => &config.info_log_dir,
+            _ => "",
+        }
+    }
+
+    pub fn may_open_files(&self) -> usize {
+        match self {
+            MixedRaftDbConfig::Rocks { config } => config.max_open_files as usize,
+            _ => 0,
+        }
+    }
+}
+
+impl Default for MixedRaftDbConfig {
+    fn default() -> MixedRaftDbConfig {
+        let config = RaftDbConfig::default();
+        MixedRaftDbConfig::Rocks { config }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum DBType {
     Kv,
@@ -2082,8 +2161,8 @@ pub struct TiKvConfig {
     #[config(submodule)]
     pub rocksdb: DbConfig,
 
-    #[config(submodule)]
-    pub raftdb: RaftDbConfig,
+    #[config(skip)]
+    pub raftdb: MixedRaftDbConfig,
 
     #[config(skip)]
     pub security: SecurityConfig,
@@ -2126,7 +2205,7 @@ impl Default for TiKvConfig {
             coprocessor: CopConfig::default(),
             pd: PdConfig::default(),
             rocksdb: DbConfig::default(),
-            raftdb: RaftDbConfig::default(),
+            raftdb: MixedRaftDbConfig::default(),
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
@@ -2301,12 +2380,15 @@ impl TiKvConfig {
         // as the shared cache size.
         let cache_cfg = &mut self.storage.block_cache;
         if cache_cfg.shared && cache_cfg.capacity.0.is_none() {
-            cache_cfg.capacity.0 = Some(ReadableSize {
+            let mut capacity = ReadableSize {
                 0: self.rocksdb.defaultcf.block_cache_size.0
                     + self.rocksdb.writecf.block_cache_size.0
-                    + self.rocksdb.lockcf.block_cache_size.0
-                    + self.raftdb.defaultcf.block_cache_size.0,
-            });
+                    + self.rocksdb.lockcf.block_cache_size.0,
+            };
+            if let MixedRaftDbConfig::Rocks { ref config } = self.raftdb {
+                capacity.0 += config.defaultcf.block_cache_size.0;
+            }
+            cache_cfg.capacity.0 = Some(capacity);
         }
 
         self.readpool.adjust_use_unified_pool();
@@ -2322,13 +2404,15 @@ impl TiKvConfig {
             ));
         }
 
-        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
-            return Err(format!(
-                "raftdb wal_dir have been changed, former raftdb wal_dir is '{}', \
-                 current raftdb wal_dir is '{}', please guarantee all raft wal logs \
-                 have been moved to destination directory.",
-                last_cfg.raftdb.wal_dir, self.rocksdb.wal_dir
-            ));
+        if let (Some(last_config), Some(config)) = (last_cfg.raftdb.rocks(), self.raftdb.rocks()) {
+            if last_config.wal_dir != config.wal_dir {
+                return Err(format!(
+                    "raftdb wal_dir have been changed, former raftdb wal_dir is '{}', \
+                    current raftdb wal_dir is '{}', please guarantee all raft wal logs \
+                    have been moved to destination directory.",
+                    last_config.wal_dir, config.wal_dir
+                ));
+            }
         }
 
         if last_cfg.storage.data_dir != self.storage.data_dir {
@@ -2752,6 +2836,7 @@ mod tests {
     use crate::storage::config::StorageConfigManger;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
+    use raft_log_engine::RecoveryMode;
     use slog::Level;
     use std::sync::Arc;
 
@@ -2767,10 +2852,10 @@ mod tests {
         last_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
 
-        tikv_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
+        tikv_cfg.raftdb.must_rocks_mut().wal_dir = "/raft/wal_dir".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
-        last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
+        last_cfg.raftdb.must_rocks_mut().wal_dir = "/raft/wal_dir".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
 
         tikv_cfg.storage.data_dir = "/data1".to_owned();
@@ -2819,19 +2904,19 @@ mod tests {
         let mut tikv_cfg = TiKvConfig::default();
 
         tikv_cfg.rocksdb.wal_dir = s1.clone();
-        tikv_cfg.raftdb.wal_dir = s2.clone();
+        tikv_cfg.raftdb.must_rocks_mut().wal_dir = s2.clone();
         tikv_cfg.write_to_file(file).unwrap();
         let cfg_from_file = TiKvConfig::from_file(file, None);
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s1);
-        assert_eq!(cfg_from_file.raftdb.wal_dir, s2);
+        assert_eq!(cfg_from_file.raftdb.must_rocks().wal_dir, s2);
 
         // write critical config when exist.
         tikv_cfg.rocksdb.wal_dir = s2.clone();
-        tikv_cfg.raftdb.wal_dir = s1.clone();
+        tikv_cfg.raftdb.must_rocks_mut().wal_dir = s1.clone();
         tikv_cfg.write_to_file(file).unwrap();
         let cfg_from_file = TiKvConfig::from_file(file, None);
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
-        assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
+        assert_eq!(cfg_from_file.raftdb.must_rocks().wal_dir, s1);
     }
 
     #[test]
@@ -2866,13 +2951,13 @@ mod tests {
         tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::gb(10);
         tikv_cfg.rocksdb.writecf.block_size = ReadableSize::gb(10);
         tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::gb(10);
-        tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::gb(10);
+        tikv_cfg.raftdb.must_rocks_mut().defaultcf.block_size = ReadableSize::gb(10);
         assert!(tikv_cfg.validate().is_err());
         tikv_cfg.rocksdb.defaultcf.block_size = ReadableSize::kb(10);
         tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::kb(10);
         tikv_cfg.rocksdb.writecf.block_size = ReadableSize::kb(10);
         tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::kb(10);
-        tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::kb(10);
+        tikv_cfg.raftdb.must_rocks_mut().defaultcf.block_size = ReadableSize::kb(10);
         tikv_cfg.validate().unwrap();
     }
 
@@ -3230,5 +3315,33 @@ mod tests {
                 "security.encryption.master-keys".to_owned(),
             ],
         );
+    }
+
+    #[test]
+    fn test_raft_engine() {
+        let content = r#"
+            [raftdb]
+            type = "raft-engine"
+            recovery_mode = "tolerate-corrupted-tail-records"
+            bytes-per-sync = "64KB"
+        "#;
+        let cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let config = cfg.raftdb.raft_engine().unwrap();
+        assert_eq!(
+            config.recovery_mode,
+            RecoveryMode::TolerateCorruptedTailRecords
+        );
+        assert_eq!(config.bytes_per_sync.0, ReadableSize::kb(64).0);
+    }
+
+    #[test]
+    fn test_raft_engine_dir() {
+        let content = r#"
+            [raftdb]
+            type = "raft-engine"
+            dir = "test-dir"
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        assert!(cfg.raftdb.validate().is_err());
     }
 }

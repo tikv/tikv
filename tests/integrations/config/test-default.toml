@@ -30,10 +30,6 @@
 
 [rocksdb.lockcf]
 
-[raftdb]
-
-[raftdb.defaultcf]
-
 [security]
 
 [import]

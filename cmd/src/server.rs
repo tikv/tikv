@@ -23,7 +23,7 @@ use kvproto::{
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
 use pd_client::{PdClient, RpcClient};
-use raft_log_engine::{RaftEngineConfig, RaftLogEngine};
+use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
         config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
@@ -863,9 +863,10 @@ impl TiKVServer<RocksEngine> {
 
         // Create raft engine.
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
-        let mut raft_db_opts = self.config.raftdb.build_opt();
+        let config_raftdb = self.config.raftdb.must_rocks();
+        let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
-        let raft_db_cf_opts = self.config.raftdb.build_cf_opts(&block_cache);
+        let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
         let raft_engine = engine_rocks::raw_util::new_engine_opt(
             raft_db_path.to_str().unwrap(),
             raft_db_opts,
@@ -940,8 +941,9 @@ impl TiKVServer<RaftLogEngine> {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
-        // TODO: make it configurable.
-        let raft_engine = RaftLogEngine::new(RaftEngineConfig::default());
+        let mut raft_config = self.config.raftdb.raft_engine().unwrap().clone();
+        raft_config.dir = self.config.raft_store.raftdb_path.clone();
+        let raft_engine = RaftLogEngine::new(raft_config);
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
@@ -1034,7 +1036,7 @@ fn check_system_config(config: &TiKvConfig) {
         rocksdb_max_open_files *= 2;
     }
     if let Err(e) = tikv_util::config::check_max_open_fds(
-        RESERVED_OPEN_FDS + (rocksdb_max_open_files + config.raftdb.max_open_files) as u64,
+        RESERVED_OPEN_FDS + rocksdb_max_open_files as u64 + config.raftdb.may_open_files() as u64,
     ) {
         fatal!("{}", e);
     }

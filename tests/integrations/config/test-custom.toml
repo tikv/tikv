@@ -449,6 +449,7 @@ max-sorted-runs = 100
 gc-merge-rewrite = true
 
 [raftdb]
+type = "rocks"
 wal-recovery-mode = 3
 wal-dir = "/var"
 wal-ttl-seconds = 1
