@@ -58,6 +58,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
     /// the `current_ts` is literally the timestamp when this function is invoked. It may not be
     /// accurate.
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
+        // to prevent this case from happening.
+        context.concurrency_manager.update_max_ts(self.lock_ts);
+
         let mut txn = MvccTxn::new(
             snapshot,
             self.lock_ts,

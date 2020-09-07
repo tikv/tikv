@@ -2668,6 +2668,7 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
+        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -2692,6 +2693,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+        assert_eq!(cm.max_ts(), 100.into());
         expect_none(
             storage
                 .get(Context::default(), Key::from_raw(b"x"), 105.into())
@@ -4141,6 +4143,7 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
+        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
 
         // These locks (transaction ts=99) are not going to be resolved.
@@ -4236,6 +4239,10 @@ mod tests {
                     )
                     .unwrap();
                 rx.recv().unwrap();
+
+                if *is_rollback {
+                    assert_eq!(cm.max_ts(), ts);
+                }
 
                 // All locks should be resolved except for a, b and c.
                 storage
@@ -4462,6 +4469,7 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
+        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
 
         let k = Key::from_raw(b"k");
@@ -4492,6 +4500,8 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+
+        assert_eq!(cm.max_ts(), ts(9, 0));
 
         // No lock and no commit info. If specified rollback_if_not_exist, the key will be rolled
         // back.
@@ -4652,6 +4662,7 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
+        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
 
         let k1 = Key::from_raw(b"k1");
@@ -4722,6 +4733,8 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+
+        assert_eq!(cm.max_ts(), 10.into());
 
         // Some of the locks do not exist
         let k3 = Key::from_raw(b"k3");
