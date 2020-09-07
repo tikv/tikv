@@ -213,6 +213,10 @@ impl RaftEngine for RocksEngine {
     fn reset_statistics(&self) {
         KvEngine::reset_statistics(self)
     }
+
+    fn dump_stats(&self) -> Result<String> {
+        MiscExt::dump_stats(self)
+    }
 }
 
 impl RaftLogBatch for RocksWriteBatch {
