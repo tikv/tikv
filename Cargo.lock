@@ -456,6 +456,7 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
+ "concurrency_manager",
  "crossbeam",
  "engine_rocks",
  "engine_traits",
@@ -481,7 +482,7 @@ dependencies = [
  "test_util",
  "tikv",
  "tikv_util",
- "tokio-threadpool",
+ "tokio 0.2.13",
  "txn_types",
 ]
 
@@ -1078,7 +1079,6 @@ dependencies = [
  "prometheus-static-metric",
  "protobuf",
  "raft",
- "raft-engine",
  "rand",
  "rocksdb",
  "serde",
@@ -1099,9 +1099,10 @@ version = "0.0.1"
 dependencies = [
  "error_code",
  "hex 0.4.2",
+ "kvproto",
  "protobuf",
  "quick-error",
- "raft-engine",
+ "raft",
  "slog",
  "slog-global",
  "tikv_alloc",
@@ -1896,9 +1897,9 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
-version = "0.2.66"
+version = "0.2.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d515b1f41455adea1313a4a2ac8a8a477634fbae63cc6100e3aebb207ce61558"
+checksum = "755456fae044e6fa1ebbbd1b3e902ae19e73097ed4ed87bb79934a867c007bc3"
 
 [[package]]
 name = "libflate"
@@ -1951,7 +1952,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
+source = "git+https://github.com/tikv/rust-rocksdb.git#ee6c08ad9fe9634301d1ac2bbfe64194ed4167db"
 dependencies = [
  "cc",
  "cmake",
@@ -1960,7 +1961,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
+source = "git+https://github.com/tikv/rust-rocksdb.git#ee6c08ad9fe9634301d1ac2bbfe64194ed4167db"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1980,7 +1981,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
+source = "git+https://github.com/tikv/rust-rocksdb.git#ee6c08ad9fe9634301d1ac2bbfe64194ed4167db"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2330,6 +2331,18 @@ dependencies = [
  "cfg-if",
  "libc",
  "void",
+]
+
+[[package]]
+name = "nix"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83450fe6a6142ddd95fb064b746083fc4ef1705fe81f64a64e1d4b39f54a1055"
+dependencies = [
+ "bitflags",
+ "cc",
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]
@@ -3031,24 +3044,25 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine#8d45f51381ebf9941f9857474602cab2a5e9a0a2"
+source = "git+https://github.com/tikv/raft-engine.git#5e305ec0db988a11df8dda296ae0a867eef28cdc"
 dependencies = [
  "byteorder",
  "crc32fast",
+ "crossbeam",
  "errno",
  "fxhash",
- "kvproto",
  "lazy_static",
  "libc",
  "log",
  "lz4-sys",
+ "nix 0.18.0",
  "prometheus",
  "protobuf",
  "quick-error",
- "raft",
  "serde",
  "serde_derive",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
@@ -3060,6 +3074,30 @@ dependencies = [
  "prost",
  "protobuf",
  "protobuf-build",
+]
+
+[[package]]
+name = "raft_log_engine"
+version = "0.0.1"
+dependencies = [
+ "coarsetime",
+ "configuration",
+ "engine_traits",
+ "hex 0.4.2",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "num_cpus",
+ "protobuf",
+ "raft",
+ "raft-engine",
+ "serde",
+ "serde_derive",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "tikv_util",
+ "time 0.1.42",
 ]
 
 [[package]]
@@ -3080,9 +3118,7 @@ dependencies = [
  "error_code",
  "fail",
  "fs2",
- "futures 0.1.29",
  "futures 0.3.4",
- "futures-executor",
  "futures-util",
  "hex 0.4.2",
  "into_other",
@@ -3100,7 +3136,6 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
- "raft-engine",
  "rand",
  "serde",
  "serde_derive",
@@ -3116,9 +3151,6 @@ dependencies = [
  "tikv_util",
  "time 0.1.42",
  "tokio 0.2.13",
- "tokio-core",
- "tokio-threadpool",
- "tokio-timer",
  "txn_types",
  "uuid",
  "yatp",
@@ -3372,7 +3404,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#91c4851ca5ddd83c743d9e2ca0a24b66888c9387"
+source = "git+https://github.com/tikv/rust-rocksdb.git#ee6c08ad9fe9634301d1ac2bbfe64194ed4167db"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3925,10 +3957,8 @@ dependencies = [
  "engine_traits",
  "error_code",
  "external_storage",
- "futures 0.1.29",
  "futures 0.3.4",
  "futures-cpupool",
- "futures-executor",
  "futures-util",
  "grpcio",
  "hex 0.4.2",
@@ -4247,17 +4277,18 @@ name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
  "concurrency_manager",
+ "crossbeam",
  "encryption",
  "engine_rocks",
  "engine_traits",
  "fail",
- "futures 0.1.29",
  "futures 0.3.4",
  "futures-cpupool",
  "grpcio",
  "hex 0.4.2",
  "keys",
  "kvproto",
+ "lazy_static",
  "pd_client",
  "raft",
  "raftstore",
@@ -4676,6 +4707,7 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
+ "raft_log_engine",
  "raftstore",
  "rand",
  "regex",
@@ -4788,7 +4820,6 @@ dependencies = [
  "error_code",
  "fail",
  "fs2",
- "futures 0.1.29",
  "futures 0.3.4",
  "futures-cpupool",
  "fxhash",
@@ -4822,7 +4853,6 @@ dependencies = [
  "time 0.1.42",
  "tipb",
  "tokio 0.2.13",
- "tokio-core",
  "tokio-executor",
  "tokio-timer",
  "toml",

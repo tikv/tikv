@@ -3,7 +3,7 @@
 use crate::callback::must_call;
 use futures::executor::{self, Notify, Spawn};
 use futures::{Async, Future};
-use futures03::channel::oneshot as futures_oneshot;
+use futures::channel::oneshot as futures_oneshot;
 use std::sync::{Arc, Mutex};
 
 /// Generates a paired future and callback so that when callback is being called, its result

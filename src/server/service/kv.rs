@@ -24,9 +24,10 @@ use engine_rocks::RocksEngine;
 use futures::{future, Future, Sink, Stream};
 use futures03::compat::{Compat, Future01CompatExt};
 use futures03::future::{self as future03, Future as Future03, FutureExt, TryFutureExt};
+use futures03::stream::{StreamExt, TryStreamExt};
 use grpcio::{
-    ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
-    RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
+    ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
+    RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
@@ -48,7 +49,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 /// Service handles the RPC messages for the `Tikv` service.
 pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> {
     /// Used to handle requests related to GC.
-    gc_worker: GcWorker<E>,
+    gc_worker: GcWorker<E, T>,
     // For handling KV requests.
     storage: Storage<E, L>,
     // For handling coprocessor requests.
@@ -95,7 +96,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         storage: Storage<E, L>,
-        gc_worker: GcWorker<E>,
+        gc_worker: GcWorker<E, T>,
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
@@ -715,7 +716,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             callback: Callback::Write(cb),
         };
 
-        if let Err(e) = self.ch.casual_send(region_id, req) {
+        if let Err(e) = self.ch.send_casual_msg(region_id, req) {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
             return;
         }
@@ -885,19 +886,22 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             .inspect(|r| GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64))
             .map(move |mut r| {
                 r.set_transport_layer_load(thread_load.load() as u64);
-                (r, WriteFlags::default().buffer_hint(false))
-            })
-            .map_err(|e| {
-                let msg = Some(format!("{:?}", e));
-                GrpcError::RpcFailure(RpcStatus::new(RpcStatusCode::UNKNOWN, msg))
+                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
+                    r,
+                    WriteFlags::default().buffer_hint(false),
+                ))
             });
 
-        ctx.spawn(sink.send_all(response_retriever).map(|_| ()).map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "batch_commands",
-                "err" => ?e
-            );
-        }));
+        ctx.spawn(
+            sink.send_all(response_retriever.compat())
+                .map(|_| ())
+                .map_err(|e| {
+                    debug!("kv rpc failed";
+                        "request" => "batch_commands",
+                        "err" => ?e
+                    );
+                }),
+        );
     }
 
     fn ver_get(

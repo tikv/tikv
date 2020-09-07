@@ -30,8 +30,8 @@ use encryption::{
 };
 use engine_rocks::encryption::get_env;
 use engine_rocks::RocksEngine;
-use engine_traits::Engines;
 use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{Engines, RaftEngine};
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
@@ -102,12 +102,14 @@ fn new_debug_executor(
                 engine_rocks::raw_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts)
                     .unwrap();
 
+            let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
+            let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
+            let shared_block_cache = cache.is_some();
+            kv_db.set_shared_block_cache(shared_block_cache);
+            raft_db.set_shared_block_cache(shared_block_cache);
+
             Box::new(Debugger::new(
-                Engines::new(
-                    RocksEngine::from_db(Arc::new(kv_db)),
-                    RocksEngine::from_db(Arc::new(raft_db)),
-                    cache.is_some(),
-                ),
+                Engines::new(kv_db, raft_db),
                 ConfigController::default(),
             )) as Box<dyn DebugExecutor>
         }
@@ -778,7 +780,7 @@ impl DebugExecutor for DebugClient {
     }
 }
 
-impl DebugExecutor for Debugger {
+impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     fn check_local_mode(&self) {}
 
     fn get_all_meta_regions(&self) -> Vec<u64> {

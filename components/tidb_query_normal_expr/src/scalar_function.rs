@@ -131,10 +131,14 @@ impl ScalarFunc {
             | ScalarFuncSig::AddDatetimeAndString
             | ScalarFuncSig::AddDurationAndDuration
             | ScalarFuncSig::AddDurationAndString
+            | ScalarFuncSig::AddDateAndDuration
+            | ScalarFuncSig::AddDateAndString
             | ScalarFuncSig::SubDatetimeAndDuration
             | ScalarFuncSig::SubDatetimeAndString
             | ScalarFuncSig::SubDurationAndDuration
             | ScalarFuncSig::SubDurationAndString
+            | ScalarFuncSig::SubDateAndDuration
+            | ScalarFuncSig::SubDateAndString
             | ScalarFuncSig::PeriodAdd
             | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Strcmp
@@ -933,6 +937,12 @@ dispatch_call! {
 
         StringAnyValue => string_any_value,
         AddTimeStringNull => add_time_string_null,
+
+        AddDateAndDuration => add_date_and_duration,
+        AddDateAndString => add_date_and_string,
+
+        SubDateAndDuration => sub_date_and_duration,
+        SubDateAndString => sub_date_and_string,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{Engines, KvEngine, Snapshot, WriteOptions};
+use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteOptions};
 use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -29,10 +29,8 @@ use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
-use raft_engine::RaftEngine;
 use smallvec::SmallVec;
 use time::Timespec;
-use txn_types::TxnExtra;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -171,6 +169,7 @@ pub struct ConsistencyState {
     pub last_check_time: Instant,
     // (computed_result_or_to_be_verified, index, hash)
     pub index: u64,
+    pub context: Vec<u8>,
     pub hash: Vec<u8>,
 }
 
@@ -525,6 +524,7 @@ where
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
                 index: INVALID_INDEX,
+                context: vec![],
                 hash: vec![],
             },
             raft_log_size_hint: 0,
@@ -2022,7 +2022,6 @@ where
         cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        txn_extra: TxnExtra,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -2077,7 +2076,6 @@ where
                     index: idx,
                     term: self.term(),
                     cb,
-                    txn_extra,
                     renew_lease_time: None,
                 };
                 if let Some(cmd_type) = req_admin_cmd_type {
@@ -2459,7 +2457,6 @@ where
                     index,
                     term: self.term(),
                     cb: Callback::None,
-                    txn_extra: TxnExtra::default(),
                     renew_lease_time: Some(renew_lease_time),
                 };
                 self.post_propose(poll_ctx, p);
@@ -2631,7 +2628,7 @@ where
             // The admin request is rejected because it may need to update epoch checker which
             // introduces an uncertainty and may breaks the correctness of epoch checker.
             return Err(box_err!(
-                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
                 self.get_store().applied_index_term(),
                 self.term()
@@ -2812,7 +2809,7 @@ where
         // `self.get_store().applied_index()` is passed.
         if self.get_store().applied_index_term() != self.term() {
             return Err(box_err!(
-                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
                 self.get_store().applied_index_term(),
                 self.term()
@@ -3637,7 +3634,6 @@ mod tests {
                 index,
                 term: (index / 10) + 1,
                 cb: Callback::None,
-                txn_extra: TxnExtra::default(),
                 renew_lease_time,
             });
         }
