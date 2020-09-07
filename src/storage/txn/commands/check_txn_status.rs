@@ -6,7 +6,7 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC;
 use crate::storage::mvcc::txn::MissingLockAction;
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn};
+use crate::storage::mvcc::{Error as MvccError, MvccTxn};
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
@@ -77,9 +77,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 if lock.use_async_commit
                     && (!self.caller_start_ts.is_zero() || !self.current_ts.is_zero())
                 {
-                    return Err(MvccError::from(MvccErrorInner::Other(box_err!(
-                        "cannot call check_txn_status with caller_start_ts or current_ts set on async commit transaction"
-                    ))).into());
+                    warn!(
+                        "check async commit txn status with non-zero caller_start_ts or current_ts";
+                        "caller_start_ts" => self.caller_start_ts,
+                        "current_ts" => self.current_ts
+                    );
+                    self.caller_start_ts = TimeStamp::zero();
+                    self.current_ts = TimeStamp::zero();
                 }
 
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
@@ -315,11 +319,6 @@ pub mod tests {
         };
         do_check_txn_status(true);
         do_check_txn_status(false);
-
-        // Disallow calling check_txn_status on async commit transactions with caller_start_ts or
-        // current_ts set.
-        must_err(&engine, b"key", 2, 1, 0, true);
-        must_err(&engine, b"key", 2, 0, 1, true);
     }
 
     fn test_check_txn_status_impl(rollback_if_not_exist: bool) {
@@ -362,6 +361,18 @@ pub mod tests {
         // CheckTxnStatus with caller_start_ts = 0 and current_ts = 0 should just return the
         // information of the lock without changing it.
         must_success(&engine, k, ts(5, 0), 0, 0, r, uncommitted(100, ts(5, 1)));
+
+        // CheckTxnStatus an async commit lock with non-zero caller_start_ts or current_ts simply
+        // performs the same as caller_start_ts = 0 and current_ts = 0.
+        must_success(
+            &engine,
+            k,
+            ts(5, 0),
+            ts(50, 0),
+            ts(100, 0),
+            r,
+            uncommitted(100, ts(5, 1)),
+        );
 
         // Update min_commit_ts to current_ts.
         must_success(
