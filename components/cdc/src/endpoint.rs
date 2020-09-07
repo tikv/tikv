@@ -1208,8 +1208,8 @@ mod tests {
             err: Some(Error::Request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
-        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
         loop {
+            let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
             if let CdcEvent::Event(mut e) = cdc_event {
                 let event = e.event.take().unwrap();
                 match event {
