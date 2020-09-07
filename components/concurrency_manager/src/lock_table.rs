@@ -5,7 +5,7 @@ use super::key_handle::{KeyHandle, KeyHandleGuard};
 use crossbeam_skiplist::SkipMap;
 use std::{
     ops::Bound,
-    sync::{Arc, Weak},
+    sync::{atomic, Arc, Weak},
 };
 use txn_types::{Key, Lock};
 
@@ -25,7 +25,14 @@ impl LockTable {
             let weak = Arc::downgrade(&handle);
             let weak2 = weak.clone();
             let guard = handle.lock().await;
+
+            // SeqCst fences are added to ensure linearizability which crossbeam-skiplist itself
+            // does not provide (https://github.com/crossbeam-rs/crossbeam/issues/204).
+            // TODO: Do we really need this fence or can we use a more relaxed order?
+            atomic::fence(atomic::Ordering::SeqCst);
             let entry = self.0.get_or_insert(key.clone(), weak);
+            atomic::fence(atomic::Ordering::SeqCst);
+
             if entry.value().ptr_eq(&weak2) {
                 return guard;
             } else {
@@ -73,6 +80,7 @@ impl LockTable {
 
     /// Gets the handle of the key.
     pub fn get<'m>(&'m self, key: &Key) -> Option<Arc<KeyHandle>> {
+        atomic::fence(atomic::Ordering::SeqCst);
         self.0.get(key).and_then(|e| e.value().upgrade())
     }
 
@@ -90,6 +98,8 @@ impl LockTable {
         let upper_bound = end_key
             .map(|k| Bound::Excluded(k))
             .unwrap_or(Bound::Unbounded);
+
+        atomic::fence(atomic::Ordering::SeqCst);
         for e in self.0.range((lower_bound, upper_bound)) {
             let res = e.value().upgrade().and_then(&mut pred);
             if res.is_some() {
@@ -101,6 +111,7 @@ impl LockTable {
 
     /// Iterates all handles and call a specified function on each of them.
     pub fn for_each(&self, mut f: impl FnMut(Arc<KeyHandle>)) {
+        atomic::fence(atomic::Ordering::SeqCst);
         for entry in self.0.iter() {
             if let Some(handle) = entry.value().upgrade() {
                 f(handle);
@@ -110,7 +121,9 @@ impl LockTable {
 
     /// Removes the key and its key handle from the map.
     pub fn remove(&self, key: &Key) {
+        atomic::fence(atomic::Ordering::SeqCst);
         self.0.remove(key);
+        atomic::fence(atomic::Ordering::SeqCst);
     }
 }
 
