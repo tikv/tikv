@@ -273,14 +273,14 @@ pub mod tests {
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
             .unwrap();
 
-        let do_check_txn_status = |rollback_if_not_exist| {
+        let do_check_txn_status = |caller_start_ts, current_ts, rollback_if_not_exist| {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let command = crate::storage::txn::commands::CheckTxnStatus {
                 ctx: Default::default(),
                 primary_key: Key::from_raw(b"key"),
                 lock_ts: TimeStamp::new(2),
-                caller_start_ts: 0.into(),
-                current_ts: 0.into(),
+                caller_start_ts,
+                current_ts,
                 rollback_if_not_exist,
             };
             let result = command
@@ -317,8 +317,13 @@ pub mod tests {
                 unreachable!();
             }
         };
-        do_check_txn_status(true);
-        do_check_txn_status(false);
+        do_check_txn_status(TimeStamp::zero(), TimeStamp::zero(), true);
+        do_check_txn_status(TimeStamp::zero(), TimeStamp::zero(), false);
+        // CheckTxnStatus an async commit lock with non-zero caller_start_ts or current_ts simply
+        // performs the same as caller_start_ts = 0 and current_ts = 0.
+        do_check_txn_status(100.into(), 200.into(), true);
+        do_check_txn_status(TimeStamp::zero(), 50.into(), false);
+        do_check_txn_status(30.into(), TimeStamp::zero(), true);
     }
 
     fn test_check_txn_status_impl(rollback_if_not_exist: bool) {
@@ -361,18 +366,6 @@ pub mod tests {
         // CheckTxnStatus with caller_start_ts = 0 and current_ts = 0 should just return the
         // information of the lock without changing it.
         must_success(&engine, k, ts(5, 0), 0, 0, r, uncommitted(100, ts(5, 1)));
-
-        // CheckTxnStatus an async commit lock with non-zero caller_start_ts or current_ts simply
-        // performs the same as caller_start_ts = 0 and current_ts = 0.
-        must_success(
-            &engine,
-            k,
-            ts(5, 0),
-            ts(50, 0),
-            ts(100, 0),
-            r,
-            uncommitted(100, ts(5, 1)),
-        );
 
         // Update min_commit_ts to current_ts.
         must_success(
