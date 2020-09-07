@@ -1,8 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::callback::must_call;
-use futures::executor::{self, Notify, Spawn};
-use futures::{Async, Future};
+use futures::{Future, FutureExt};
+use futures::future::BoxFuture;
+use futures::task::{self, ArcWake, Context, Poll};
 use futures::channel::oneshot as futures_oneshot;
 use std::sync::{Arc, Mutex};
 
@@ -42,29 +43,26 @@ where
 }
 
 // BatchCommandsNotify is used to make business pool notifiy completion queues directly.
-pub(crate) struct BatchCommandsNotify<F>(pub(crate) Arc<Mutex<Option<Spawn<F>>>>);
-impl<F> Clone for BatchCommandsNotify<F> {
-    fn clone(&self) -> BatchCommandsNotify<F> {
-        BatchCommandsNotify(Arc::clone(&self.0))
+pub(crate) struct BatchCommandsWaker(Mutex<Option<BoxFuture<'static, ()>>>);
+impl ArcWake for BatchCommandsWaker {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        let mut future_slot = arc_self.0.lock().unwrap();
+        if let Some(mut future) = future_slot.take() {
+            let waker = task::waker_ref(&arc_self);
+            let cx = &mut Context::from_waker(&*waker);
+            match future.as_mut().poll(cx) {
+                Poll::Pending => {
+                    *future_slot = Some(future);
+                },
+                Poll::Ready(()) => {}
+            }
+        }
     }
 }
 
-impl<F> Notify for BatchCommandsNotify<F>
-where
-    F: Future<Item = (), Error = ()> + Send + 'static,
-{
-    fn notify(&self, id: usize) {
-        let n = Arc::new(self.clone());
-        let mut s = self.0.lock().unwrap();
-        match s.as_mut().map(|spawn| spawn.poll_future_notify(&n, id)) {
-            Some(Ok(Async::NotReady)) | None => {}
-            _ => *s = None,
-        };
-    }
-}
-
-pub fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
-    let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
-    let notify = BatchCommandsNotify(spawn);
-    notify.notify(0);
+pub fn poll_future_notify<F: Future<Output = ()> + Send + 'static>(f: F) {
+    let f = Box::pin(f);
+    let spawn = Mutex::new(Some(f));
+    let waker = Arc::new(BatchCommandsWaker(spawn));
+    waker.wake();
 }

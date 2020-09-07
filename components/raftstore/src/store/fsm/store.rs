@@ -15,6 +15,7 @@ use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
+use futures::FutureExt;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
@@ -417,23 +418,16 @@ where
     fn schedule_store_tick(&self, tick: StoreTick, timeout: Duration) {
         if !is_zero_duration(&timeout) {
             let mb = self.router.control_mailbox();
-            let delay = self.timer.delay(timeout).compat();
-            let f = async move {
-                match delay.await {
-                    Ok(_) => {
-                        if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
-                            info!(
+            let delay = self.timer.delay(timeout).map(move |_| {
+                if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
+                    info!(
                                 "failed to schedule store tick, are we shutting down?";
                                 "tick" => ?tick,
                                 "err" => ?e
                             );
-                        }
-                    }
-                })
-                .map_err(move |e| {
-                    panic!("tick {:?} is lost due to timeout error: {:?}", tick, e);
-                });
-            poll_future_notify(f);
+                }
+            });
+            poll_future_notify(delay);
         }
     }
 
