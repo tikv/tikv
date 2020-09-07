@@ -747,12 +747,6 @@
 # optimize-filters-for-hits = false
 
 [raftdb]
-## TiKV supports 2 type raft engines: `rocks` and `raft-engine`.
-## `rocks` is the traditional one, which is RocksDB exactly.
-## `raft-engine` is a new file-based implementation.
-type = "rocks"
-
-## For rocks. 
 # max-background-jobs = 4
 # max-sub-compactions = 2
 # max-open-files = 40960
@@ -801,7 +795,9 @@ type = "rocks"
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
 
-## For raft-engine
+[raft-engine]
+## Enable raft-engine will ignore all settings about `raftdb`.
+# enable = false
 ## Recovery mode. Candidates are `tolerate-corrupted-tail-records` and `absolute-consistency`.
 # recovery_mode = "tolerate-corrupted-tail-records"
 # bytes-per-sync = "256KB"

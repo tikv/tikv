@@ -3274,6 +3274,7 @@ mod tests {
             enable = true
             recovery_mode = "tolerate-corrupted-tail-records"
             bytes-per-sync = "64KB"
+            purge-threshold = "1GB"
         "#;
         let cfg: TiKvConfig = toml::from_str(content).unwrap();
         assert!(cfg.raft_engine.enable);
@@ -3283,6 +3284,7 @@ mod tests {
             RecoveryMode::TolerateCorruptedTailRecords
         );
         assert_eq!(config.bytes_per_sync.0, ReadableSize::kb(64).0);
+        assert_eq!(config.purge_threshold.0, ReadableSize::gb(1).0);
     }
 
     #[test]
