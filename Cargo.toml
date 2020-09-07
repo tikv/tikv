@@ -183,6 +183,7 @@ members = [
   "components/test_coprocessor",
   "components/test_sst_importer",
   "components/test_util",
+  "components/test_pd",
   "components/tikv_alloc",
   "components/match_template",
   "components/codec",
