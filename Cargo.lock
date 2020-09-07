@@ -595,6 +595,7 @@ dependencies = [
  "promptly",
  "protobuf",
  "raft",
+ "raft_log_engine",
  "raftstore",
  "rand",
  "security",
