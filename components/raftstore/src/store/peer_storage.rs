@@ -24,8 +24,8 @@ use crate::store::fsm::GenSnapTask;
 use crate::store::util;
 use crate::store::ProposalContext;
 use crate::{Error, Result};
+use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
-use raft_engine::{RaftEngine, RaftLogBatch};
 use tikv_util::worker::Scheduler;
 
 use super::metrics::*;
@@ -1080,10 +1080,11 @@ where
             cache.flush_stats();
             return;
         }
-        let stats = self.engines.raft.flush_stats();
-        RAFT_ENTRIES_CACHES_GAUGE.add(stats.mem_size_change as i64);
-        RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as i64);
-        RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as i64);
+        if let Some(stats) = self.engines.raft.flush_stats() {
+            RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
+            RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as i64);
+            RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as i64);
+        }
     }
 
     // Apply the peer with given snapshot.
@@ -1670,8 +1671,7 @@ mod tests {
         let kv_db = new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = path.path().join(Path::new("raft"));
         let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
-        let shared_block_cache = false;
-        let engines = Engines::new(kv_db, raft_db, shared_block_cache);
+        let engines = Engines::new(kv_db, raft_db);
         bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
@@ -2497,8 +2497,7 @@ mod tests {
         let kv_db = new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = td.path().join(Path::new("raft"));
         let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
-        let shared_block_cache = false;
-        let engines = Engines::new(kv_db, raft_db, shared_block_cache);
+        let engines = Engines::new(kv_db, raft_db);
         bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);

@@ -14,7 +14,7 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use futures::Future;
+use futures::compat::Future01CompatExt;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
@@ -24,12 +24,13 @@ use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::{Ready, StateRole};
 use time::{self, Timespec};
+use tokio::runtime::{self, Handle, Runtime};
 
 use engine_rocks::CompactedEvent;
+use engine_traits::{RaftEngine, RaftLogBatch};
 use error_code::ErrorCodeExt;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
-use raft_engine::{RaftEngine, RaftLogBatch};
 use sst_importer::SSTImporter;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
@@ -416,16 +417,17 @@ where
     fn schedule_store_tick(&self, tick: StoreTick, timeout: Duration) {
         if !is_zero_duration(&timeout) {
             let mb = self.router.control_mailbox();
-            let f = self
-                .timer
-                .delay(timeout)
-                .map(move |_| {
-                    if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
-                        info!(
-                            "failed to schedule store tick, are we shutting down?";
-                            "tick" => ?tick,
-                            "err" => ?e
-                        );
+            let delay = self.timer.delay(timeout).compat();
+            let f = async move {
+                match delay.await {
+                    Ok(_) => {
+                        if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
+                            info!(
+                                "failed to schedule store tick, are we shutting down?";
+                                "tick" => ?tick,
+                                "err" => ?e
+                            );
+                        }
                     }
                 })
                 .map_err(move |e| {
@@ -552,6 +554,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
             StoreTick::CompactCheck => self.on_compact_check_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
+            StoreTick::RaftEnginePurge => self.on_raft_engine_purge_tick(),
         }
         let elapsed = t.elapsed();
         RAFT_EVENT_DURATION
@@ -612,6 +615,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
+        self.register_raft_engine_purge_tick();
     }
 }
 
@@ -1201,7 +1205,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_worker: Worker::new("cleanup-worker"),
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
-            coprocessor_host,
+            coprocessor_host: coprocessor_host.clone(),
         };
         let mut builder = RaftPollerBuilder {
             cfg,
@@ -1217,7 +1221,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             apply_router: self.apply_router.clone(),
             trans,
             pd_client,
-            coprocessor_host: workers.coprocessor_host.clone(),
+            coprocessor_host: coprocessor_host.clone(),
             importer,
             snap_mgr: mgr,
             global_replication_state,
@@ -1234,6 +1238,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 region_peers,
                 builder,
                 auto_split_controller,
+                coprocessor_host,
                 concurrency_manager,
             )?;
         } else {
@@ -1242,6 +1247,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 region_peers,
                 builder,
                 auto_split_controller,
+                coprocessor_host,
                 concurrency_manager,
             )?;
         }
@@ -1254,6 +1260,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         region_peers: Vec<SenderFsmPair<EK, ER>>,
         builder: RaftPollerBuilder<EK, ER, T, C>,
         auto_split_controller: AutoSplitController,
+        coprocessor_host: CoprocessorHost<EK>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
@@ -1324,7 +1331,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let timer = region_runner.new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
 
-        let raftlog_gc_runner = RaftlogGcRunner::new(None);
+        let raftlog_gc_runner = RaftlogGcRunner::new(self.router());
         box_try!(workers.raftlog_gc_worker.start(raftlog_gc_runner));
 
         let compact_runner = CompactRunner::new(engines.kv.clone());
@@ -1349,7 +1356,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
-        let consistency_check_runner = ConsistencyCheckRunner::<EK, _>::new(self.router.clone());
+        let consistency_check_runner =
+            ConsistencyCheckRunner::<EK, _>::new(self.router.clone(), coprocessor_host);
         box_try!(workers
             .consistency_check_worker
             .start(consistency_check_runner));
@@ -2302,6 +2310,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         let mut request = new_admin_request(target_region_id, target_peer);
         let mut admin = AdminRequest::default();
         admin.set_cmd_type(AdminCmdType::ComputeHash);
+        self.ctx
+            .coprocessor_host
+            .on_prepropose_compute_hash(admin.mut_compute_hash());
         request.set_admin_request(admin);
 
         let _ = self.ctx.router.send(
@@ -2391,6 +2402,20 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         state.set_status(status);
         drop(state);
         self.ctx.router.report_status_update()
+    }
+
+    fn register_raft_engine_purge_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::RaftEnginePurge,
+            self.ctx.cfg.raft_engine_purge_interval.0,
+        )
+    }
+
+    fn on_raft_engine_purge_tick(&self) {
+        let raft_engine = self.ctx.engines.raft.clone();
+        let scheduler = &self.ctx.raftlog_gc_scheduler;
+        let _ = scheduler.schedule(RaftlogGcTask::Purge { raft_engine });
+        self.register_raft_engine_purge_tick();
     }
 }
 
