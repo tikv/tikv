@@ -53,6 +53,51 @@ make_static_metric! {
         gc,
         unsafe_destroy_range,
         physical_scan_lock,
+<<<<<<< HEAD
+=======
+        validate_config,
+    }
+
+    pub label_enum SnapTask {
+        send,
+        recv,
+    }
+
+    pub label_enum ResolveStore {
+        resolving,
+        resolve,
+        failed,
+        success,
+        tombstone,
+    }
+
+    pub label_enum GcKeysCF {
+        default,
+        lock,
+        write,
+    }
+
+    pub label_enum GcKeysDetail {
+        processed_keys,
+        get,
+        next,
+        prev,
+        seek,
+        seek_for_prev,
+        over_seek_bound,
+        next_tombstone,
+        prev_tombstone,
+        seek_tombstone,
+        seek_for_prev_tombstone,
+    }
+
+    pub struct GcCommandCounterVec: LocalIntCounter {
+        "type" => GcCommandKind,
+    }
+
+    pub struct SnapTaskCounterVec: LocalIntCounter {
+        "type" => SnapTask,
+>>>>>>> 6c5f0e7... storage: Add perf statistics for scan detail (#8510)
     }
 
     pub struct GrpcMsgHistogramVec: Histogram {

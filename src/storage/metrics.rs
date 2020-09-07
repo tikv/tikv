@@ -211,7 +211,37 @@ make_static_metric! {
         high,
     }
 
+<<<<<<< HEAD
     pub struct SchedDurationVec: Histogram {
+=======
+    pub label_enum GcKeysCF {
+        default,
+        lock,
+        write,
+    }
+
+    pub label_enum GcKeysDetail {
+        processed_keys,
+        get,
+        next,
+        prev,
+        seek,
+        seek_for_prev,
+        over_seek_bound,
+        next_tombstone,
+        prev_tombstone,
+        seek_tombstone,
+        seek_for_prev_tombstone,
+    }
+
+    pub struct CommandScanDetails: LocalIntCounter {
+        "req" => CommandKind,
+        "cf" => GcKeysCF,
+        "tag" => GcKeysDetail,
+    }
+
+    pub struct SchedDurationVec: LocalHistogram {
+>>>>>>> 6c5f0e7... storage: Add perf statistics for scan detail (#8510)
         "type" => CommandKind,
     }
 
@@ -241,6 +271,37 @@ make_static_metric! {
     }
 }
 
+<<<<<<< HEAD
+=======
+impl Into<GcKeysCF> for ServerGcKeysCF {
+    fn into(self) -> GcKeysCF {
+        match self {
+            ServerGcKeysCF::default => GcKeysCF::default,
+            ServerGcKeysCF::lock => GcKeysCF::lock,
+            ServerGcKeysCF::write => GcKeysCF::write,
+        }
+    }
+}
+
+impl Into<GcKeysDetail> for ServerGcKeysDetail {
+    fn into(self) -> GcKeysDetail {
+        match self {
+            ServerGcKeysDetail::processed_keys => GcKeysDetail::processed_keys,
+            ServerGcKeysDetail::get => GcKeysDetail::get,
+            ServerGcKeysDetail::next => GcKeysDetail::next,
+            ServerGcKeysDetail::prev => GcKeysDetail::prev,
+            ServerGcKeysDetail::seek => GcKeysDetail::seek,
+            ServerGcKeysDetail::seek_for_prev => GcKeysDetail::seek_for_prev,
+            ServerGcKeysDetail::over_seek_bound => GcKeysDetail::over_seek_bound,
+            ServerGcKeysDetail::next_tombstone => GcKeysDetail::next_tombstone,
+            ServerGcKeysDetail::prev_tombstone => GcKeysDetail::prev_tombstone,
+            ServerGcKeysDetail::seek_tombstone => GcKeysDetail::seek_tombstone,
+            ServerGcKeysDetail::seek_for_prev_tombstone => GcKeysDetail::seek_for_prev_tombstone,
+        }
+    }
+}
+
+>>>>>>> 6c5f0e7... storage: Add perf statistics for scan detail (#8510)
 lazy_static! {
     pub static ref KV_COMMAND_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_storage_command_total",
