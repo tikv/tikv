@@ -949,11 +949,6 @@ where
         };
         let peer_id = self.fsm.peer.peer_id();
         let cb = Box::new(move || {
-            fail_point!(
-                "on_raft_log_gc_tick_1",
-                peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
-                |_| unreachable!()
-            );
             // This can happen only when the peer is about to be destroyed
             // or the node is shutting down. So it's OK to not to clean up
             // registry.

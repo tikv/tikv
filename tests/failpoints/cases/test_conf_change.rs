@@ -158,8 +158,6 @@ fn test_tick_after_destroy() {
     let engine_3 = cluster.get_engine(3);
     must_get_equal(&engine_3, b"k1", b"v1");
 
-    let tick_fp = "on_raft_log_gc_tick_1";
-    fail::cfg(tick_fp, "pause").unwrap();
     let poll_fp = "pause_on_peer_destroy_res";
     fail::cfg(poll_fp, "pause").unwrap();
 
@@ -176,7 +174,6 @@ fn test_tick_after_destroy() {
     cluster.must_put(b"k3", b"v3");
 
     thread::sleep(cluster.cfg.raft_store.raft_log_gc_tick_interval.0);
-    fail::remove(tick_fp);
     thread::sleep(Duration::from_millis(100));
     fail::remove(poll_fp);
 
