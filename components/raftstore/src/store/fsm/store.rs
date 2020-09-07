@@ -447,11 +447,9 @@ where
             gc_msg.set_is_tombstone(true);
         }
         if let Err(e) = self.trans.send(gc_msg) {
-            error!(
+            error!(?e;
                 "send gc message failed";
                 "region_id" => region_id,
-                "err" => ?e,
-                "error_code" => %e.error_code(),
             );
         }
         self.need_flush_trans = true;
@@ -543,11 +541,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(
+                        error!(?e;
                             "handle raft message failed";
                             "store_id" => self.fsm.store.id,
-                            "error_code" => %e.error_code(),
-                            "err" => ?e
                         );
                     }
                 }
@@ -1478,11 +1474,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                 extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
                 extra_msg.set_check_peers(region.get_peers().into());
                 if let Err(e) = self.ctx.trans.send(send_msg) {
-                    error!(
+                    error!(?e;
                         "send check stale peer response message failed";
                         "region_id" => region_id,
-                        "error_code" => %e.error_code(),
-                        "err" => ?e
                     );
                 }
                 self.ctx.need_flush_trans = true;
@@ -2056,11 +2050,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
 
     fn on_snap_mgr_gc(&mut self) {
         if let Err(e) = self.handle_snap_mgr_gc() {
-            error!(
+            error!(?e;
                 "handle gc snap failed";
                 "store_id" => self.fsm.store.id,
-                "error_code" => %e.error_code(),
-                "err" => ?e
             );
         }
         self.register_snap_mgr_gc_tick();
@@ -2279,11 +2271,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
 
     fn on_cleanup_import_sst_tick(&mut self) {
         if let Err(e) = self.on_cleanup_import_sst() {
-            error!(
+            error!(?e;
                 "cleanup import sst failed";
                 "store_id" => self.fsm.store.id,
-                "err" => ?e,
-                "error_code" => %e.error_code(),
             );
         }
         self.register_cleanup_import_sst_tick();

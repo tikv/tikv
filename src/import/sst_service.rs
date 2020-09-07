@@ -104,9 +104,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         };
         match res {
             Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
-            Err(ref e) => {
-                error!("switch mode failed"; "mode" => ?req.get_mode(), "err" => %e, "error_code" => %e.error_code())
-            }
+            Err(ref e) => error!(%e; "switch mode failed"; "mode" => ?req.get_mode(),),
         }
 
         ctx.spawn(
@@ -337,13 +335,11 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
                     "end" => end.map(log_wrappers::Key),
                     "output_level" => ?output_level, "takes" => ?timer.elapsed()
                 ),
-                Err(ref e) => error!(
+                Err(ref e) => error!(%e;
                     "compact files in range failed";
                     "start" => start.map(log_wrappers::Key),
                     "end" => end.map(log_wrappers::Key),
                     "output_level" => ?output_level,
-                    "err" => %e,
-                    "error_code" => %e.error_code()
                 ),
             }
 
@@ -421,7 +417,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
                         let writer = match import.new_writer::<RocksEngine>(default, write, meta) {
                             Ok(w) => w,
                             Err(e) => {
-                                error!("build writer failed"; "err" => %e, "error_code" => %e.error_code());
+                                error!(%e; "build writer failed");
                                 return Err(Error::InvalidChunk);
                             }
                         };

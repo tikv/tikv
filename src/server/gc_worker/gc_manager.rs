@@ -350,7 +350,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             Ok(res) => res,
             // Return false directly so we will check it a while later.
             Err(e) => {
-                error!("failed to get safe point from pd"; "err" => ?e, "error_code" => %e.error_code());
+                error!(?e; "failed to get safe point from pd");
                 return false;
             }
         };
@@ -583,9 +583,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         );
 
         if let Err(e) = res {
-            error!(
-                "gc_worker: failed to get next region information"; "err" => ?e, "error_code" => %e.error_code()
-            );
+            error!(?e; "gc_worker: failed to get next region information");
             return (None, None);
         };
 

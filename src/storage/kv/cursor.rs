@@ -369,12 +369,10 @@ impl<I: Iterator> Cursor<I> {
                 self.max_key.as_ref().map(|v| hex::encode_upper(v)),
             );
         } else {
-            error!(
+            error!(?e;
                 "failed to iterate";
                 "min_key" => ?self.min_key.as_ref().map(|v| hex::encode_upper(v)),
                 "max_key" => ?self.max_key.as_ref().map(|v| hex::encode_upper(v)),
-                "error" => ?e,
-                "error_code" => %e.error_code()
             );
             Err(e)
         }

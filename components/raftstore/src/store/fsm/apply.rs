@@ -1096,12 +1096,10 @@ where
                         "peer_id" => self.id(),
                         "err" => ?e
                     ),
-                    _ => error!(
+                    _ => error!(?e;
                         "execute raft command";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "err" => ?e,
-                        "error_code" => %e.error_code(),
                     ),
                 }
                 (cmd_resp::new_error(e), ApplyResult::None)
@@ -1495,14 +1493,12 @@ where
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
-            error!(
+            error!(?e;
                  "ingest fail";
                  "region_id" => self.region_id(),
                  "peer_id" => self.id(),
                  "sst" => ?sst,
                  "region" => ?&self.region,
-                 "err" => ?e,
-                "error_code" => %e.error_code(),
             );
             // This file is not valid, we can delete it here.
             let _ = importer.delete(sst);

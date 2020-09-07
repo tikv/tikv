@@ -580,6 +580,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "fs2",
  "futures 0.1.29",
  "futures 0.3.4",

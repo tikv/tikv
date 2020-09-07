@@ -239,7 +239,7 @@ impl BackupRange {
         let snapshot = match engine.snapshot(&ctx) {
             Ok(s) => s,
             Err(e) => {
-                error!("backup raw kv snapshot failed"; "error" => ?e, "error_code" => %e.error_code());
+                error!(?e; "backup raw kv snapshot failed");
                 return Err(e.into());
             }
         };
@@ -275,7 +275,7 @@ impl BackupRange {
             debug!("backup scan raw kv entries"; "len" => batch.len());
             // Build sst files.
             if let Err(e) = writer.write(batch.drain(..), false) {
-                error!("backup raw kv build sst failed"; "error" => ?e);
+                error!(?e; "backup raw kv build sst failed");
                 return Err(e);
             }
         }
@@ -306,7 +306,7 @@ impl BackupRange {
         ) {
             Ok(w) => w,
             Err(e) => {
-                error!("backup writer failed"; "error" => ?e);
+                error!(?e; "backup writer failed");
                 return Err(e);
             }
         };
@@ -324,7 +324,7 @@ impl BackupRange {
         match writer.save(&storage.storage) {
             Ok(files) => Ok((files, stat)),
             Err(e) => {
-                error!("backup save file failed"; "error" => ?e);
+                error!(?e; "backup save file failed");
                 Err(e)
             }
         }
@@ -350,7 +350,7 @@ impl BackupRange {
         ) {
             Ok(w) => w,
             Err(e) => {
-                error!("backup writer failed"; "error" => ?e);
+                error!(?e; "backup writer failed");
                 return Err(e);
             }
         };
@@ -362,7 +362,7 @@ impl BackupRange {
         match writer.save(&storage.storage) {
             Ok(files) => Ok((files, stat)),
             Err(e) => {
-                error!("backup save file failed"; "error" => ?e);
+                error!(?e; "backup save file failed");
                 Err(e)
             }
         }
@@ -489,7 +489,7 @@ impl<R: RegionInfoProvider> Progress<R> {
         );
         if let Err(e) = res {
             // TODO: handle error.
-            error!("backup seek region failed"; "error" => ?e, "error_code" => %e.error_code());
+            error!(?e; "backup seek region failed");
         }
 
         let branges: Vec<_> = rx.iter().collect();
@@ -722,11 +722,11 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 let mut response = BackupResponse::default();
                 match res {
                     Err(e) => {
-                        error!("backup region failed";
+                        error!(?e; "backup region failed";
                             "region" => ?brange.region,
                             "start_key" => hex::encode_upper(&start_key),
                             "end_key" => hex::encode_upper(&end_key),
-                            "error" => ?e);
+                        );
                         response.set_error(e.into());
                     }
                     Ok((mut files, stat)) => {
@@ -749,7 +749,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 response.set_end_key(end_key);
 
                 if let Err(e) = tx.unbounded_send(response) {
-                    error!("backup failed to send response"; "error" => ?e);
+                    error!(?e; "backup failed to send response");
                     return;
                 }
             }

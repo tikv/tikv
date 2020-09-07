@@ -14,6 +14,7 @@ use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, MetricsFlusher};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
+use error_code::ErrorCodeExt;
 use fs2::FileExt;
 use futures03::executor::block_on;
 use futures_cpupool::Builder;
@@ -385,10 +386,7 @@ impl TiKVServer {
             let ch = ch.lock().unwrap();
             let event = StoreMsg::CompactedEvent(compacted_event);
             if let Err(e) = ch.send_control(event) {
-                error!(
-                    "send compaction finished event to raftstore failed";
-                    "err" => ?e,
-                );
+                error!(?e; "send compaction finished event to raftstore failed");
             }
         });
         engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
@@ -842,10 +840,7 @@ impl TiKVServer {
 
         // Start metrics flusher
         if let Err(e) = metrics_flusher.start() {
-            error!(
-                "failed to start metrics flusher";
-                "err" => %e
-            );
+            error!(%e; "failed to start metrics flusher");
         }
 
         self.to_stop.push(metrics_flusher);
@@ -877,10 +872,7 @@ impl TiKVServer {
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
-                    error!(
-                        "failed to start runtime for status service";
-                        "err" => %e
-                    );
+                    error!(%e; "failed to start runtime for status service");
                     return;
                 }
             };
@@ -889,10 +881,7 @@ impl TiKVServer {
                 self.config.server.status_addr.clone(),
                 self.config.server.advertise_status_addr.clone(),
             ) {
-                error!(
-                    "failed to bind addr for status service";
-                    "err" => %e
-                );
+                error!(%e; "failed to bind addr for status service");
             } else {
                 self.to_stop.push(status_server);
             }

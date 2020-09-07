@@ -319,13 +319,11 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
             self.raft_router
                 .report_snapshot_status(self.region_id, self.to_peer_id, status)
         {
-            error!(
+            error!(?e;
                 "report snapshot to peer failes";
                 "to_peer_id" => self.to_peer_id,
                 "to_store_id" => self.to_store_id,
                 "region_id" => self.region_id,
-                "err" => ?e,
-                "error_code" => %e.error_code()
             );
         }
     }
@@ -538,13 +536,11 @@ where
                     SnapshotStatus::Failure,
                 );
                 if let Err(e) = res {
-                    error!(
+                    error!(?e;
                         "reporting snapshot to peer fails";
                         "to_peer_id" => peer_id,
                         "to_store_id" => self.store_id,
                         "region_id" => region_id,
-                        "err" => ?e,
-                        "error_code" => %e.error_code()
                     );
                 }
             } else {

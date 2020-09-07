@@ -311,7 +311,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_commit_ts_expired(commit_ts_expired);
         }
         _ => {
-            error!("txn aborts"; "err" => ?err, "error_code" => %err.error_code());
+            error!(?err; "txn aborts");
             key_error.set_abort(format!("{:?}", err));
         }
     }

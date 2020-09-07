@@ -276,7 +276,7 @@ where
             // Error::Incompatible is returned by response header from PD, no need to retry
             Err(Error::Incompatible) => true,
             Err(err) => {
-                error!("request failed, retry"; "err" => ?err, "error_code" => %err.error_code());
+                error!(?err; "request failed, retry");
                 false
             }
         }
@@ -313,9 +313,9 @@ where
                 return Ok(r);
             }
             Err(e) => {
-                error!("request failed"; "err" => ?e, "error_code" => %e.error_code());
+                error!(?e; "request failed");
                 if let Err(e) = block_on(client.reconnect()) {
-                    error!("reconnect failed"; "err" => ?e, "error_code" => %e.error_code());
+                    error!(?e; "reconnect failed");
                 }
                 err.replace(e);
             }
@@ -438,7 +438,7 @@ pub async fn try_connect_leader(
                     }
                 }
                 Err(e) => {
-                    error!("connect failed"; "endpoints" => ep, "err" => ?e, "error_code" => %e.error_code());
+                    error!(?e; "connect failed"; "endpoints" => ep,);
                     continue;
                 }
             }

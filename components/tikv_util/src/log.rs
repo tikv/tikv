@@ -18,7 +18,7 @@ macro_rules! error {
         ::slog_global::error!($($args)+ "err"=>?$e,"err_code"=>%$e.error_code())
     };
 
-    (%$e:expr; $(args:tt)+) => {
+    (%$e:expr; $($args:tt)+) => {
         ::slog_global::error!($($args)+ "err" => %$e,"err_code" => %$e.error_code())
     };
 
