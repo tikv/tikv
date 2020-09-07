@@ -2632,6 +2632,7 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "error_code",
+ "fail",
  "futures 0.3.4",
  "grpcio",
  "hex 0.4.2",
@@ -4274,6 +4275,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_pd"
+version = "0.0.1"
+dependencies = [
+ "fail",
+ "futures 0.1.29",
+ "grpcio",
+ "kvproto",
+ "pd_client",
+ "security",
+ "slog",
+ "slog-global",
+ "tikv_util",
+]
+
+[[package]]
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
@@ -4393,6 +4409,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "test_coprocessor",
+ "test_pd",
  "test_raftstore",
  "test_sst_importer",
  "test_storage",
