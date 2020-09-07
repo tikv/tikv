@@ -7,7 +7,6 @@ use kvproto::import_sstpb::SstMeta;
 
 use crate::store::util::is_epoch_stale;
 use crate::store::{StoreMsg, StoreRouter};
-use error_code::ErrorCodeExt;
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use tikv_util::worker::Runnable;

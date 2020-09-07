@@ -9,7 +9,6 @@ use txn_types::Key;
 
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_LOCK};
-use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::CmdType;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};

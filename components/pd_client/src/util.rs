@@ -17,7 +17,6 @@ use futures::task::Context;
 use futures::task::Poll;
 use futures::task::Waker;
 
-use error_code::ErrorCodeExt;
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,

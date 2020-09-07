@@ -6,7 +6,6 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
-use error_code::ErrorCodeExt;
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;

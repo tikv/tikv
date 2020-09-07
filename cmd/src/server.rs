@@ -14,7 +14,6 @@ use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, MetricsFlusher};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
-use error_code::ErrorCodeExt;
 use fs2::FileExt;
 use futures03::executor::block_on;
 use futures_cpupool::Builder;

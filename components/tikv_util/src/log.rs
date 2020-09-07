@@ -7,19 +7,19 @@ macro_rules! crit( ($($args:tt)+) => {
 #[macro_export]
 macro_rules! error {
     (?$e:expr; $l:literal) => {
-        ::slog_global::error!($l; "err"=>?$e,"err_code"=>%$e.error_code())
+        ::slog_global::error!($l; "err"=>?$e,"err_code"=>%error_code::ErrorCodeExt::error_code(&$e))
     };
 
     (%$e:expr; $l:literal) => {
-        ::slog_global::error!($l; "err"=>?$e,"err_code"=>%$e.error_code())
+        ::slog_global::error!($l; "err"=>?$e,"err_code"=>%error_code::ErrorCodeExt::error_code(&$e))
     };
 
     (?$e:expr; $($args:tt)+) => {
-        ::slog_global::error!($($args)+ "err"=>?$e,"err_code"=>%$e.error_code())
+        ::slog_global::error!($($args)+ "err"=>?$e,"err_code"=>%error_code::ErrorCodeExt::error_code(&$e))
     };
 
     (%$e:expr; $($args:tt)+) => {
-        ::slog_global::error!($($args)+ "err" => %$e,"err_code" => %$e.error_code())
+        ::slog_global::error!($($args)+ "err" => %$e,"err_code" => %error_code::ErrorCodeExt::error_code(&$e))
     };
 
     ($($args:tt)+) => {

@@ -5,7 +5,6 @@ use crate::server::snap::Task as SnapTask;
 use crate::server::{self, Config, StoreAddrResolver};
 use crossbeam::queue::{ArrayQueue, PushError};
 use engine_rocks::RocksEngine;
-use error_code::ErrorCodeExt;
 use futures::task::{self, Task};
 use futures::{Async, AsyncSink, Future, Poll, Sink};
 use futures03::compat::Future01CompatExt;

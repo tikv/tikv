@@ -13,7 +13,6 @@ use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use futures::stream::TryStreamExt;
 
-use error_code::ErrorCodeExt;
 use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};

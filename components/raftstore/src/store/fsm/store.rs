@@ -27,7 +27,6 @@ use time::{self, Timespec};
 use tokio::runtime::{self, Handle, Runtime};
 
 use engine_rocks::CompactedEvent;
-use error_code::ErrorCodeExt;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
 use raft_engine::{RaftEngine, RaftLogBatch};

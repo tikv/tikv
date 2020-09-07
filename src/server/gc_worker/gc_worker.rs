@@ -10,7 +10,6 @@ use std::time::Instant;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use error_code::ErrorCodeExt;
 use futures03::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, PdClient};
@@ -251,7 +250,7 @@ where
             let (mut next_gc_key, mut gc_info) = (keys.next(), GcInfo::default());
             while let Some(ref key) = next_gc_key {
                 if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn) {
-                    error!(?e; "GC meets failure"; "key" => %key);
+                    error!(?e; "GC meets failure"; "key" => %key,);
                     // Switch to the next key if meets failure.
                     gc_info.is_completed = true;
                 }
