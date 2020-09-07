@@ -343,10 +343,10 @@ mod tests {
 
     use crate::future::BatchCommandsNotify;
     use futures::executor::{self, Notify};
-    use futures_cpupool::CpuPool;
     use futures::future::{self, BoxFuture, FutureExt};
     use futures::stream::{self, StreamExt};
     use futures::task::{self, ArcWake, Poll};
+    use futures_cpupool::CpuPool;
     use tokio::runtime::Builder;
 
     use super::*;

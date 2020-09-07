@@ -25,7 +25,6 @@ use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::{Ready, StateRole};
 use time::{self, Timespec};
-use tokio::runtime::{self, Handle, Runtime};
 
 use engine_rocks::CompactedEvent;
 use engine_traits::{RaftEngine, RaftLogBatch};
@@ -418,13 +417,13 @@ where
     fn schedule_store_tick(&self, tick: StoreTick, timeout: Duration) {
         if !is_zero_duration(&timeout) {
             let mb = self.router.control_mailbox();
-            let delay = self.timer.delay(timeout).map(move |_| {
+            let delay = self.timer.delay(timeout).compat().map(move |_| {
                 if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
                     info!(
-                                "failed to schedule store tick, are we shutting down?";
-                                "tick" => ?tick,
-                                "err" => ?e
-                            );
+                        "failed to schedule store tick, are we shutting down?";
+                        "tick" => ?tick,
+                        "err" => ?e
+                    );
                 }
             });
             poll_future_notify(delay);
@@ -754,13 +753,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
                 .poll_ctx
                 .timer
                 .delay(self.poll_ctx.tick_batch[idx].wait_duration)
+                .compat()
                 .map(move |_| {
                     for tick in peer_ticks {
                         tick();
                     }
-                })
-                .map_err(|e| {
-                    panic!("batch tick failed because: {:?}", e);
                 });
             poll_future_notify(f);
         }

@@ -10,7 +10,6 @@ use batch_system::{BasicMailbox, Fsm};
 use engine_traits::CF_RAFT;
 use engine_traits::{Engines, KvEngine, RaftEngine, WriteBatchExt};
 use error_code::ErrorCodeExt;
-use futures::compat::Future01CompatExt;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};

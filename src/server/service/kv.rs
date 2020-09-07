@@ -21,7 +21,8 @@ use crate::storage::{
     SecondaryLocksStatus, Storage, TxnStatus,
 };
 use engine_rocks::RocksEngine;
-use futures::{future, Future, Sink, Stream};
+use futures::executor::{self, Notify, Spawn};
+use futures::{future, Async, Future, Sink, Stream};
 use futures03::compat::{Compat, Future01CompatExt};
 use futures03::future::{self as future03, Future as Future03, FutureExt, TryFutureExt};
 use futures03::stream::{StreamExt, TryStreamExt};
@@ -37,7 +38,7 @@ use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
-use tikv_util::future::{paired_future_callback, poll_future_notify};
+use tikv_util::future::paired_future_callback;
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -988,6 +989,33 @@ fn response_batch_commands_request<F>(
         Ok(())
     });
     poll_future_notify(f);
+}
+
+// BatchCommandsNotify is used to make business pool notifiy completion queues directly.
+struct BatchCommandsNotify<F>(Arc<Mutex<Option<Spawn<F>>>>);
+impl<F> Clone for BatchCommandsNotify<F> {
+    fn clone(&self) -> BatchCommandsNotify<F> {
+        BatchCommandsNotify(Arc::clone(&self.0))
+    }
+}
+impl<F> Notify for BatchCommandsNotify<F>
+where
+    F: Future<Item = (), Error = ()> + Send + 'static,
+{
+    fn notify(&self, id: usize) {
+        let n = Arc::new(self.clone());
+        let mut s = self.0.lock().unwrap();
+        match s.as_mut().map(|spawn| spawn.poll_future_notify(&n, id)) {
+            Some(Ok(Async::NotReady)) | None => {}
+            _ => *s = None,
+        };
+    }
+}
+
+pub fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
+    let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
+    let notify = BatchCommandsNotify(spawn);
+    notify.notify(0);
 }
 
 fn handle_batch_commands_request<E: Engine, L: LockManager>(
