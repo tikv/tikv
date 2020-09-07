@@ -686,8 +686,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             let resps = futures03::future::join_all(regions).await;
             let regions = resps
                 .into_iter()
-                .filter(|resp| resp.is_some())
-                .map(|resp| resp.unwrap())
+                .filter_map(|resp| resp)
                 .collect();
             match scheduler.schedule(Task::MinTS { regions, min_ts }) {
                 Ok(_) | Err(ScheduleError::Stopped(_)) => (),
