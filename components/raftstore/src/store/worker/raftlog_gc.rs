@@ -5,6 +5,8 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 
 use crate::store::{CasualMessage, CasualRouter};
+use engine_traits::{KvEngine, RaftEngine};
+use tikv_util::worker::Runnable;
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
 use tikv_util::time::Duration;
