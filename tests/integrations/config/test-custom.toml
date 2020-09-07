@@ -449,7 +449,6 @@ max-sorted-runs = 100
 gc-merge-rewrite = true
 
 [raftdb]
-type = "rocks"
 wal-recovery-mode = 3
 wal-dir = "/var"
 wal-ttl-seconds = 1
@@ -537,6 +536,10 @@ level-merge = true
 range-merge = true
 max-sorted-runs = 100
 gc-merge-rewrite = true
+
+[raft-engine]
+enable = true
+dir = "test-dir"
 
 [security]
 ca-path = "invalid path"

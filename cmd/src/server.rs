@@ -94,8 +94,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
     let _m = Monitor::default();
 
-    // TODO: enable raft engine by the configuration file.
-    if true {
+    if !config.raft_engine.enable {
         let mut tikv = TiKVServer::<RocksEngine>::init(config);
         tikv.check_conflict_addr();
         tikv.init_fs();
@@ -360,7 +359,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             );
         }
 
-        // We truncate a big file to make sure that both raftdb and kvdb of TiKV have enough space to compaction when TiKV recover. This file is created in data_dir rather than db_path, because we must not increase store size of db_path.
+        // We truncate a big file to make sure that both raftdb and kvdb of TiKV have enough space
+        // to compaction when TiKV recover. This file is created in data_dir rather than db_path,
+        // because we must not increase store size of db_path.
         tikv_util::reserve_space_for_recover(
             &self.config.storage.data_dir,
             self.config.storage.reserve_space.0,
@@ -863,7 +864,7 @@ impl TiKVServer<RocksEngine> {
 
         // Create raft engine.
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
-        let config_raftdb = self.config.raftdb.must_rocks();
+        let config_raftdb = &self.config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
         let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
@@ -941,7 +942,7 @@ impl TiKVServer<RaftLogEngine> {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
-        let mut raft_config = self.config.raftdb.raft_engine().unwrap().clone();
+        let mut raft_config = self.config.raft_engine.config();
         raft_config.dir = self.config.raft_store.raftdb_path.clone();
         let raft_engine = RaftLogEngine::new(raft_config);
 
@@ -1036,7 +1037,7 @@ fn check_system_config(config: &TiKvConfig) {
         rocksdb_max_open_files *= 2;
     }
     if let Err(e) = tikv_util::config::check_max_open_fds(
-        RESERVED_OPEN_FDS + rocksdb_max_open_files as u64 + config.raftdb.may_open_files() as u64,
+        RESERVED_OPEN_FDS + (rocksdb_max_open_files + config.raftdb.max_open_files) as u64,
     ) {
         fatal!("{}", e);
     }

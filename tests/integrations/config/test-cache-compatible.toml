@@ -32,7 +32,6 @@ block-cache-size = "1GB"
 block-cache-size = "128MB"
 
 [raftdb]
-type = "rocks"
 
 [raftdb.defaultcf]
 block-cache-size = "128MB"

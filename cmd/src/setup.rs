@@ -134,8 +134,8 @@ pub fn initial_logger(config: &TiKvConfig) {
                 DEFAULT_ROCKSDB_LOG_FILE,
             )
         };
-        let raftdb_info_log_path = if !config.raftdb.info_log_dir().is_empty() {
-            make_engine_log_path(&config.raftdb.info_log_dir(), "", DEFAULT_RAFTDB_LOG_FILE)
+        let raftdb_info_log_path = if !config.raftdb.info_log_dir.is_empty() {
+            make_engine_log_path(&config.raftdb.info_log_dir, "", DEFAULT_RAFTDB_LOG_FILE)
         } else {
             if !config.raft_store.raftdb_path.is_empty() {
                 make_engine_log_path(
