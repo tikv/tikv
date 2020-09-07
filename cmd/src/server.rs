@@ -94,8 +94,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
     let _m = Monitor::default();
 
-    // TODO: enable raft engine by the configuration file.
-    if true {
+    if config.raftdb.rocks().is_some() {
         let mut tikv = TiKVServer::<RocksEngine>::init(config);
         tikv.check_conflict_addr();
         tikv.init_fs();
