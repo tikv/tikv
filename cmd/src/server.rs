@@ -942,8 +942,7 @@ impl TiKVServer<RaftLogEngine> {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
-        let mut raft_config = self.config.raft_engine.config();
-        raft_config.dir = self.config.raft_store.raftdb_path.clone();
+        let raft_config = self.config.raft_engine.config();
         let raft_engine = RaftLogEngine::new(raft_config);
 
         // Create kv engine.

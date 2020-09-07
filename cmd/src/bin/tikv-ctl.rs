@@ -117,8 +117,7 @@ fn new_debug_executor(
                 let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
                 Box::new(debugger) as Box<dyn DebugExecutor>
             } else {
-                let mut config = cfg.raft_engine.config();
-                config.dir = cfg.raft_store.raftdb_path.clone();
+                let config = cfg.raft_engine.config();
                 let raft_db = RaftLogEngine::new(config);
                 let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
                 Box::new(debugger) as Box<dyn DebugExecutor>
