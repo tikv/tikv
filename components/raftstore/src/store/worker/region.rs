@@ -14,9 +14,9 @@ use engine_traits::{DeleteStrategy, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
     Engines, IngestExternalFileOptions, KvEngine, Mutable, SstWriter, SstWriterBuilder,
 };
+use error_code::ErrorCodeExt;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use raft_engine::RaftEngine;
 
 use crate::coprocessor::CoprocessorHost;
 use crate::store::peer_storage::{

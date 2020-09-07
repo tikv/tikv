@@ -17,7 +17,8 @@ use crate::write_batch::{WriteBatch, WriteBatchExt};
 
 use tikv_util::keybuilder::KeyBuilder;
 
-pub const MAX_DELETE_BATCH_SIZE: usize = 256;
+// FIXME: Find somewhere else to put this?
+pub const MAX_DELETE_BATCH_COUNT: usize = 512;
 
 const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
 

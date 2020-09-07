@@ -430,7 +430,7 @@ impl Cluster {
             region.get_region_epoch().clone(),
         );
         assert!(end_key > start_key);
-        let overlaps = self.get_overlap(start_key.clone(), end_key.clone());
+        let overlaps = self.get_overlap(start_key, end_key);
         for r in overlaps.iter() {
             if incoming_epoch.get_version() < r.get_region_epoch().get_version() {
                 return Err(box_err!("epoch {:?} is stale.", incoming_epoch));
