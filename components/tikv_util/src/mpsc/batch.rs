@@ -341,12 +341,9 @@ mod tests {
     use std::sync::{mpsc, Mutex};
     use std::{thread, time};
 
-    use crate::future::BatchCommandsNotify;
-    use futures::executor::{self, Notify};
     use futures::future::{self, BoxFuture, FutureExt};
     use futures::stream::{self, StreamExt};
     use futures::task::{self, ArcWake, Poll};
-    use futures_cpupool::CpuPool;
     use tokio::runtime::Builder;
 
     use super::*;
@@ -449,14 +446,19 @@ mod tests {
 
     #[test]
     fn test_switch_between_sender_and_receiver() {
-        let (tx, rx) = unbounded::<u64>(4);
-        let f = rx.for_each(|_| Ok(())).map_err(|_| ());
-        let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
-        BatchCommandsNotify(Arc::clone(&spawn)).notify(0);
-
-        // Switch to `receiver` in one thread in where `sender` is dropped.
+        let (tx, mut rx) = unbounded::<i32>(4);
+        let future = async move { rx.next().await };
+        let task = Task {
+            future: Arc::new(Mutex::new(Some(future.boxed()))),
+        };
+        // Receiver has not received any messages, so the future is not be finished
+        // in this tick.
+        task.tick();
+        assert!(task.future.lock().unwrap().is_some());
+        // After sender is dropped, the task will be waked and then it tick self
+        // again to advance the progress.
         drop(tx);
-        assert!(spawn.lock().unwrap().is_none());
+        assert!(task.future.lock().unwrap().is_none());
     }
 
     #[derive(Clone)]
