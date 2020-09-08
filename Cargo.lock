@@ -471,6 +471,8 @@ dependencies = [
  "panic_hook",
  "pd_client",
  "prometheus",
+ "prost",
+ "protobuf",
  "raft",
  "raftstore",
  "resolved_ts",
@@ -482,7 +484,7 @@ dependencies = [
  "test_util",
  "tikv",
  "tikv_util",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "txn_types",
 ]
 
@@ -580,9 +582,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "fs2",
- "futures 0.1.29",
  "futures 0.3.4",
- "futures-cpupool",
  "grpcio",
  "hex 0.4.2",
  "keys",
@@ -595,6 +595,7 @@ dependencies = [
  "promptly",
  "protobuf",
  "raft",
+ "raft_log_engine",
  "raftstore",
  "rand",
  "security",
@@ -605,6 +606,7 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
+ "tokio 0.2.22",
  "toml",
  "txn_types",
  "vlog",
@@ -642,7 +644,7 @@ name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
  "parking_lot 0.10.0",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "txn_types",
 ]
 
@@ -1049,7 +1051,7 @@ dependencies = [
  "test_util",
  "tikv_alloc",
  "tikv_util",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "toml",
 ]
 
@@ -1157,9 +1159,13 @@ dependencies = [
 name = "error_code"
 version = "0.0.1"
 dependencies = [
+ "grpcio",
  "kvproto",
+ "lazy_static",
  "raft",
+ "serde",
  "tikv_alloc",
+ "toml",
 ]
 
 [[package]]
@@ -1189,7 +1195,7 @@ dependencies = [
  "tame-oauth",
  "tempfile",
  "tikv_alloc",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "url",
 ]
 
@@ -1364,6 +1370,7 @@ dependencies = [
  "futures-core",
  "futures-task",
  "futures-util",
+ "num_cpus",
 ]
 
 [[package]]
@@ -1591,7 +1598,7 @@ dependencies = [
  "indexmap",
  "log",
  "slab",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "tokio-util",
 ]
 
@@ -1701,7 +1708,7 @@ dependencies = [
  "net2",
  "pin-project",
  "time 0.1.42",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "tower-service",
  "want",
 ]
@@ -1720,7 +1727,7 @@ dependencies = [
  "once_cell",
  "openssl",
  "openssl-sys",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "tokio-openssl",
 ]
 
@@ -1733,7 +1740,7 @@ dependencies = [
  "bytes 0.5.3",
  "hyper",
  "native-tls",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "tokio-tls",
 ]
 
@@ -2632,6 +2639,7 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "error_code",
+ "fail",
  "futures 0.3.4",
  "grpcio",
  "hex 0.4.2",
@@ -3044,7 +3052,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine.git#5e305ec0db988a11df8dda296ae0a867eef28cdc"
+source = "git+https://github.com/tikv/raft-engine.git#e4984d11683c71bbceb3522721ba8657204e1974"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3150,7 +3158,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "txn_types",
  "uuid",
  "yatp",
@@ -3348,7 +3356,7 @@ dependencies = [
  "serde",
  "serde_urlencoded",
  "time 0.1.42",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "tokio-tls",
  "url",
  "wasm-bindgen",
@@ -3435,7 +3443,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "xml-rs",
 ]
 
@@ -3455,7 +3463,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "zeroize",
 ]
 
@@ -3523,7 +3531,7 @@ dependencies = [
  "serde",
  "sha2",
  "time 0.2.16",
- "tokio 0.2.13",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -3976,7 +3984,7 @@ dependencies = [
  "test_util",
  "tikv_alloc",
  "tikv_util",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "txn_types",
  "uuid",
 ]
@@ -4249,6 +4257,7 @@ version = "0.0.1"
 dependencies = [
  "concurrency_manager",
  "futures 0.1.29",
+ "futures 0.3.4",
  "kvproto",
  "protobuf",
  "test_storage",
@@ -4270,6 +4279,21 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+]
+
+[[package]]
+name = "test_pd"
+version = "0.0.1"
+dependencies = [
+ "fail",
+ "futures 0.1.29",
+ "grpcio",
+ "kvproto",
+ "pd_client",
+ "security",
+ "slog",
+ "slog-global",
+ "tikv_util",
 ]
 
 [[package]]
@@ -4300,6 +4324,7 @@ dependencies = [
  "test_util",
  "tikv",
  "tikv_util",
+ "tokio 0.2.22",
  "tokio-threadpool",
  "tokio-timer",
  "txn_types",
@@ -4321,7 +4346,7 @@ dependencies = [
 name = "test_storage"
 version = "0.0.1"
 dependencies = [
- "futures 0.1.29",
+ "futures 0.3.4",
  "kvproto",
  "pd_client",
  "raftstore",
@@ -4391,6 +4416,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "test_coprocessor",
+ "test_pd",
  "test_raftstore",
  "test_sst_importer",
  "test_storage",
@@ -4407,7 +4433,7 @@ dependencies = [
  "time 0.1.42",
  "tipb",
  "tipb_helper",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "tokio-threadpool",
  "toml",
  "txn_types",
@@ -4738,7 +4764,7 @@ dependencies = [
  "tikv_util",
  "time 0.1.42",
  "tipb",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "tokio-core",
  "tokio-fs",
  "tokio-io",
@@ -4852,7 +4878,7 @@ dependencies = [
  "tikv_alloc",
  "time 0.1.42",
  "tipb",
- "tokio 0.2.13",
+ "tokio 0.2.22",
  "tokio-executor",
  "tokio-timer",
  "toml",
@@ -4966,9 +4992,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "0.2.13"
+version = "0.2.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fa5e81d6bc4e67fe889d5783bd2a128ab2e0cfa487e0be16b6a8d177b101616"
+checksum = "5d34ca54d84bf2b5b4d7d31e901a8464f7b60ac145a284fba25ceb801f2ddccd"
 dependencies = [
  "bytes 0.5.3",
  "fnv",
@@ -5078,7 +5104,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c4b08c5f4208e699ede3df2520aca2e82401b2de33f45e96696a074480be594"
 dependencies = [
  "openssl",
- "tokio 0.2.13",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -5160,7 +5186,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bde02a3a5291395f59b06ec6945a3077602fac2b07eeeaf0dee2122f3619828"
 dependencies = [
  "native-tls",
- "tokio 0.2.13",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -5207,7 +5233,7 @@ dependencies = [
  "futures-sink",
  "log",
  "pin-project-lite",
- "tokio 0.2.13",
+ "tokio 0.2.22",
 ]
 
 [[package]]
