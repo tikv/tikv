@@ -19,7 +19,7 @@ use std::time::Duration;
 use std::{process, str, u64};
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
-use futures03::{
+use futures::{
     compat::Stream01CompatExt, executor::block_on, future, stream, Stream, StreamExt, TryStreamExt,
 };
 use grpcio::{CallOption, ChannelBuilder, Environment};
@@ -30,8 +30,8 @@ use encryption::{
 };
 use engine_rocks::encryption::get_env;
 use engine_rocks::RocksEngine;
-use engine_traits::Engines;
 use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{Engines, RaftEngine};
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
@@ -780,7 +780,7 @@ impl DebugExecutor for DebugClient {
     }
 }
 
-impl DebugExecutor for Debugger {
+impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     fn check_local_mode(&self) {}
 
     fn get_all_meta_regions(&self) -> Vec<u64> {

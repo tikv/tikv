@@ -65,17 +65,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
 
-        // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
-        // to prevent this case from happening.
-        if let Some(max_rollback_ts) = txn_status
-            .iter()
-            .filter(|(_, commit_ts)| commit_ts.is_zero())
-            .map(|(start_ts, _)| start_ts)
-            .max()
-        {
-            context.concurrency_manager.update_max_ts(*max_rollback_ts);
-        }
-
         let mut txn = MvccTxn::new(
             snapshot,
             TimeStamp::zero(),

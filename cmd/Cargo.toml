@@ -58,9 +58,8 @@ encryption = { path = "../components/encryption" }
 engine_rocks = { path = "../components/engine_rocks" }
 engine_traits = { path = "../components/engine_traits" }
 fs2 = "0.4"
-futures = "0.1"
-futures03 = { package = "futures", version = "0.3" }
-futures-cpupool = "0.1"
+futures = "0.3"
+tokio = { version = "0.2", features = ["rt-threaded"] }
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../components/keys" }
