@@ -13,7 +13,6 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
-use txn_types::TxnExtra;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
@@ -338,26 +337,16 @@ pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
-    pub txn_extra: TxnExtra,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
     #[inline]
-    pub fn with_txn_extra(
-        request: RaftCmdRequest,
-        callback: Callback<S>,
-        txn_extra: TxnExtra,
-    ) -> RaftCommand<S> {
+    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
         RaftCommand {
             request,
             callback,
-            txn_extra,
             send_time: Instant::now(),
         }
-    }
-
-    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
-        Self::with_txn_extra(request, callback, TxnExtra::default())
     }
 }
 

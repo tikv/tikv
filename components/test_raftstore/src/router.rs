@@ -77,4 +77,6 @@ impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
             Err(RaftStoreError::RegionNotFound(region_id))
         }
     }
+
+    fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
 }

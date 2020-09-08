@@ -16,7 +16,7 @@ use crate::write_batch::{Mutable, WriteBatchExt};
 use tikv_util::keybuilder::KeyBuilder;
 
 // FIXME: Find somewhere else to put this?
-pub const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
+pub const MAX_DELETE_BATCH_COUNT: usize = 512;
 
 pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
     fn is_titan(&self) -> bool {
@@ -75,7 +75,7 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
             let mut it_valid = it.seek(start_key.into())?;
             while it_valid {
                 wb.delete_cf(cf, it.key())?;
-                if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
+                if wb.count() >= MAX_DELETE_BATCH_COUNT {
                     // Can't use write_without_wal here.
                     // Otherwise it may cause dirty data when applying snapshot.
                     self.write(&wb)?;

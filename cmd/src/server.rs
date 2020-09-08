@@ -138,13 +138,12 @@ struct TiKVEngines {
     engines: Engines<RocksEngine, RocksEngine>,
     store_meta: Arc<Mutex<StoreMeta>>,
     engine: RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>,
-    raft_router: ServerRaftStoreRouter<RocksEngine, RocksEngine>,
 }
 
 struct Servers {
     lock_mgr: LockManager,
-    server: Server<ServerRaftStoreRouter<RocksEngine, RocksEngine>, resolve::PdStoreAddrResolver>,
-    node: Node<RpcClient>,
+    server: Server<RaftRouter<RocksEngine, RocksEngine>, resolve::PdStoreAddrResolver>,
+    node: Node<RpcClient, RocksEngine>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
 }
@@ -436,6 +435,7 @@ impl TiKVServer {
         let local_reader =
             LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
+        let engine = RaftKv::new(raft_router, engines.kv.clone());
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -462,23 +462,23 @@ impl TiKVServer {
             )),
         );
 
-        let engine = RaftKv::new(raft_router.clone(), engines.kv.clone());
-
         self.engines = Some(TiKVEngines {
             engines,
             store_meta,
             engine,
-            raft_router,
         });
     }
 
     fn init_gc_worker(
         &mut self,
-    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>> {
+    ) -> GcWorker<
+        RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>,
+        RaftRouter<RocksEngine, RocksEngine>,
+    > {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
-            Some(self.router.clone()),
+            self.router.clone(),
             self.config.gc.clone(),
             self.pd_client.cluster_version(),
         );
@@ -494,13 +494,27 @@ impl TiKVServer {
 
     fn init_servers(
         &mut self,
-        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>>,
+        gc_worker: &GcWorker<
+            RaftKv<ServerRaftStoreRouter<RocksEngine, RocksEngine>>,
+            RaftRouter<RocksEngine, RocksEngine>,
+        >,
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Gc,
             Box::new(gc_worker.get_config_manager()),
         );
+
+        // Create cdc.
+        let mut cdc_worker = Box::new(tikv_util::worker::Worker::new("cdc"));
+        let cdc_scheduler = cdc_worker.scheduler();
+        let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
+
+        self.engines
+            .as_mut()
+            .unwrap()
+            .engine
+            .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
@@ -577,9 +591,7 @@ impl TiKVServer {
             cop_read_pools.handle()
         };
 
-        // Create and register cdc.
-        let mut cdc_worker = Box::new(tikv_util::worker::Worker::new("cdc"));
-        let cdc_scheduler = cdc_worker.scheduler();
+        // Register cdc
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(&mut coprocessor_host);
 
@@ -595,7 +607,7 @@ impl TiKVServer {
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
             ),
-            engines.raft_router.clone(),
+            self.router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
             gc_worker.clone(),
@@ -674,12 +686,11 @@ impl TiKVServer {
         }
 
         // Start CDC.
-        let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
         let cdc_endpoint = cdc::Endpoint::new(
             &self.config.cdc,
             self.pd_client.clone(),
             cdc_worker.scheduler(),
-            raft_router,
+            self.router.clone(),
             cdc_ob,
             engines.store_meta.clone(),
             self.concurrency_manager.clone(),
@@ -708,7 +719,7 @@ impl TiKVServer {
         // Import SST service.
         let import_service = ImportSSTService::new(
             self.config.import.clone(),
-            engines.raft_router.clone(),
+            self.router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
             self.security_mgr.clone(),
@@ -733,7 +744,7 @@ impl TiKVServer {
         let debug_service = DebugService::new(
             engines.engines.clone(),
             pool.clone(),
-            engines.raft_router.clone(),
+            self.router.clone(),
             self.cfg_controller.as_ref().unwrap().clone(),
             self.security_mgr.clone(),
         );

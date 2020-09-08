@@ -10,5 +10,7 @@ define_error_codes!(
     CF_NAME => ("CFName", "", ""),
     CODEC => ("Codec", "", ""),
 
-    UNKNOWN => ("Unknown", "", "")
+    UNKNOWN => ("Unknown", "", ""),
+    DATALOSS => ("DataLoss", "", ""),
+    DATACOMPACTED => ("DataCompacted", "", "")
 );
