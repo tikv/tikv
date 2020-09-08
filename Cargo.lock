@@ -472,6 +472,8 @@ dependencies = [
  "panic_hook",
  "pd_client",
  "prometheus",
+ "prost",
+ "protobuf",
  "raft",
  "raftstore",
  "resolved_ts",
@@ -595,6 +597,7 @@ dependencies = [
  "promptly",
  "protobuf",
  "raft",
+ "raft_log_engine",
  "raftstore",
  "rand",
  "security",
@@ -3051,7 +3054,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine.git#5e305ec0db988a11df8dda296ae0a867eef28cdc"
+source = "git+https://github.com/tikv/raft-engine.git#e4984d11683c71bbceb3522721ba8657204e1974"
 dependencies = [
  "byteorder",
  "crc32fast",
