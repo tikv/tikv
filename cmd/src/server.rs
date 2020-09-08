@@ -8,7 +8,16 @@
 //! Components are often used to initialize other components, and/or must be explicitly stopped.
 //! We keep these components in the `TiKVServer` struct.
 
-use crate::{setup::*, signal_handler};
+use std::{
+    convert::TryFrom,
+    env, fmt,
+    fs::{self, File},
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    thread::JoinHandle,
+};
+
 use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine};
@@ -39,15 +48,6 @@ use raftstore::{
     },
 };
 use security::SecurityManager;
-use std::{
-    convert::TryFrom,
-    env, fmt,
-    fs::{self, File},
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    thread::JoinHandle,
-};
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
@@ -74,6 +74,8 @@ use tikv_util::{
     worker::{FutureWorker, Worker},
 };
 
+use crate::{setup::*, signal_handler};
+
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
 pub fn run_tikv(config: TiKvConfig) {
@@ -94,38 +96,31 @@ pub fn run_tikv(config: TiKvConfig) {
 
     let _m = Monitor::default();
 
+    macro_rules! run_impl {
+        ($ER: ty) => {{
+            let mut tikv = TiKVServer::<$ER>::init(config);
+            tikv.check_conflict_addr();
+            tikv.init_fs();
+            tikv.init_yatp();
+            tikv.init_encryption();
+            let engines = tikv.init_raw_engines();
+            tikv.init_engines(engines);
+            let gc_worker = tikv.init_gc_worker();
+            let server_config = tikv.init_servers(&gc_worker);
+            tikv.register_services();
+            tikv.init_metrics_flusher();
+            tikv.run_server(server_config);
+            tikv.run_status_server();
+
+            signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
+            tikv.stop();
+        }};
+    }
+
     if !config.raft_engine.enable {
-        let mut tikv = TiKVServer::<RocksEngine>::init(config);
-        tikv.check_conflict_addr();
-        tikv.init_fs();
-        tikv.init_yatp();
-        tikv.init_encryption();
-        tikv.init_engines();
-        let gc_worker = tikv.init_gc_worker();
-        let server_config = tikv.init_servers(&gc_worker);
-        tikv.register_services();
-        tikv.init_metrics_flusher();
-        tikv.run_server(server_config);
-        tikv.run_status_server();
-
-        signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
-        tikv.stop();
+        run_impl!(RocksEngine)
     } else {
-        let mut tikv = TiKVServer::<RaftLogEngine>::init(config);
-        tikv.check_conflict_addr();
-        tikv.init_fs();
-        tikv.init_yatp();
-        tikv.init_encryption();
-        tikv.init_engines();
-        let gc_worker = tikv.init_gc_worker();
-        let server_config = tikv.init_servers(&gc_worker);
-        tikv.register_services();
-        tikv.init_metrics_flusher();
-        tikv.run_server(server_config);
-        tikv.run_status_server();
-
-        signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
-        tikv.stop();
+        run_impl!(RaftLogEngine)
     }
 }
 
@@ -412,6 +407,32 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             }
         });
         engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
+    }
+
+    fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let engine = RaftKv::new(
+            ServerRaftStoreRouter::new(
+                self.router.clone(),
+                LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone()),
+            ),
+            engines.kv.clone(),
+        );
+
+        let cfg_controller = self.cfg_controller.as_mut().unwrap();
+        cfg_controller.register(
+            tikv::config::Module::Storage,
+            Box::new(StorageConfigManger::new(
+                engines.kv.clone(),
+                self.config.storage.block_cache.shared,
+            )),
+        );
+
+        self.engines = Some(TiKVEngines {
+            engines,
+            store_meta,
+            engine,
+        });
     }
 
     fn init_gc_worker(
@@ -858,7 +879,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 }
 
 impl TiKVServer<RocksEngine> {
-    fn init_engines(&mut self) {
+    fn init_raw_engines(&mut self) -> Engines<RocksEngine, RocksEngine> {
         let env = get_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
@@ -897,20 +918,7 @@ impl TiKVServer<RocksEngine> {
         raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader =
-            LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
-        let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
-        let engine = RaftKv::new(raft_router, engines.kv.clone());
-
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Storage,
-            Box::new(StorageConfigManger::new(
-                engines.kv.clone(),
-                self.config.storage.block_cache.shared,
-            )),
-        );
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(
@@ -928,16 +936,12 @@ impl TiKVServer<RocksEngine> {
             )),
         );
 
-        self.engines = Some(TiKVEngines {
-            engines,
-            store_meta,
-            engine,
-        });
+        engines
     }
 }
 
 impl TiKVServer<RaftLogEngine> {
-    fn init_engines(&mut self) {
+    fn init_raw_engines(&mut self) -> Engines<RocksEngine, RaftLogEngine> {
         let env = get_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
@@ -963,23 +967,9 @@ impl TiKVServer<RaftLogEngine> {
         let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
         let shared_block_cache = block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
-
         let engines = Engines::new(kv_engine, raft_engine);
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader =
-            LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
-        let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
-        let engine = RaftKv::new(raft_router, engines.kv.clone());
-
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Storage,
-            Box::new(StorageConfigManger::new(
-                engines.kv.clone(),
-                self.config.storage.block_cache.shared,
-            )),
-        );
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(
@@ -989,11 +979,7 @@ impl TiKVServer<RaftLogEngine> {
             )),
         );
 
-        self.engines = Some(TiKVEngines {
-            engines,
-            store_meta,
-            engine,
-        });
+        engines
     }
 }
 

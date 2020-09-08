@@ -1,11 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fs;
+use std::path::Path;
+
 use engine_traits::{CacheStats, RaftEngine, RaftLogBatch as RaftLogBatchTrait, Result};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
+use raft_engine::{EntryExt, Error as RaftEngineError, LogBatch, RaftLogEngine as RawRaftEngine};
+
 pub use raft_engine::config::RecoveryMode;
 pub use raft_engine::Config as RaftEngineConfig;
-use raft_engine::{EntryExt, Error as RaftEngineError, LogBatch, RaftLogEngine as RawRaftEngine};
 
 #[derive(Clone)]
 pub struct EntryExtTyped;
@@ -22,6 +26,15 @@ pub struct RaftLogEngine(RawRaftEngine<Entry, EntryExtTyped>);
 impl RaftLogEngine {
     pub fn new(config: RaftEngineConfig) -> Self {
         RaftLogEngine(RawRaftEngine::new(config))
+    }
+
+    /// If path is not an empty directory, we say db exists.
+    pub fn exists(path: &str) -> bool {
+        let path = Path::new(path);
+        if !path.exists() || !path.is_dir() {
+            return false;
+        }
+        fs::read_dir(&path).unwrap().next().is_some()
     }
 }
 
