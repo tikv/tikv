@@ -19,7 +19,7 @@ use std::time::Duration;
 use std::{process, str, u64};
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
-use futures03::{
+use futures::{
     compat::Stream01CompatExt, executor::block_on, future, stream, Stream, StreamExt, TryStreamExt,
 };
 use grpcio::{CallOption, ChannelBuilder, Environment};
