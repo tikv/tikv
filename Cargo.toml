@@ -84,7 +84,7 @@ fail = "0.3"
 failure = "0.1"
 fs2 = "0.4"
 futures = "0.1"
-futures03 = { package = "futures", version = "0.3.1", features = ["compat"] }
+futures03 = { package = "futures", version = "0.3.1", features = ["compat", "thread-pool"] }
 futures-cpupool = "0.1"
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
@@ -205,6 +205,7 @@ members = [
   "components/test_coprocessor",
   "components/test_sst_importer",
   "components/test_util",
+  "components/test_pd",
   "components/tikv_alloc",
   "components/match_template",
   "components/engine_traits/tests",
