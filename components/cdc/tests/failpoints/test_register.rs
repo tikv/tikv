@@ -45,7 +45,7 @@ fn test_failed_pending_batch() {
     fail::remove(fp);
 
     loop {
-        let mut events = receive_event().events.to_vec();
+        let mut events = receive_event(false).events.to_vec();
         match events.pop().unwrap().event.unwrap() {
             Event_oneof_event::Error(err) => {
                 assert!(err.has_epoch_not_match(), "{:?}", err);
@@ -65,7 +65,7 @@ fn test_failed_pending_batch() {
     assert_eq!(req.get_region_id(), region.get_id());
     req.set_region_epoch(region.get_region_epoch().clone());
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
@@ -107,7 +107,7 @@ fn test_region_ready_after_deregister() {
 
     // Then CDC should not panic
     fail::remove(fp);
-    receive_event();
+    receive_event(false);
 
     event_feed_wrap.as_ref().replace(None);
     suite.stop();
@@ -140,7 +140,7 @@ fn test_connections_register() {
         .send((req.clone(), WriteFlags::default()))
         .wait()
         .unwrap();
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
@@ -168,9 +168,9 @@ fn test_connections_register() {
     suite.cluster.must_split(&region, b"k0");
     fail::remove(fp);
     // Receive events from conn 2
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     while events.len() < 2 {
-        events.extend(receive_event().events.into_iter());
+        events.extend(receive_event(false).events.into_iter());
     }
     assert_eq!(events.len(), 2, "{:?}", events.len());
     match events.remove(0).event.unwrap() {
@@ -229,9 +229,9 @@ fn test_merge() {
     // The call is finished when prepare_merge is applied.
     suite.cluster.try_merge(source.get_id(), target.get_id());
     // Epoch not match after prepare_merge
-    let mut events = source_event().events.to_vec();
+    let mut events = source_event(false).events.to_vec();
     if events.len() == 1 {
-        events.extend(source_event().events.into_iter());
+        events.extend(source_event(false).events.into_iter());
     }
     assert_eq!(events.len(), 2, "{:?}", events);
     match events.remove(0).event.unwrap() {
@@ -248,7 +248,7 @@ fn test_merge() {
         }
         _ => panic!("unknown event"),
     }
-    let mut events = target_event().events.to_vec();
+    let mut events = target_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
@@ -275,7 +275,7 @@ fn test_merge() {
     sleep_ms(100);
     fail::remove(destroy_peer_fp);
     loop {
-        let mut events = source_event().events.to_vec();
+        let mut events = source_event(false).events.to_vec();
         assert_eq!(events.len(), 1, "{:?}", events);
         match events.pop().unwrap().event.unwrap() {
             Event_oneof_event::Error(err) => {
@@ -290,7 +290,7 @@ fn test_merge() {
             _ => panic!("unknown event"),
         }
     }
-    let mut events = target_event().events.to_vec();
+    let mut events = target_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
@@ -335,7 +335,7 @@ fn test_deregister_pending_downstream() {
     // Sleep for a while to make sure the region has been subscribed
     sleep_ms(200);
     fail::remove(build_resolver_fp);
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
@@ -345,7 +345,7 @@ fn test_deregister_pending_downstream() {
     }
 
     let _req_tx2 = req_tx2.send((req, WriteFlags::default())).wait().unwrap();
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {

@@ -32,10 +32,7 @@ fn test_cdc_basic() {
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    let event = receive_event();
-    if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-        assert_ne!(0, resolved_ts.ts);
-    }
+    let event = receive_event(false);
     event.events.into_iter().for_each(|e| {
         match e.event.unwrap() {
             // Even if there is no write,
@@ -71,7 +68,7 @@ fn test_cdc_basic() {
     mutation.key = k.clone().into_bytes();
     mutation.value = v.into_bytes();
     suite.must_kv_prewrite(1, vec![mutation], k.clone().into_bytes(), start_ts);
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(entries) => {
@@ -85,7 +82,7 @@ fn test_cdc_basic() {
     loop {
         // Even if there is no write,
         // resolved ts should be advanced regularly.
-        let event = receive_event();
+        let event = receive_event(true);
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             assert_ne!(0, resolved_ts.ts);
             counter += 1;
@@ -97,8 +94,9 @@ fn test_cdc_basic() {
     // Commit
     let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![k.into_bytes()], start_ts, commit_ts);
-    let mut events = receive_event().events.to_vec();
-    assert_eq!(events.len(), 1);
+    let mut event = receive_event(false);
+    let mut events = event.take_events();
+    assert_eq!(events.len(), 1, "{:?}", event);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(entries) => {
             assert_eq!(entries.entries.len(), 1);
@@ -110,7 +108,7 @@ fn test_cdc_basic() {
     // Split region 1
     let region1 = suite.cluster.get_region(&[]);
     suite.cluster.must_split(&region1, b"key2");
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
@@ -135,7 +133,7 @@ fn test_cdc_basic() {
     let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
@@ -178,7 +176,7 @@ fn test_cdc_basic() {
     let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
@@ -207,7 +205,7 @@ fn test_cdc_not_leader() {
         .wait()
         .unwrap();
     // Make sure region 1 is registered.
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
@@ -256,7 +254,7 @@ fn test_cdc_not_leader() {
         .find(|p| *p != leader)
         .unwrap();
     suite.cluster.must_transfer_leader(1, peer);
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
@@ -286,7 +284,7 @@ fn test_cdc_not_leader() {
 
     // Try to subscribe again.
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     // Should failed with not leader error.
     match events.pop().unwrap().event.unwrap() {
@@ -316,7 +314,7 @@ fn test_cdc_stale_epoch_after_region_ready() {
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Make sure region 1 is registered.
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
@@ -339,7 +337,7 @@ fn test_cdc_stale_epoch_after_region_ready() {
         .wait()
         .unwrap();
     // Must receive epoch not match error.
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
@@ -351,7 +349,7 @@ fn test_cdc_stale_epoch_after_region_ready() {
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Must receive epoch not match error.
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
@@ -401,9 +399,9 @@ fn test_cdc_scan() {
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     if events.len() == 1 {
-        events.extend(receive_event().events.into_iter());
+        events.extend(receive_event(false).events.into_iter());
     }
     assert_eq!(events.len(), 2, "{:?}", events);
     match events.remove(0).event.unwrap() {
@@ -461,9 +459,9 @@ fn test_cdc_scan() {
     let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     if events.len() == 1 {
-        events.extend(receive_event().events.to_vec());
+        events.extend(receive_event(false).events.to_vec());
     }
     assert_eq!(events.len(), 2, "{:?}", events);
     match events.remove(0).event.unwrap() {
@@ -518,7 +516,7 @@ fn test_cdc_tso_failure() {
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Make sure region 1 is registered.
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
@@ -539,7 +537,7 @@ fn test_cdc_tso_failure() {
     loop {
         // Even if there is no write,
         // resolved ts should be advanced regularly.
-        let event = receive_event();
+        let event = receive_event(true);
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             assert!(resolved_ts.ts >= previous_ts);
             assert_eq!(resolved_ts.regions, vec![1]);
@@ -569,7 +567,7 @@ fn test_region_split() {
         .wait()
         .unwrap();
     // Make sure region 1 is registered.
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
@@ -583,7 +581,7 @@ fn test_region_split() {
     }
     // Split region.
     suite.cluster.must_split(&region, b"k0");
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
@@ -600,7 +598,7 @@ fn test_region_split() {
         .send((req.clone(), WriteFlags::default()))
         .wait()
         .unwrap();
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
@@ -616,7 +614,7 @@ fn test_region_split() {
     req.region_id = region1.get_id();
     req.set_region_epoch(region1.get_region_epoch().clone());
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
@@ -633,7 +631,7 @@ fn test_region_split() {
     loop {
         // Even if there is no write,
         // resolved ts should be advanced regularly.
-        let event = receive_event();
+        let event = receive_event(true);
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             assert!(resolved_ts.ts >= previous_ts);
             assert!(
@@ -666,7 +664,7 @@ fn test_duplicate_subscribe() {
         .wait()
         .unwrap();
     // Make sure region 1 is registered.
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
@@ -680,7 +678,7 @@ fn test_duplicate_subscribe() {
     }
     // Try to subscribe again.
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     // Should receive duplicate request error.
     match events.pop().unwrap().event.unwrap() {
@@ -720,10 +718,10 @@ fn test_cdc_batch_size_limit() {
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events.len());
     while events.len() < 3 {
-        events.extend(receive_event().events.into_iter());
+        events.extend(receive_event(false).events.into_iter());
     }
     assert_eq!(events.len(), 3, "{:?}", events.len());
     match events.remove(0).event.unwrap() {
@@ -782,7 +780,7 @@ fn test_cdc_batch_size_limit() {
     m4.value = b"v4".to_vec();
     suite.must_kv_prewrite(1, vec![m3, m4], k3, start_ts);
 
-    let mut events = receive_event().events.to_vec();
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
@@ -862,7 +860,7 @@ fn test_old_value_basic() {
 
     let mut event_count = 0;
     loop {
-        let events = receive_event().events.to_vec();
+        let events = receive_event(false).events.to_vec();
         for event in events.into_iter() {
             match event.event.unwrap() {
                 Event_oneof_event::Entries(mut es) => {
@@ -896,7 +894,7 @@ fn test_old_value_basic() {
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     let mut event_count = 0;
     loop {
-        let event = receive_event();
+        let event = receive_event(false);
         for e in event.events.into_iter() {
             match e.event.unwrap() {
                 Event_oneof_event::Entries(mut es) => {
@@ -967,7 +965,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Make sure region 1 is registered.
-    let mut events = receive_event().events;
+    let mut events = receive_event(false).events;
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
@@ -986,12 +984,12 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
         }
     };
 
-    check_resolved_ts(receive_event(), |ts| assert_eq!(ts, 80));
+    check_resolved_ts(receive_event(true), |ts| assert_eq!(ts, 80));
     assert!(cm.max_read_ts() >= 100.into());
 
     drop(guard);
     for retry in 0.. {
-        let event = receive_event();
+        let event = receive_event(true);
         let mut current_rts = 0;
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             current_rts = resolved_ts.ts;
@@ -1014,7 +1012,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
     let mut last_resolved_ts = 0;
     let mut success = false;
     for _ in 0..5 {
-        let event = receive_event();
+        let event = receive_event(true);
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             let ts = resolved_ts.ts;
             assert!(ts > 100);

@@ -185,18 +185,26 @@ impl ChangeData for Service {
                         resp_vecs.push(ChangeDataEvent::default());
                         current_events_size = 0;
                     }
-                    current_events_size += event.size() as usize;
+                    let event_size = event.size();
                     match event {
                         CdcEvent::Event(e) => {
                             resp_vecs.last_mut().unwrap().mut_events().push(e);
+                            current_events_size += event_size;
                         }
                         CdcEvent::ResolvedTs(r) => {
+                            // Set resolved ts as an individual event.
+                            let events = resp_vecs.last_mut().unwrap().take_events();
+                            let mut change_data_event = ChangeDataEvent::default();
+                            change_data_event.set_events(events);
+
                             resp_vecs.last_mut().unwrap().set_resolved_ts(r);
+                            resp_vecs.push(change_data_event);
                         }
                     }
                 }
                 let resps = resp_vecs
                     .into_iter()
+                    .filter(|e| e.has_resolved_ts() || e.events.len() > 0)
                     .map(|resp| (resp, WriteFlags::default()));
                 stream::iter(resps)
             })

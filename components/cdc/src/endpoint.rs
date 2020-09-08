@@ -681,12 +681,14 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             let regions = resps
                 .into_iter()
                 .filter_map(|resp| resp)
-                .collect();
-            match scheduler.schedule(Task::MinTS { regions, min_ts }) {
-                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
-                // advance normally.
-                Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
+                .collect::<Vec<u64>>();
+            if !regions.is_empty() {
+                match scheduler.schedule(Task::MinTS { regions, min_ts }) {
+                    Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                    // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                    // advance normally.
+                    Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
+                }
             }
             match scheduler.schedule(Task::RegisterMinTsEvent) {
                 Ok(_) | Err(ScheduleError::Stopped(_)) => (),

@@ -39,20 +39,24 @@ pub fn new_event_feed(
 ) -> (
     ClientDuplexSender<ChangeDataRequest>,
     Rc<Cell<Option<ClientDuplexReceiver<ChangeDataEvent>>>>,
-    impl Fn() -> ChangeDataEvent,
+    impl Fn(bool) -> ChangeDataEvent,
 ) {
     let (req_tx, resp_rx) = client.event_feed().unwrap();
     let event_feed_wrap = Rc::new(Cell::new(Some(resp_rx)));
     let event_feed_wrap_clone = event_feed_wrap.clone();
 
-    let receive_event = move || {
+    let receive_event = move |keep_resolved_ts: bool| loop {
         let event_feed = event_feed_wrap_clone.as_ref();
         let (change_data, events) = match event_feed.replace(None).unwrap().into_future().wait() {
             Ok(res) => res,
             Err(e) => panic!("receive failed {:?}", e.0),
         };
         event_feed.set(Some(events));
-        change_data.unwrap()
+        let change_data_event = change_data.unwrap();
+        if !keep_resolved_ts && change_data_event.has_resolved_ts() {
+            continue;
+        }
+        break change_data_event;
     };
     (req_tx, event_feed_wrap, receive_event)
 }
