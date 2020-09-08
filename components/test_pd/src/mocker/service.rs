@@ -269,4 +269,11 @@ impl PdMocker for Service {
         let mut resp = self.members_resp.lock().unwrap();
         *resp = Some(members_resp);
     }
+
+    fn get_operator(&self, _: &GetOperatorRequest) -> Option<Result<GetOperatorResponse>> {
+        let mut resp = GetOperatorResponse::default();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
 }

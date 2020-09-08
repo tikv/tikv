@@ -2321,7 +2321,6 @@ impl RegionProposal {
 
 pub struct Destroy {
     region_id: u64,
-    async_remove: bool,
 }
 
 /// A message that asks the delegate to apply to the given logs and then reply to
@@ -2462,11 +2461,8 @@ impl Msg {
         Msg::Registration(Registration::new(peer))
     }
 
-    pub fn destroy(region_id: u64, async_remove: bool) -> Msg {
-        Msg::Destroy(Destroy {
-            region_id,
-            async_remove,
-        })
+    pub fn destroy(region_id: u64) -> Msg {
+        Msg::Destroy(Destroy { region_id })
     }
 }
 
@@ -2681,17 +2677,15 @@ impl ApplyFsm {
         assert_eq!(d.region_id, self.delegate.region_id());
         if !self.delegate.stopped {
             self.destroy(ctx);
-            if d.async_remove {
-                ctx.notifier.notify(
-                    self.delegate.region_id(),
-                    PeerMsg::ApplyRes {
-                        res: TaskRes::Destroy {
-                            region_id: self.delegate.region_id(),
-                            peer_id: self.delegate.id,
-                        },
+            ctx.notifier.notify(
+                self.delegate.region_id(),
+                PeerMsg::ApplyRes {
+                    res: TaskRes::Destroy {
+                        region_id: self.delegate.region_id(),
+                        peer_id: self.delegate.id,
                     },
-                );
-            }
+                },
+            );
         }
     }
 
@@ -3046,6 +3040,9 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> PollHandler<ApplyFsm, Contro
             }
             expected_msg_count = None;
         }
+        fail_point!("before_handle_normal_3", normal.delegate.id() == 3, |_| {
+            None
+        });
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => self.msg_buf.push(msg),
@@ -3573,7 +3570,7 @@ mod tests {
             );
         });
 
-        router.schedule_task(2, Msg::destroy(2, true));
+        router.schedule_task(2, Msg::destroy(2));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Destroy { region_id, peer_id } => (region_id, peer_id),
