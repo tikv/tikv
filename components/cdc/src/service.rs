@@ -199,20 +199,11 @@ impl ChangeData for Service {
                         }
                     }
                 }
-<<<<<<< HEAD
-                let resps = event_vecs.into_iter().map(|events| {
-                    let mut resp = ChangeDataEvent::default();
-                    resp.set_events(events.into());
-                    (resp, WriteFlags::default())
-                });
-                stream::iter_ok(resps)
-=======
                 let resps = resp_vecs
                     .into_iter()
                     .filter(|e| e.has_resolved_ts() || !e.events.is_empty())
                     .map(|resp| (resp, WriteFlags::default()));
-                stream::iter(resps)
->>>>>>> a711ec9... cdc: reduce the message of advancing resolved ts (#8442)
+                stream::iter_ok(resps)
             })
             .flatten()
             .map_err(|_: ()| {

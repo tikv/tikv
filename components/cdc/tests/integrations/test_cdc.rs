@@ -12,20 +12,12 @@ use kvproto::cdcpb::*;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
     event::{row::OpType as EventRowOpType, Event as Event_oneof_event, LogType as EventLogType},
-<<<<<<< HEAD
     ChangeDataRequest,
-=======
-    ChangeDataEvent, ChangeDataRequest,
->>>>>>> a711ec9... cdc: reduce the message of advancing resolved ts (#8442)
 };
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::sleep_ms;
-<<<<<<< HEAD
-=======
 use test_raftstore::*;
-use txn_types::{Key, Lock, LockType};
->>>>>>> a711ec9... cdc: reduce the message of advancing resolved ts (#8442)
 
 use cdc::Task;
 
@@ -929,104 +921,3 @@ fn test_old_value_basic() {
     event_feed_wrap.as_ref().replace(None);
     suite.stop();
 }
-<<<<<<< HEAD
-=======
-
-#[test]
-fn test_cdc_resolve_ts_checking_concurrency_manager() {
-    let mut suite: super::super::TestSuite = TestSuite::new(1);
-    let cm: ConcurrencyManager = suite.get_txn_concurrency_manager(1).unwrap();
-    let lock_key = |key: &[u8], ts: u64| {
-        let guard = block_on(cm.lock_key(&Key::from_raw(key)));
-        guard.with_lock(|l| {
-            *l = Some(Lock::new(
-                LockType::Put,
-                key.to_vec(),
-                ts.into(),
-                0,
-                None,
-                0.into(),
-                1,
-                ts.into(),
-            ))
-        });
-        guard
-    };
-
-    cm.update_max_read_ts(20.into());
-
-    let guard = lock_key(b"a", 80);
-    suite.set_tso(100);
-
-    let mut req = ChangeDataRequest::default();
-    req.region_id = 1;
-    req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    req.set_checkpoint_ts(100);
-    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    // Make sure region 1 is registered.
-    let mut events = receive_event(false).events;
-    assert_eq!(events.len(), 1);
-    match events.pop().unwrap().event.unwrap() {
-        // Even if there is no write,
-        // it should always outputs an Initialized event.
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
-        }
-        _ => panic!("unknown event"),
-    }
-
-    fn check_resolved_ts(event: ChangeDataEvent, check_fn: impl Fn(u64)) {
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            check_fn(resolved_ts.ts)
-        }
-    };
-
-    check_resolved_ts(receive_event(true), |ts| assert_eq!(ts, 80));
-    assert!(cm.max_read_ts() >= 100.into());
-
-    drop(guard);
-    for retry in 0.. {
-        let event = receive_event(true);
-        let mut current_rts = 0;
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            current_rts = resolved_ts.ts;
-            if resolved_ts.ts >= 100 {
-                break;
-            }
-        }
-        if retry >= 5 {
-            panic!(
-                "resolved ts didn't push properly after unlocking memlock. current resolved_ts: {}",
-                current_rts
-            );
-        }
-    }
-
-    let _guard = lock_key(b"a", 90);
-    // The resolved_ts should be blocked by the mem lock but it's already greater than 90.
-    // Retry until receiving an unchanged resovled_ts because the first several resolved ts received
-    // might be updated before acquiring the lock.
-    let mut last_resolved_ts = 0;
-    let mut success = false;
-    for _ in 0..5 {
-        let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            let ts = resolved_ts.ts;
-            assert!(ts > 100);
-            if ts == last_resolved_ts {
-                success = true;
-                break;
-            }
-            assert!(ts > last_resolved_ts);
-            last_resolved_ts = ts;
-        }
-    }
-    assert!(success, "resolved_ts not blocked by the memory lock");
-
-    event_feed_wrap.as_ref().replace(None);
-    suite.stop();
-}
->>>>>>> a711ec9... cdc: reduce the message of advancing resolved ts (#8442)

@@ -773,14 +773,12 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
-<<<<<<< HEAD
-            let (events, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
-                Ok((events, rx)) => (events, rx),
-                Err(e) => panic!("unexpected recv error: {:?}", e.0),
-            };
-=======
-            let (resps, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
->>>>>>> a711ec9... cdc: reduce the message of advancing resolved ts (#8442)
+            let (resps, rx) = rx_wrap
+                .replace(None)
+                .unwrap()
+                .into_future()
+                .wait()
+                .unwrap_or_else(|e| panic!("unexpected recv error: {:?}", e.0));
             rx_wrap.set(Some(rx));
             let mut resps = resps.unwrap();
             assert_eq!(resps.len(), 1);
@@ -905,14 +903,12 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let check_event = |event_rows: Vec<EventRow>| {
-<<<<<<< HEAD
-            let (events, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
-                Ok((events, rx)) => (events, rx),
-                Err(e) => panic!("unexpected recv error: {:?}", e.0),
-            };
-=======
-            let (resps, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
->>>>>>> a711ec9... cdc: reduce the message of advancing resolved ts (#8442)
+            let (resps, rx) = rx_wrap
+                .replace(None)
+                .unwrap()
+                .into_future()
+                .wait()
+                .unwrap_or_else(|e| panic!("unexpected recv error: {:?}", e.0));
             rx_wrap.set(Some(rx));
             let mut resps = resps.unwrap();
             assert_eq!(resps.len(), 1);
