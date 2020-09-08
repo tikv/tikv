@@ -9,12 +9,11 @@ use std::sync::Arc;
 use crossbeam::atomic::AtomicCell;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
-    error::DuplicateRequest as ErrorDuplicateRequest,
     event::{
         row::OpType as EventRowOpType, Entries as EventEntries, Event as Event_oneof_event,
         LogType as EventLogType, Row as EventRow,
     },
-    Error as EventError, Event,
+    Compatibility, DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event,
 };
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{

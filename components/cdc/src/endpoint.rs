@@ -10,6 +10,8 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures03::compat::Future01CompatExt;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::event::Event as Event_oneof_event;
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
@@ -1304,7 +1306,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -1314,7 +1316,7 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 1);
 
         // duplicate request error.
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 2, conn_id);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -1323,6 +1325,8 @@ mod tests {
         });
         let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
         if let CdcEvent::Event(mut e) = cdc_event {
+            assert_eq!(e.region_id, 1);
+            assert_eq!(e.request_id, 2);
             let event = e.event.take().unwrap();
             match event {
                 Event_oneof_event::Error(err) => {
@@ -1336,7 +1340,7 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 1);
 
         // Compatibility error.
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 3, conn_id);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -1345,6 +1349,8 @@ mod tests {
         });
         let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
         if let CdcEvent::Event(mut e) = cdc_event {
+            assert_eq!(e.region_id, 1);
+            assert_eq!(e.request_id, 3);
             let event = e.event.take().unwrap();
             match event {
                 Event_oneof_event::Error(err) => {
