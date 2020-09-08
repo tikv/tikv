@@ -1,10 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::callback::must_call;
+use futures::channel::mpsc;
 use futures::channel::oneshot as futures_oneshot;
-use futures::future::BoxFuture;
+use futures::future::{self, BoxFuture, Future, FutureExt, TryFutureExt};
+use futures::stream::{Stream, StreamExt};
 use futures::task::{self, ArcWake, Context, Poll};
-use futures::Future;
+
 use std::sync::{Arc, Mutex};
 
 /// Generates a paired future and callback so that when callback is being called, its result
@@ -42,7 +44,8 @@ where
     (callback, future)
 }
 
-// BatchCommandsNotify is used to make business pool notifiy completion queues directly.
+
+// BatchCommandsWaker is used to make business pool notifiy completion queues directly.
 pub(crate) struct BatchCommandsWaker(Mutex<Option<BoxFuture<'static, ()>>>);
 impl ArcWake for BatchCommandsWaker {
     fn wake_by_ref(arc_self: &Arc<Self>) {
@@ -65,4 +68,26 @@ pub fn poll_future_notify<F: Future<Output = ()> + Send + 'static>(f: F) {
     let spawn = Mutex::new(Some(f));
     let waker = Arc::new(BatchCommandsWaker(spawn));
     waker.wake();
+}
+
+/// Create a stream proxy with buffer representing the remote stream. The returned task
+/// will receive messages from the remote stream as much as possible.
+pub fn create_stream_with_buffer<T, S>(
+    s: S,
+    size: usize,
+) -> (
+    impl Stream<Item = T> + Send + 'static,
+    impl Future<Output = ()> + Send + 'static,
+)
+where
+    S: Stream<Item = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = mpsc::channel::<T>(size);
+    let driver = s
+        .then(future::ok::<T, mpsc::SendError>)
+        .forward(tx)
+        .map_err(|e| warn!("stream with buffer send error"; "error" => %e))
+        .map(|_| ());
+    (rx, driver)
 }
