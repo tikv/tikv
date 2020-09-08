@@ -101,12 +101,19 @@ pub fn commit<S: Snapshot>(
 
 pub mod tests {
     use super::*;
-    use crate::storage::mvcc::tests::write;
+    use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::MvccTxn;
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use txn_types::TimeStamp;
+
+    #[cfg(test)]
+    use crate::storage::mvcc::SHORT_VALUE_MAX_LEN;
+    #[cfg(test)]
+    use crate::storage::txn::commands::check_txn_status;
+    #[cfg(test)]
+    use crate::storage::{TestEngineBuilder, TxnStatus};
 
     pub fn must_succeed<E: Engine>(
         engine: &E,
@@ -135,5 +142,132 @@ pub mod tests {
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
         assert!(commit(&mut txn, Key::from_raw(key), commit_ts.into()).is_err());
+    }
+
+    #[cfg(test)]
+    fn test_commit_ok_imp(k1: &[u8], v1: &[u8], k2: &[u8], k3: &[u8]) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        must_prewrite_put(&engine, k1, v1, k1, 10);
+        must_prewrite_lock(&engine, k2, k1, 10);
+        must_prewrite_delete(&engine, k3, k1, 10);
+        must_locked(&engine, k1, 10);
+        must_locked(&engine, k2, 10);
+        must_locked(&engine, k3, 10);
+        must_succeed(&engine, k1, 10, 15);
+        must_succeed(&engine, k2, 10, 15);
+        must_succeed(&engine, k3, 10, 15);
+        must_written(&engine, k1, 10, 15, WriteType::Put);
+        must_written(&engine, k2, 10, 15, WriteType::Lock);
+        must_written(&engine, k3, 10, 15, WriteType::Delete);
+        // commit should be idempotent
+        must_succeed(&engine, k1, 10, 15);
+        must_succeed(&engine, k2, 10, 15);
+        must_succeed(&engine, k3, 10, 15);
+    }
+
+    #[test]
+    fn test_commit_ok() {
+        test_commit_ok_imp(b"x", b"v", b"y", b"z");
+
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        test_commit_ok_imp(b"x", &long_value, b"y", b"z");
+    }
+
+    #[cfg(test)]
+    fn test_commit_err_imp(k: &[u8], v: &[u8]) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Not prewrite yet
+        must_err(&engine, k, 1, 2);
+        must_prewrite_put(&engine, k, v, k, 5);
+        // start_ts not match
+        must_err(&engine, k, 4, 5);
+        must_rollback(&engine, k, 5);
+        // commit after rollback
+        must_err(&engine, k, 5, 6);
+    }
+
+    #[test]
+    fn test_commit_err() {
+        test_commit_err_imp(b"k", b"v");
+
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        test_commit_err_imp(b"k2", &long_value);
+    }
+
+    #[test]
+    fn test_min_commit_ts() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (k, v) = (b"k", b"v");
+
+        // Shortcuts
+        let ts = TimeStamp::compose;
+        let uncommitted = |ttl, min_commit_ts| {
+            move |s| {
+                if let TxnStatus::Uncommitted { lock } = s {
+                    lock.ttl == ttl && lock.min_commit_ts == min_commit_ts
+                } else {
+                    false
+                }
+            }
+        };
+
+        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(10, 0), 100, 0);
+        check_txn_status::tests::must_success(
+            &engine,
+            k,
+            ts(10, 0),
+            ts(20, 0),
+            ts(20, 0),
+            true,
+            uncommitted(100, ts(20, 1)),
+        );
+        // The the min_commit_ts should be ts(20, 1)
+        must_err(&engine, k, ts(10, 0), ts(15, 0));
+        must_err(&engine, k, ts(10, 0), ts(20, 0));
+        must_succeed(&engine, k, ts(10, 0), ts(20, 1));
+
+        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(30, 0), 100, 0);
+        check_txn_status::tests::must_success(
+            &engine,
+            k,
+            ts(30, 0),
+            ts(40, 0),
+            ts(40, 0),
+            true,
+            uncommitted(100, ts(40, 1)),
+        );
+        must_succeed(&engine, k, ts(30, 0), ts(50, 0));
+
+        // If the min_commit_ts of the pessimistic lock is greater than prewrite's, use it.
+        must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(60, 0), ts(60, 0), 100);
+        check_txn_status::tests::must_success(
+            &engine,
+            k,
+            ts(60, 0),
+            ts(70, 0),
+            ts(70, 0),
+            true,
+            uncommitted(100, ts(70, 1)),
+        );
+        must_prewrite_put_impl(
+            &engine,
+            k,
+            v,
+            k,
+            &None,
+            ts(60, 0),
+            true,
+            50,
+            ts(60, 0),
+            1,
+            ts(60, 1),
+            false,
+        );
+        // The min_commit_ts is ts(70, 0) other than ts(60, 1) in prewrite request.
+        must_large_txn_locked(&engine, k, ts(60, 0), 100, ts(70, 1), false);
+        must_err(&engine, k, ts(60, 0), ts(65, 0));
+        must_succeed(&engine, k, ts(60, 0), ts(80, 0));
     }
 }
