@@ -456,6 +456,7 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
+ "bitflags",
  "concurrency_manager",
  "crossbeam",
  "engine_rocks",
@@ -477,6 +478,7 @@ dependencies = [
  "raftstore",
  "resolved_ts",
  "security",
+ "semver 0.10.0",
  "slog",
  "slog-global",
  "tempfile",
@@ -1883,7 +1885,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#d677e6fd224a9c59ff6b3e29426fc8818ebebfbd"
+source = "git+https://github.com/overvenus/kvproto.git?branch=cdc/version#afd1cccce17bb4e21f03c25e5fb96d052b0a0f8a"
 dependencies = [
  "futures 0.1.29",
  "grpcio",

@@ -36,7 +36,7 @@ use txn_types::{
 
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
-use crate::service::{CdcEvent, Conn, ConnID};
+use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
 
 pub enum Deregister {
@@ -119,6 +119,7 @@ pub enum Task {
         request: ChangeDataRequest,
         downstream: Downstream,
         conn_id: ConnID,
+        version: semver::Version,
     },
     Deregister(Deregister),
     OpenConn {
@@ -168,6 +169,7 @@ impl fmt::Debug for Task {
                 ref request,
                 ref downstream,
                 ref conn_id,
+                ref version,
                 ..
             } => de
                 .field("type", &"register")
@@ -175,6 +177,7 @@ impl fmt::Debug for Task {
                 .field("request", request)
                 .field("id", &downstream.get_id())
                 .field("conn_id", conn_id)
+                .field("version", version)
                 .finish(),
             Task::Deregister(deregister) => de
                 .field("type", &"deregister")
@@ -411,8 +414,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         mut request: ChangeDataRequest,
         mut downstream: Downstream,
         conn_id: ConnID,
+        version: semver::Version,
     ) {
         let region_id = request.region_id;
+        let downstream_id = downstream.get_id();
         let conn = match self.connections.get_mut(&conn_id) {
             Some(conn) => conn,
             None => {
@@ -422,13 +427,20 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             }
         };
         downstream.set_sink(conn.get_sink());
-        if !conn.subscribe(request.get_region_id(), downstream.get_id()) {
+
+        // TODO: Add a new task to close incompatible features.
+        if let Some(e) = conn.check_version_and_set_feature(version) {
+            // The downstream has not registered yet, send error right away.
+            downstream.sink_compatibility_error(region_id, e);
+            return;
+        }
+        if !conn.subscribe(request.get_region_id(), downstream_id) {
             downstream.sink_duplicate_error(request.get_region_id());
             error!("duplicate register";
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
                 "req_id" => request.get_request_id(),
-                "downstream_id" => ?downstream.get_id());
+                "downstream_id" => ?downstream_id);
             return;
         }
 
@@ -436,7 +448,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             "region_id" => region_id,
             "conn_id" => ?conn.get_id(),
             "req_id" => request.get_request_id(),
-            "downstream_id" => ?downstream.get_id());
+            "downstream_id" => ?downstream_id);
         let mut is_new_delegate = false;
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
             let d = Delegate::new(region_id);
@@ -444,7 +456,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             d
         });
 
-        let downstream_id = downstream.get_id();
         let downstream_state = downstream.get_state();
         let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
@@ -629,13 +640,43 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let mut resolved_ts = ResolvedTs::default();
         resolved_ts.regions = regions;
         resolved_ts.ts = self.min_resolved_ts.into_inner();
-        for (id, conn) in &self.connections {
-            if conn
-                .get_sink()
-                .send(CdcEvent::ResolvedTs(resolved_ts.clone()))
-                .is_err()
-            {
-                error!("send event failed"; "conn" => ?id);
+
+        let send_cdc_event = |conn: &Conn, event| {
+            if let Err(e) = conn.get_sink().try_send(event) {
+                match e {
+                    crossbeam::TrySendError::Disconnected(_) => {
+                        debug!("send event failed, disconnected";
+                            "conn_id" => ?conn.get_id(), "downstream" => conn.get_peer());
+                    }
+                    crossbeam::TrySendError::Full(_) => {
+                        info!("send event failed, full";
+                            "conn_id" => ?conn.get_id(), "downstream" => conn.get_peer());
+                    }
+                }
+            }
+        };
+        for conn in self.connections.values() {
+            let features = if let Some(features) = conn.get_feature() {
+                features
+            } else {
+                // None means there is no downsteam registered yet.
+                continue;
+            };
+
+            if features.contains(FeatureGate::BATCH_RESOLVED_TS) {
+                send_cdc_event(conn, CdcEvent::ResolvedTs(resolved_ts.clone()));
+            } else {
+                // Fallback to previous non-batch resolved ts event.
+                for region_id in &resolved_ts.regions {
+                    if conn.downstream_id(*region_id).is_none() {
+                        // No such region registers in the connection.
+                        continue;
+                    }
+                    let mut event = Event::default();
+                    event.region_id = *region_id;
+                    event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.ts));
+                    send_cdc_event(conn, CdcEvent::Event(event));
+                }
             }
         }
     }
@@ -918,7 +959,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                 request,
                 downstream,
                 conn_id,
-            } => self.on_register(request, downstream, conn_id),
+                version,
+            } => self.on_register(request, downstream, conn_id, version),
             Task::ResolverReady {
                 observe_id,
                 resolver,
@@ -1193,7 +1235,7 @@ mod tests {
             .send_casual_msg(1, CasualMessage::ClearRegionSize)
             .unwrap_err();
 
-        let conn = Conn::new(tx);
+        let conn = Conn::new(tx, String::new());
         let conn_id = conn.get_id();
         ep.run(Task::OpenConn { conn });
         let mut req_header = Header::default();
@@ -1206,6 +1248,7 @@ mod tests {
             request: req,
             downstream,
             conn_id,
+            version: semver::Version::new(0, 0, 0),
         });
         assert_eq!(ep.capture_regions.len(), 1);
 
@@ -1238,7 +1281,7 @@ mod tests {
         );
         let (tx, rx) = batch::unbounded(1);
 
-        let conn = Conn::new(tx);
+        let conn = Conn::new(tx, String::new());
         let conn_id = conn.get_id();
         ep.run(Task::OpenConn { conn });
         let mut req_header = Header::default();
@@ -1252,6 +1295,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
+            version: semver::Version::new(0, 0, 0),
         });
         assert_eq!(ep.capture_regions.len(), 1);
 
@@ -1285,6 +1329,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
+            version: semver::Version::new(0, 0, 0),
         });
         assert_eq!(ep.capture_regions.len(), 1);
 
@@ -1326,6 +1371,7 @@ mod tests {
             request: req,
             downstream,
             conn_id,
+            version: semver::Version::new(0, 0, 0),
         });
         assert_eq!(ep.capture_regions.len(), 1);
         let deregister = Deregister::Region {

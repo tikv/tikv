@@ -70,7 +70,7 @@ fn test_cdc_basic() {
     mutation.value = v.into_bytes();
     suite.must_kv_prewrite(1, vec![mutation], k.clone().into_bytes(), start_ts);
     let mut events = receive_event(false).events.to_vec();
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(entries) => {
             assert_eq!(entries.entries.len(), 1);

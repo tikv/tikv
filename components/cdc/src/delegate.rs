@@ -18,8 +18,8 @@ use kvproto::cdcpb::{
 };
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
-    Error as EventError, ErrorDuplicateRequest, Event, EventEntries, EventLogType, EventRow,
-    EventRowOpType, Event_oneof_event,
+    Compatibility, DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event,
+    EventEntries, EventLogType, EventRow, EventRowOpType, Event_oneof_event,
 };
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -107,14 +107,23 @@ impl Downstream {
     /// The size of `Error` and `ResolvedTS` are considered zero.
     pub fn sink_event(&self, mut event: Event) {
         event.set_request_id(self.req_id);
-        if self
-            .sink
-            .as_ref()
-            .unwrap()
-            .send(CdcEvent::Event(event))
-            .is_err()
-        {
-            error!("send event failed"; "downstream" => %self.peer);
+        if self.sink.is_none() {
+            info!("drop event, no sink";
+                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
+            return;
+        }
+        let sink = self.sink.as_ref().unwrap();
+        if let Err(e) = sink.try_send(CdcEvent::Event(event)) {
+            match e {
+                crossbeam::TrySendError::Disconnected(_) => {
+                    debug!("send event failed, disconnected";
+                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
+                }
+                crossbeam::TrySendError::Full(_) => {
+                    info!("send event failed, full";
+                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
+                }
+            }
         }
     }
 
@@ -140,6 +149,16 @@ impl Downstream {
         let mut err = ErrorDuplicateRequest::default();
         err.set_region_id(region_id);
         cdc_err.set_duplicate_request(err);
+        change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
+        change_data_event.region_id = region_id;
+        self.sink_event(change_data_event);
+    }
+
+    // TODO: merge it into Delegate::error_event.
+    pub fn sink_compatibility_error(&self, region_id: u64, compat: Compatibility) {
+        let mut change_data_event = Event::default();
+        let mut cdc_err = EventError::default();
+        cdc_err.set_compatibility(compat);
         change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
         change_data_event.region_id = region_id;
         self.sink_event(change_data_event);
