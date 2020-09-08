@@ -109,13 +109,13 @@ clean:
 ## Development builds
 ## ------------------
 
-all: format build test
+all: format build test error-code
 
 dev: format clippy
 	@env FAIL_POINT=1 make test
 
 build: export TIKV_PROFILE=debug
-build:
+build: error-code
 	cargo build --no-default-features --features "${ENABLE_FEATURES}"
 
 ## Release builds (optimized dev builds)
@@ -129,7 +129,7 @@ build:
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
 release: export TIKV_PROFILE=release
-release:
+release: error-code
 	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
@@ -167,7 +167,7 @@ endif
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
 build_dist_release: export TIKV_PROFILE=dist_release
-build_dist_release:
+build_dist_release: error-code
 	make x-build-dist
 ifeq ($(shell uname),Linux) # Macs don't have objcopy
 	# Reduce binary size by compressing binaries.
@@ -332,10 +332,15 @@ ctl:
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
+<<<<<<< HEAD
 # A special target for testing only "coprocessor::dag::expr"
 # per https://github.com/tikv/tikv/pull/3280
 expression: format clippy
 	RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" --no-default-features --package tidb_query "expr" -- --nocapture
+=======
+error-code:
+	cargo run --manifest-path components/error_code/Cargo.toml --features protobuf-codec
+>>>>>>> f2ab511... error-code: support to generate metafile (#8609)
 
 # A special target for building TiKV docker image.
 .PHONY: docker
