@@ -653,7 +653,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     if let Err(e) = raft_router_clone.significant_send(
                         region_id,
                         SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
-                            let resp = if !resp.response.get_header().has_error() {
+                            let resp = if resp.response.get_header().has_error() {
                                 None
                             } else {
                                 Some(region_id)
