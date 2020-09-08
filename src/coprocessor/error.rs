@@ -99,6 +99,18 @@ impl From<tikv_util::deadline::DeadlineError> for Error {
     }
 }
 
+impl From<tidb_query_datatype::DataTypeError> for Error {
+    fn from(err: tidb_query_datatype::DataTypeError) -> Self {
+        Error::Other(err.to_string())
+    }
+}
+
+impl From<tidb_query::codec::Error> for Error {
+    fn from(err: tidb_query::codec::Error) -> Self {
+        Error::Other(err.to_string())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl ErrorCodeExt for Error {
