@@ -2184,18 +2184,24 @@ impl TiKvConfig {
                 .to_owned();
         }
 
-        let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
-        if self.raft_store.raftdb_path.is_empty() {
-            self.raft_store.raftdb_path = default_raftdb_path;
-        } else if self.raft_store.raftdb_path != default_raftdb_path {
-            self.raft_store.raftdb_path = config::canonicalize_path(&self.raft_store.raftdb_path)?;
-        }
-
-        let default_er_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
-        if self.raft_engine.config.dir.is_empty() {
-            self.raft_engine.config.dir = default_er_path;
-        } else if self.raft_engine.config.dir != default_er_path {
-            self.raft_engine.config.dir = config::canonicalize_path(&self.raft_engine.config.dir)?;
+        if !self.raft_engine.enable {
+            let default_raftdb_path =
+                config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
+            if self.raft_store.raftdb_path.is_empty() {
+                self.raft_store.raftdb_path = default_raftdb_path;
+            } else if self.raft_store.raftdb_path != default_raftdb_path {
+                self.raft_store.raftdb_path =
+                    config::canonicalize_path(&self.raft_store.raftdb_path)?;
+            }
+        } else {
+            let default_er_path =
+                config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
+            if self.raft_engine.config.dir.is_empty() {
+                self.raft_engine.config.dir = default_er_path;
+            } else if self.raft_engine.config.dir != default_er_path {
+                self.raft_engine.config.dir =
+                    config::canonicalize_path(&self.raft_engine.config.dir)?;
+            }
         }
 
         let kv_db_path =
