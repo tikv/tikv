@@ -4,7 +4,7 @@ use crate::future_pool::{self, FuturePool};
 use futures::channel::oneshot;
 use futures::future::TryFutureExt;
 use kvproto::kvrpcpb::CommandPri;
-use std::future::Future as StdFuture;
+use std::future::Future;
 use std::sync::Arc;
 use yatp::pool::{CloneRunnerBuilder, Local, Runner};
 use yatp::queue::Extras;
@@ -106,7 +106,7 @@ pub enum ReadPoolHandle {
 impl ReadPoolHandle {
     pub fn spawn<F>(&self, f: F, priority: CommandPri, task_id: u64) -> Result<(), ReadPoolError>
     where
-        F: StdFuture<Output = ()> + Send + 'static,
+        F: Future<Output = ()> + Send + 'static,
     {
         match self {
             ReadPoolHandle::FuturePools {
@@ -161,9 +161,9 @@ impl ReadPoolHandle {
         f: F,
         priority: CommandPri,
         task_id: u64,
-    ) -> impl StdFuture<Output = Result<T, ReadPoolError>>
+    ) -> impl Future<Output = Result<T, ReadPoolError>>
     where
-        F: StdFuture<Output = T> + Send + 'static,
+        F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
         let (tx, rx) = oneshot::channel::<T>();

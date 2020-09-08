@@ -18,7 +18,6 @@ impl EntryExt<Entry> for EntryExtTyped {
 #[derive(Clone)]
 pub struct RaftLogEngine(RawRaftEngine<Entry, EntryExtTyped>);
 
-
 impl RaftLogEngine {
     pub fn new(config: RaftEngineConfig) -> Self {
         RaftLogEngine(RawRaftEngine::new(config))
