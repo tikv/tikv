@@ -677,12 +677,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     rx.await.unwrap_or(None)
                 }
             }).collect();
-            match scheduler.schedule(Task::RegisterMinTsEvent) {
-                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
-                // advance normally.
-                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
-            }
             let resps = futures03::future::join_all(regions).await;
             let regions = resps
                 .into_iter()
@@ -693,6 +687,12 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
                 // advance normally.
                 Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
+            }
+            match scheduler.schedule(Task::RegisterMinTsEvent) {
+                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                // advance normally.
+                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
             }
         };
         self.tso_worker.spawn(fut);
