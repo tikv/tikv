@@ -514,6 +514,11 @@ impl Lease {
         self.remote = Some(remote);
         Some(remote_clone)
     }
+
+    /// Return current `RemoteLease`.
+    pub fn remote(&self) -> Option<RemoteLease> {
+        self.remote.clone()
+    }
 }
 
 impl fmt::Debug for Lease {

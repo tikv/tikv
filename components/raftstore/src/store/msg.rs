@@ -17,7 +17,7 @@ use raft::SnapshotStatus;
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
 use crate::store::metrics::RaftEventDurationType;
-use crate::store::util::KeysInfoFormatter;
+use crate::store::util::{KeysInfoFormatter, RemoteLease};
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
@@ -54,6 +54,7 @@ where
 
 pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
+pub type LeaseCallback<S> = Box<dyn FnOnce(ReadResponse<S>, Option<RemoteLease>) + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callback for read only requests including `StatusRequest`,
@@ -67,6 +68,8 @@ pub enum Callback<S: Snapshot> {
     Read(ReadCallback<S>),
     /// Write callback.
     Write(WriteCallback),
+    /// Lease callback, returns remote lease to external service for checking leadership.
+    Lease(LeaseCallback<S>),
 }
 
 impl<S> Callback<S>
@@ -88,13 +91,18 @@ where
                 let resp = WriteResponse { response: resp };
                 write(resp);
             }
+            Callback::Lease(_) => (),
         }
     }
 
-    pub fn invoke_read(self, args: ReadResponse<S>) {
+    pub fn invoke_read(self, args: ReadResponse<S>, remote_lease: Option<RemoteLease>) {
         match self {
             Callback::Read(read) => read(args),
-            other => panic!("expect Callback::Read(..), got {:?}", other),
+            Callback::Lease(lease) => lease(args, remote_lease),
+            other => panic!(
+                "expect Callback::Read(..) or Callback::Lease(..), got {:?}",
+                other
+            ),
         }
     }
 
@@ -115,6 +123,7 @@ where
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
             Callback::Write(_) => write!(fmt, "Callback::Write(..)"),
+            Callback::Lease(_) => write!(fmt, "Callback::Lease(..)"),
         }
     }
 }
@@ -225,7 +234,7 @@ where
         region_epoch: RegionEpoch,
         callback: Callback<SK>,
     },
-    LeaderCallback(Callback<SK>),
+    CheckLeader(Callback<SK>),
 }
 
 /// Message that will be sent to a peer.

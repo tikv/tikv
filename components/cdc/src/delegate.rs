@@ -27,7 +27,7 @@ use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::store::fsm::ObserveID;
-use raftstore::store::util::compare_region_epoch;
+use raftstore::store::util::{compare_region_epoch, RemoteLease};
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
@@ -195,6 +195,7 @@ pub struct Delegate {
     enabled: Arc<AtomicBool>,
     failed: bool,
     pub txn_extra_op: TxnExtraOp,
+    pub remote_lease: Option<RemoteLease>,
 }
 
 impl Delegate {
@@ -210,6 +211,7 @@ impl Delegate {
             enabled: Arc::new(AtomicBool::new(true)),
             failed: false,
             txn_extra_op: TxnExtraOp::default(),
+            remote_lease: None,
         }
     }
 
@@ -351,7 +353,12 @@ impl Delegate {
     }
 
     /// Install a resolver and return pending downstreams.
-    pub fn on_region_ready(&mut self, mut resolver: Resolver, region: Region) -> Vec<Downstream> {
+    pub fn on_region_ready(
+        &mut self,
+        mut resolver: Resolver,
+        region: Region,
+        remote_lease: Option<RemoteLease>,
+    ) -> Vec<Downstream> {
         assert!(
             self.resolver.is_none(),
             "region {} resolver should not be ready",
@@ -371,6 +378,7 @@ impl Delegate {
             }
         }
         self.resolver = Some(resolver);
+        self.remote_lease = remote_lease;
         info!("region is ready"; "region_id" => self.region_id);
         pending.take_downstreams()
     }
@@ -787,7 +795,7 @@ mod tests {
         assert!(enabled.load(Ordering::SeqCst));
         let mut resolver = Resolver::new(region_id);
         resolver.init();
-        for downstream in delegate.on_region_ready(resolver, region) {
+        for downstream in delegate.on_region_ready(resolver, region, None) {
             delegate.subscribe(downstream);
         }
 
@@ -987,6 +995,6 @@ mod tests {
 
         let mut resolver = Resolver::new(region_id);
         resolver.init();
-        delegate.on_region_ready(resolver, region);
+        delegate.on_region_ready(resolver, region, None);
     }
 }

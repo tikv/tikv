@@ -43,11 +43,11 @@ use crate::store::fsm::{
 };
 use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::metrics::*;
-use crate::store::msg::Callback;
-use crate::store::peer::{ConsistencyState, Peer, StaleState};
+use crate::store::msg::{Callback, ReadResponse};
+use crate::store::peer::{ConsistencyState, Peer, RequestInspector, StaleState};
 use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
-use crate::store::util::{is_learner, KeysInfoFormatter};
+use crate::store::util::{is_learner, KeysInfoFormatter, LeaseState};
 use crate::store::worker::{
     CleanupSSTTask, CleanupTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask,
     SplitCheckTask,
@@ -709,10 +709,10 @@ where
         let apply_router = self.ctx.apply_router.clone();
         self.propose_raft_command(
             msg,
-            Callback::Read(Box::new(move |resp| {
+            Callback::Lease(Box::new(move |resp, remote_lease| {
                 // Return the error
                 if resp.response.get_header().has_error() {
-                    cb.invoke_read(resp);
+                    cb.invoke_read(resp, None);
                     return;
                 }
                 apply_router.schedule_task(
@@ -721,6 +721,7 @@ where
                         cmd,
                         region_epoch,
                         cb,
+                        remote_lease,
                     },
                 )
             })),
@@ -784,8 +785,8 @@ where
                 region_epoch,
                 callback,
             } => self.on_capture_change(cmd, region_epoch, callback),
-            SignificantMsg::LeaderCallback(cb) => {
-                self.on_leader_callback(cb);
+            SignificantMsg::CheckLeader(cb) => {
+                self.on_check_leader(cb);
             }
         }
     }
@@ -815,7 +816,16 @@ where
         self.fsm.peer.raft_group.report_snapshot(to_peer_id, status)
     }
 
-    fn on_leader_callback(&mut self, cb: Callback<EK::Snapshot>) {
+    fn on_check_leader(&mut self, cb: Callback<EK::Snapshot>) {
+        if let LeaseState::Valid = self.fsm.peer.inspect_lease() {
+            let resp = ReadResponse {
+                response: RaftCmdResponse::default(),
+                snapshot: None,
+                txn_extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
+            };
+            cb.invoke_read(resp, self.fsm.peer.leader_lease.remote());
+            return;
+        }
         let msg = new_read_index_request(
             self.region_id(),
             self.region().get_region_epoch().clone(),
@@ -3813,6 +3823,7 @@ pub fn new_read_index_request(
     request.mut_header().set_peer(peer);
     let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::ReadIndex);
+    request.mut_requests().push(cmd);
     request
 }
 
