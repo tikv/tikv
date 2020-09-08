@@ -11,6 +11,7 @@ use grpcio::{
     ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
 };
 use kvproto::tikvpb::*;
+use tokio::runtime::{Handle as RuntimeHandle, Runtime};
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
@@ -64,6 +65,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     grpc_thread_load: Arc<ThreadLoad>,
     yatp_read_pool: Option<ReadPool>,
     readpool_normal_thread_load: Arc<ThreadLoad>,
+    debug_thread_pool: Arc<Runtime>,
     timer: Handle,
 }
 
@@ -77,8 +79,9 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        gc_worker: GcWorker<E>,
+        gc_worker: GcWorker<E, T>,
         yatp_read_pool: Option<ReadPool>,
+        debug_thread_pool: Arc<Runtime>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.stats_concurrency > 0 {
@@ -165,10 +168,15 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
             grpc_thread_load,
             yatp_read_pool,
             readpool_normal_thread_load,
+            debug_thread_pool,
             timer: GLOBAL_TIMER_HANDLE.clone(),
         };
 
         Ok(svr)
+    }
+
+    pub fn get_debug_thread_pool(&self) -> &RuntimeHandle {
+        self.debug_thread_pool.handle()
     }
 
     pub fn transport(&self) -> ServerTransport<T, S> {
@@ -279,10 +287,11 @@ mod tests {
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::store::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
+    use raftstore::store::PeerMsg;
     use raftstore::store::*;
     use raftstore::Result as RaftStoreResult;
     use security::SecurityConfig;
-    use txn_types::TxnExtra;
+    use tokio::runtime::Builder as TokioBuilder;
 
     use super::*;
     use crate::config::CoprReadPoolConfig;
@@ -351,6 +360,8 @@ mod tests {
             Ok(())
         }
 
+        fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
+
         fn send_casual_msg(&self, _: u64, _: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
@@ -364,16 +375,6 @@ mod tests {
         fn send_command(
             &self,
             _: RaftCmdRequest,
-            _: Callback<RocksSnapshot>,
-        ) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
-            Ok(())
-        }
-
-        fn send_command_txn_extra(
-            &self,
-            _: RaftCmdRequest,
-            _: TxnExtra,
             _: Callback<RocksSnapshot>,
         ) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
@@ -401,8 +402,8 @@ mod tests {
         }
     }
 
-    #[test]
     // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
+    #[test]
     fn test_peer_resolve() {
         let mut cfg = Config::default();
         cfg.addr = "127.0.0.1:0".to_owned();
@@ -410,13 +411,6 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
-        let mut gc_worker = GcWorker::new(
-            storage.get_engine(),
-            None,
-            Default::default(),
-            Default::default(),
-        );
-        gc_worker.start().unwrap();
 
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
@@ -424,6 +418,14 @@ mod tests {
             tx,
             significant_msg_sender,
         };
+
+        let mut gc_worker = GcWorker::new(
+            storage.get_engine(),
+            router.clone(),
+            Default::default(),
+            Default::default(),
+        );
+        gc_worker.start().unwrap();
 
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(cfg);
@@ -438,7 +440,14 @@ mod tests {
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
         );
-
+        let debug_thread_pool = Arc::new(
+            TokioBuilder::new()
+                .threaded_scheduler()
+                .thread_name(thd_name!("debugger"))
+                .core_threads(1)
+                .build()
+                .unwrap(),
+        );
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
             &cfg,
@@ -453,6 +462,7 @@ mod tests {
             SnapManager::new(""),
             gc_worker,
             None,
+            debug_thread_pool,
         )
         .unwrap();
 

@@ -35,7 +35,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
-use crate::endpoint::OldValueCallback;
+use crate::endpoint::{OldValueCache, OldValueCallback};
 use crate::metrics::*;
 use crate::service::{CdcEvent, ConnID};
 use crate::{Error, Result};
@@ -396,6 +396,7 @@ impl Delegate {
         &mut self,
         batch: CmdBatch,
         old_value_cb: Rc<RefCell<OldValueCallback>>,
+        old_value_cache: &mut OldValueCache,
     ) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
         if batch.observe_id != self.id {
@@ -409,7 +410,12 @@ impl Delegate {
             } = cmd;
             if !response.get_header().has_error() {
                 if !request.has_admin_request() {
-                    self.sink_data(index, request.requests.into(), old_value_cb.clone())?;
+                    self.sink_data(
+                        index,
+                        request.requests.into(),
+                        old_value_cb.clone(),
+                        old_value_cache,
+                    )?;
                 } else {
                     self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
                 }
@@ -520,6 +526,7 @@ impl Delegate {
         index: u64,
         requests: Vec<Request>,
         old_value_cb: Rc<RefCell<OldValueCallback>>,
+        old_value_cache: &mut OldValueCache,
     ) -> Result<()> {
         let mut rows = HashMap::default();
         for mut req in requests {
@@ -583,7 +590,8 @@ impl Delegate {
 
                     if self.txn_extra_op == TxnExtraOp::ReadOldValue {
                         let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-                        row.old_value = old_value_cb.borrow_mut()(key).unwrap_or_default();
+                        row.old_value =
+                            old_value_cb.borrow_mut()(key, old_value_cache).unwrap_or_default();
                     }
 
                     let occupied = rows.entry(row.key.clone()).or_default();

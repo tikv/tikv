@@ -70,8 +70,7 @@ pub fn error_stream(e: io::Error) -> impl Stream<Item = io::Result<Bytes>> + Unp
 /// This means the future must only use async functions.
 // FIXME: get rid of this function, so that futures_executor::block_on is sufficient.
 pub fn block_on_external_io<F: Future>(f: F) -> F::Output {
-    // we need a Tokio runtime rather than futures_executor::block_on because
-    // Tokio futures require Tokio executor.
+    // we need a Tokio runtime, Tokio futures require Tokio executor.
     Builder::new()
         .basic_scheduler()
         .enable_io()

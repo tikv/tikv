@@ -3,9 +3,12 @@
 use std::sync::Arc;
 
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, MiscExt};
+use engine_traits::{Engines, MiscExt, RaftEngine};
 use futures::{future, stream, Future, Stream};
-use futures_cpupool::CpuPool;
+use futures03::compat::{Compat, Future01CompatExt};
+use futures03::future::Future as Future03;
+use futures03::future::FutureExt;
+use futures03::future::TryFutureExt;
 use grpcio::{Error as GrpcError, WriteFlags};
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use kvproto::debugpb::{self, *};
@@ -13,6 +16,7 @@ use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
     StatusCmdType, StatusRequest,
 };
+use tokio::runtime::Handle;
 use tokio_sync::oneshot;
 
 use crate::config::ConfigController;
@@ -44,22 +48,22 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 
 /// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter<RocksEngine>> {
-    pool: CpuPool,
-    debugger: Debugger,
+pub struct Service<ER: RaftEngine, T: RaftStoreRouter<RocksEngine>> {
+    pool: Handle,
+    debugger: Debugger<ER>,
     raft_router: T,
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<T: RaftStoreRouter<RocksEngine>> Service<T> {
+impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine>> Service<ER, T> {
     /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
     pub fn new(
-        engines: Engines<RocksEngine, RocksEngine>,
-        pool: CpuPool,
+        engines: Engines<RocksEngine, ER>,
+        pool: Handle,
         raft_router: T,
         cfg_controller: ConfigController,
         security_mgr: Arc<SecurityManager>,
-    ) -> Service<T> {
+    ) -> Service<ER, T> {
         let debugger = Debugger::new(engines, cfg_controller);
         Service {
             pool,
@@ -77,17 +81,22 @@ impl<T: RaftStoreRouter<RocksEngine>> Service<T> {
         tag: &'static str,
     ) where
         P: Send + 'static,
-        F: Future<Item = P, Error = Error> + Send + 'static,
+        F: Future03<Output = Result<P, Error>> + Send + 'static,
     {
-        let f = resp.then(|v| match v {
-            Ok(resp) => sink.success(resp),
-            Err(e) => sink.fail(error_to_status(e)),
-        });
-        ctx.spawn(f.map_err(move |e| on_grpc_error(tag, &e)));
+        let ctx_task = async move {
+            match resp.await {
+                Ok(resp) => sink.success(resp).compat().await?,
+                Err(e) => sink.fail(error_to_status(e)).compat().await?,
+            }
+            Ok(())
+        };
+        ctx.spawn(Compat::new(
+            ctx_task.map_err(move |e| on_grpc_error(tag, &e)).boxed(),
+        ));
     }
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
+impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<ER, T> {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
@@ -97,18 +106,17 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
         let db = req.get_db();
         let cf = req.take_cf();
         let key = req.take_key();
+        let debugger = self.debugger.clone();
 
-        let f = self
+        let join = self
             .pool
-            .spawn(
-                future::ok(self.debugger.clone())
-                    .and_then(move |debugger| debugger.get(db, &cf, key.as_slice())),
-            )
-            .map(|value| {
-                let mut resp = GetResponse::default();
-                resp.set_value(value);
-                resp
-            });
+            .spawn(async move { debugger.get(db, &cf, key.as_slice()) });
+        let f = async move {
+            let value = join.await.unwrap()?;
+            let mut resp = GetResponse::default();
+            resp.set_value(value);
+            Ok(resp)
+        };
 
         self.handle_response(ctx, sink, f, TAG);
     }
@@ -126,18 +134,17 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
 
         let region_id = req.get_region_id();
         let log_index = req.get_log_index();
+        let debugger = self.debugger.clone();
 
-        let f = self
+        let join = self
             .pool
-            .spawn(
-                future::ok(self.debugger.clone())
-                    .and_then(move |debugger| debugger.raft_log(region_id, log_index)),
-            )
-            .map(|entry| {
-                let mut resp = RaftLogResponse::default();
-                resp.set_entry(entry);
-                resp
-            });
+            .spawn(async move { debugger.raft_log(region_id, log_index) });
+        let f = async move {
+            let entry = join.await.unwrap()?;
+            let mut resp = RaftLogResponse::default();
+            resp.set_entry(entry);
+            Ok(resp)
+        };
 
         self.handle_response(ctx, sink, f, TAG);
     }
@@ -154,26 +161,25 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
         const TAG: &str = "debug_region_log";
 
         let region_id = req.get_region_id();
+        let debugger = self.debugger.clone();
 
-        let f = self
+        let join = self
             .pool
-            .spawn(
-                future::ok(self.debugger.clone())
-                    .and_then(move |debugger| debugger.region_info(region_id)),
-            )
-            .map(|region_info| {
-                let mut resp = RegionInfoResponse::default();
-                if let Some(raft_local_state) = region_info.raft_local_state {
-                    resp.set_raft_local_state(raft_local_state);
-                }
-                if let Some(raft_apply_state) = region_info.raft_apply_state {
-                    resp.set_raft_apply_state(raft_apply_state);
-                }
-                if let Some(region_state) = region_info.region_local_state {
-                    resp.set_region_local_state(region_state);
-                }
-                resp
-            });
+            .spawn(async move { debugger.region_info(region_id) });
+        let f = async move {
+            let region_info = join.await.unwrap()?;
+            let mut resp = RegionInfoResponse::default();
+            if let Some(raft_local_state) = region_info.raft_local_state {
+                resp.set_raft_local_state(raft_local_state);
+            }
+            if let Some(raft_apply_state) = region_info.raft_apply_state {
+                resp.set_raft_apply_state(raft_apply_state);
+            }
+            if let Some(region_state) = region_info.region_local_state {
+                resp.set_region_local_state(region_state);
+            }
+            Ok(resp)
+        };
 
         self.handle_response(ctx, sink, f, TAG);
     }
@@ -191,28 +197,27 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
 
         let region_id = req.get_region_id();
         let cfs = req.take_cfs().into();
+        let debugger = self.debugger.clone();
 
-        let f = self
+        let join = self
             .pool
-            .spawn(
-                future::ok(self.debugger.clone())
-                    .and_then(move |debugger| debugger.region_size(region_id, cfs)),
-            )
-            .map(|entries| {
-                let mut resp = RegionSizeResponse::default();
-                resp.set_entries(
-                    entries
-                        .into_iter()
-                        .map(|(cf, size)| {
-                            let mut entry = region_size_response::Entry::default();
-                            entry.set_cf(cf);
-                            entry.set_size(size as u64);
-                            entry
-                        })
-                        .collect(),
-                );
-                resp
-            });
+            .spawn(async move { debugger.region_size(region_id, cfs) });
+        let f = async move {
+            let entries = join.await.unwrap()?;
+            let mut resp = RegionSizeResponse::default();
+            resp.set_entries(
+                entries
+                    .into_iter()
+                    .map(|(cf, size)| {
+                        let mut entry = region_size_response::Entry::default();
+                        entry.set_cf(cf);
+                        entry.set_size(size as u64);
+                        entry
+                    })
+                    .collect(),
+            );
+            Ok(resp)
+        };
 
         self.handle_response(ctx, sink, f, TAG);
     }
@@ -245,7 +250,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
                     .map(|_| ())
             })
             .map_err(|e| on_grpc_error("scan_mvcc", &e));
-        self.pool.spawn(future).forget();
+        self.pool.spawn(future.compat());
     }
 
     fn compact(
@@ -258,7 +263,9 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
             return;
         }
         let debugger = self.debugger.clone();
-        let f = self.pool.spawn_fn(move || {
+
+        let res = self.pool.spawn(async move {
+            let req = req;
             debugger
                 .compact(
                     req.get_db(),
@@ -270,6 +277,9 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
                 )
                 .map(|_| CompactResponse::default())
         });
+
+        let f = async move { res.await.unwrap() };
+
         self.handle_response(ctx, sink, f, "debug_compact");
     }
 
@@ -284,17 +294,20 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
         }
         const TAG: &str = "debug_inject_fail_point";
 
-        let f = self.pool.spawn_fn(move || {
-            let name = req.take_name();
-            if name.is_empty() {
-                return Err(Error::InvalidArgument("Failure Type INVALID".to_owned()));
-            }
-            let actions = req.get_actions();
-            if let Err(e) = fail::cfg(name, actions) {
-                return Err(box_err!("{:?}", e));
-            }
-            Ok(InjectFailPointResponse::default())
-        });
+        let f = self
+            .pool
+            .spawn(async move {
+                let name = req.take_name();
+                if name.is_empty() {
+                    return Err(Error::InvalidArgument("Failure Type INVALID".to_owned()));
+                }
+                let actions = req.get_actions();
+                if let Err(e) = fail::cfg(name, actions) {
+                    return Err(box_err!("{:?}", e));
+                }
+                Ok(InjectFailPointResponse::default())
+            })
+            .map(|res| res.unwrap());
 
         self.handle_response(ctx, sink, f, TAG);
     }
@@ -310,14 +323,17 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
         }
         const TAG: &str = "debug_recover_fail_point";
 
-        let f = self.pool.spawn_fn(move || {
-            let name = req.take_name();
-            if name.is_empty() {
-                return Err(Error::InvalidArgument("Failure Type INVALID".to_owned()));
-            }
-            fail::remove(name);
-            Ok(RecoverFailPointResponse::default())
-        });
+        let f = self
+            .pool
+            .spawn(async move {
+                let name = req.take_name();
+                if name.is_empty() {
+                    return Err(Error::InvalidArgument("Failure Type INVALID".to_owned()));
+                }
+                fail::remove(name);
+                Ok(RecoverFailPointResponse::default())
+            })
+            .map(|res| res.unwrap());
 
         self.handle_response(ctx, sink, f, TAG);
     }
@@ -333,17 +349,20 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
         }
         const TAG: &str = "debug_list_fail_points";
 
-        let f = self.pool.spawn_fn(move || {
-            let list = fail::list().into_iter().map(|(name, actions)| {
-                let mut entry = list_fail_points_response::Entry::default();
-                entry.set_name(name);
-                entry.set_actions(actions);
-                entry
-            });
-            let mut resp = ListFailPointsResponse::default();
-            resp.set_entries(list.collect());
-            Ok(resp)
-        });
+        let f = self
+            .pool
+            .spawn(async move {
+                let list = fail::list().into_iter().map(|(name, actions)| {
+                    let mut entry = list_fail_points_response::Entry::default();
+                    entry.set_name(name);
+                    entry.set_actions(actions);
+                    entry
+                });
+                let mut resp = ListFailPointsResponse::default();
+                resp.set_entries(list.collect());
+                Ok(resp)
+            })
+            .map(|res| res.unwrap());
 
         self.handle_response(ctx, sink, f, TAG);
     }
@@ -360,18 +379,21 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
         const TAG: &str = "debug_get_metrics";
 
         let debugger = self.debugger.clone();
-        let f = self.pool.spawn_fn(move || {
-            let mut resp = GetMetricsResponse::default();
-            resp.set_store_id(debugger.get_store_id()?);
-            resp.set_prometheus(metrics::dump());
-            if req.get_all() {
-                let engines = debugger.get_engine();
-                resp.set_rocksdb_kv(box_try!(engines.kv.dump_stats()));
-                resp.set_rocksdb_raft(box_try!(engines.raft.dump_stats()));
-                resp.set_jemalloc(tikv_alloc::dump_stats());
-            }
-            Ok(resp)
-        });
+        let f = self
+            .pool
+            .spawn(async move {
+                let mut resp = GetMetricsResponse::default();
+                resp.set_store_id(debugger.get_store_id()?);
+                resp.set_prometheus(metrics::dump());
+                if req.get_all() {
+                    let engines = debugger.get_engine();
+                    resp.set_rocksdb_kv(box_try!(MiscExt::dump_stats(&engines.kv)));
+                    resp.set_rocksdb_raft(box_try!(RaftEngine::dump_stats(&engines.raft)));
+                    resp.set_jemalloc(tikv_alloc::dump_stats());
+                }
+                Ok(resp)
+            })
+            .map(|res| res.unwrap());
 
         self.handle_response(ctx, sink, f, TAG);
     }
@@ -390,13 +412,16 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
         let router1 = self.raft_router.clone();
         let router2 = self.raft_router.clone();
 
-        let consistency_check = future::result(debugger.get_store_id())
-            .and_then(move |store_id| region_detail(router2, region_id, store_id))
-            .and_then(|detail| consistency_check(router1, detail));
+        let consistency_check_task = async move {
+            let store_id = debugger.get_store_id()?;
+            let detail = region_detail(router2, region_id, store_id).compat().await?;
+            consistency_check(router1, detail).compat().await
+        };
         let f = self
             .pool
-            .spawn(consistency_check)
-            .map(|_| RegionConsistencyCheckResponse::default());
+            .spawn(consistency_check_task)
+            .map(|res| res.unwrap())
+            .map_ok(|_| RegionConsistencyCheckResponse::default());
         self.handle_response(ctx, sink, f, "check_region_consistency");
     }
 
@@ -413,13 +438,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
 
         let config_name = req.take_config_name();
         let config_value = req.take_config_value();
+        let debugger = self.debugger.clone();
 
-        let f =
-            self.pool
-                .spawn(future::ok(self.debugger.clone()).and_then(move |debugger| {
-                    debugger.modify_tikv_config(&config_name, &config_value)
-                }))
-                .map(|_| ModifyTikvConfigResponse::default());
+        let f = self
+            .pool
+            .spawn(async move { debugger.modify_tikv_config(&config_name, &config_value) })
+            .map(|res| res.unwrap())
+            .map_ok(|_| ModifyTikvConfigResponse::default());
 
         self.handle_response(ctx, sink, f, TAG);
     }
@@ -438,8 +463,9 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
 
         let f = self
             .pool
-            .spawn_fn(move || debugger.get_region_properties(req.get_region_id()))
-            .map(|props| {
+            .spawn(async move { debugger.get_region_properties(req.get_region_id()) })
+            .map(|res| res.unwrap())
+            .map_ok(|props| {
                 let mut resp = GetRegionPropertiesResponse::default();
                 for (name, value) in props {
                     let mut prop = Property::default();
@@ -465,14 +491,17 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
         const TAG: &str = "debug_get_store_id";
         let debugger = self.debugger.clone();
 
-        let f = self.pool.spawn_fn(move || {
-            let mut resp = GetStoreInfoResponse::default();
-            match debugger.get_store_id() {
-                Ok(store_id) => resp.set_store_id(store_id),
-                Err(_) => resp.set_store_id(0),
-            }
-            Ok(resp)
-        });
+        let f = self
+            .pool
+            .spawn(async move {
+                let mut resp = GetStoreInfoResponse::default();
+                match debugger.get_store_id() {
+                    Ok(store_id) => resp.set_store_id(store_id),
+                    Err(_) => resp.set_store_id(0),
+                }
+                Ok(resp)
+            })
+            .map(|res| res.unwrap());
 
         self.handle_response(ctx, sink, f, TAG);
     }
@@ -489,14 +518,17 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
         const TAG: &str = "debug_get_cluster_id";
         let debugger = self.debugger.clone();
 
-        let f = self.pool.spawn_fn(move || {
-            let mut resp = GetClusterInfoResponse::default();
-            match debugger.get_cluster_id() {
-                Ok(cluster_id) => resp.set_cluster_id(cluster_id),
-                Err(_) => resp.set_cluster_id(0),
-            }
-            Ok(resp)
-        });
+        let f = self
+            .pool
+            .spawn(async move {
+                let mut resp = GetClusterInfoResponse::default();
+                match debugger.get_cluster_id() {
+                    Ok(cluster_id) => resp.set_cluster_id(cluster_id),
+                    Err(_) => resp.set_cluster_id(0),
+                }
+                Ok(resp)
+            })
+            .map(|res| res.unwrap());
 
         self.handle_response(ctx, sink, f, TAG);
     }

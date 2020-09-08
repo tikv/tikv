@@ -1263,7 +1263,7 @@ mod tests {
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
             vec![key_range],
-            primary_column_ids.clone(),
+            primary_column_ids,
             false,
             false,
         )

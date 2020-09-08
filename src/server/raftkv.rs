@@ -1,5 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt::{self, Debug, Display, Formatter};
+use std::io::Error as IoError;
+use std::result;
+use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
+
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CfName;
 use engine_traits::CF_DEFAULT;
@@ -10,11 +15,7 @@ use kvproto::raft_cmdpb::{
     RaftRequestHeader, Request, Response,
 };
 use kvproto::{errorpb, metapb};
-use std::fmt::{self, Debug, Display, Formatter};
-use std::io::Error as IoError;
-use std::result;
-use std::{sync::atomic::Ordering, time::Duration};
-use txn_types::{Key, TxnExtra, Value};
+use txn_types::{Key, TxnExtraScheduler, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -111,6 +112,7 @@ where
 {
     router: S,
     engine: RocksEngine,
+    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
 }
 
 pub enum CmdRes {
@@ -171,7 +173,15 @@ where
 {
     /// Create a RaftKv using specified configuration.
     pub fn new(router: S, engine: RocksEngine) -> RaftKv<S> {
-        RaftKv { router, engine }
+        RaftKv {
+            router,
+            engine,
+            txn_extra_scheduler: None,
+        }
+    }
+
+    pub fn set_txn_extra_scheduler(&mut self, txn_extra_scheduler: Arc<dyn TxnExtraScheduler>) {
+        self.txn_extra_scheduler = Some(txn_extra_scheduler);
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
@@ -214,7 +224,6 @@ where
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
-        txn_extra: TxnExtra,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
@@ -246,9 +255,8 @@ where
         cmd.set_requests(reqs.into());
 
         self.router
-            .send_command_txn_extra(
+            .send_command(
                 cmd,
-                txn_extra,
                 StoreCallback::Write(Box::new(move |resp| {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
@@ -373,10 +381,15 @@ where
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
+            if !batch.extra.is_empty() {
+                tx.schedule(batch.extra);
+            }
+        }
+
         self.exec_write_requests(
             ctx,
             reqs,
-            batch.extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();

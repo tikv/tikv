@@ -111,7 +111,7 @@ impl TestSuite {
 
         cluster.run();
         for (id, worker) in &mut endpoints {
-            let sim = cluster.sim.rl();
+            let sim = cluster.sim.wl();
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
             let cm = ConcurrencyManager::new(1.into());
