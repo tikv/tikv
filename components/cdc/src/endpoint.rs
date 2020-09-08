@@ -668,14 +668,25 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             } else {
                 // Fallback to previous non-batch resolved ts event.
                 for region_id in &resolved_ts.regions {
-                    if conn.downstream_id(*region_id).is_none() {
+                    let downstream_id = match conn.downstream_id(*region_id) {
+                        Some(downstream_id) => downstream_id,
                         // No such region registers in the connection.
-                        continue;
-                    }
+                        None => continue,
+                    };
+                    let delegate = match self.capture_regions.get(&region_id) {
+                        Some(delegate) => delegate,
+                        // No such region registers in the endpoint.
+                        None => continue,
+                    };
+                    let downstream = match delegate.downstream(downstream_id) {
+                        Some(downstream) => downstream,
+                        // No such downstream registers in the delegate.
+                        None => continue,
+                    };
                     let mut event = Event::default();
                     event.region_id = *region_id;
                     event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.ts));
-                    send_cdc_event(conn, CdcEvent::Event(event));
+                    downstream.sink_event(event);
                 }
             }
         }
@@ -1387,11 +1398,8 @@ mod tests {
         });
         let mut resolver = Resolver::new(1);
         resolver.init();
-        ep.capture_regions
-            .get_mut(&1)
-            .unwrap()
-            .on_region_ready(resolver, region.clone());
-
+        let observe_id = ep.capture_regions[&1].id;
+        ep.on_region_ready(observe_id, resolver, region.clone());
         ep.run(Task::MinTS {
             regions: vec![1],
             min_ts: TimeStamp::from(1),
@@ -1416,11 +1424,8 @@ mod tests {
         let mut resolver = Resolver::new(2);
         resolver.init();
         region.set_id(2);
-        ep.capture_regions
-            .get_mut(&2)
-            .unwrap()
-            .on_region_ready(resolver, region.clone());
-
+        let observe_id = ep.capture_regions[&2].id;
+        ep.on_region_ready(observe_id, resolver, region.clone());
         ep.run(Task::MinTS {
             regions: vec![1, 2],
             min_ts: TimeStamp::from(2),
@@ -1442,7 +1447,7 @@ mod tests {
         let conn_id = conn.get_id();
         ep.run(Task::OpenConn { conn });
         req.set_region_id(3);
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 3, conn_id);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -1452,11 +1457,8 @@ mod tests {
         let mut resolver = Resolver::new(3);
         resolver.init();
         region.set_id(3);
-        ep.capture_regions
-            .get_mut(&3)
-            .unwrap()
-            .on_region_ready(resolver, region.clone());
-
+        let observe_id = ep.capture_regions[&3].id;
+        ep.on_region_ready(observe_id, resolver, region.clone());
         ep.run(Task::MinTS {
             regions: vec![1, 2, 3],
             min_ts: TimeStamp::from(3),
@@ -1474,6 +1476,7 @@ mod tests {
         let cdc_event = rx2.recv_timeout(Duration::from_millis(500)).unwrap();
         if let CdcEvent::Event(mut e) = cdc_event {
             assert_eq!(e.region_id, 3);
+            assert_eq!(e.request_id, 3);
             let event = e.event.take().unwrap();
             match event {
                 Event_oneof_event::ResolvedTs(ts) => {

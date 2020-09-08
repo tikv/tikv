@@ -267,6 +267,10 @@ impl Delegate {
         true
     }
 
+    pub fn downstream(&self, downstream_id: DownstreamID) -> Option<&Downstream> {
+        self.downstreams.iter().find(|d| d.id == downstream_id)
+    }
+
     pub fn downstreams(&self) -> &Vec<Downstream> {
         if self.pending.is_some() {
             &self.pending.as_ref().unwrap().downstreams
