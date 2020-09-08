@@ -74,7 +74,10 @@ pub struct TestSuite {
 
 impl TestSuite {
     pub fn new(count: usize) -> TestSuite {
-        Self::with_cluster(count, new_server_cluster(1, count))
+        let mut cluster = new_server_cluster(1, count);
+        // Increase the Raft tick interval to make this test case running reliably.
+        configure_for_lease_read(&mut cluster, Some(100), None);
+        Self::with_cluster(count, cluster)
     }
 
     pub fn with_cluster(count: usize, mut cluster: Cluster<ServerCluster>) -> TestSuite {

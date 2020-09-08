@@ -1340,9 +1340,9 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 1);
 
         // Compatibility error.
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 3, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id);
         ep.run(Task::Register {
-            request: req.clone(),
+            request: req,
             downstream,
             conn_id,
             version: semver::Version::new(0, 0, 0),
@@ -1431,7 +1431,7 @@ mod tests {
         resolver.init();
         region.set_id(2);
         let observe_id = ep.capture_regions[&2].id;
-        ep.on_region_ready(observe_id, resolver, region.clone());
+        ep.on_region_ready(observe_id, resolver, region);
         ep.run(Task::MinTS {
             regions: vec![1, 2],
             min_ts: TimeStamp::from(2),
@@ -1453,9 +1453,9 @@ mod tests {
         let conn_id = conn.get_id();
         ep.run(Task::OpenConn { conn });
         req.set_region_id(3);
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 3, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id);
         ep.run(Task::Register {
-            request: req.clone(),
+            request: req,
             downstream,
             conn_id,
             version: semver::Version::new(4, 0, 5),
@@ -1464,7 +1464,7 @@ mod tests {
         resolver.init();
         region.set_id(3);
         let observe_id = ep.capture_regions[&3].id;
-        ep.on_region_ready(observe_id, resolver, region.clone());
+        ep.on_region_ready(observe_id, resolver, region);
         ep.run(Task::MinTS {
             regions: vec![1, 2, 3],
             min_ts: TimeStamp::from(3),
