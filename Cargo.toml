@@ -81,7 +81,6 @@ engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
 error_code = { path = "components/error_code" }
 fail = "0.3"
-raft-engine = { git = "https://github.com/tikv/raft-engine", default-features = false }
 failure = "0.1"
 fs2 = "0.4"
 futures = "0.1"
@@ -206,6 +205,7 @@ members = [
   "components/test_coprocessor",
   "components/test_sst_importer",
   "components/test_util",
+  "components/test_pd",
   "components/tikv_alloc",
   "components/match_template",
   "components/engine_traits/tests",

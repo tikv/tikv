@@ -81,6 +81,8 @@ pub trait RaftEngine: Clone + Sync + Send + 'static {
     fn reset_statistics(&self) {}
 
     fn stop(&self) {}
+
+    fn dump_stats(&self) -> Result<String>;
 }
 
 pub trait RaftLogBatch: Send {
