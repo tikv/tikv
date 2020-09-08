@@ -104,6 +104,7 @@ impl Conn {
                 if v406_bacth_resoled_ts <= ver {
                     features.toggle(FeatureGate::BATCH_RESOLVED_TS);
                 }
+                info!("cdc connection version"; "version" => ver.to_string(), "features" => ?features);
                 self.version = Some((ver, features));
                 None
             }
