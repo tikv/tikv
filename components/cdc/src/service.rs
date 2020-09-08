@@ -249,11 +249,11 @@ impl ChangeData for Service {
                 resp_vecs.push(ChangeDataEvent::default());
                 let mut current_events_size = 0;
                 for event in events {
-                    if current_events_size >= CDC_MAX_RESP_SIZE {
+                    let event_size = event.size();
+                    if current_events_size + event_size >= CDC_MAX_RESP_SIZE {
                         resp_vecs.push(ChangeDataEvent::default());
                         current_events_size = 0;
                     }
-                    let event_size = event.size();
                     match event {
                         CdcEvent::Event(e) => {
                             resp_vecs.last_mut().unwrap().mut_events().push(e);
