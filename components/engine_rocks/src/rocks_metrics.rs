@@ -905,11 +905,12 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
             STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
                 .with_label_values(&[name, cf])
                 .set(block_cache_usage as i64);
-            let blob_cache_usage = engine.get_blob_cache_usage_cf(handle);
-            STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
-                .with_label_values(&[name, cf])
-                .set(blob_cache_usage as i64);
         }
+
+        let blob_cache_usage = engine.get_blob_cache_usage_cf(handle);
+        STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
+            .with_label_values(&[name, cf])
+            .set(blob_cache_usage as i64);
 
         // TODO: find a better place to record these metrics.
         // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
@@ -1076,10 +1077,6 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
         STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
             .with_label_values(&[name, "all"])
             .set(block_cache_usage as i64);
-        let blob_cache_usage = engine.get_blob_cache_usage_cf(handle);
-        STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
-            .with_label_values(&[name, "all"])
-            .set(blob_cache_usage as i64);
     }
 }
 
