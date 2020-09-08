@@ -1319,6 +1319,8 @@ mod tests {
                 }
                 other => panic!("unknown event {:?}", other),
             }
+        } else {
+            panic!("unknown cdc event {:?}", cdc_event);
         }
         assert_eq!(ep.capture_regions.len(), 1);
 
@@ -1339,8 +1341,149 @@ mod tests {
                 }
                 other => panic!("unknown event {:?}", other),
             }
+        } else {
+            panic!("unknown cdc event {:?}", cdc_event);
         }
         assert_eq!(ep.capture_regions.len(), 1);
+    }
+
+    #[test]
+    fn test_feature_gate() {
+        let (task_sched, _task_rx) = dummy_scheduler();
+        let raft_router = MockRaftStoreRouter::new();
+        let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
+        let observer = CdcObserver::new(task_sched.clone());
+        let pd_client = Arc::new(TestPdClient::new(0, true));
+        let mut ep = Endpoint::new(
+            &CdcConfig {
+                min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+                ..Default::default()
+            },
+            pd_client,
+            task_sched,
+            raft_router,
+            observer,
+            Arc::new(Mutex::new(StoreMeta::new(0))),
+            ConcurrencyManager::new(1.into()),
+        );
+
+        let (tx, rx) = batch::unbounded(1);
+        let mut region = Region::default();
+        region.set_id(1);
+        let conn = Conn::new(tx, String::new());
+        let conn_id = conn.get_id();
+        ep.run(Task::OpenConn { conn });
+        let mut req_header = Header::default();
+        req_header.set_cluster_id(0);
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(1);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        ep.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version: semver::Version::new(4, 0, 6),
+        });
+        let mut resolver = Resolver::new(1);
+        resolver.init();
+        ep.capture_regions
+            .get_mut(&1)
+            .unwrap()
+            .on_region_ready(resolver, region.clone());
+
+        ep.run(Task::MinTS {
+            regions: vec![1],
+            min_ts: TimeStamp::from(1),
+        });
+        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        if let CdcEvent::ResolvedTs(r) = cdc_event {
+            assert_eq!(r.regions, vec![1]);
+            assert_eq!(r.ts, 1);
+        } else {
+            panic!("unknown cdc event {:?}", cdc_event);
+        }
+
+        // Register region 2 to the conn.
+        req.set_region_id(2);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        ep.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version: semver::Version::new(4, 0, 6),
+        });
+        let mut resolver = Resolver::new(2);
+        resolver.init();
+        region.set_id(2);
+        ep.capture_regions
+            .get_mut(&2)
+            .unwrap()
+            .on_region_ready(resolver, region.clone());
+
+        ep.run(Task::MinTS {
+            regions: vec![1, 2],
+            min_ts: TimeStamp::from(2),
+        });
+        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        if let CdcEvent::ResolvedTs(mut r) = cdc_event {
+            r.regions.as_mut_slice().sort();
+            assert_eq!(r.regions, vec![1, 2]);
+            assert_eq!(r.ts, 2);
+        } else {
+            panic!("unknown cdc event {:?}", cdc_event);
+        }
+
+        // Register region 3 to another conn which is not support batch resolved ts.
+        let (tx, rx2) = batch::unbounded(1);
+        let mut region = Region::default();
+        region.set_id(3);
+        let conn = Conn::new(tx, String::new());
+        let conn_id = conn.get_id();
+        ep.run(Task::OpenConn { conn });
+        req.set_region_id(3);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        ep.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version: semver::Version::new(4, 0, 5),
+        });
+        let mut resolver = Resolver::new(3);
+        resolver.init();
+        region.set_id(3);
+        ep.capture_regions
+            .get_mut(&3)
+            .unwrap()
+            .on_region_ready(resolver, region.clone());
+
+        ep.run(Task::MinTS {
+            regions: vec![1, 2, 3],
+            min_ts: TimeStamp::from(3),
+        });
+        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        if let CdcEvent::ResolvedTs(mut r) = cdc_event {
+            r.regions.as_mut_slice().sort();
+            // Although region 3 is not register in the first conn, batch resolved ts
+            // sends all region ids.
+            assert_eq!(r.regions, vec![1, 2, 3]);
+            assert_eq!(r.ts, 3);
+        } else {
+            panic!("unknown cdc event {:?}", cdc_event);
+        }
+        let cdc_event = rx2.recv_timeout(Duration::from_millis(500)).unwrap();
+        if let CdcEvent::Event(mut e) = cdc_event {
+            assert_eq!(e.region_id, 3);
+            let event = e.event.take().unwrap();
+            match event {
+                Event_oneof_event::ResolvedTs(ts) => {
+                    assert_eq!(ts, 3);
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        } else {
+            panic!("unknown cdc event {:?}", cdc_event);
+        }
     }
 
     #[test]
