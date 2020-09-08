@@ -905,6 +905,10 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
             STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
                 .with_label_values(&[name, cf])
                 .set(block_cache_usage as i64);
+            let blob_cache_usage = engine.get_blob_cache_usage_cf(handle);
+            STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
+                .with_label_values(&[name, cf])
+                .set(blob_cache_usage as i64);
         }
 
         // TODO: find a better place to record these metrics.
@@ -1072,6 +1076,10 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
         STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
             .with_label_values(&[name, "all"])
             .set(block_cache_usage as i64);
+        let blob_cache_usage = engine.get_blob_cache_usage_cf(handle);
+        STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
+            .with_label_values(&[name, "all"])
+            .set(blob_cache_usage as i64);
     }
 }
 
@@ -1086,6 +1094,11 @@ lazy_static! {
     pub static ref STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_block_cache_size_bytes",
         "Usage of each column families' block cache",
+        &["db", "cf"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_blob_cache_size_bytes",
+        "Usage of each column families' blob cache",
         &["db", "cf"]
     ).unwrap();
     pub static ref STORE_ENGINE_MEMORY_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
