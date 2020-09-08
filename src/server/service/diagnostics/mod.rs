@@ -4,13 +4,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::server::{Error, Result};
-use futures::{Future, Sink, Stream};
-use futures_cpupool::CpuPool;
+use futures::{future, Future, Sink, Stream};
+use futures03::compat::{Compat, Future01CompatExt};
+use futures03::future::{FutureExt, TryFutureExt};
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
     ServerInfoType,
 };
+use tokio::runtime::Handle;
 
 #[cfg(feature = "prost-codec")]
 use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget;
@@ -28,7 +30,7 @@ mod sys;
 /// Service handles the RPC messages for the `Diagnostics` service.
 #[derive(Clone)]
 pub struct Service {
-    pool: CpuPool,
+    pool: Handle,
     log_file: String,
     slow_log_file: String,
     security_mgr: Arc<SecurityManager>,
@@ -36,7 +38,7 @@ pub struct Service {
 
 impl Service {
     pub fn new(
-        pool: CpuPool,
+        pool: Handle,
         log_file: String,
         slow_log_file: String,
         security_mgr: Arc<SecurityManager>,
@@ -65,34 +67,43 @@ impl Diagnostics for Service {
         } else {
             self.slow_log_file.to_owned()
         };
-        let stream = self
-            .pool
-            .spawn_fn(move || log::search(log_file, req))
-            .map(|stream| {
-                stream
-                    .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
-                    .map_err(|e| {
-                        grpcio::Error::RpcFailure(RpcStatus::new(
-                            RpcStatusCode::UNKNOWN,
-                            Some(format!("{:?}", e)),
-                        ))
-                    })
-            })
-            .map_err(|e| {
-                grpcio::Error::RpcFailure(RpcStatus::new(
-                    RpcStatusCode::UNKNOWN,
-                    Some(format!("{:?}", e)),
-                ))
-            });
-        let future = self.pool.spawn(
-            stream
-                .and_then(|stream| sink.send_all(stream))
-                .map(|_| ())
+
+        let stream = self.pool.spawn(async move {
+            log::search(log_file, req)
+                .map(|stream| {
+                    stream
+                        .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
+                        .map_err(|e| {
+                            grpcio::Error::RpcFailure(RpcStatus::new(
+                                RpcStatusCode::UNKNOWN,
+                                Some(format!("{:?}", e)),
+                            ))
+                        })
+                })
                 .map_err(|e| {
-                    error!("search log RPC error"; "error" => ?e);
-                }),
-        );
-        ctx.spawn(future);
+                    grpcio::Error::RpcFailure(RpcStatus::new(
+                        RpcStatusCode::UNKNOWN,
+                        Some(format!("{:?}", e)),
+                    ))
+                })
+        });
+
+        let f = self
+            .pool
+            .spawn(async move {
+                let stream = stream.await.unwrap();
+                future::result(stream)
+                    .and_then(|stream| sink.send_all(stream))
+                    .map(|_| ())
+                    .map_err(|e| {
+                        error!("search log RPC error"; "error" => ?e);
+                    })
+                    .compat()
+                    .await
+            })
+            .map(|res| res.unwrap());
+
+        ctx.spawn(Compat::new(f.boxed()));
     }
 
     fn server_info(
@@ -105,60 +116,65 @@ impl Diagnostics for Service {
             return;
         }
         let tp = req.get_tp();
-        let collect = self
-            .pool
-            .spawn_fn(move || {
-                let s = match tp {
-                    ServerInfoType::LoadInfo | ServerInfoType::All => {
-                        let mut system = sysinfo::System::new();
-                        system.refresh_networks_list();
-                        system.refresh_all();
-                        let load = (
-                            sys::cpu_time_snapshot(),
-                            system
-                                .get_networks()
-                                .into_iter()
-                                .map(|(n, d)| {
-                                    (n.to_owned(), sys::NicSnapshot::from_network_data(d))
-                                })
-                                .collect(),
-                            ioload::IoLoad::snapshot(),
-                        );
-                        let when = Instant::now() + Duration::from_millis(1000);
-                        (Some(load), when)
-                    }
-                    _ => (None, Instant::now()),
-                };
-                Ok(s)
-            })
-            .and_then(|(load, when)| {
-                let timer = GLOBAL_TIMER_HANDLE.clone();
-                timer.delay(when).then(|_| Ok(load))
-            })
-            .and_then(move |load| -> Result<ServerInfoResponse> {
-                let mut server_infos = Vec::new();
-                match req.get_tp() {
-                    ServerInfoType::HardwareInfo => sys::hardware_info(&mut server_infos),
-                    ServerInfoType::LoadInfo => sys::load_info(load.unwrap(), &mut server_infos),
-                    ServerInfoType::SystemInfo => sys::system_info(&mut server_infos),
-                    ServerInfoType::All => {
-                        sys::hardware_info(&mut server_infos);
-                        sys::load_info(load.unwrap(), &mut server_infos);
-                        sys::system_info(&mut server_infos);
-                    }
-                };
-                // Sort pairs by key to make result stable
-                server_infos
-                    .sort_by(|a, b| (a.get_tp(), a.get_name()).cmp(&(b.get_tp(), b.get_name())));
-                let mut resp = ServerInfoResponse::default();
-                resp.set_items(server_infos.into());
-                Ok(resp)
-            });
+
+        let collect = self.pool.spawn(async move {
+            let s = match tp {
+                ServerInfoType::LoadInfo | ServerInfoType::All => {
+                    let mut system = sysinfo::System::new();
+                    system.refresh_networks_list();
+                    system.refresh_all();
+                    let load = (
+                        sys::cpu_time_snapshot(),
+                        system
+                            .get_networks()
+                            .into_iter()
+                            .map(|(n, d)| (n.to_owned(), sys::NicSnapshot::from_network_data(d)))
+                            .collect(),
+                        ioload::IoLoad::snapshot(),
+                    );
+                    let when = Instant::now() + Duration::from_millis(1000);
+                    (Some(load), when)
+                }
+                _ => (None, Instant::now()),
+            };
+            future::ok(s)
+                .and_then(|(load, when)| {
+                    let timer = GLOBAL_TIMER_HANDLE.clone();
+                    timer.delay(when).then(|_| Ok(load))
+                })
+                .and_then(move |load| -> Result<ServerInfoResponse> {
+                    let mut server_infos = Vec::new();
+                    match req.get_tp() {
+                        ServerInfoType::HardwareInfo => sys::hardware_info(&mut server_infos),
+                        ServerInfoType::LoadInfo => {
+                            sys::load_info(load.unwrap(), &mut server_infos)
+                        }
+                        ServerInfoType::SystemInfo => sys::system_info(&mut server_infos),
+                        ServerInfoType::All => {
+                            sys::hardware_info(&mut server_infos);
+                            sys::load_info(load.unwrap(), &mut server_infos);
+                            sys::system_info(&mut server_infos);
+                        }
+                    };
+                    // Sort pairs by key to make result stable
+                    server_infos.sort_by(|a, b| {
+                        (a.get_tp(), a.get_name()).cmp(&(b.get_tp(), b.get_name()))
+                    });
+                    let mut resp = ServerInfoResponse::default();
+                    resp.set_items(server_infos.into());
+                    Ok(resp)
+                })
+        });
+
         let f = self
             .pool
-            .spawn(collect)
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map_err(|e| debug!("Diagnostics rpc failed"; "err" => ?e));
-        ctx.spawn(f);
+            .spawn(async move { collect.await.unwrap().compat().await })
+            .map(|res| res.unwrap())
+            .and_then(|res| async move { sink.success(res).map_err(Error::from).compat().await })
+            .map_err(|e| {
+                debug!("Diagnostics rpc failed"; "err" => ?e);
+            });
+
+        ctx.spawn(Compat::new(f.boxed()));
     }
 }
