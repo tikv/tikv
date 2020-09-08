@@ -14,17 +14,18 @@ fn main() {
         sst_importer::ALL_ERROR_CODES.iter(),
         storage::ALL_ERROR_CODES.iter(),
     ];
-    let mut content = String::new();
+    let path = Path::new("./etc/error_code.toml");
+    let mut f = fs::File::create(&path).unwrap();
     err_codes
         .into_iter()
         .flatten()
         .map(|c| {
             let s = toml::to_string_pretty(c).unwrap();
-            format!("[error.{}]\n", c.code) + s.as_str() + "\n"
+            format!("[error.{}]\n{}\n", c.code, s.as_str())
         })
-        .for_each(|s| content.push_str(&s));
-    let path = Path::new("./etc/error_code.toml");
-    let mut f = fs::File::create(&path).unwrap();
-    f.write_all(content.as_bytes()).unwrap();
+        .for_each(|s| {
+            f.write_all(s.as_bytes()).unwrap();
+        });
+
     f.sync_all().unwrap();
 }
