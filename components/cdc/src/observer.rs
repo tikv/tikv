@@ -315,6 +315,7 @@ mod tests {
     use std::time::Duration;
     use tikv::storage::kv::TestEngineBuilder;
     use tikv::storage::mvcc::tests::*;
+    use tikv::storage::txn::action::commit::tests::must_succeed as must_commit;
 
     #[test]
     fn test_register_and_deregister() {

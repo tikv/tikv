@@ -103,9 +103,10 @@ pub enum SecondaryLockStatus {
     RolledBack,
 }
 
+/// The abstraction of a locally-transactional MVCC key-value store
 pub struct MvccTxn<S: Snapshot> {
     pub(crate) reader: MvccReader<S>,
-    start_ts: TimeStamp,
+    pub(crate) start_ts: TimeStamp,
     write_size: usize,
     writes: WriteData,
     // collapse continuous rollbacks.
@@ -802,101 +803,6 @@ impl<S: Snapshot> MvccTxn<S> {
         )
     }
 
-    pub fn commit(&mut self, key: Key, commit_ts: TimeStamp) -> Result<Option<ReleasedLock>> {
-        fail_point!("commit", |err| Err(make_txn_error(
-            err,
-            &key,
-            self.start_ts,
-        )
-        .into()));
-
-        let mut lock = match self.reader.load_lock(&key)? {
-            Some(mut lock) if lock.ts == self.start_ts => {
-                // A lock with larger min_commit_ts than current commit_ts can't be committed
-                if commit_ts < lock.min_commit_ts {
-                    info!(
-                        "trying to commit with smaller commit_ts than min_commit_ts";
-                        "key" => %key,
-                        "start_ts" => self.start_ts,
-                        "commit_ts" => commit_ts,
-                        "min_commit_ts" => lock.min_commit_ts,
-                    );
-                    return Err(ErrorInner::CommitTsExpired {
-                        start_ts: self.start_ts,
-                        commit_ts,
-                        key: key.into_raw()?,
-                        min_commit_ts: lock.min_commit_ts,
-                    }
-                    .into());
-                }
-
-                // It's an abnormal routine since pessimistic locks shouldn't be committed in our
-                // transaction model. But a pessimistic lock will be left if the pessimistic
-                // rollback request fails to send and the transaction need not to acquire
-                // this lock again(due to WriteConflict). If the transaction is committed, we
-                // should commit this pessimistic lock too.
-                if lock.lock_type == LockType::Pessimistic {
-                    warn!(
-                        "commit a pessimistic lock with Lock type";
-                        "key" => %key,
-                        "start_ts" => self.start_ts,
-                        "commit_ts" => commit_ts,
-                    );
-                    // Commit with WriteType::Lock.
-                    lock.lock_type = LockType::Lock;
-                }
-                lock
-            }
-            _ => {
-                return match self
-                    .reader
-                    .get_txn_commit_record(&key, self.start_ts)?
-                    .info()
-                {
-                    Some((_, WriteType::Rollback)) | None => {
-                        MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
-                        // None: related Rollback has been collapsed.
-                        // Rollback: rollback by concurrent transaction.
-                        info!(
-                            "txn conflict (lock not found)";
-                            "key" => %key,
-                            "start_ts" => self.start_ts,
-                            "commit_ts" => commit_ts,
-                        );
-                        Err(ErrorInner::TxnLockNotFound {
-                            start_ts: self.start_ts,
-                            commit_ts,
-                            key: key.into_raw()?,
-                        }
-                        .into())
-                    }
-                    // Committed by concurrent transaction.
-                    Some((_, WriteType::Put))
-                    | Some((_, WriteType::Delete))
-                    | Some((_, WriteType::Lock)) => {
-                        MVCC_DUPLICATE_CMD_COUNTER_VEC.commit.inc();
-                        Ok(None)
-                    }
-                };
-            }
-        };
-        let mut write = Write::new(
-            WriteType::from_lock_type(lock.lock_type).unwrap(),
-            self.start_ts,
-            lock.short_value.take(),
-        );
-
-        for ts in &lock.rollback_ts {
-            if *ts == commit_ts {
-                write = write.set_overlapped_rollback(true);
-                break;
-            }
-        }
-
-        self.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
-        Ok(self.unlock_key(key, lock.is_pessimistic_txn()))
-    }
-
     pub fn rollback(&mut self, key: Key) -> Result<Option<ReleasedLock>> {
         fail_point!("rollback", |err| Err(make_txn_error(
             err,
@@ -1222,6 +1128,10 @@ mod tests {
     use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
+    use crate::storage::txn::action;
+    use crate::storage::txn::action::commit::tests::{
+        must_err as must_commit_err, must_succeed as must_commit,
+    };
     use crate::storage::txn::commands::*;
     use crate::storage::SecondaryLocksStatus;
     use kvproto::kvrpcpb::Context;
@@ -1920,7 +1830,7 @@ mod tests {
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 10.into(), true, cm);
-        txn.commit(key, 15.into()).unwrap();
+        action::commit::commit(&mut txn, key, 15.into()).unwrap();
         assert!(txn.write_size() > 0);
         engine
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
@@ -2796,7 +2706,7 @@ mod tests {
             }
             write(WriteData::from_modifies(txn.into_modifies()));
             let mut txn = new_txn(start_ts.into(), cm);
-            txn.commit(key.clone(), commit_ts.into()).unwrap();
+            action::commit::commit(&mut txn, key.clone(), commit_ts.into()).unwrap();
             engine
                 .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
                 .unwrap();

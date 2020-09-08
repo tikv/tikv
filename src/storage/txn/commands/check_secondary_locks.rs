@@ -156,6 +156,7 @@ pub mod tests {
     use crate::storage::kv::TestEngineBuilder;
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
+    use crate::storage::txn::action::commit::tests::must_succeed as must_commit;
     use crate::storage::txn::commands::WriteCommand;
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;

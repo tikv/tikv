@@ -8,7 +8,7 @@ use crate::storage::mvcc::MvccTxn;
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
-use crate::storage::txn::{Error, ErrorInner, Result};
+use crate::storage::txn::{action, Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
 
 command! {
@@ -55,7 +55,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         // Pessimistic txn needs key_hashes to wake up waiters
         let mut released_locks = ReleasedLocks::new(self.lock_ts, self.commit_ts);
         for k in self.keys {
-            released_locks.push(txn.commit(k, self.commit_ts)?);
+            released_locks.push(action::commit::commit(&mut txn, k, self.commit_ts)?);
         }
         released_locks.wake_up(context.lock_mgr);
 

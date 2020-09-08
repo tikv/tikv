@@ -878,6 +878,7 @@ mod latest_kv_tests {
     use crate::storage::mvcc::tests::*;
     use crate::storage::Scanner;
 
+    use crate::storage::txn::action::commit::tests::must_succeed as must_commit;
     use kvproto::kvrpcpb::Context;
 
     /// Check whether everything works as usual when `ForwardKvScanner::get()` goes out of bound.
@@ -1163,8 +1164,8 @@ mod latest_entry_tests {
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::mvcc::tests::*;
+    use crate::storage::txn::action::commit::tests::must_succeed as must_commit;
     use crate::storage::{Engine, TestEngineBuilder};
-
     use kvproto::kvrpcpb::Context;
 
     use super::test_util::EntryBuilder;
@@ -1515,10 +1516,10 @@ mod latest_entry_tests {
 
 #[cfg(test)]
 mod delta_entry_tests {
-
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::mvcc::tests::*;
+    use crate::storage::txn::action::commit::tests::must_succeed as must_commit;
     use crate::storage::{Engine, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;

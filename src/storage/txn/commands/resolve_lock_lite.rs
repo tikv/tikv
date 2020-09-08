@@ -6,7 +6,7 @@ use crate::storage::mvcc::MvccTxn;
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
-use crate::storage::txn::Result;
+use crate::storage::txn::{action, Result};
 use crate::storage::{ProcessResult, Snapshot};
 use txn_types::{Key, TimeStamp};
 
@@ -49,7 +49,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
         let mut released_locks = ReleasedLocks::new(self.start_ts, self.commit_ts);
         for key in self.resolve_keys {
             released_locks.push(if !self.commit_ts.is_zero() {
-                txn.commit(key, self.commit_ts)?
+                action::commit::commit(&mut txn, key, self.commit_ts)?
             } else {
                 txn.rollback(key)?
             });

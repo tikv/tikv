@@ -6,6 +6,7 @@ pub mod commands;
 pub mod sched_pool;
 pub mod scheduler;
 
+pub mod action;
 mod latch;
 mod store;
 
