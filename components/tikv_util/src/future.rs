@@ -44,7 +44,6 @@ where
     (callback, future)
 }
 
-
 // BatchCommandsWaker is used to make business pool notifiy completion queues directly.
 pub(crate) struct BatchCommandsWaker(Mutex<Option<BoxFuture<'static, ()>>>);
 impl ArcWake for BatchCommandsWaker {
