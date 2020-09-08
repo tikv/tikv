@@ -5,7 +5,7 @@ use super::key_handle::{KeyHandle, KeyHandleGuard};
 use crossbeam_skiplist::SkipMap;
 use std::{
     ops::Bound,
-    sync::{atomic, Arc, Weak},
+    sync::{Arc, Weak},
 };
 use txn_types::{Key, Lock};
 
@@ -72,7 +72,6 @@ impl LockTable {
 
     /// Gets the handle of the key.
     pub fn get<'m>(&'m self, key: &Key) -> Option<Arc<KeyHandle>> {
-        atomic::fence(atomic::Ordering::SeqCst);
         self.0.get(key).and_then(|e| e.value().upgrade())
     }
 
