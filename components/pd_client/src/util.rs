@@ -178,7 +178,9 @@ impl LeaderClient {
                 start,
             )
         };
+
         let (client, members) = future.await?;
+        fail_point!("leader_client_reconnect");
 
         {
             let mut inner = self.inner.wl();
@@ -330,8 +332,13 @@ where
 {
     let mut err = None;
     for _ in 0..retry {
-        // DO NOT put any lock operation in match statement, or it will cause dead lock!
-        let ret = { func(&client.inner.rl().client_stub).map_err(Error::Grpc) };
+        let ret = {
+            // Drop the read lock immediately to prevent the deadlock between the caller thread
+            // which may hold the read lock and wait for PD client thread completing the request
+            // and the PD client thread which may block on acquiring the write lock.
+            let client_stub = client.inner.rl().client_stub.clone();
+            func(&client_stub).map_err(Error::Grpc)
+        };
         match ret {
             Ok(r) => {
                 return Ok(r);
