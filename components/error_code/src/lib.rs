@@ -4,6 +4,8 @@ extern crate tikv_alloc;
 #[macro_use]
 extern crate lazy_static;
 
+use std::fmt::{self, Display, Formatter};
+
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 macro_rules! define_error_codes {
@@ -39,8 +41,6 @@ pub struct ErrorCode {
     pub workaround: &'static str,
 }
 
-<<<<<<< HEAD
-=======
 impl Display for ErrorCode {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.code)
@@ -60,7 +60,6 @@ impl Serialize for ErrorCode {
     }
 }
 
->>>>>>> f2ab511... error-code: support to generate metafile (#8609)
 pub trait ErrorCodeExt {
     fn error_code(&self) -> ErrorCode;
 }

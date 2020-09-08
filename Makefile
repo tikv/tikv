@@ -332,15 +332,13 @@ ctl:
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
-<<<<<<< HEAD
 # A special target for testing only "coprocessor::dag::expr"
 # per https://github.com/tikv/tikv/pull/3280
 expression: format clippy
 	RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" --no-default-features --package tidb_query "expr" -- --nocapture
-=======
+
 error-code:
 	cargo run --manifest-path components/error_code/Cargo.toml --features protobuf-codec
->>>>>>> f2ab511... error-code: support to generate metafile (#8609)
 
 # A special target for building TiKV docker image.
 .PHONY: docker
