@@ -101,7 +101,7 @@ fn test_stale_resolver() {
                 _ => panic!("{:?}", es),
             },
             Event_oneof_event::Error(e) => panic!("{:?}", e),
-            _ => panic!("unknown event"),
+            other => panic!("unknown event {:?}", other),
         }
     }
 
@@ -126,7 +126,7 @@ fn test_stale_resolver() {
                 }
             },
             Event_oneof_event::Error(e) => panic!("{:?}", e),
-            _ => panic!("unknown event"),
+            other => panic!("unknown event {:?}", other),
         }
     }
 

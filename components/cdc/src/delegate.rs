@@ -815,7 +815,7 @@ mod tests {
                 let event = e.event.take().unwrap();
                 match event {
                     Event_oneof_event::Error(err) => err,
-                    _ => panic!("unknown event"),
+                    other => panic!("unknown event {:?}", other),
                 }
             } else {
                 panic!("unknown event")
@@ -944,7 +944,7 @@ mod tests {
                     Event_oneof_event::Entries(entries) => {
                         assert_eq!(entries.entries.as_slice(), event_rows.as_slice());
                     }
-                    _ => panic!("unknown event"),
+                    other => panic!("unknown event {:?}", other),
                 }
             }
         };

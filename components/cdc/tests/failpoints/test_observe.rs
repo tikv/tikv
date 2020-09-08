@@ -46,7 +46,7 @@ fn test_observe_duplicate_cmd() {
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         Event_oneof_event::Error(e) => panic!("{:?}", e),
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
 
     let (k, v) = ("key1".to_owned(), "value".to_owned());
@@ -69,7 +69,7 @@ fn test_observe_duplicate_cmd() {
             assert_eq!(entries.entries.len(), 1);
             assert_eq!(entries.entries[0].get_type(), EventLogType::Prewrite);
         }
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
     let fp = "before_cdc_flush_apply";
     fail::cfg(fp, "pause").unwrap();
@@ -109,7 +109,7 @@ fn test_observe_duplicate_cmd() {
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         Event_oneof_event::Error(e) => panic!("{:?}", e),
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
 
     // Make sure resolved ts can be advanced normally even with few tso failures.
@@ -202,7 +202,7 @@ fn test_delayed_change_cmd() {
                     let e = &es.entries[0];
                     assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
                 }
-                _ => panic!("unknown event"),
+                other => panic!("unknown event {:?}", other),
             }
         }
         if counter > 3 {

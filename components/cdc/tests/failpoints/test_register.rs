@@ -56,7 +56,7 @@ fn test_failed_pending_batch() {
                 let e = &es.entries[0];
                 assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
             }
-            _ => panic!("unknown event"),
+            other => panic!("unknown event {:?}", other),
         }
     }
     // Try to subscribe region again.
@@ -73,7 +73,7 @@ fn test_failed_pending_batch() {
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
 
     event_feed_wrap.as_ref().replace(None);
@@ -145,7 +145,7 @@ fn test_connections_register() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
 
     // Conn 1
@@ -182,13 +182,13 @@ fn test_connections_register() {
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         Event_oneof_event::Error(e) => panic!("{:?}", e),
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
 
     event_feed_wrap.as_ref().replace(None);
@@ -240,13 +240,13 @@ fn test_merge() {
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
     let mut events = target_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
@@ -256,7 +256,7 @@ fn test_merge() {
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
     // Continue to commit merge
     let destroy_peer_fp = "destroy_peer";
@@ -287,7 +287,7 @@ fn test_merge() {
                 let e = &es.entries[0];
                 assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
             }
-            _ => panic!("unknown event"),
+            other => panic!("unknown event {:?}", other),
         }
     }
     let mut events = target_event(false).events.to_vec();
@@ -296,7 +296,7 @@ fn test_merge() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
 
     source_wrap.as_ref().replace(None);
@@ -341,7 +341,7 @@ fn test_deregister_pending_downstream() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
 
     let _req_tx2 = req_tx2.send((req, WriteFlags::default())).wait().unwrap();
@@ -351,7 +351,7 @@ fn test_deregister_pending_downstream() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
     fail::remove(raft_capture_fp);
 

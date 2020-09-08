@@ -1317,7 +1317,7 @@ mod tests {
                         assert!(err.has_not_leader());
                         break;
                     }
-                    _ => panic!("unknown event"),
+                    other => panic!("unknown event {:?}", other),
                 }
             }
         }
@@ -1359,7 +1359,7 @@ mod tests {
                         assert!(err.has_not_leader());
                         break;
                     }
-                    _ => panic!("unknown event"),
+                    other => panic!("unknown event {:?}", other),
                 }
             }
         }
@@ -1383,7 +1383,7 @@ mod tests {
         ep.run(Task::Deregister(deregister));
         match rx.recv_timeout(Duration::from_millis(500)) {
             Err(_) => (),
-            _ => panic!("unknown event"),
+            other => panic!("unknown event {:?}", other),
         }
         assert_eq!(ep.capture_regions.len(), 1);
     }
