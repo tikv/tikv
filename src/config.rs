@@ -3330,7 +3330,10 @@ mod tests {
 
     #[test]
     fn test_raft_engine_dir() {
-        let content = r#"[raft-engine]"#;
+        let content = r#"
+            [raft-engine]
+            enable = true
+        "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
         assert_eq!(
