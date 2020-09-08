@@ -148,9 +148,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
                         if data.is_empty() {
                             return Err(Error::InvalidChunk);
                         }
-                        if let Err(e) = file.append(data) {
-                            return Err(e);
-                        }
+                        file.append(data)?;
                         IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
                         IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
                         Ok(file)
@@ -205,13 +203,10 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             );
             let mut resp = DownloadResponse::default();
             match res {
-                Ok(range) => {
-                    if let Some(r) = range {
-                        resp.set_range(r);
-                    } else {
-                        resp.set_is_empty(true);
-                    }
-                }
+                Ok(range) => match range {
+                    Some(r) => resp.set_range(r),
+                    None => resp.set_is_empty(true),
+                },
                 Err(e) => resp.set_error(e.into()),
             }
             let resp = Ok(resp);
@@ -460,14 +455,11 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
                     })
                     .await?;
 
-                match writer.finish() {
-                    Ok(metas) => {
-                        let mut resp = WriteResponse::default();
-                        resp.set_metas(metas.into());
-                        Ok(resp)
-                    }
-                    Err(e) => Err(e),
-                }
+                writer.finish().map(|metas| {
+                    let mut resp = WriteResponse::default();
+                    resp.set_metas(metas.into());
+                    resp
+                })
             }
             .await;
             send_rpc_response!(res, sink, label, timer);
