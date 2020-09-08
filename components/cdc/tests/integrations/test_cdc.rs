@@ -19,6 +19,7 @@ use kvproto::cdcpb::{
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::sleep_ms;
+use test_raftstore::*;
 use txn_types::{Key, Lock, LockType};
 
 use cdc::Task;
@@ -218,7 +219,7 @@ fn test_cdc_not_leader() {
         _ => panic!("unknown event"),
     }
     // Sleep a while to make sure the stream is registered.
-    sleep_ms(200);
+    sleep_ms(1000);
     // There must be a delegate.
     let scheduler = suite
         .endpoints
@@ -555,7 +556,10 @@ fn test_cdc_tso_failure() {
 
 #[test]
 fn test_region_split() {
-    let mut suite = TestSuite::new(3);
+    let mut cluster = new_server_cluster(1, 3);
+    configure_for_lease_read(&mut cluster, Some(100), None);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuite::with_cluster(3, cluster);
 
     let region = suite.cluster.get_region(&[]);
     let mut req = ChangeDataRequest::default();
