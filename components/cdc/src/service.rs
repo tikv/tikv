@@ -204,7 +204,7 @@ impl ChangeData for Service {
                 }
                 let resps = resp_vecs
                     .into_iter()
-                    .filter(|e| e.has_resolved_ts() || e.events.len() > 0)
+                    .filter(|e| e.has_resolved_ts() || !e.events.is_empty())
                     .map(|resp| (resp, WriteFlags::default()));
                 stream::iter(resps)
             })
