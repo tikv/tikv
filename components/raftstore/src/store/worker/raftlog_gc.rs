@@ -178,16 +178,14 @@ where
 }
 
 #[cfg(test)]
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::mpsc::sync_channel;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use engine_rocks::util::new_engine;
     use engine_rocks::RocksEngine;
-    use engine_traits::{
-        kCF_DEFAULT, Engines, KvEngine, Mutable, WriteBatchExt, ALL_CFS, CF_DEFAULT,
-    };
+    use engine_traits::{Engines, KvEngine, Mutable, WriteBatchExt, ALL_CFS, CF_DEFAULT};
     use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
