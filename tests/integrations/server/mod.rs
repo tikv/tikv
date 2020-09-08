@@ -280,7 +280,6 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     ) {
         unimplemented!()
     }
-
 }
 
 fn mock_kv_service<T>(kv: MockKv<T>, ip: &str, port: u16) -> Result<Server>
