@@ -25,8 +25,7 @@ use engine_traits::{
     compaction_job::CompactionJobInfo, Engines, MetricsFlusher, RaftEngine, CF_DEFAULT, CF_WRITE,
 };
 use fs2::FileExt;
-use futures03::executor::block_on;
-use futures_cpupool::Builder;
+use futures::executor::block_on;
 use kvproto::{
     backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
@@ -73,6 +72,7 @@ use tikv_util::{
     time::Monitor,
     worker::{FutureWorker, Worker},
 };
+use tokio::runtime::Builder;
 
 use crate::{setup::*, signal_handler};
 
@@ -504,6 +504,18 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             None
         };
 
+        // The `DebugService` and `DiagnosticsService` will share the same thread pool
+        let debug_thread_pool = Arc::new(
+            Builder::new()
+                .threaded_scheduler()
+                .thread_name(thd_name!("debugger"))
+                .core_threads(1)
+                .on_thread_start(|| tikv_alloc::add_thread_memory_accessor())
+                .on_thread_stop(|| tikv_alloc::remove_thread_memory_accessor())
+                .build()
+                .unwrap(),
+        );
+
         let storage_read_pool_handle = if self.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
@@ -575,6 +587,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             snap_mgr.clone(),
             gc_worker.clone(),
             unified_read_pool,
+            debug_thread_pool,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
@@ -695,18 +708,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             fatal!("failed to register import service");
         }
 
-        // The `DebugService` and `DiagnosticsService` will share the same thread pool
-        let pool = Builder::new()
-            .name_prefix(thd_name!("debugger"))
-            .pool_size(1)
-            .after_start(|| tikv_alloc::add_thread_memory_accessor())
-            .before_stop(|| tikv_alloc::remove_thread_memory_accessor())
-            .create();
-
         // Debug service.
         let debug_service = DebugService::new(
             engines.engines.clone(),
-            pool.clone(),
+            servers.server.get_debug_thread_pool().clone(),
             self.router.clone(),
             self.cfg_controller.as_ref().unwrap().clone(),
             self.security_mgr.clone(),
@@ -721,7 +726,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
-            pool,
+            servers.server.get_debug_thread_pool().clone(),
             self.config.log_file.clone(),
             self.config.slow_log_file.clone(),
             self.security_mgr.clone(),
