@@ -2318,11 +2318,6 @@ impl RegionProposal {
 
 pub struct Destroy {
     region_id: u64,
-<<<<<<< HEAD
-    async_remove: bool,
-=======
-    merge_from_snapshot: bool,
->>>>>>> c4b7e8f... raftstore: destroy process must be asynchronous if peer is initialized (#8455)
 }
 
 /// A message that asks the delegate to apply to the given logs and then reply to
@@ -2463,18 +2458,8 @@ impl Msg {
         Msg::Registration(Registration::new(peer))
     }
 
-<<<<<<< HEAD
-    pub fn destroy(region_id: u64, async_remove: bool) -> Msg {
-        Msg::Destroy(Destroy {
-            region_id,
-            async_remove,
-=======
-    pub fn destroy(region_id: u64, merge_from_snapshot: bool) -> Msg<EK> {
-        Msg::Destroy(Destroy {
-            region_id,
-            merge_from_snapshot,
->>>>>>> c4b7e8f... raftstore: destroy process must be asynchronous if peer is initialized (#8455)
-        })
+    pub fn destroy(region_id: u64) -> Msg {
+        Msg::Destroy(Destroy { region_id })
     }
 }
 
@@ -2689,24 +2674,12 @@ impl ApplyFsm {
         assert_eq!(d.region_id, self.delegate.region_id());
         if !self.delegate.stopped {
             self.destroy(ctx);
-<<<<<<< HEAD
-            if d.async_remove {
-                ctx.notifier.notify(
-                    self.delegate.region_id(),
-                    PeerMsg::ApplyRes {
-                        res: TaskRes::Destroy {
-                            region_id: self.delegate.region_id(),
-                            peer_id: self.delegate.id,
-                        },
-=======
             ctx.notifier.notify(
                 self.delegate.region_id(),
                 PeerMsg::ApplyRes {
                     res: TaskRes::Destroy {
                         region_id: self.delegate.region_id(),
                         peer_id: self.delegate.id,
-                        merge_from_snapshot: d.merge_from_snapshot,
->>>>>>> c4b7e8f... raftstore: destroy process must be asynchronous if peer is initialized (#8455)
                     },
                 },
             );
@@ -3594,11 +3567,7 @@ mod tests {
             );
         });
 
-<<<<<<< HEAD
-        router.schedule_task(2, Msg::destroy(2, true));
-=======
-        router.schedule_task(2, Msg::destroy(2, false));
->>>>>>> c4b7e8f... raftstore: destroy process must be asynchronous if peer is initialized (#8455)
+        router.schedule_task(2, Msg::destroy(2));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Destroy { region_id, peer_id } => (region_id, peer_id),
