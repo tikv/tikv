@@ -7,13 +7,10 @@ use futures::sink::Sink;
 use futures::Future;
 use futures03::executor::block_on;
 use grpcio::WriteFlags;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::event::{Event as Event_oneof_event, LogType as EventLogType};
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::{Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataRequest,
-};
 use kvproto::kvrpcpb::*;
 use kvproto::metapb::RegionEpoch;
 use pd_client::PdClient;
@@ -30,9 +27,7 @@ fn test_failed_pending_batch() {
     fail::cfg(fp, "pause").unwrap();
 
     let region = suite.cluster.get_region(&[]);
-    let mut req = ChangeDataRequest::default();
-    req.region_id = region.get_id();
-    req.set_region_epoch(region.get_region_epoch().clone());
+    let mut req = suite.new_changedata_request(region.get_id());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let req_tx = req_tx
         .send((req.clone(), WriteFlags::default()))
@@ -87,9 +82,7 @@ fn test_region_ready_after_deregister() {
     let fp = "cdc_incremental_scan_start";
     fail::cfg(fp, "pause").unwrap();
 
-    let mut req = ChangeDataRequest::default();
-    req.region_id = 1;
-    req.set_region_epoch(suite.get_context(1).take_region_epoch());
+    let req = suite.new_changedata_request(1);
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Sleep for a while to make sure the region has been subscribed
@@ -131,8 +124,7 @@ fn test_connections_register() {
     mutation.value = v.into_bytes();
     suite.must_kv_prewrite(region.get_id(), vec![mutation], k.into_bytes(), start_ts);
 
-    let mut req = ChangeDataRequest::default();
-    req.region_id = region.get_id();
+    let mut req = suite.new_changedata_request(region.get_id());
     req.set_region_epoch(RegionEpoch::default());
 
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
@@ -203,7 +195,7 @@ fn test_merge() {
     suite.cluster.must_split(&region, b"k1");
     // Subscribe source region
     let source = suite.cluster.get_region(b"k0");
-    let mut req = ChangeDataRequest::default();
+    let mut req = suite.new_changedata_request(region.get_id());
     req.region_id = source.get_id();
     req.set_region_epoch(source.get_region_epoch().clone());
     let (source_tx, source_wrap, source_event) =
@@ -310,9 +302,7 @@ fn test_deregister_pending_downstream() {
 
     let build_resolver_fp = "before_schedule_resolver_ready";
     fail::cfg(build_resolver_fp, "pause").unwrap();
-    let mut req = ChangeDataRequest::default();
-    req.region_id = 1;
-    req.set_region_epoch(suite.get_context(1).take_region_epoch());
+    let mut req = suite.new_changedata_request(1);
     let (req_tx1, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx1 = req_tx1
         .send((req.clone(), WriteFlags::default()))

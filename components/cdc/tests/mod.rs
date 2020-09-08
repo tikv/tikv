@@ -151,6 +151,14 @@ impl TestSuite {
         self.cluster.shutdown();
     }
 
+    pub fn new_changedata_request(&mut self, region_id: u64) -> ChangeDataRequest {
+        let mut req = ChangeDataRequest::default();
+        req.region_id = region_id;
+        req.set_region_epoch(self.get_context(region_id).take_region_epoch());
+        req.mut_header().set_ticdc_version("4.0.6".into());
+        req
+    }
+
     pub fn must_kv_prewrite(
         &mut self,
         region_id: u64,

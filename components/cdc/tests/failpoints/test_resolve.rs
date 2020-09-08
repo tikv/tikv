@@ -4,13 +4,10 @@ use futures::sink::Sink;
 use futures::Future;
 use futures03::executor::block_on;
 use grpcio::WriteFlags;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::event::{Event as Event_oneof_event, LogType as EventLogType};
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::{Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataRequest,
-};
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::sleep_ms;
@@ -24,9 +21,7 @@ fn test_stale_resolver() {
 
     // Close previous connection and open a new one twice time
     let region = suite.cluster.get_region(&[]);
-    let mut req = ChangeDataRequest::default();
-    req.region_id = region.get_id();
-    req.set_region_epoch(region.get_region_epoch().clone());
+    let req = suite.new_changedata_request(region.get_id());
     let (req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
     let _req_tx = req_tx
