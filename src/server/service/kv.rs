@@ -1146,13 +1146,11 @@ fn future_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: GetRequest,
 ) -> impl Future03<Output = ServerResult<GetResponse>> {
-    let v = storage
-        .get(
-            req.take_context(),
-            Key::from_raw(req.get_key()),
-            req.get_version().into(),
-        )
-        .compat();
+    let v = storage.get(
+        req.take_context(),
+        Key::from_raw(req.get_key()),
+        req.get_version().into(),
+    );
 
     async move {
         let v = v.await;
@@ -1179,18 +1177,16 @@ fn future_scan<E: Engine, L: LockManager>(
     } else {
         Some(Key::from_raw(req.get_end_key()))
     };
-    let v = storage
-        .scan(
-            req.take_context(),
-            Key::from_raw(req.get_start_key()),
-            end_key,
-            req.get_limit() as usize,
-            req.get_sample_step() as usize,
-            req.get_version().into(),
-            req.get_key_only(),
-            req.get_reverse(),
-        )
-        .compat();
+    let v = storage.scan(
+        req.take_context(),
+        Key::from_raw(req.get_start_key()),
+        end_key,
+        req.get_limit() as usize,
+        req.get_sample_step() as usize,
+        req.get_version().into(),
+        req.get_key_only(),
+        req.get_reverse(),
+    );
 
     async move {
         let v = v.await;
@@ -1209,9 +1205,7 @@ fn future_batch_get<E: Engine, L: LockManager>(
     mut req: BatchGetRequest,
 ) -> impl Future03<Output = ServerResult<BatchGetResponse>> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-    let v = storage
-        .batch_get(req.take_context(), keys, req.get_version().into())
-        .compat();
+    let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
 
     async move {
         let v = v.await;
@@ -1264,9 +1258,7 @@ fn future_raw_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawGetRequest,
 ) -> impl Future03<Output = ServerResult<RawGetResponse>> {
-    let v = storage
-        .raw_get(req.take_context(), req.take_cf(), req.take_key())
-        .compat();
+    let v = storage.raw_get(req.take_context(), req.take_cf(), req.take_key());
 
     async move {
         let v = v.await;
@@ -1289,9 +1281,7 @@ fn future_raw_batch_get<E: Engine, L: LockManager>(
     mut req: RawBatchGetRequest,
 ) -> impl Future03<Output = ServerResult<RawBatchGetResponse>> {
     let keys = req.take_keys().into();
-    let v = storage
-        .raw_batch_get(req.take_context(), req.take_cf(), keys)
-        .compat();
+    let v = storage.raw_batch_get(req.take_context(), req.take_cf(), keys);
 
     async move {
         let v = v.await;
@@ -1417,17 +1407,15 @@ fn future_raw_scan<E: Engine, L: LockManager>(
     } else {
         Some(req.take_end_key())
     };
-    let v = storage
-        .raw_scan(
-            req.take_context(),
-            req.take_cf(),
-            req.take_start_key(),
-            end_key,
-            req.get_limit() as usize,
-            req.get_key_only(),
-            req.get_reverse(),
-        )
-        .compat();
+    let v = storage.raw_scan(
+        req.take_context(),
+        req.take_cf(),
+        req.take_start_key(),
+        end_key,
+        req.get_limit() as usize,
+        req.get_key_only(),
+        req.get_reverse(),
+    );
 
     async move {
         let v = v.await;
@@ -1445,16 +1433,14 @@ fn future_raw_batch_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawBatchScanRequest,
 ) -> impl Future03<Output = ServerResult<RawBatchScanResponse>> {
-    let v = storage
-        .raw_batch_scan(
-            req.take_context(),
-            req.take_cf(),
-            req.take_ranges().into(),
-            req.get_each_limit() as usize,
-            req.get_key_only(),
-            req.get_reverse(),
-        )
-        .compat();
+    let v = storage.raw_batch_scan(
+        req.take_context(),
+        req.take_cf(),
+        req.take_ranges().into(),
+        req.get_each_limit() as usize,
+        req.get_key_only(),
+        req.get_reverse(),
+    );
 
     async move {
         let v = v.await;
@@ -1555,9 +1541,8 @@ fn future_cop<E: Engine>(
     peer: Option<String>,
     req: Request,
 ) -> impl Future03<Output = ServerResult<Response>> {
-    cop.parse_and_handle_unary_request(req, peer)
-        .map_err(|_| unreachable!())
-        .compat()
+    let ret = cop.parse_and_handle_unary_request(req, peer);
+    async move { Ok(ret.await) }
 }
 
 macro_rules! txn_command_future {
