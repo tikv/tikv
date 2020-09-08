@@ -17464,7 +17464,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The blob cache size. Broken down by column family if shared blob cache is disabled.",
+          "description": "The blob cache size.",
           "fill": 1,
           "gridPos": {
             "h": 8,
