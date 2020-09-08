@@ -305,9 +305,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             priority,
             thread_rng().next_u64(),
         );
-
-        res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-            .flatten()
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Get values of a set of keys with seperate context from a snapshot, return a list of `Result`s.
@@ -522,6 +523,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             priority,
             thread_rng().next_u64(),
         );
+
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
@@ -642,6 +644,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             priority,
             thread_rng().next_u64(),
         );
+
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
@@ -787,6 +790,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             priority,
             thread_rng().next_u64(),
         );
+
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
@@ -1160,7 +1164,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         limit: usize,
         key_only: bool,
         reverse_scan: bool,
-    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
+    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -1239,8 +1243,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             thread_rng().next_u64(),
         );
 
-        res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-            .flatten()
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Check the given raw kv CF name. Return the CF name, or `Err` if given CF name is invalid.
@@ -1372,6 +1378,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             priority,
             thread_rng().next_u64(),
         );
+
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
@@ -1697,10 +1704,10 @@ mod tests {
             Key::from_raw(b"x"),
             100.into(),
         )));
-        expect_value(block_on(
+        expect_value(
             b"100".to_vec(),
-            storage.get(Context::default(), Key::from_raw(b"x"), 101.into()),
-        ));
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
+        );
     }
 
     #[test]

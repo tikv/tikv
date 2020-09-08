@@ -6,7 +6,7 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC;
 use crate::storage::mvcc::txn::MissingLockAction;
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn};
+use crate::storage::mvcc::{Error as MvccError, MvccTxn};
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
@@ -77,9 +77,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 if lock.use_async_commit
                     && (!self.caller_start_ts.is_zero() || !self.current_ts.is_zero())
                 {
-                    return Err(MvccError::from(MvccErrorInner::Other(box_err!(
-                        "cannot call check_txn_status with caller_start_ts or current_ts set on async commit transaction"
-                    ))).into());
+                    warn!(
+                        "check async commit txn status with non-zero caller_start_ts or current_ts";
+                        "caller_start_ts" => self.caller_start_ts,
+                        "current_ts" => self.current_ts
+                    );
+                    self.caller_start_ts = TimeStamp::zero();
+                    self.current_ts = TimeStamp::zero();
                 }
 
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
@@ -269,14 +273,14 @@ pub mod tests {
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
             .unwrap();
 
-        let do_check_txn_status = |rollback_if_not_exist| {
+        let do_check_txn_status = |caller_start_ts, current_ts, rollback_if_not_exist| {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let command = crate::storage::txn::commands::CheckTxnStatus {
                 ctx: Default::default(),
                 primary_key: Key::from_raw(b"key"),
                 lock_ts: TimeStamp::new(2),
-                caller_start_ts: 0.into(),
-                current_ts: 0.into(),
+                caller_start_ts,
+                current_ts,
                 rollback_if_not_exist,
             };
             let result = command
@@ -313,13 +317,13 @@ pub mod tests {
                 unreachable!();
             }
         };
-        do_check_txn_status(true);
-        do_check_txn_status(false);
-
-        // Disallow calling check_txn_status on async commit transactions with caller_start_ts or
-        // current_ts set.
-        must_err(&engine, b"key", 2, 1, 0, true);
-        must_err(&engine, b"key", 2, 0, 1, true);
+        do_check_txn_status(TimeStamp::zero(), TimeStamp::zero(), true);
+        do_check_txn_status(TimeStamp::zero(), TimeStamp::zero(), false);
+        // CheckTxnStatus an async commit lock with non-zero caller_start_ts or current_ts simply
+        // performs the same as caller_start_ts = 0 and current_ts = 0.
+        do_check_txn_status(100.into(), 200.into(), true);
+        do_check_txn_status(TimeStamp::zero(), 50.into(), false);
+        do_check_txn_status(30.into(), TimeStamp::zero(), true);
     }
 
     fn test_check_txn_status_impl(rollback_if_not_exist: bool) {
