@@ -37,8 +37,9 @@ use crate::storage::kv::{
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::metrics::{
     self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC,
-    SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC,
-    SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
+    SCHED_CONTEX_GAUGE, SCHED_EARLY_RESP_TIME_DIFF_VEC_STATIC, SCHED_HISTOGRAM_VEC_STATIC,
+    SCHED_LATCH_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC,
+    SCHED_WRITING_BYTES_GAUGE,
 };
 use crate::storage::txn::commands::{ResponsePolicy, WriteContext, WriteResult};
 use crate::storage::txn::{
@@ -92,6 +93,7 @@ struct TaskContext {
     lock: Lock,
     cb: Option<StorageCallback>,
     pr: Option<ProcessResult>,
+    result_taken_timer: Option<Instant>,
     write_bytes: usize,
     tag: metrics::CommandKind,
     // How long it waits on latches.
@@ -120,6 +122,7 @@ impl TaskContext {
             lock,
             cb: Some(cb),
             pr: None,
+            result_taken_timer: None,
             write_bytes,
             tag,
             latch_timer: Instant::now_coarse(),
@@ -233,7 +236,10 @@ impl<L: LockManager> SchedulerInner<L> {
         self.task_contexts[id_index(cid)]
             .lock()
             .get_mut(&cid)
-            .and_then(|tctx| (tctx.cb.take().map(|cb| (cb, tctx.pr.take().unwrap()))))
+            .and_then(|tctx| {
+                tctx.result_taken_timer = Some(Instant::now_coarse());
+                tctx.cb.take().map(|cb| (cb, tctx.pr.take().unwrap()))
+            })
     }
 
     fn too_busy(&self) -> bool {
@@ -490,6 +496,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let mut tctx = self.inner.dequeue_task_context(cid);
 
         // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
+        if let Some(timer) = tctx.result_taken_timer.take() {
+            SCHED_EARLY_RESP_TIME_DIFF_VEC_STATIC
+                .get(tag)
+                .observe(timer.elapsed_secs());
+        }
         if let Some(cb) = tctx.cb.take() {
             let pr = match result {
                 Ok(()) => pr.unwrap_or_else(|| tctx.pr.take().unwrap()),
