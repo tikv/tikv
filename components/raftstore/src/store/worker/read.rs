@@ -23,7 +23,6 @@ use crate::store::{
 };
 use crate::Result;
 use engine_traits::KvEngine;
-use error_code::ErrorCodeExt;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 
