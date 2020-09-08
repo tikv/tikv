@@ -2431,7 +2431,7 @@ impl CollectPeerStateResult {
 
     pub fn on_finish(&mut self, state: PeerCurrentState) {
         let mut data = self.task.data.lock().unwrap();
-        assert_eq!(data.states.insert(self.region_id, Some(state)), None);
+        assert_eq!(data.states.insert(self.region_id, Some(state)), Some(None));
         assert!(data.counter > 0);
         data.counter -= 1;
         if data.counter == 0 {
