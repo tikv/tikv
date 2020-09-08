@@ -3,8 +3,11 @@
 use crate::callback::must_call;
 use futures::channel::mpsc;
 use futures::channel::oneshot as futures_oneshot;
-use futures::future::{self, Future, FutureExt, TryFutureExt};
+use futures::future::{self, BoxFuture, Future, FutureExt, TryFutureExt};
 use futures::stream::{Stream, StreamExt};
+use futures::task::{self, ArcWake, Context, Poll};
+
+use std::sync::{Arc, Mutex};
 
 /// Generates a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.
@@ -61,4 +64,34 @@ where
         .map_err(|e| warn!("stream with buffer send error"; "error" => %e))
         .map(|_| ());
     (rx, driver)
+}
+
+/// Polls the provided future immediately. If the future is not ready,
+/// it will register the waker. When the event is ready, the waker will
+/// be notified, then the internal future is immediately polled in the
+/// thread calling `wake()`.
+pub fn poll_future_notify(f: impl Future<Output = ()> + Send + 'static) {
+    let f: BoxFuture<'static, ()> = Box::pin(f);
+    let spawn = Mutex::new(Some(f));
+    let waker = Arc::new(BatchCommandsWaker(spawn));
+    waker.wake();
+}
+
+// BatchCommandsWaker is used to make business pool notifiy completion queues directly.
+struct BatchCommandsWaker(Mutex<Option<BoxFuture<'static, ()>>>);
+
+impl ArcWake for BatchCommandsWaker {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        let mut future_slot = arc_self.0.lock().unwrap();
+        if let Some(mut future) = future_slot.take() {
+            let waker = task::waker_ref(&arc_self);
+            let cx = &mut Context::from_waker(&*waker);
+            match future.as_mut().poll(cx) {
+                Poll::Pending => {
+                    *future_slot = Some(future);
+                }
+                Poll::Ready(()) => {}
+            }
+        }
+    }
 }

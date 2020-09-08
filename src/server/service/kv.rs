@@ -23,9 +23,8 @@ use crate::storage::{
 use engine_rocks::RocksEngine;
 use futures::{future, Future, Sink, Stream};
 use futures03::compat::{Compat, Future01CompatExt};
-use futures03::future::{self as future03, BoxFuture, Future as Future03, FutureExt, TryFutureExt};
+use futures03::future::{self as future03, Future as Future03, FutureExt, TryFutureExt};
 use futures03::stream::{StreamExt, TryStreamExt};
-use futures03::task::{self, ArcWake, Context, Poll};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
@@ -38,7 +37,7 @@ use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
-use tikv_util::future::paired_future_callback;
+use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -990,32 +989,6 @@ fn response_batch_commands_request<F>(
         }
     };
     poll_future_notify(task);
-}
-
-// BatchCommandsWaker is used to make business pool notifiy completion queues directly.
-struct BatchCommandsWaker(Mutex<Option<BoxFuture<'static, ()>>>);
-
-impl ArcWake for BatchCommandsWaker {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        let mut future_slot = arc_self.0.lock().unwrap();
-        if let Some(mut future) = future_slot.take() {
-            let waker = task::waker_ref(&arc_self);
-            let cx = &mut Context::from_waker(&*waker);
-            match future.as_mut().poll(cx) {
-                Poll::Pending => {
-                    *future_slot = Some(future);
-                }
-                Poll::Ready(()) => {}
-            }
-        }
-    }
-}
-
-pub fn poll_future_notify(f: impl Future03<Output = ()> + Send + 'static) {
-    let f: BoxFuture<'static, ()> = Box::pin(f);
-    let spawn = Mutex::new(Some(f));
-    let waker = Arc::new(BatchCommandsWaker(spawn));
-    waker.wake();
 }
 
 fn handle_batch_commands_request<E: Engine, L: LockManager>(
