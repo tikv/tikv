@@ -8,7 +8,7 @@ use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, WriteBatchExt};
+use engine_traits::{Engines, KvEngine, RaftEngine, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use futures::compat::Future01CompatExt;
 use kvproto::errorpb;
@@ -29,7 +29,6 @@ use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
-use raft_engine::RaftEngine;
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;

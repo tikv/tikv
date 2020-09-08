@@ -27,9 +27,9 @@ use time::{self, Timespec};
 use tokio::runtime::{self, Handle, Runtime};
 
 use engine_rocks::CompactedEvent;
+use engine_traits::{RaftEngine, RaftLogBatch};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
-use raft_engine::{RaftEngine, RaftLogBatch};
 use sst_importer::SSTImporter;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};

@@ -10,10 +10,9 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, Mutable};
+use engine_traits::{Engines, KvEngine, Mutable, RaftEngine};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use raft_engine::RaftEngine;
 
 use crate::coprocessor::CoprocessorHost;
 use crate::store::peer_storage::{
