@@ -1069,6 +1069,7 @@ mod tests {
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::TestEngineBuilder;
     use tikv_util::collections::HashSet;
+    use tikv_util::config::ReadableDuration;
     use tikv_util::mpsc::batch;
     use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, Worker};
 
@@ -1264,6 +1265,85 @@ mod tests {
     }
 
     #[test]
+    fn test_register() {
+        let (task_sched, _task_rx) = dummy_scheduler();
+        let raft_router = MockRaftStoreRouter::new();
+        let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
+        let observer = CdcObserver::new(task_sched.clone());
+        let pd_client = Arc::new(TestPdClient::new(0, true));
+        let mut ep = Endpoint::new(
+            &CdcConfig {
+                min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+                ..Default::default()
+            },
+            pd_client,
+            task_sched,
+            raft_router,
+            observer,
+            Arc::new(Mutex::new(StoreMeta::new(0))),
+            ConcurrencyManager::new(1.into()),
+        );
+        let (tx, rx) = batch::unbounded(1);
+
+        let conn = Conn::new(tx, String::new());
+        let conn_id = conn.get_id();
+        ep.run(Task::OpenConn { conn });
+        let mut req_header = Header::default();
+        req_header.set_cluster_id(0);
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(1);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        ep.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version: semver::Version::new(4, 0, 6),
+        });
+        assert_eq!(ep.capture_regions.len(), 1);
+
+        // duplicate request error.
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        ep.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version: semver::Version::new(4, 0, 6),
+        });
+        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        if let CdcEvent::Event(mut e) = cdc_event {
+            let event = e.event.take().unwrap();
+            match event {
+                Event_oneof_event::Error(err) => {
+                    assert!(err.has_duplicate_request());
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        }
+        assert_eq!(ep.capture_regions.len(), 1);
+
+        // Compatibility error.
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id);
+        ep.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version: semver::Version::new(0, 0, 0),
+        });
+        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        if let CdcEvent::Event(mut e) = cdc_event {
+            let event = e.event.take().unwrap();
+            match event {
+                Event_oneof_event::Error(err) => {
+                    assert!(err.has_compatibility());
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        }
+        assert_eq!(ep.capture_regions.len(), 1);
+    }
+
+    #[test]
     fn test_deregister() {
         let (task_sched, _task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
@@ -1383,7 +1463,7 @@ mod tests {
         ep.run(Task::Deregister(deregister));
         match rx.recv_timeout(Duration::from_millis(500)) {
             Err(_) => (),
-            other => panic!("unknown event {:?}", other),
+            Ok(other) => panic!("unknown event {:?}", other),
         }
         assert_eq!(ep.capture_regions.len(), 1);
     }

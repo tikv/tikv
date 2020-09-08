@@ -39,6 +39,7 @@ impl ConnID {
     }
 }
 
+#[derive(Debug)]
 pub enum CdcEvent {
     ResolvedTs(ResolvedTs),
     Event(Event),
