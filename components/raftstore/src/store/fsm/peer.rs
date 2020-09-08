@@ -1534,7 +1534,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // Destroy the apply fsm first, wait for the reply msg from apply fsm
             self.ctx
                 .apply_router
-                .schedule_task(job.region_id, ApplyTask::destroy(job.region_id, false));
+                .schedule_task(job.region_id, ApplyTask::destroy(job.region_id));
             false
         } else {
             // Destroy the peer fsm directly
