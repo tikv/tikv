@@ -27,6 +27,7 @@ use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
 use security::*;
 use test_raftstore::*;
+use tikv::config::CdcConfig;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
@@ -128,6 +129,7 @@ impl TestSuite {
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
             let mut cdc_endpoint = cdc::Endpoint::new(
+                &CdcConfig::default(),
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
