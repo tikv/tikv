@@ -407,12 +407,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             match m {
                 PeerMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(
+                        error!(%e;
                             "handle raft message err";
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
-                            "err" => %e,
-                            "error_code" => %e.error_code(),
                         );
                     }
                 }
@@ -570,13 +568,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 let s = match self.ctx.snap_mgr.get_snapshot_for_sending(&key) {
                     Ok(s) => s,
                     Err(e) => {
-                        error!(
+                        error!(%e;
                             "failed to load snapshot";
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "snapshot" => ?key,
-                            "err" => %e,
-                            "error_code" => %e.error_code(),
                         );
                         continue;
                     }
@@ -627,13 +623,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 let a = match self.ctx.snap_mgr.get_snapshot_for_applying(&key) {
                     Ok(a) => a,
                     Err(e) => {
-                        error!(
+                        error!(%e;
                             "failed to load snapshot";
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "snap_file" => %key,
-                            "err" => %e,
-                            "error_code" => %e.error_code(),
                         );
                         continue;
                     }
@@ -2001,13 +1995,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // Now the target peer is not in region map.
         match self.is_merge_target_region_stale(target_region) {
             Err(e) => {
-                error!(
+                error!(%e;
                     "failed to load region state, ignore";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
-                    "err" => %e,
                     "target_region_id" => target_region_id,
-                    "error_code" => %e.error_code(),
                 );
                 Ok(false)
             }

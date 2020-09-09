@@ -67,7 +67,7 @@ impl ErrorCodeExt for EvaluateError {
                 error_code::coprocessor::INVALID_CHARACTER_STRING
             }
             EvaluateError::Custom { .. } => error_code::coprocessor::EVAL,
-            EvaluateError::Other(_) => error_code::coprocessor::UNKNOWN,
+            EvaluateError::Other(_) => error_code::UNKNOWN,
         }
     }
 }

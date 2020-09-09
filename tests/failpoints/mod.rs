@@ -5,8 +5,6 @@
 #![test_runner(test_util::run_failpoint_tests)]
 #![recursion_limit = "100"]
 
-#[macro_use]
-extern crate slog_global;
 extern crate test;
 #[macro_use]
 extern crate tikv_util;
