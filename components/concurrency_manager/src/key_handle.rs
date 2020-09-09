@@ -80,9 +80,7 @@ impl Drop for KeyHandleGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parking_lot::Mutex;
     use std::{
-        collections::BTreeMap,
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
@@ -90,9 +88,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_key_mutex() {
-        let table = LockTable(Arc::new(Mutex::new(BTreeMap::new())));
+        let table = LockTable::default();
         let key_handle = Arc::new(KeyHandle::new(Key::from_raw(b"k"), table.clone()));
-        table.insert_if_not_exist(Key::from_raw(b"k"), Arc::downgrade(&key_handle));
+        table
+            .0
+            .insert(Key::from_raw(b"k"), Arc::downgrade(&key_handle));
 
         let counter = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::new();
@@ -117,12 +117,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_ref_count() {
-        let table = LockTable(Arc::new(Mutex::new(BTreeMap::new())));
+        let table = LockTable::default();
 
         let k = Key::from_raw(b"k");
 
         let handle = Arc::new(KeyHandle::new(k.clone(), table.clone()));
-        table.insert_if_not_exist(k.clone(), Arc::downgrade(&handle));
+        table.0.insert(k.clone(), Arc::downgrade(&handle));
         let lock_ref1 = table.get(&k).unwrap();
         let lock_ref2 = table.get(&k).unwrap();
         drop(handle);

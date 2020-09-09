@@ -36,7 +36,7 @@ use txn_types::{
 
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
-use crate::service::{Conn, ConnID};
+use crate::service::{CdcEvent, Conn, ConnID};
 use crate::{CdcObserver, Error, Result};
 
 pub enum Deregister {
@@ -129,7 +129,7 @@ pub enum Task {
         old_value_cb: OldValueCallback,
     },
     MinTS {
-        region_id: u64,
+        regions: Vec<u64>,
         min_ts: TimeStamp,
     },
     ResolverReady {
@@ -188,14 +188,9 @@ impl fmt::Debug for Task {
                 .field("type", &"multibatch")
                 .field("multibatch", &multi.len())
                 .finish(),
-            Task::MinTS {
-                ref region_id,
-                ref min_ts,
-            } => de
-                .field("type", &"mit_ts")
-                .field("region_id", region_id)
-                .field("min_ts", min_ts)
-                .finish(),
+            Task::MinTS { ref min_ts, .. } => {
+                de.field("type", &"mit_ts").field("min_ts", min_ts).finish()
+            }
             Task::ResolverReady {
                 ref observe_id,
                 ref region,
@@ -613,13 +608,34 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         }
     }
 
-    fn on_min_ts(&mut self, region_id: u64, min_ts: TimeStamp) {
-        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-            if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
-                if resolved_ts < self.min_resolved_ts {
-                    self.min_resolved_ts = resolved_ts;
-                    self.min_ts_region_id = region_id;
+    fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
+        let mut resolved_regions = Vec::with_capacity(regions.len());
+        self.min_resolved_ts = TimeStamp::max();
+        for region_id in regions {
+            if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+                if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
+                    if resolved_ts < self.min_resolved_ts {
+                        self.min_resolved_ts = resolved_ts;
+                        self.min_ts_region_id = region_id;
+                    }
+                    resolved_regions.push(region_id);
                 }
+            }
+        }
+        self.broadcast_resolved_ts(resolved_regions);
+    }
+
+    fn broadcast_resolved_ts(&self, regions: Vec<u64>) {
+        let mut resolved_ts = ResolvedTs::default();
+        resolved_ts.regions = regions;
+        resolved_ts.ts = self.min_resolved_ts.into_inner();
+        for (id, conn) in &self.connections {
+            if conn
+                .get_sink()
+                .send(CdcEvent::ResolvedTs(resolved_ts.clone()))
+                .is_err()
+            {
+                error!("send event failed"; "conn" => ?id);
             }
         }
     }
@@ -653,45 +669,56 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
             // TODO: send a message to raftstore would consume too much cpu time,
             // try to handle it outside raftstore.
-            for (region_id, observe_id) in regions {
+            let regions: Vec<_> = regions.iter().copied().map(|(region_id, observe_id)| {
                 let scheduler_clone = scheduler.clone();
-                if let Err(e) = raft_router.significant_send(
-                    region_id,
-                    SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
-                        if !resp.response.get_header().has_error() {
-                            match scheduler_clone.schedule(Task::MinTS { region_id, min_ts }) {
-                                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                                Err(err) => panic!(
-                                    "failed to schedule min_ts event, min_ts: {}, error: {:?}",
-                                    min_ts, err
-                                ),
-                            }
-                        }
-                    }))),
-                ) {
-                    warn!(
-                        "send LeaderCallback for advancing resolved ts failed";
-                        "err" => ?e,
-                        "min_ts" => min_ts,
-                    );
-                    let deregister = Deregister::Region {
-                        observe_id,
+                let raft_router_clone = raft_router.clone();
+                async move {
+                    let (tx, rx) = futures03::channel::oneshot::channel();
+                    if let Err(e) = raft_router_clone.significant_send(
                         region_id,
-                        err: Error::Request(e.into()),
-                    };
-                    if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                        error!("schedule cdc task failed"; "error" => ?e);
+                        SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
+                            let resp = if resp.response.get_header().has_error() {
+                                None
+                            } else {
+                                Some(region_id)
+                            };
+                            if tx.send(resp).is_err() {
+                                error!("cdc send tso response failed");
+                            }
+                        }))),
+                    ) {
+                        warn!("cdc send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
+                        let deregister = Deregister::Region {
+                            observe_id,
+                            region_id,
+                            err: Error::Request(e.into()),
+                        };
+                        if let Err(e) = scheduler_clone.schedule(Task::Deregister(deregister)) {
+                            error!("schedule cdc task failed"; "error" => ?e);
+                            return None;
+                        }
                     }
+                    rx.await.unwrap_or(None)
+                }
+            }).collect();
+            let resps = futures03::future::join_all(regions).await;
+            let regions = resps
+                .into_iter()
+                .filter_map(|resp| resp)
+                .collect::<Vec<u64>>();
+            if !regions.is_empty() {
+                match scheduler.schedule(Task::MinTS { regions, min_ts }) {
+                    Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                    // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                    // advance normally.
+                    Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
                 }
             }
             match scheduler.schedule(Task::RegisterMinTsEvent) {
                 Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                 // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
                 // advance normally.
-                Err(err) => panic!(
-                    "failed to schedule regiester min ts event, error: {:?}",
-                    err
-                ),
+                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
             }
         };
         self.tso_worker.spawn(fut);
@@ -886,7 +913,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
-            Task::MinTS { region_id, min_ts } => self.on_min_ts(region_id, min_ts),
+            Task::MinTS { regions, min_ts } => self.on_min_ts(regions, min_ts),
             Task::Register {
                 request,
                 downstream,
@@ -1237,11 +1264,18 @@ mod tests {
             err: Some(Error::Request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
-        let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
-        let event = change_data_event.event.take().unwrap();
-        match event {
-            Event_oneof_event::Error(err) => assert!(err.has_not_leader()),
-            _ => panic!("unknown event"),
+        loop {
+            let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+            if let CdcEvent::Event(mut e) = cdc_event {
+                let event = e.event.take().unwrap();
+                match event {
+                    Event_oneof_event::Error(err) => {
+                        assert!(err.has_not_leader());
+                        break;
+                    }
+                    _ => panic!("unknown event"),
+                }
+            }
         }
         assert_eq!(ep.capture_regions.len(), 0);
 
@@ -1271,11 +1305,18 @@ mod tests {
             err: Some(Error::Request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
-        let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
-        let event = change_data_event.event.take().unwrap();
-        match event {
-            Event_oneof_event::Error(err) => assert!(err.has_not_leader()),
-            _ => panic!("unknown event"),
+        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        loop {
+            if let CdcEvent::Event(mut e) = cdc_event {
+                let event = e.event.take().unwrap();
+                match event {
+                    Event_oneof_event::Error(err) => {
+                        assert!(err.has_not_leader());
+                        break;
+                    }
+                    _ => panic!("unknown event"),
+                }
+            }
         }
         assert_eq!(ep.capture_regions.len(), 0);
 
