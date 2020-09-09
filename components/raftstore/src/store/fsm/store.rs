@@ -673,13 +673,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
                 |_| {}
             );
 
-            let need_sync = self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log;
             self.poll_ctx
                 .engines
                 .raft
                 .consume_and_shrink(
                     &mut self.poll_ctx.raft_wb,
-                    need_sync,
+                    true,
                     RAFT_WB_SHRINK_SIZE,
                     4 * 1024,
                 )
