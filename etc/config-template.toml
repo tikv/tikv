@@ -795,6 +795,17 @@
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
 
+[raft-engine]
+## Enable raft-engine will ignore all settings about `raftdb`.
+# enable = false
+## Recovery mode. Candidates are `tolerate-corrupted-tail-records` and `absolute-consistency`.
+# recovery_mode = "tolerate-corrupted-tail-records"
+# bytes-per-sync = "256KB"
+# target-file-size = "128MB"
+# purge-threshold = "10GB"
+## Raft engine has builtin entry cache. `cache-limit` limits the memory usage of the cache.
+# cache-limit = "1GB"
+
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
 # ca-path = ""

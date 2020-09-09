@@ -2,6 +2,7 @@
 
 use std::ffi::CString;
 use std::i64;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -11,10 +12,12 @@ use super::super::metrics::*;
 use super::super::{Config, Result};
 use crossbeam::channel::SendError;
 use engine_rocks::RocksEngine;
-use futures::{future, stream, Future, Poll, Sink, Stream};
-use futures03::compat::Compat;
-use futures03::stream::StreamExt;
-use grpcio::{ChannelBuilder, Environment, Error as GrpcError, WriteFlags};
+use futures03::compat::{Compat, Future01CompatExt, Sink01CompatExt};
+use futures03::future::{FutureExt, TryFutureExt};
+use futures03::sink::SinkExt;
+use futures03::stream::{self, Stream, StreamExt};
+use futures03::task::{Context, Poll};
+use grpcio::{ChannelBuilder, Environment, Error as GrpcError, Result as GrpcResult, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
 use raftstore::router::RaftStoreRouter;
@@ -64,14 +67,11 @@ impl Conn {
         let client2 = client1.clone();
 
         let (tx, rx) = batch::unbounded::<RaftMessage>(RAFT_MSG_NOTIFY_SIZE);
-        let rx = Compat::new(
-            batch::BatchReceiver::new(
-                rx,
-                RAFT_MSG_MAX_BATCH_SIZE,
-                Vec::new,
-                RaftMsgCollector::new(cfg.max_grpc_send_msg_len as usize),
-            )
-            .map(|item| std::result::Result::<_, ()>::Ok(item)),
+        let rx = batch::BatchReceiver::new(
+            rx,
+            RAFT_MSG_MAX_BATCH_SIZE,
+            Vec::new,
+            RaftMsgCollector::new(cfg.max_grpc_send_msg_len as usize),
         );
 
         // Use a mutex to make compiler happy.
@@ -80,46 +80,47 @@ impl Conn {
         let (addr1, addr2) = (addr.to_owned(), addr.to_owned());
 
         let (batch_sink, batch_receiver) = client1.batch_raft().unwrap();
-        let batch_send_or_fallback = batch_sink
-            .send_all(Reusable(rx1).map(move |v| {
+
+        let batch_send_or_fallback = async move {
+            let mut s = Reusable(rx1).map(move |v| {
                 let mut batch_msgs = BatchRaftMessage::default();
                 batch_msgs.set_msgs(v.into());
-                (batch_msgs, WriteFlags::default().buffer_hint(false))
-            }))
-            .then(move |sink_r| {
-                batch_receiver.then(move |recv_r| {
-                    check_rpc_result("batch_raft", &addr1, sink_r.err(), recv_r.err())
-                })
-            })
-            .or_else(move |fallback| {
-                if !fallback {
-                    return Box::new(future::err(false))
-                        as Box<dyn Future<Item = _, Error = bool> + Send>;
-                }
-                // Fallback to raft RPC.
-                warn!("batch_raft is unimplemented, fallback to raft");
-                let (sink, receiver) = client2.raft().unwrap();
-                let msgs = Reusable(rx2)
-                    .map(|msgs| {
-                        let len = msgs.len();
-                        let grpc_msgs = msgs.into_iter().enumerate().map(move |(i, v)| {
-                            if i < len - 1 {
-                                (v, WriteFlags::default().buffer_hint(true))
-                            } else {
-                                (v, WriteFlags::default())
-                            }
-                        });
-                        stream::iter_ok::<_, GrpcError>(grpc_msgs)
-                    })
-                    .flatten();
-                Box::new(sink.send_all(msgs).then(move |sink_r| {
-                    receiver.then(move |recv_r| {
-                        check_rpc_result("raft", &addr2, sink_r.err(), recv_r.err())
-                    })
-                }))
+                GrpcResult::Ok((batch_msgs, WriteFlags::default().buffer_hint(false)))
             });
+            let send_res = batch_sink.sink_compat().send_all(&mut s).await;
+            let recv_res = batch_receiver.compat().await;
+            let res = check_rpc_result("batch_raft", &addr1, send_res.err(), recv_res.err());
+            if res.is_ok() {
+                return Ok(());
+            }
+            // Don't need to fallback
+            if !res.unwrap_err() {
+                return Err(false);
+            }
+            // Fallback to raft RPC.
+            warn!("batch_raft is unimplemented, fallback to raft");
+            let (sink, receiver) = client2.raft().unwrap();
+            let mut msgs = Reusable(rx2)
+                .map(|msgs| {
+                    let len = msgs.len();
+                    let grpc_msgs = msgs.into_iter().enumerate().map(move |(i, v)| {
+                        if i < len - 1 {
+                            (v, WriteFlags::default().buffer_hint(true))
+                        } else {
+                            (v, WriteFlags::default())
+                        }
+                    });
+                    stream::iter(grpc_msgs)
+                })
+                .flatten()
+                .map(|msg| Ok(msg));
 
-        client1.spawn(
+            let send_res = sink.sink_compat().send_all(&mut msgs).await;
+            let recv_res = receiver.compat().await;
+            check_rpc_result("raft", &addr2, send_res.err(), recv_res.err())
+        };
+
+        client1.spawn(Compat::new(
             batch_send_or_fallback
                 .map_err(move |_| {
                     REPORT_FAILURE_MSG_COUNTER
@@ -127,8 +128,8 @@ impl Conn {
                         .inc();
                     router.broadcast_unreachable(store_id);
                 })
-                .map(|_| ()),
-        );
+                .boxed(),
+        ));
 
         Conn {
             stream: tx,
@@ -150,7 +151,7 @@ pub struct RaftClient<T: 'static> {
     grpc_thread_load: Arc<ThreadLoad>,
     // When message senders want to delay the notification to the gRPC client,
     // it can put a tokio_timer::Delay to the runtime.
-    stats_pool: Option<tokio_threadpool::Sender>,
+    stats_pool: Option<tokio::runtime::Handle>,
     timer: Handle,
 }
 
@@ -161,7 +162,7 @@ impl<T: RaftStoreRouter<RocksEngine>> RaftClient<T> {
         security_mgr: Arc<SecurityManager>,
         router: T,
         grpc_thread_load: Arc<ThreadLoad>,
-        stats_pool: Option<tokio_threadpool::Sender>,
+        stats_pool: Option<tokio::runtime::Handle>,
     ) -> RaftClient<T> {
         RaftClient {
             env,
@@ -227,9 +228,10 @@ impl<T: RaftStoreRouter<RocksEngine>> RaftClient<T> {
                     continue;
                 }
                 let wait = self.cfg.heavy_load_wait_duration.0;
-                let _ = self.stats_pool.as_ref().unwrap().spawn(
+                self.stats_pool.as_ref().unwrap().spawn(
                     self.timer
                         .delay(Instant::now() + wait)
+                        .compat()
                         .map_err(|_| warn!("RaftClient delay flush error"))
                         .inspect(move |_| notifier.notify()),
                 );
@@ -271,12 +273,11 @@ impl BatchCollector<Vec<RaftMessage>, RaftMessage> for RaftMsgCollector {
 
 // Reusable is for fallback batch_raft call to raft call.
 struct Reusable<T>(Arc<Mutex<T>>);
-impl<T: Stream> Stream for Reusable<T> {
+impl<T: Stream + Unpin> Stream for Reusable<T> {
     type Item = T::Item;
-    type Error = GrpcError;
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut t = self.0.lock().unwrap();
-        t.poll().map_err(|_| GrpcError::RpcFinished(None))
+        Pin::new(&mut *t).poll_next(cx)
     }
 }
 
