@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::{Future, Sink, Stream};
+use futures::executor::block_on;
+use futures::{SinkExt, StreamExt};
 use grpcio::*;
 use kvproto::tikvpb::TikvClient;
 use kvproto::tikvpb::*;
@@ -30,20 +31,18 @@ fn test_batch_commands() {
             batch_req.mut_requests().push(Default::default());
             batch_req.mut_request_ids().push(i);
         }
-        match sender.send((batch_req, WriteFlags::default())).wait() {
-            Ok(s) => sender = s,
-            Err(e) => panic!("tikv client send fail: {:?}", e),
-        }
+        block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
     }
 
     let (tx, rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
         // We have send 10k requests to the server, so we should get 10k responses.
         let mut count = 0;
-        for x in receiver
-            .wait()
-            .map(move |b| b.unwrap().get_responses().len())
-        {
+        for x in block_on(
+            receiver
+                .map(move |b| b.unwrap().get_responses().len())
+                .collect::<Vec<usize>>(),
+        ) {
             count += x;
             if count == 10000 {
                 tx.send(1).unwrap();
@@ -77,20 +76,18 @@ fn test_empty_commands() {
             batch_req.mut_requests().push(req);
             batch_req.mut_request_ids().push(i);
         }
-        match sender.send((batch_req, WriteFlags::default())).wait() {
-            Ok(s) => sender = s,
-            Err(e) => panic!("tikv client send fail: {:?}", e),
-        }
+        block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
     }
 
     let (tx, rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
         // We have send 10k requests to the server, so we should get 10k responses.
         let mut count = 0;
-        for x in receiver
-            .wait()
-            .map(move |b| b.unwrap().get_responses().len())
-        {
+        for x in block_on(
+            receiver
+                .map(move |b| b.unwrap().get_responses().len())
+                .collect::<Vec<usize>>(),
+        ) {
             count += x;
             if count == 10000 {
                 tx.send(1).unwrap();

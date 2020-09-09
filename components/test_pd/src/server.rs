@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use futures::{Future, Sink, Stream};
+use futures::{future, FutureExt, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 use grpcio::{
-    DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
-    Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
+    DuplexSink, EnvBuilder, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
+    RpcStatusCode, Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
 use pd_client::Error as PdError;
 use security::*;
@@ -123,13 +123,15 @@ fn hijack_unary<F, R, C: PdMocker>(
     match resp {
         Some(Ok(resp)) => ctx.spawn(
             sink.success(resp)
-                .map_err(move |err| error!("failed to reply: {:?}", err)),
+                .map_err(move |err| error!("failed to reply: {:?}", err))
+                .map(|_| ()),
         ),
         Some(Err(err)) => {
             let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", err)));
             ctx.spawn(
                 sink.fail(status)
-                    .map_err(move |err| error!("failed to reply: {:?}", err)),
+                    .map_err(move |err| error!("failed to reply: {:?}", err))
+                    .map(|_| ()),
             );
         }
         _ => {
@@ -139,7 +141,8 @@ fn hijack_unary<F, R, C: PdMocker>(
             );
             ctx.spawn(
                 sink.fail(status)
-                    .map_err(move |err| error!("failed to reply: {:?}", err)),
+                    .map_err(move |err| error!("failed to reply: {:?}", err))
+                    .map(|_| ()),
             );
         }
     }
@@ -174,18 +177,19 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         &mut self,
         ctx: RpcContext<'_>,
         req: RequestStream<TsoRequest>,
-        resp: DuplexSink<TsoResponse>,
+        mut resp: DuplexSink<TsoResponse>,
     ) {
         let header = Service::header();
-        let fut = resp
-            .send_all(req.map(move |_| {
+        let fut = async move {
+            resp.send_all(&mut req.map(move |_| {
                 let mut r = TsoResponse::default();
                 r.set_header(header.clone());
                 r.mut_timestamp().physical = 42;
-                (r, WriteFlags::default())
+                GrpcResult::Ok((r, WriteFlags::default()))
             }))
-            .map_err(|_| ())
-            .map(|_| ());
+            .await
+            .unwrap();
+        };
         ctx.spawn(fut);
     }
 
@@ -259,28 +263,24 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         sink: DuplexSink<RegionHeartbeatResponse>,
     ) {
         let mock = self.clone();
-        let f = sink
-            .sink_map_err(PdError::from)
-            .send_all(
-                stream
-                    .map_err(PdError::from)
-                    .and_then(move |req| {
-                        let resp = mock
-                            .case
-                            .as_ref()
-                            .and_then(|case| case.region_heartbeat(&req))
-                            .or_else(|| mock.default_handler.region_heartbeat(&req));
-                        match resp {
-                            None => Ok(None),
-                            Some(Ok(resp)) => Ok(Some((resp, WriteFlags::default()))),
-                            Some(Err(e)) => Err(box_err!("{:?}", e)),
-                        }
-                    })
-                    .filter_map(|o| o),
-            )
-            .map(|_| ())
-            .map_err(|e| error!("failed to handle heartbeat: {:?}", e));
-        ctx.spawn(f)
+        ctx.spawn(async move {
+            let mut stream = stream.map_err(PdError::from).try_filter_map(move |req| {
+                let resp = mock
+                    .case
+                    .as_ref()
+                    .and_then(|case| case.region_heartbeat(&req))
+                    .or_else(|| mock.default_handler.region_heartbeat(&req));
+                match resp {
+                    None => future::ok(None),
+                    Some(Ok(resp)) => future::ok(Some((resp, WriteFlags::default()))),
+                    Some(Err(e)) => future::err(box_err!("{:?}", e)),
+                }
+            });
+            sink.sink_map_err(PdError::from)
+                .send_all(&mut stream)
+                .await
+                .unwrap();
+        });
     }
 
     fn get_region(

@@ -4,11 +4,8 @@ use std::f64::INFINITY;
 use std::sync::Arc;
 
 use engine_traits::{name_to_cf, CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
-use futures::Future;
-use futures03::compat::{Compat, Future01CompatExt, Stream01CompatExt};
-use futures03::executor::{ThreadPool, ThreadPoolBuilder};
-use futures03::future::FutureExt;
-use futures03::stream::TryStreamExt;
+use futures::executor::{ThreadPool, ThreadPoolBuilder};
+use futures::{FutureExt, TryFutureExt, TryStreamExt};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::errorpb;
 
@@ -113,7 +110,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             let res = Ok(SwitchModeResponse::default());
             send_rpc_response!(res, sink, label, timer);
         };
-        ctx.spawn(Compat::new(task.unit_error().boxed()));
+        ctx.spawn(task);
     }
 
     /// Receive SST from client and save the file for later ingesting.
@@ -129,8 +126,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         let label = "upload";
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
-        let (rx, buf_driver) =
-            create_stream_with_buffer(stream.compat(), self.cfg.stream_channel_window);
+        let (rx, buf_driver) = create_stream_with_buffer(stream, self.cfg.stream_channel_window);
         let mut rx = rx.map_err(Error::from);
 
         let handle_task = async move {
@@ -165,7 +161,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             thread_handle.spawn_ok(buf_driver);
             thread_handle.spawn_ok(handle_task);
         };
-        ctx.spawn(Compat::new(ctx_task.unit_error().boxed()));
+        ctx.spawn(ctx_task);
     }
 
     /// Downloads the file and performs key-rewrite for later ingesting.
@@ -217,7 +213,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         let ctx_task = async move {
             thread_handle.spawn_ok(handle_task);
         };
-        ctx.spawn(Compat::new(ctx_task.unit_error().boxed()));
+        ctx.spawn(ctx_task);
     }
 
     /// Ingest the file by sending a raft command to raftstore.
@@ -251,9 +247,13 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             errorpb.set_server_is_busy(server_is_busy_err);
             let mut resp = IngestResponse::default();
             resp.set_error(errorpb);
-            ctx.spawn(sink.success(resp).map_err(|e| {
-                warn!("send rpc failed"; "err" => %e);
-            }));
+            ctx.spawn(
+                sink.success(resp)
+                    .map_err(|e| {
+                        warn!("send rpc failed"; "err" => %e);
+                    })
+                    .map(|_| ()),
+            );
             return;
         }
         // Make ingest command.
@@ -273,9 +273,13 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         if let Err(e) = self.router.send_command(cmd, Callback::Write(cb)) {
             let mut resp = IngestResponse::default();
             resp.set_error(e.into());
-            ctx.spawn(sink.success(resp).map_err(|e| {
-                warn!("send rpc failed"; "err" => %e);
-            }));
+            ctx.spawn(
+                sink.success(resp)
+                    .map_err(|e| {
+                        warn!("send rpc failed"; "err" => %e);
+                    })
+                    .map(|_| ()),
+            );
             return;
         }
 
@@ -294,7 +298,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             };
             send_rpc_response!(res, sink, label, timer);
         };
-        ctx.spawn(Compat::new(ctx_task.unit_error().boxed()));
+        ctx.spawn(ctx_task);
     }
 
     fn compact(
@@ -365,7 +369,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         let ctx_task = async move {
             thread_handle.spawn_ok(handle_task);
         };
-        ctx.spawn(Compat::new(ctx_task.unit_error().boxed()));
+        ctx.spawn(ctx_task);
     }
 
     fn set_download_speed_limit(
@@ -392,7 +396,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             send_rpc_response!(res, sink, label, timer);
         };
 
-        ctx.spawn(Compat::new(ctx_task.unit_error().boxed()));
+        ctx.spawn(ctx_task);
     }
 
     fn write(
@@ -408,8 +412,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
         let engine = self.engine.clone();
-        let (rx, buf_driver) =
-            create_stream_with_buffer(stream.compat(), self.cfg.stream_channel_window);
+        let (rx, buf_driver) = create_stream_with_buffer(stream, self.cfg.stream_channel_window);
         let mut rx = rx.map_err(Error::from);
 
         let handle_task = async move {
@@ -470,6 +473,6 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             thread_handle.spawn_ok(buf_driver);
             thread_handle.spawn_ok(handle_task);
         };
-        ctx.spawn(Compat::new(ctx_task.unit_error().boxed()));
+        ctx.spawn(ctx_task);
     }
 }

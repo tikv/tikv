@@ -746,8 +746,8 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures03::executor::block_on;
-    use futures03::stream::StreamExt;
+    use futures::executor::block_on;
+    use futures::stream::StreamExt;
     use kvproto::errorpb::Error as ErrorHeader;
     use kvproto::metapb::Region;
     use std::cell::Cell;

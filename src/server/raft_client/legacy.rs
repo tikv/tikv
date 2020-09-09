@@ -12,11 +12,10 @@ use super::super::metrics::*;
 use super::super::{Config, Result};
 use crossbeam::channel::SendError;
 use engine_rocks::RocksEngine;
-use futures03::compat::{Compat, Future01CompatExt, Sink01CompatExt};
-use futures03::future::{FutureExt, TryFutureExt};
-use futures03::sink::SinkExt;
-use futures03::stream::{self, Stream, StreamExt};
-use futures03::task::{Context, Poll};
+use futures::compat::Future01CompatExt;
+use futures::stream::{self, Stream, StreamExt};
+use futures::task::{Context, Poll};
+use futures::{FutureExt, SinkExt, TryFutureExt};
 use grpcio::{ChannelBuilder, Environment, Error as GrpcError, Result as GrpcResult, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
@@ -79,7 +78,7 @@ impl Conn {
         let rx2 = Arc::clone(&rx1);
         let (addr1, addr2) = (addr.to_owned(), addr.to_owned());
 
-        let (batch_sink, batch_receiver) = client1.batch_raft().unwrap();
+        let (mut batch_sink, batch_receiver) = client1.batch_raft().unwrap();
 
         let batch_send_or_fallback = async move {
             let mut s = Reusable(rx1).map(move |v| {
@@ -87,8 +86,8 @@ impl Conn {
                 batch_msgs.set_msgs(v.into());
                 GrpcResult::Ok((batch_msgs, WriteFlags::default().buffer_hint(false)))
             });
-            let send_res = batch_sink.sink_compat().send_all(&mut s).await;
-            let recv_res = batch_receiver.compat().await;
+            let send_res = batch_sink.send_all(&mut s).await;
+            let recv_res = batch_receiver.await;
             let res = check_rpc_result("batch_raft", &addr1, send_res.err(), recv_res.err());
             if res.is_ok() {
                 return Ok(());
@@ -99,7 +98,7 @@ impl Conn {
             }
             // Fallback to raft RPC.
             warn!("batch_raft is unimplemented, fallback to raft");
-            let (sink, receiver) = client2.raft().unwrap();
+            let (mut sink, receiver) = client2.raft().unwrap();
             let mut msgs = Reusable(rx2)
                 .map(|msgs| {
                     let len = msgs.len();
@@ -115,12 +114,12 @@ impl Conn {
                 .flatten()
                 .map(|msg| Ok(msg));
 
-            let send_res = sink.sink_compat().send_all(&mut msgs).await;
-            let recv_res = receiver.compat().await;
+            let send_res = sink.send_all(&mut msgs).await;
+            let recv_res = receiver.await;
             check_rpc_result("raft", &addr2, send_res.err(), recv_res.err())
         };
 
-        client1.spawn(Compat::new(
+        client1.spawn(
             batch_send_or_fallback
                 .map_err(move |_| {
                     REPORT_FAILURE_MSG_COUNTER
@@ -128,8 +127,8 @@ impl Conn {
                         .inc();
                     router.broadcast_unreachable(store_id);
                 })
-                .boxed(),
-        ));
+                .map(|_| ()),
+        );
 
         Conn {
             stream: tx,

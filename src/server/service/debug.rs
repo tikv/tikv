@@ -4,12 +4,11 @@ use std::sync::Arc;
 
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, MiscExt, RaftEngine};
-use futures03::channel::oneshot;
-use futures03::compat::{Compat, Future01CompatExt, Sink01CompatExt};
-use futures03::future::Future as Future03;
-use futures03::future::{FutureExt, TryFutureExt};
-use futures03::sink::SinkExt;
-use futures03::stream::{self, TryStreamExt};
+use futures::channel::oneshot;
+use futures::future::Future;
+use futures::future::{FutureExt, TryFutureExt};
+use futures::sink::SinkExt;
+use futures::stream::{self, TryStreamExt};
 use grpcio::{Error as GrpcError, WriteFlags};
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use kvproto::debugpb::{self, *};
@@ -81,18 +80,20 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine>> Service<ER, T> {
         tag: &'static str,
     ) where
         P: Send + 'static,
-        F: Future03<Output = Result<P>> + Send + 'static,
+        F: Future<Output = Result<P>> + Send + 'static,
     {
         let ctx_task = async move {
             match resp.await {
-                Ok(resp) => sink.success(resp).compat().await?,
-                Err(e) => sink.fail(error_to_status(e)).compat().await?,
+                Ok(resp) => sink.success(resp).await?,
+                Err(e) => sink.fail(error_to_status(e)).await?,
             }
             Ok(())
         };
-        ctx.spawn(Compat::new(
-            ctx_task.map_err(move |e| on_grpc_error(tag, &e)).boxed(),
-        ));
+        ctx.spawn(
+            ctx_task
+                .map_err(move |e| on_grpc_error(tag, &e))
+                .map(|_| ()),
+        );
     }
 }
 
@@ -226,7 +227,7 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         &mut self,
         ctx: RpcContext<'_>,
         mut req: ScanMvccRequest,
-        sink: ServerStreamingSink<ScanMvccResponse>,
+        mut sink: ServerStreamingSink<ScanMvccResponse>,
     ) {
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
@@ -249,7 +250,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
                     resp.set_info(mvcc_info);
                     (resp, WriteFlags::default())
                 });
-            let mut sink = sink.sink_compat();
             if let Err(e) = sink.send_all(&mut s).await {
                 on_grpc_error("scan_mvcc", &e);
             }
@@ -543,7 +543,7 @@ fn region_detail<T: RaftStoreRouter<RocksEngine>>(
     raft_router: T,
     region_id: u64,
     store_id: u64,
-) -> impl Future03<Output = Result<RegionDetailResponse>> {
+) -> impl Future<Output = Result<RegionDetailResponse>> {
     let mut header = RaftRequestHeader::default();
     header.set_region_id(region_id);
     header.mut_peer().set_store_id(store_id);
@@ -583,7 +583,7 @@ fn region_detail<T: RaftStoreRouter<RocksEngine>>(
 fn consistency_check<T: RaftStoreRouter<RocksEngine>>(
     raft_router: T,
     mut detail: RegionDetailResponse,
-) -> impl Future03<Output = Result<()>> {
+) -> impl Future<Output = Result<()>> {
     let mut header = RaftRequestHeader::default();
     header.set_region_id(detail.get_region().get_id());
     header.set_peer(detail.take_leader());

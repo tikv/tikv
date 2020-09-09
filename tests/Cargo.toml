@@ -85,11 +85,10 @@ crossbeam = "0.7.2"
 configuration = { path = "../components/configuration" }
 encryption = { path = "../components/encryption" }
 cdc = { path = "../components/cdc" }
-futures = "0.1"
-futures03 = { package = "futures", version = "0.3", features = ["executor", "compat"] }
-grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
+futures = { version = "0.3", features = ["executor", "compat"] }
+grpcio = { version = "0.6", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/hunterlxt/kvproto.git", branch = "future-update", default-features = false }
 pd_client = { path = "../components/pd_client" }
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }

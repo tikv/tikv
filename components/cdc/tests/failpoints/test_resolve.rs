@@ -1,8 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::{new_event_feed, TestSuite};
-use futures::sink::Sink;
-use futures::Future;
-use futures03::executor::block_on;
+use futures::executor::block_on;
+use futures::sink::SinkExt;
 use grpcio::WriteFlags;
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
@@ -27,12 +26,9 @@ fn test_stale_resolver() {
     let mut req = ChangeDataRequest::default();
     req.region_id = region.get_id();
     req.set_region_epoch(region.get_region_epoch().clone());
-    let (req_tx, event_feed_wrap, receive_event) =
+    let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
-    let _req_tx = req_tx
-        .send((req.clone(), WriteFlags::default()))
-        .wait()
-        .unwrap();
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
     // Sleep for a while to wait the scan is done
     sleep_ms(200);
 
@@ -54,20 +50,17 @@ fn test_stale_resolver() {
     let fp1 = "cdc_incremental_scan_start";
     fail::cfg(fp1, "pause").unwrap();
     // Close previous connection and open two new connections
-    let (req_tx, resp_rx) = suite
+    let (mut req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let _req_tx = req_tx
-        .send((req.clone(), WriteFlags::default()))
-        .wait()
-        .unwrap();
-    let (req_tx1, resp_rx1) = suite
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    let (mut req_tx1, resp_rx1) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
-    let _req_tx1 = req_tx1.send((req, WriteFlags::default())).wait().unwrap();
+    block_on(req_tx1.send((req, WriteFlags::default()))).unwrap();
     // Unblock the first scan
     fail::remove(fp);
     // Sleep for a while to wait the wrong resolver init
@@ -77,7 +70,7 @@ fn test_stale_resolver() {
     let commit_resp =
         suite.async_kv_commit(region.get_id(), vec![k.into_bytes()], start_ts, commit_ts);
     // Receive Commit response
-    commit_resp.wait().unwrap();
+    block_on(commit_resp).unwrap();
     // Unblock all scans
     fail::remove(fp1);
     // Receive events

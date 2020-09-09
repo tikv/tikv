@@ -2,10 +2,10 @@
 
 use async_stream::stream;
 use engine_traits::KvEngine;
-use futures03::compat::Compat01As03;
-use futures03::executor::block_on;
-use futures03::future::{ok, poll_fn};
-use futures03::prelude::*;
+use futures::compat::Compat01As03;
+use futures::executor::block_on;
+use futures::future::{ok, poll_fn};
+use futures::prelude::*;
 use hyper::client::HttpConnector;
 use hyper::server::accept::Accept;
 use hyper::server::conn::{AddrIncoming, AddrStream};
@@ -958,9 +958,9 @@ fn decode_json(
 
 #[cfg(test)]
 mod tests {
-    use futures03::executor::block_on;
-    use futures03::future::ok;
-    use futures03::prelude::*;
+    use futures::executor::block_on;
+    use futures::future::ok;
+    use futures::prelude::*;
     use hyper::client::HttpConnector;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
     use hyper_openssl::HttpsConnector;

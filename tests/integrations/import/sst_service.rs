@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use futures::{stream, Future, Stream};
-use futures03::executor::block_on;
+use futures::executor::block_on;
+use futures::{stream, SinkExt};
 use tempfile::Builder;
 use uuid::Uuid;
 
@@ -306,11 +306,12 @@ fn send_upload_sst(
     r2.set_data(data.to_vec());
     let reqs: Vec<_> = vec![r1, r2]
         .into_iter()
-        .map(|r| (r, WriteFlags::default()))
+        .map(|r| Result::Ok((r, WriteFlags::default())))
         .collect();
-    let (tx, rx) = client.upload().unwrap();
-    let stream = stream::iter_ok(reqs);
-    stream.forward(tx).and_then(|_| rx).wait()
+    let (mut tx, rx) = client.upload().unwrap();
+    let mut stream = stream::iter(reqs);
+    block_on(tx.send_all(&mut stream)).unwrap();
+    block_on(rx)
 }
 
 fn send_write_sst(
@@ -339,12 +340,13 @@ fn send_write_sst(
 
     let reqs: Vec<_> = vec![r1, r2]
         .into_iter()
-        .map(|r| (r, WriteFlags::default()))
+        .map(|r| Result::Ok((r, WriteFlags::default())))
         .collect();
 
-    let (tx, rx) = client.write().unwrap();
-    let stream = stream::iter_ok(reqs);
-    stream.forward(tx).and_then(|_| rx).wait()
+    let (mut tx, rx) = client.write().unwrap();
+    let mut stream = stream::iter(reqs);
+    block_on(tx.send_all(&mut stream)).unwrap();
+    block_on(rx)
 }
 
 fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {

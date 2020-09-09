@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::server::Error;
-use futures03::compat::{Compat, Future01CompatExt, Sink01CompatExt};
-use futures03::future::{FutureExt, TryFutureExt};
-use futures03::sink::SinkExt;
-use futures03::stream::StreamExt;
+use futures::compat::Future01CompatExt;
+use futures::future::{FutureExt, TryFutureExt};
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
@@ -58,7 +58,7 @@ impl Diagnostics for Service {
         &mut self,
         ctx: RpcContext<'_>,
         req: SearchLogRequest,
-        sink: ServerStreamingSink<SearchLogResponse>,
+        mut sink: ServerStreamingSink<SearchLogResponse>,
     ) {
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
@@ -85,10 +85,7 @@ impl Diagnostics for Service {
             .spawn(async move {
                 match stream.await.unwrap() {
                     Ok(s) => {
-                        let res = sink
-                            .sink_compat()
-                            .send_all(&mut s.map(|item| Ok(item)))
-                            .await;
+                        let res = sink.send_all(&mut s.map(|item| Ok(item))).await;
                         if let Err(e) = res {
                             error!("search log RPC error"; "error" => ?e);
                         }
@@ -100,7 +97,7 @@ impl Diagnostics for Service {
             })
             .map(|res| res.unwrap());
 
-        ctx.spawn(Compat::new(f.unit_error().boxed()));
+        ctx.spawn(f);
     }
 
     fn server_info(
@@ -158,16 +155,12 @@ impl Diagnostics for Service {
         };
 
         let f = self.pool.spawn(collect).then(|res| async move {
-            let res = sink
-                .success(res.unwrap())
-                .compat()
-                .map_err(Error::from)
-                .await;
+            let res = sink.success(res.unwrap()).map_err(Error::from).await;
             if let Err(e) = res {
                 debug!("Diagnostics rpc failed"; "err" => ?e);
             }
         });
 
-        ctx.spawn(Compat::new(f.unit_error().boxed()));
+        ctx.spawn(f);
     }
 }
