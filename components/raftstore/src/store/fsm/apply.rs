@@ -3,7 +3,6 @@
 use std::cmp::Ord;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
-use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
@@ -2982,7 +2981,7 @@ where
 }
 
 fn set_tls_core<EK: KvEngine>(core: ApplyContextCore<EK>) {
-    TLS_APPLY_CONTEXT.with(|e| unsafe {
+    TLS_APPLY_CONTEXT_CORE.with(|e| unsafe {
         if (*e.get()).is_null() {
             let ptr = Box::into_raw(Box::new(core)) as *mut ();
             *e.get() = ptr;
@@ -3110,62 +3109,49 @@ where
     }
 }
 
-pub trait ApplyBatchSystem<EK: KvEngine>: Sync + Send {
+#[derive(Clone)]
+pub struct ApplyBatchSystem<EK: KvEngine> {
+    pool: Arc<yatp::pool::ThreadPool<TaskCell>>,
+    remote: Remote<TaskCell>,
+    engine: EK,
+}
+
+impl<EK: KvEngine> ApplyBatchSystem<EK> {
     /// Only for test
-    fn register_router(&self, reg: Registration) -> ApplyRouter<EK> {
+    pub fn register_router(&self, reg: Registration) -> ApplyRouter<EK> {
         let (sender, receiver) = channel(1024);
         self.register(reg, receiver);
         ApplyRouter::new(sender)
     }
 
-    fn register(&self, reg: Registration, receiver: Receiver<Msg<EK>>);
-    fn clone_box(&self) -> Box<dyn ApplyBatchSystem<EK>>;
-    fn shutdown(&self);
-}
-
-pub struct ApplyBatchSystemImpl<EK, W>
-where
-    EK: KvEngine,
-    W: WriteBatch<EK> + 'static,
-{
-    pool: Arc<yatp::pool::ThreadPool<TaskCell>>,
-    remote: Remote<TaskCell>,
-    _phantom: Arc<Mutex<W>>,
-    _phantom_ek: PhantomData<EK>,
-}
-
-impl<EK, W> ApplyBatchSystem<EK> for ApplyBatchSystemImpl<EK, W>
-where
-    EK: KvEngine,
-    W: WriteBatch<EK> + 'static,
-{
-    fn register(&self, reg: Registration, receiver: Receiver<Msg<EK>>) {
+    pub fn register(&self, reg: Registration, receiver: Receiver<Msg<EK>>) {
         let fsm = Box::new(ApplyFsm::from_registration(reg));
         // Set every task of apply to high priority.
         let extras = Extras::new_multilevel(0, Some(0));
-        let task_cell = TaskCell::new(
-            async move {
-                handle_normal::<EK, W>(fsm, receiver).await;
-            },
-            extras,
-        );
+        let task_cell = if self.engine.support_write_batch_vec() {
+            TaskCell::new(
+                async move {
+                    handle_normal::<EK, EK::WriteBatchVec>(fsm, receiver).await;
+                },
+                extras,
+            )
+        } else {
+            TaskCell::new(
+                async move {
+                    handle_normal::<EK, EK::WriteBatch>(fsm, receiver).await;
+                },
+                extras,
+            )
+        };
         self.remote.spawn(task_cell);
     }
 
-    fn clone_box(&self) -> Box<dyn ApplyBatchSystem<EK>> {
-        Box::new(Self {
-            remote: self.remote.clone(),
-            pool: self.pool.clone(),
-            _phantom: self._phantom.clone(),
-            _phantom_ek: PhantomData,
-        })
-    }
-    fn shutdown(&self) {
+    pub fn shutdown(&self) {
         self.pool.shutdown();
     }
 }
 
-pub fn create_apply_batch_system<EK: KvEngine, W: WriteBatch<EK> + 'static>(
+pub fn create_apply_batch_system<EK: KvEngine>(
     store_id: u64,
     tag: String,
     host: CoprocessorHost<EK>,
@@ -3175,7 +3161,7 @@ pub fn create_apply_batch_system<EK: KvEngine, W: WriteBatch<EK> + 'static>(
     notifier: Box<dyn Notifier<EK>>,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     cfg: &Config,
-) -> Box<dyn ApplyBatchSystem<EK>> {
+) -> ApplyBatchSystem<EK> {
     let perf_level = cfg.perf_level;
     let pool_size = cfg.apply_batch_system.pool_size;
     let core = ApplyContextCore {
@@ -3193,7 +3179,17 @@ pub fn create_apply_batch_system<EK: KvEngine, W: WriteBatch<EK> + 'static>(
         enable_sync_log: cfg.sync_log,
     };
     let shared_core = Arc::new(Mutex::new(core));
-    let pool = ReadPoolBuilder::new(DefaultTicker::default())
+    let mut builder = ReadPoolBuilder::new(DefaultTicker::default());
+    if engine.support_write_batch_vec() {
+        builder
+            .before_pause(flush_tls_ctx::<EK, EK::WriteBatchVec>)
+            .before_stop(flush_tls_ctx::<EK, EK::WriteBatchVec>);
+    } else {
+        builder
+            .before_pause(flush_tls_ctx::<EK, EK::WriteBatch>)
+            .before_stop(flush_tls_ctx::<EK, EK::WriteBatch>);
+    };
+    let pool = builder
         .name_prefix("apply")
         .thread_count(pool_size, pool_size)
         .after_start(move || {
@@ -3202,17 +3198,13 @@ pub fn create_apply_batch_system<EK: KvEngine, W: WriteBatch<EK> + 'static>(
             let core = shared_core.lock().unwrap();
             set_tls_core(core.clone());
         })
-        .before_pause(flush_tls_ctx::<EK, W>)
-        .before_stop(flush_tls_ctx::<EK, W>)
         .build_yatp_pool();
-    let _phantom = Arc::new(Mutex::new(W::with_capacity(&engine, 0)));
-    let system = ApplyBatchSystemImpl::<EK, W> {
+
+    ApplyBatchSystem {
         remote: pool.remote().clone(),
         pool: Arc::new(pool),
-        _phantom_ek: PhantomData,
-        _phantom,
-    };
-    Box::new(system)
+        engine,
+    }
 }
 
 #[cfg(test)]
@@ -3228,7 +3220,7 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
-    use engine_rocks::{util::new_engine, RocksEngine, RocksSnapshot, RocksWriteBatch};
+    use engine_rocks::{util::new_engine, RocksEngine, RocksSnapshot};
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
@@ -3432,7 +3424,7 @@ mod tests {
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let (sender, receiver) = channel(1024);
         let mut router = ApplyRouter::new(sender);
-        let system = create_apply_batch_system::<RocksEngine, RocksWriteBatch>(
+        let system = create_apply_batch_system(
             1,
             "test-store".to_owned(),
             CoprocessorHost::<RocksEngine>::default(),
@@ -3735,7 +3727,7 @@ mod tests {
         let (sender, receiver) = channel(1024);
         let mut router = ApplyRouter::new(sender);
 
-        let system = create_apply_batch_system::<_, RocksWriteBatch>(
+        let system = create_apply_batch_system(
             1,
             "test-store".to_owned(),
             CoprocessorHost::<RocksEngine>::default(),
@@ -4069,7 +4061,7 @@ mod tests {
         let (sender, receiver) = channel(1024);
         let mut router = ApplyRouter::new(sender);
 
-        let system = create_apply_batch_system::<RocksEngine, RocksWriteBatch>(
+        let system = create_apply_batch_system(
             1,
             "test-store".to_owned(),
             host,
@@ -4350,7 +4342,7 @@ mod tests {
         let (sender, receiver) = channel(1024);
         let mut router = ApplyRouter::new(sender);
 
-        let system = create_apply_batch_system::<RocksEngine, RocksWriteBatch>(
+        let system = create_apply_batch_system(
             2,
             "test-store".to_owned(),
             host,

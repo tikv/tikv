@@ -12,7 +12,7 @@ use std::{mem, thread, u64};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{Engines, KvEngine, Mutable, WriteBatchExt, WriteOptions};
+use engine_traits::{Engines, KvEngine, Mutable, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use kvproto::import_sstpb::SstMeta;
@@ -281,7 +281,7 @@ where
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub router: RaftRouter<EK, ER>,
-    pub apply_batch_system: Box<dyn ApplyBatchSystem<EK>>,
+    pub apply_batch_system: ApplyBatchSystem<EK>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     /// region_id -> (peer_id, is_splitting)
@@ -859,7 +859,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T, C> {
     pub engines: Engines<EK, ER>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
-    apply_system: Box<dyn ApplyBatchSystem<EK>>,
+    apply_system: ApplyBatchSystem<EK>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T, C> RaftPollerBuilder<EK, ER, T, C> {
@@ -1071,7 +1071,7 @@ where
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             node_start_time: Some(TiInstant::now_coarse()),
-            apply_batch_system: self.apply_system.clone_box(),
+            apply_batch_system: self.apply_system.clone(),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
@@ -1103,7 +1103,7 @@ pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm>,
     router: RaftRouter<EK, ER>,
     workers: Option<Workers<EK>>,
-    apply_system: Option<Box<dyn ApplyBatchSystem<EK>>>,
+    apply_system: Option<ApplyBatchSystem<EK>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
@@ -1155,31 +1155,18 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let region_scheduler = workers.region_worker.scheduler();
-        let apply_system = if engines.kv.support_write_batch_vec() {
-            create_apply_batch_system::<EK, <EK as WriteBatchExt>::WriteBatchVec>(
-                meta.get_id(),
-                format!("[store {}]", meta.get_id()),
-                workers.coprocessor_host.clone(),
-                importer.clone(),
-                region_scheduler.clone(),
-                engines.kv.clone(),
-                Box::new(self.router.clone()),
-                pending_create_peers.clone(),
-                &cfg.value(),
-            )
-        } else {
-            create_apply_batch_system::<EK, <EK as WriteBatchExt>::WriteBatch>(
-                meta.get_id(),
-                format!("[store {}]", meta.get_id()),
-                workers.coprocessor_host.clone(),
-                importer.clone(),
-                region_scheduler.clone(),
-                engines.kv.clone(),
-                Box::new(self.router.clone()),
-                pending_create_peers.clone(),
-                &cfg.value(),
-            )
-        };
+        let apply_system = create_apply_batch_system(
+            meta.get_id(),
+            format!("[store {}]", meta.get_id()),
+            workers.coprocessor_host.clone(),
+            importer.clone(),
+            region_scheduler.clone(),
+            engines.kv.clone(),
+            Box::new(self.router.clone()),
+            pending_create_peers.clone(),
+            &cfg.value(),
+        );
+
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
@@ -1202,7 +1189,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pending_create_peers,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
             poller_handle: workers.future_poller.handle().clone(),
-            apply_system: apply_system.clone_box(),
+            apply_system: apply_system.clone(),
         };
         self.apply_system = Some(apply_system);
         let region_peers = builder.init()?;
