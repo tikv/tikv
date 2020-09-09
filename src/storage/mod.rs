@@ -269,6 +269,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: &str = "batch_get_command";
         // all requests in a batch have the same region, epoch, term, replica_read
+<<<<<<< HEAD
         let ctx = gets[0].ctx.clone();
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -284,6 +285,64 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             &key,
                             false,
                         );
+=======
+        let priority = requests[0].get_context().get_priority();
+        let enable_async_commit = self.enable_async_commit;
+        let concurrency_manager = self.concurrency_manager.clone();
+        let res =
+            self.read_pool.spawn_handle(
+                async move {
+                    for get in &requests {
+                        let key = get.key.to_owned();
+                        let region_id = get.get_context().get_region_id();
+                        let peer = get.get_context().get_peer();
+                        tls_collect_qps(region_id, peer, &key, &key, false);
+                    }
+                    KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(requests.len() as f64);
+                    let command_duration = tikv_util::time::Instant::now_coarse();
+                    let read_id = Some(ThreadReadId::new());
+                    let mut statistics = Statistics::default();
+                    let mut results = Vec::default();
+                    let mut req_snaps = vec![];
+
+                    for mut req in requests {
+                        let key = Key::from_raw(req.get_key());
+                        let start_ts = req.get_version().into();
+                        let mut ctx = req.take_context();
+                        let isolation_level = ctx.get_isolation_level();
+                        let fill_cache = !ctx.get_not_fill_cache();
+                        let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
+                        let region_id = ctx.get_region_id();
+                        if enable_async_commit {
+                            // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                            if let Err(e) = async_commit_check_keys(
+                                &concurrency_manager,
+                                iter::once(&key),
+                                start_ts,
+                                ctx.get_isolation_level(),
+                                &bypass_locks,
+                            ) {
+                                req_snaps.push(Err(e));
+                                continue;
+                            }
+                        }
+
+                        let snap = Self::with_tls_engine(|engine| {
+                            Self::snapshot(engine, read_id.clone(), &ctx)
+                        });
+                        req_snaps.push(Ok((
+                            snap,
+                            key,
+                            start_ts,
+                            isolation_level,
+                            fill_cache,
+                            bypass_locks,
+                            region_id,
+                        )));
+>>>>>>> c562464e6... fix miss qps statistic (#8596)
                     }
                 }
 
@@ -629,6 +688,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
+<<<<<<< HEAD
                 metrics::tls_collect_command_count(CMD, priority_tag);
 
                 for get in &gets {
@@ -641,6 +701,46 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             &key,
                             false,
                         );
+=======
+                for get in &gets {
+                    let key = get.key.to_owned();
+                    let region_id = get.get_context().get_region_id();
+                    let peer = get.get_context().get_peer();
+                    tls_collect_qps(region_id, peer, &key, &key, false);
+                }
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                    .get(CMD)
+                    .observe(gets.len() as f64);
+                let command_duration = tikv_util::time::Instant::now_coarse();
+                let read_id = Some(ThreadReadId::new());
+                let mut results = Vec::default();
+                let mut snaps = vec![];
+                for req in gets {
+                    let snap = Self::with_tls_engine(|engine| {
+                        Self::snapshot(engine, read_id.clone(), req.get_context())
+                    });
+                    snaps.push((req, snap));
+                }
+                Self::with_tls_engine(|engine| engine.release_snapshot());
+                let begin_instant = Instant::now_coarse();
+                for (mut req, snap) in snaps {
+                    let ctx = req.take_context();
+                    let cf = req.take_cf();
+                    let key = req.take_key();
+                    match snap.await {
+                        Ok(snapshot) => {
+                            let mut stats = Statistics::default();
+                            results.push(Self::raw_get_key_value(&snapshot, cf, key, &mut stats));
+                            tls_collect_read_flow(ctx.get_region_id(), &stats);
+                        }
+                        Err(e) => {
+                            results.push(Err(e));
+                        }
+>>>>>>> c562464e6... fix miss qps statistic (#8596)
                     }
                 }
 
