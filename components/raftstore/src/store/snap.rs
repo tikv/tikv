@@ -692,12 +692,10 @@ impl Snap {
             match self.validate(kv_snap.get_db(), true) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
-                    error!(
+                    error!(?e;
                         "snapshot is corrupted, will rebuild";
                         "region_id" => region.get_id(),
                         "snapshot" => %self.path(),
-                        "err" => ?e,
-                        "error_code" => %e.error_code(),
                     );
                     if !retry_delete_snapshot(&self.mgr, &self.key, self) {
                         error!(
