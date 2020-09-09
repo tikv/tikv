@@ -1,16 +1,15 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::server::metrics::GRPC_MSG_HISTOGRAM_STATIC;
-use crate::server::service::kv::{batch_commands_response, poll_future_notify};
+use crate::server::service::kv::batch_commands_response;
 use crate::storage::{
     errors::{extract_key_error, extract_region_error},
     kv::Engine,
     lock_manager::LockManager,
     Storage,
 };
-use futures03::compat::Compat;
-use futures03::future::FutureExt;
 use kvproto::kvrpcpb::*;
+use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::batch::Sender;
 use tikv_util::time::{duration_to_sec, Instant};
 
@@ -133,7 +132,7 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
             .kv_batch_get_command
             .observe(begin_instant.elapsed_secs());
     };
-    poll_future_notify(Compat::new(f.unit_error().boxed()));
+    poll_future_notify(f);
 }
 
 fn future_batch_raw_get_command<E: Engine, L: LockManager>(
@@ -188,5 +187,5 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
             .raw_batch_get_command
             .observe(duration_to_sec(begin_instant.elapsed()));
     };
-    poll_future_notify(Compat::new(f.unit_error().boxed()));
+    poll_future_notify(f);
 }

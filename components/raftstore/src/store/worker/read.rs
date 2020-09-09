@@ -25,7 +25,6 @@ use crate::store::{
 use crate::Result;
 
 use engine_traits::{KvEngine, RaftEngine};
-use error_code::ErrorCodeExt;
 use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};
@@ -93,11 +92,9 @@ pub trait ReadExecutor<E: KvEngine> {
                 CmdType::Get => match self.get_value(req, region.as_ref()) {
                     Ok(resp) => resp,
                     Err(e) => {
-                        error!(
+                        error!(?e;
                             "failed to execute get command";
                             "region_id" => region.get_id(),
-                            "err" => ?e,
-                            "error_code" => %e.error_code(),
                         );
                         response.response = cmd_resp::new_error(e);
                         return response;
