@@ -11,42 +11,13 @@ use grpcio::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
-use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
+use pd_client::{validate_endpoints, Error as PdError, PdClient, RegionStat, RpcClient};
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
 use tikv_util::config::ReadableDuration;
 use txn_types::TimeStamp;
 
-use super::mock::mocker::*;
-use super::mock::Server as MockServer;
-
-fn new_config(eps: Vec<(String, u16)>) -> Config {
-    let mut cfg = Config::default();
-    cfg.endpoints = eps
-        .into_iter()
-        .map(|addr| format!("{}:{}", addr.0, addr.1))
-        .collect();
-    cfg
-}
-
-fn new_client(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> RpcClient {
-    let cfg = new_config(eps);
-    let mgr =
-        mgr.unwrap_or_else(|| Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()));
-    RpcClient::new(&cfg, mgr).unwrap()
-}
-
-fn new_client_with_update_interval(
-    eps: Vec<(String, u16)>,
-    mgr: Option<Arc<SecurityManager>>,
-    interval: ReadableDuration,
-) -> RpcClient {
-    let mut cfg = new_config(eps);
-    cfg.update_interval = interval;
-    let mgr =
-        mgr.unwrap_or_else(|| Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()));
-    RpcClient::new(&cfg, mgr).unwrap()
-}
+use test_pd::{mocker::*, util::*, Server as MockServer};
 
 #[test]
 fn test_retry_rpc_client() {
