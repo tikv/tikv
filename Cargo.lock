@@ -444,6 +444,7 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
+ "bitflags",
  "crossbeam",
  "engine",
  "engine_rocks",
@@ -464,6 +465,7 @@ dependencies = [
  "raftstore",
  "resolved_ts",
  "security",
+ "semver",
  "slog",
  "slog-global",
  "tempfile",
