@@ -155,7 +155,8 @@ impl TestSuite {
         let mut req = ChangeDataRequest::default();
         req.region_id = region_id;
         req.set_region_epoch(self.get_context(region_id).take_region_epoch());
-        req.mut_header().set_ticdc_version("4.0.6".into());
+        // Batch resolved ts is enabled on v4.0.7
+        req.mut_header().set_ticdc_version("4.0.7".into());
         req
     }
 

@@ -83,8 +83,8 @@ impl Conn {
 
     // TODO refactor into Error::Version.
     pub fn check_version_and_set_feature(&mut self, ver: semver::Version) -> Option<Compatibility> {
-        // Assume batch resolved ts will be release in v4.0.6
-        let v406_bacth_resoled_ts = semver::Version::new(4, 0, 6);
+        // Assume batch resolved ts will be release in v4.0.7
+        let v407_bacth_resoled_ts = semver::Version::new(4, 0, 7);
 
         match &self.version {
             Some((version, _)) => {
@@ -101,7 +101,7 @@ impl Conn {
             }
             None => {
                 let mut features = FeatureGate::empty();
-                if v406_bacth_resoled_ts <= ver {
+                if v407_bacth_resoled_ts <= ver {
                     features.toggle(FeatureGate::BATCH_RESOLVED_TS);
                 }
                 info!("cdc connection version"; "version" => ver.to_string(), "features" => ?features);
