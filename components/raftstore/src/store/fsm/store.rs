@@ -34,6 +34,7 @@ use raft_engine::{RaftEngine, RaftLogBatch};
 use sst_importer::SSTImporter;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::minitrace::Event;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
@@ -554,10 +555,13 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
 
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMessage>) {
         for mut m in msgs.drain(..) {
-            let _g = m.context.trace_handle.trace_enable(0u32);
             match m.msg {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
+                    let _g = m
+                        .context
+                        .trace_handle
+                        .trace_enable(Event::TiKvHandleStoreRaftMessage as u32);
                     if let Err(e) = self.on_raft_message(msg) {
                         error!(
                             "handle raft message failed";

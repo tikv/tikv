@@ -161,6 +161,16 @@ requests_to_trace!(
   raw_put -> Event::TiKvRawPut,
   raw_delete -> Event::TiKvRawDelete,
   raw_delete_range -> Event::TiKvRawDeleteRange,
+  kv_prewrite -> Event::TiKvPrewrite,
+  kv_commit -> Event::TiKvCommit,
+  kv_get -> Event::TiKvGet,
+  kv_scan -> Event::TiKvScan,
+  kv_pessimistic_lock -> Event::TiKvPessimisticLock,
+  kv_pessimistic_rollback -> Event::TiKvPessimisticRollback,
+  kv_cleanup -> Event::TiKvCleanup,
+  kv_batch_get -> Event::TiKvBatchGet,
+  kv_batch_rollback -> Event::TiKvBatchRollback,
+  kv_gc -> Event::TiKvGc,
 );
 
 macro_rules! handle_request {
@@ -192,7 +202,7 @@ macro_rules! handle_request {
                 );
                 GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
             })
-            .trace_task(Event::TiKvGrpcio as u32)
+            .trace_task_fine(Event::TiKvGrpcioPending as u32, Event::TiKvGrpcio as u32)
             .inspect(move |_| reporter.report(req_trace_context, collector));
 
             ctx.spawn(Compat::new(task.boxed()));
@@ -356,7 +366,6 @@ impl<
         let task = async move {
             let resp = future.await?;
             sink.success(resp).compat().await?;
-            reporter.report(req_trace_context, collector);
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
                 .observe(duration_to_sec(begin_instant.elapsed()));
@@ -369,7 +378,8 @@ impl<
             );
             GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
         })
-        .trace_task(Event::TiKvGrpcio as u32);
+        .trace_task_fine(Event::TiKvGrpcioPending as u32, Event::TiKvGrpcio as u32)
+        .inspect(move |_| reporter.report(req_trace_context, collector));
 
         ctx.spawn(Compat::new(task.boxed()));
     }
@@ -1149,7 +1159,7 @@ fn handle_batch_commands_request<
                     let resp = $future_fn($($arg,)* req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc())
-                        .trace_task(Event::TiKvGrpcio as u32)
+                        .trace_task_fine(Event::TiKvGrpcioPending as u32, Event::TiKvGrpcio as u32)
                         .inspect(move |_| reporter.report(req_trace_context, collector));
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name);
                 })*

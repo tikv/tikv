@@ -442,9 +442,12 @@ where
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMessage<EK>>) {
         for mut m in msgs.drain(..) {
-            let _g = m.context.trace_handle.trace_enable(0u32);
             match m.msg {
                 PeerMsg::RaftMessage(msg) => {
+                    let _g = m
+                        .context
+                        .trace_handle
+                        .trace_enable(Event::TiKvHandlePeerRaftMessage as u32);
                     if let Err(e) = self.on_raft_message(msg) {
                         error!(
                             "handle raft message err";
@@ -456,6 +459,10 @@ where
                     }
                 }
                 PeerMsg::RaftCommand(mut cmd) => {
+                    let _g = m
+                        .context
+                        .trace_handle
+                        .trace_enable(Event::TiKvHandlePeerRaftCommand as u32);
                     self.ctx
                         .raft_metrics
                         .propose

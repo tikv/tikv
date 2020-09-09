@@ -77,7 +77,7 @@ where
 {
     #[inline]
     pub fn trace_instrument(self, event: Event) -> Self {
-        let handle = minitrace::trace_binder();
+        let handle = minitrace::trace_binder_fine(Event::TiKvCallbackPending as u32);
         match self {
             Callback::None => self,
             Callback::Read(cb) => Callback::Read(Box::new(move |r| {
@@ -411,7 +411,9 @@ impl<EK: KvEngine> From<PeerMsg<EK>> for PeerMessage<EK> {
         Self {
             msg,
             context: Context {
-                trace_handle: minitrace::trace_binder(),
+                trace_handle: minitrace::trace_binder_fine(
+                    Event::TiKvPeerMessageDispatching as u32,
+                ),
             },
         }
     }
@@ -485,7 +487,9 @@ impl From<StoreMsg> for StoreMessage {
         Self {
             msg,
             context: Context {
-                trace_handle: minitrace::trace_binder(),
+                trace_handle: minitrace::trace_binder_fine(
+                    Event::TiKvStoreMessageDispatching as u32,
+                ),
             },
         }
     }

@@ -375,7 +375,6 @@ impl<E: Engine> Endpoint<E> {
         let snapshot = unsafe {
             with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
         }
-        .trace_async(Event::TiKvCoprGetSnapshot as u32)
         .await?;
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
@@ -392,12 +391,7 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
 
-        let handle_request_future = track(
-            handler
-                .handle_request()
-                .trace_async(Event::TiKvCoprHandleRequest as u32),
-            &mut tracker,
-        );
+        let handle_request_future = track(handler.handle_request(), &mut tracker);
         let result = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
@@ -440,7 +434,10 @@ impl<E: Engine> Endpoint<E> {
         self.read_pool
             .spawn_handle(
                 Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                    .trace_task(tipb::TracingEvent::TiKvCoprScheduleTask as u32),
+                    .trace_task_fine(
+                        Event::TiKvCoprTaskPending as u32,
+                        Event::TiKvCoprHandleRequest as u32,
+                    ),
                 priority,
                 task_id,
             )
