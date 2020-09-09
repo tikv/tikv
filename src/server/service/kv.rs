@@ -596,6 +596,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                     GRPC_MSG_FAIL_COUNTER.coprocessor_stream.inc();
                 }
             }
+            let _ = sink.close().await;
         };
 
         ctx.spawn(future);
@@ -910,19 +911,20 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 ))
             });
 
-        let task = async move {
-            let _ = sink
-                .send_all(&mut response_retriever)
-                .map_err(|e| {
-                    debug!("kv rpc failed";
-                        "request" => "batch_commands",
-                        "err" => ?e
-                    );
-                })
-                .await;
-        };
+        let send_task = async move {
+            sink.send_all(&mut response_retriever).await?;
+            sink.close().await?;
+            Ok(())
+        }
+        .map_err(|e: grpcio::Error| {
+            debug!("kv rpc failed";
+                "request" => "batch_commands",
+                "err" => ?e
+            );
+        })
+        .map(|_| ());
 
-        ctx.spawn(task);
+        ctx.spawn(send_task);
     }
 
     fn ver_get(

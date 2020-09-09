@@ -86,6 +86,7 @@ impl Diagnostics for Service {
                 match stream.await.unwrap() {
                     Ok(s) => {
                         let res = sink.send_all(&mut s.map(|item| Ok(item))).await;
+                        let _ = sink.close().await;
                         if let Err(e) = res {
                             error!("search log RPC error"; "error" => ?e);
                         }

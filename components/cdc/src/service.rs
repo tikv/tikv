@@ -237,6 +237,7 @@ impl ChangeData for Service {
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
+
         ctx.spawn(async move {
             let res = sink.send_all(&mut rx).await;
             // Unregister this downstream only.
@@ -247,9 +248,11 @@ impl ChangeData for Service {
             match res {
                 Ok(_s) => {
                     info!("cdc send half closed"; "remote" => peer, "conn_id" => ?conn_id);
+                    let _ = sink.close().await;
                 }
                 Err(e) => {
                     warn!("cdc send failed"; "error" => ?e, "remote" => peer, "conn_id" => ?conn_id);
+                    let _ = sink.fail(RpcStatus::new(RpcStatusCode::UNKNOWN, Some("cdc send failed".to_owned()))).await;
                 }
             }
         });

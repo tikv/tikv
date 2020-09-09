@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use futures::channel::{mpsc, oneshot};
+use futures::channel::mpsc;
 use futures::compat::Future01CompatExt;
 use futures::executor::block_on;
 use futures::future;
@@ -669,19 +669,13 @@ impl PdClient for RpcClient {
                 .client_stub
                 .tso()
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "tso", e));
-            let (keep_req_tx, mut keep_req_rx) = oneshot::channel();
             let send_once = async move {
                 let _ = req_sink.send((req, WriteFlags::default())).await;
-                let _ = keep_req_tx.send(req_sink);
+                let _ = req_sink.close().await;
             };
             cli.client_stub.spawn(send_once);
             Box::pin(async move {
                 let resp = resp_stream.try_next().await?;
-                // Now we can safely drop sink without
-                // causing a Cancel error.
-                let _ = keep_req_rx
-                    .try_recv()
-                    .unwrap_or_else(|e| panic!("fail to receive tso sender err {:?}", e));
                 let resp = match resp {
                     Some(r) => r,
                     None => return Ok(TimeStamp::zero()),

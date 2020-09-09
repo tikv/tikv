@@ -65,8 +65,12 @@ impl Backup for Service {
 
         let send_task = async move {
             let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
-            let resp = sink.send_all(&mut s).await;
-            match resp {
+            sink.send_all(&mut s).await?;
+            sink.close().await?;
+            Ok(())
+        }
+        .map(|res: Result<()>| {
+            match res {
                 Ok(_) => {
                     info!("backup send half closed");
                 }
@@ -78,7 +82,7 @@ impl Backup for Service {
                     error!("backup canceled"; "error" => ?e);
                 }
             }
-        };
+        });
 
         ctx.spawn(send_task);
     }
