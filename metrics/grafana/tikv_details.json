@@ -20055,7 +20055,7 @@
           "description": "The blob cache size.",
           "fill": 1,
           "gridPos": {
-            "h": 8,
+            "h": 6,
             "w": 12,
             "x": 12,
             "y": 34
