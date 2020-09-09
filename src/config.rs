@@ -3010,7 +3010,6 @@ mod tests {
         let mut incoming = TiKvConfig::default();
         incoming.coprocessor.region_split_keys = 10000;
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
-        incoming.raft_store.sync_log = false;
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
