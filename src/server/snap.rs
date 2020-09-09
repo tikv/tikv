@@ -248,15 +248,8 @@ fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
 ) -> impl Future<Output = Result<()>> {
     let recv_task = async move {
         let mut stream = stream.compat().map_err(Error::from);
-        let head = if let Some(head) = stream.next().await {
-            Some(head?)
-        } else {
-            None
-        };
-        let mut context = match RecvSnapContext::new(head, &snap_mgr) {
-            Ok(context) => context,
-            Err(e) => return Err(e),
-        };
+        let head = stream.next().await.transpose()?;
+        let mut context = RecvSnapContext::new(head, &snap_mgr)?;
         if context.file.is_none() {
             return context.finish(raft_router);
         }
@@ -279,7 +272,7 @@ fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
 
         let res = context.finish(raft_router);
         snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
-        Ok(res?)
+        res
     };
 
     async move {

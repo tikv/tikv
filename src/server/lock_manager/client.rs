@@ -58,33 +58,21 @@ impl Client {
         let (sink, receiver) = self.client.detect().unwrap();
         let send_task = Box::pin(async move {
             let mut sink = sink.sink_compat().sink_map_err(Error::Grpc);
-            let result = sink
-                .send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
-                .await;
-            match result {
-                Ok(()) => {
+            sink.send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
+                .await
+                .map(|_| {
                     info!("cancel detect sender");
                     sink.get_mut().get_mut().cancel();
-                    Ok(())
-                }
-                Err(e) => Err(e),
-            }
+                })
         });
         self.sender = Some(tx);
 
-        let recv_task = Box::pin(async move {
-            receiver
-                .compat()
-                .map_err(Error::Grpc)
-                .for_each(move |resp| {
-                    if let Ok(resp) = resp {
-                        cb(resp);
-                    }
-                    future::ready(())
-                })
-                .await;
-            Ok(())
-        });
+        let recv_task = Box::pin(receiver.compat().map_err(Error::Grpc).try_for_each(
+            move |resp| {
+                cb(resp);
+                future::ok(())
+            },
+        ));
 
         (send_task, recv_task)
     }

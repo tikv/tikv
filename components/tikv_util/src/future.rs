@@ -72,8 +72,7 @@ where
 /// thread calling `wake()`.
 pub fn poll_future_notify(f: impl Future<Output = ()> + Send + 'static) {
     let f: BoxFuture<'static, ()> = Box::pin(f);
-    let spawn = Mutex::new(Some(f));
-    let waker = Arc::new(BatchCommandsWaker(spawn));
+    let waker = Arc::new(BatchCommandsWaker(Mutex::new(Some(f))));
     waker.wake();
 }
 

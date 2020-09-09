@@ -557,7 +557,7 @@ fn region_detail<T: RaftStoreRouter<RocksEngine>>(
     let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
 
     async move {
-        let _ = raft_router
+        raft_router
             .send_command(raft_cmd, cb)
             .map_err(|e| Error::Other(Box::new(e)))?;
 
@@ -597,7 +597,7 @@ fn consistency_check<T: RaftStoreRouter<RocksEngine>>(
     let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
 
     async move {
-        let _ = raft_router
+        raft_router
             .send_command(raft_cmd, cb)
             .map_err(|e| Error::Other(Box::new(e)))?;
 
