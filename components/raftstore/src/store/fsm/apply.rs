@@ -3002,7 +3002,7 @@ where
         let ctx = &mut *(*e.get() as *mut Option<ApplyContext<EK, W>>);
         ctx.take()
     });
-    ctx.unwrap_or_else(||{
+    ctx.unwrap_or_else(|| {
         TLS_APPLY_CONTEXT_CORE.with(|e| unsafe {
             if (*e.get()).is_null() {
                 panic!("No apply context set before thread start");
