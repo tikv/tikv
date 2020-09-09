@@ -41,7 +41,7 @@ use crate::store::util::is_learner;
 use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, GlobalReplicationState, PdTask, ReadResponse};
 use crate::{Error, Result};
-//use futures03::channel::mpsc::Sender as FutureSender;
+
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};

@@ -1837,8 +1837,8 @@ impl CoprReadPoolConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub unified: UnifiedReadPoolConfig,
-    pub coprocessor: CoprReadPoolConfig,
     pub storage: StorageReadPoolConfig,
+    pub coprocessor: CoprReadPoolConfig,
 }
 
 impl ReadPoolConfig {
@@ -1929,7 +1929,6 @@ mod readpool_tests {
             ..Default::default()
         };
         assert!(storage.validate().is_ok());
-
         let coprocessor = CoprReadPoolConfig::default();
         assert!(coprocessor.validate().is_ok());
         let mut cfg = ReadPoolConfig {
