@@ -481,7 +481,7 @@ impl Peer {
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(ctx.cfg.sync_log);
+        write_opts.set_sync(true);
         ctx.engines.kv.c().write_opt(&kv_wb, &write_opts)?;
         ctx.engines.raft.c().write_opt(&raft_wb, &write_opts)?;
 
