@@ -323,8 +323,6 @@ where
     last_applied_index: u64,
     committed_count: usize,
 
-    // Indicates that WAL can be synchronized when data is written to KV engine.
-    enable_sync_log: bool,
     // Whether synchronize WAL is preferred.
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
@@ -374,7 +372,6 @@ where
             kv_wb_last_keys: 0,
             last_applied_index: 0,
             committed_count: 0,
-            enable_sync_log: cfg.sync_log,
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
@@ -446,7 +443,7 @@ where
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
-        let need_sync = self.enable_sync_log && self.sync_log_hint;
+        let need_sync = self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
@@ -2599,7 +2596,7 @@ where
     },
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
-    Validate(u64, Box<dyn FnOnce((*const u8, bool)) + Send>),
+    Validate(u64, Box<dyn FnOnce(*const u8) + Send>),
 }
 
 impl<EK> Msg<EK>
@@ -3100,7 +3097,7 @@ where
                 #[cfg(any(test, feature = "testexport"))]
                 Some(Msg::Validate(_, f)) => {
                     let delegate: *const u8 = unsafe { std::mem::transmute(&self.delegate) };
-                    f((delegate, apply_ctx.enable_sync_log))
+                    f(delegate)
                 }
                 None => break,
             }
@@ -3191,7 +3188,6 @@ where
                 }
                 _ => {}
             }
-            self.apply_ctx.enable_sync_log = incoming.sync_log;
         }
         self.apply_ctx.perf_context_statistics.start();
     }
