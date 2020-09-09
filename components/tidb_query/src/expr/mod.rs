@@ -1,26 +1,4 @@
-<<<<<<< HEAD:components/tidb_query/src/expr/mod.rs
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
-=======
-// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-
-//! This crate implements a simple SQL query engine to work with TiDB pushed down executors.
-//!
-//! The query engine is able to scan and understand rows stored by TiDB, run against a
-//! series of executors and then return the execution result. The query engine is provided via
-//! TiKV Coprocessor interface. However standalone UDF functions are also exported and can be used
-//! standalone.
-
-#![feature(proc_macro_hygiene)]
-#![feature(test)]
-
-#[macro_use]
-extern crate failure;
-#[macro_use(box_err, box_try, try_opt, debug)]
-extern crate tikv_util;
-
-#[cfg(test)]
-extern crate test;
->>>>>>> 3f94eb8... *: output error code to error logs (#8595):components/tidb_query_normal_expr/src/lib.rs
 
 use std::borrow::Cow;
 use std::convert::TryInto;

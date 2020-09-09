@@ -385,7 +385,6 @@ impl PdClient for RpcClient {
             tx.unbounded_send(req)
                 .unwrap_or_else(|e| panic!("send request to unbounded channel failed {:?}", e));
             inner.hb_sender = Either::Right(tx);
-<<<<<<< HEAD
             Box::new(
                 sender
                     .sink_map_err(Error::Grpc)
@@ -400,30 +399,11 @@ impl PdClient for RpcClient {
                             Ok(())
                         }
                         Err(e) => {
-                            error!("failed to send heartbeat"; "err" => ?e);
+                            error!(?e; "failed to send heartbeat");
                             Err(e)
                         }
                     }),
             ) as PdFuture<_>
-=======
-            Box::pin(async move {
-                let mut sender = sender.sink_compat().sink_map_err(Error::Grpc);
-                let result = sender
-                    .send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
-                    .await;
-                match result {
-                    Ok(()) => {
-                        sender.get_mut().get_mut().cancel();
-                        info!("cancel region heartbeat sender");
-                        Ok(())
-                    }
-                    Err(e) => {
-                        error!(?e; "failed to send heartbeat");
-                        Err(e)
-                    }
-                }
-            }) as PdFuture<_>
->>>>>>> 3f94eb8... *: output error code to error logs (#8595)
         };
 
         self.leader_client

@@ -268,38 +268,15 @@ impl BackupRange {
         start_ts: TimeStamp,
         compression_type: Option<SstCompressionType>,
     ) -> Result<(Vec<File>, Statistics)> {
-<<<<<<< HEAD
         let mut writer =
             match BackupWriter::new(db, &file_name, storage.limiter.clone(), compression_type) {
                 Ok(w) => w,
                 Err(e) => {
-                    error!("backup writer failed"; "error" => ?e);
+                    error!(?e; "backup writer failed");
                     return Err(e);
                 }
             };
         let stat = match self.backup(&mut writer, engine, backup_ts, start_ts) {
-=======
-        let mut writer = match BackupWriter::new(
-            db,
-            &file_name,
-            storage.limiter.clone(),
-            compression_type,
-            compression_level,
-        ) {
-            Ok(w) => w,
-            Err(e) => {
-                error!(?e; "backup writer failed");
-                return Err(e);
-            }
-        };
-        let stat = match self.backup(
-            &mut writer,
-            engine,
-            concurrency_manager,
-            backup_ts,
-            start_ts,
-        ) {
->>>>>>> 3f94eb8... *: output error code to error logs (#8595)
             Ok(s) => s,
             Err(e) => return Err(e),
         };
@@ -322,31 +299,14 @@ impl BackupRange {
         cf: CfName,
         ct: Option<SstCompressionType>,
     ) -> Result<(Vec<File>, Statistics)> {
-<<<<<<< HEAD
         let mut writer =
             match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone(), ct) {
                 Ok(w) => w,
                 Err(e) => {
-                    error!("backup writer failed"; "error" => ?e);
+                    error!(?e; "backup writer failed");
                     return Err(e);
                 }
             };
-=======
-        let mut writer = match BackupRawKVWriter::new(
-            db,
-            &file_name,
-            cf,
-            storage.limiter.clone(),
-            compression_type,
-            compression_level,
-        ) {
-            Ok(w) => w,
-            Err(e) => {
-                error!(?e; "backup writer failed");
-                return Err(e);
-            }
-        };
->>>>>>> 3f94eb8... *: output error code to error logs (#8595)
         let stat = match self.backup_raw(&mut writer, engine) {
             Ok(s) => s,
             Err(e) => return Err(e),

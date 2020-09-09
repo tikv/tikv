@@ -6,14 +6,9 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
 
-<<<<<<< HEAD
 use engine::DB;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, CF_WRITE, LARGE_CFS};
-use error_code::ErrorCodeExt;
-=======
-use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
->>>>>>> 3f94eb8... *: output error code to error logs (#8595)
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;

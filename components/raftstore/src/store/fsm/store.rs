@@ -30,24 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
 use time::{self, Timespec};
-<<<<<<< HEAD
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
-=======
-use tokio::runtime::{self, Handle, Runtime};
-
-use engine_rocks::CompactedEvent;
-use engine_traits::{RaftEngine, RaftLogBatch};
-use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use pd_client::PdClient;
-use sst_importer::SSTImporter;
-use tikv_util::collections::HashMap;
-use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, Instant as TiInstant};
-use tikv_util::timer::SteadyTimer;
-use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
-use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
->>>>>>> 3f94eb8... *: output error code to error logs (#8595)
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
@@ -83,7 +66,6 @@ use crate::store::{
 use crate::Result;
 use engine::Engines;
 use engine_rocks::{CompactedEvent, CompactionListener};
-use error_code::ErrorCodeExt;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
 use sst_importer::SSTImporter;

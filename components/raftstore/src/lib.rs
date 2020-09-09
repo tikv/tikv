@@ -4,7 +4,7 @@
 #![feature(cell_update)]
 #![feature(shrink_to)]
 #![feature(div_duration)]
-#![feature(min_specialization)]
+#![feature(specialization)]
 
 #[macro_use]
 extern crate bitflags;

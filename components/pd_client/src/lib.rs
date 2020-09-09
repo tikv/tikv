@@ -1,11 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
-<<<<<<< HEAD
+
+#![feature(specialization)]
 
 extern crate futures;
-=======
-#![feature(min_specialization)]
-
->>>>>>> 3f94eb8... *: output error code to error logs (#8595)
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]

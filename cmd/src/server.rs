@@ -333,7 +333,6 @@ impl TiKVServer {
         let env = get_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
-<<<<<<< HEAD
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
         let mut raft_db_opts = self.config.raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
@@ -344,18 +343,6 @@ impl TiKVServer {
             raft_db_cf_opts,
         )
         .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
-=======
-        let ch = Mutex::new(self.router.clone());
-        let compacted_handler = Box::new(move |compacted_event: engine_rocks::CompactedEvent| {
-            let ch = ch.lock().unwrap();
-            let event = StoreMsg::CompactedEvent(compacted_event);
-            if let Err(e) = ch.send_control(event) {
-                error!(?e; "send compaction finished event to raftstore failed");
-            }
-        });
-        engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
-    }
->>>>>>> 3f94eb8... *: output error code to error logs (#8595)
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();

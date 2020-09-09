@@ -386,7 +386,6 @@ impl<E: Engine> GcRunner<E> {
                 break;
             }
 
-<<<<<<< HEAD
             // Does the GC operation on all scanned keys
             next_key = self.gc_keys(ctx, safe_point, keys, next).map_err(|e| {
                 warn!("gc gc_keys failed"; "region_id" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
@@ -394,38 +393,6 @@ impl<E: Engine> GcRunner<E> {
             })?;
             if next_key.is_none() {
                 break;
-=======
-            let mut keys = keys.into_iter();
-            let mut txn = Self::new_txn(self.engine.snapshot_on_kv_engine(start_key, end_key)?);
-            let (mut next_gc_key, mut gc_info) = (keys.next(), GcInfo::default());
-            while let Some(ref key) = next_gc_key {
-                if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn) {
-                    error!(?e; "GC meets failure"; "key" => %key,);
-                    // Switch to the next key if meets failure.
-                    gc_info.is_completed = true;
-                }
-                if gc_info.is_completed {
-                    if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
-                        debug!(
-                            "GC found plenty versions for a key";
-                            "key" => %key,
-                            "versions" => gc_info.found_versions,
-                        );
-                    }
-                    if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
-                        debug!(
-                            "GC deleted plenty versions for a key";
-                            "key" => %key,
-                            "versions" => gc_info.deleted_versions,
-                        );
-                    }
-                    next_gc_key = keys.next();
-                    gc_info = GcInfo::default();
-                } else {
-                    Self::flush_txn(txn, &self.limiter, &self.engine)?;
-                    txn = Self::new_txn(self.engine.snapshot_on_kv_engine(start_key, end_key)?);
-                }
->>>>>>> 3f94eb8... *: output error code to error logs (#8595)
             }
         }
 

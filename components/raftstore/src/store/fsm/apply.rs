@@ -50,7 +50,6 @@ use crate::report_perf_context;
 
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
 use crate::{Error, Result};
-use error_code::ErrorCodeExt;
 use sst_importer::SSTImporter;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::escape;

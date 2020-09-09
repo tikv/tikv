@@ -1784,34 +1784,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 continue;
             }
 
-<<<<<<< HEAD
-=======
-            // Create new region
-            let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
-            if new_split_peer.result.is_some() {
-                if let Err(e) = self
-                    .fsm
-                    .peer
-                    .mut_store()
-                    .clear_extra_split_data(enc_start_key(&new_region), enc_end_key(&new_region))
-                {
-                    error!(?e;
-                        "failed to cleanup extra split data, may leave some dirty data";
-                        "region_id" => new_region.get_id(),
-                    );
-                }
-                continue;
-            }
-
-            {
-                let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
-                assert_eq!(
-                    pending_create_peers.remove(&new_region_id),
-                    Some((new_split_peer.peer_id, true))
-                );
-            }
-
->>>>>>> 3f94eb8... *: output error code to error logs (#8595)
             // Insert new regions and validation
             info!(
                 "insert new region";

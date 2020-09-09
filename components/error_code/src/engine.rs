@@ -9,11 +9,6 @@ define_error_codes!(
     IO => ("IO", "", ""),
     CF_NAME => ("CFName", "", ""),
     CODEC => ("Codec", "", ""),
-<<<<<<< HEAD
-
-    UNKNOWN => ("Unknown", "", "")
-=======
     DATALOSS => ("DataLoss", "", ""),
     DATACOMPACTED => ("DataCompacted", "", "")
->>>>>>> 3f94eb8... *: output error code to error logs (#8595)
 );
