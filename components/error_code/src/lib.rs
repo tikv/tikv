@@ -26,11 +26,19 @@ pub mod raftstore;
 pub mod sst_importer;
 pub mod storage;
 
+use std::fmt::{self, Display, Formatter};
+
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub struct ErrorCode {
     pub code: &'static str,
     pub description: &'static str,
     pub workaround: &'static str,
+}
+
+impl Display for ErrorCode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "[{}] {}", self.code, self.description)
+    }
 }
 
 pub trait ErrorCodeExt {

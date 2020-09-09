@@ -11,6 +11,7 @@ use engine::Engines;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot, WRITE_BATCH_MAX_KEYS};
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, Peekable};
+use error_code::ErrorCodeExt;
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -411,6 +412,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "err" => %e,
+                            "error_code" => %e.error_code(),
                         );
                     }
                 }
@@ -574,6 +576,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                             "peer_id" => self.fsm.peer_id(),
                             "snapshot" => ?key,
                             "err" => %e,
+                            "error_code" => %e.error_code(),
                         );
                         continue;
                     }
@@ -630,6 +633,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                             "peer_id" => self.fsm.peer_id(),
                             "snap_file" => %key,
                             "err" => %e,
+                            "error_code" => %e.error_code(),
                         );
                         continue;
                     }
@@ -2003,6 +2007,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "peer_id" => self.fsm.peer_id(),
                     "err" => %e,
                     "target_region_id" => target_region_id,
+                    "error_code" => %e.error_code(),
                 );
                 Ok(false)
             }
@@ -2135,6 +2140,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         "region_id" => self.fsm.region_id(),
                         "peer_id" => self.fsm.peer_id(),
                         "err" => %e,
+                        "error_code" => %e.error_code(),
                     );
                     self.rollback_merge();
                 }
@@ -2145,6 +2151,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "peer_id" => self.fsm.peer_id(),
                     "leader_id" => self.fsm.peer.leader_id(),
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 if self.fsm.peer.leader_id() != raft::INVALID_ID {
                     self.fsm.peer.send_want_rollback_merge(
@@ -2658,6 +2665,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "peer_id" => self.fsm.peer_id(),
                 "message" => ?msg,
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
             cb.invoke_with_response(new_error(e));
             return;
