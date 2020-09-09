@@ -11,6 +11,8 @@ extern crate serde_derive;
 extern crate slog_global;
 extern crate hex;
 extern crate kvproto;
+#[macro_use(fail_point)]
+extern crate fail;
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
