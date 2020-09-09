@@ -3601,7 +3601,7 @@ mod tests {
             region_id,
             Msg::Validate(
                 region_id,
-                Box::new(move |(delegate, _): (*const u8, _)| {
+                Box::new(move |delegate: *const u8| {
                     let delegate = unsafe { &*(delegate as *const ApplyDelegate<RocksEngine>) };
                     validate(delegate);
                     validate_tx.send(()).unwrap();
