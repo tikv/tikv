@@ -8,5 +8,7 @@
 #[macro_use]
 extern crate slog_global;
 extern crate test;
+#[macro_use]
+extern crate tikv_util;
 
 mod cases;
