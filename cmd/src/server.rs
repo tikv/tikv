@@ -559,10 +559,10 @@ impl TiKVServer {
 
         // Create tracing reporter
         let tracing_reporter: Arc<dyn tracing::Reporter> =
-            if self.config.tracing.jaeger_agent.is_empty() {
+            if self.config.tracing.jaeger_thrift_compact_agent.is_empty() {
                 Arc::new(tracing::NullReporter::new())
             } else {
-                let addr = &self.config.tracing.jaeger_agent;
+                let addr = &self.config.tracing.jaeger_thrift_compact_agent;
                 let agent: SocketAddr = addr
                     .parse()
                     .unwrap_or_else(|_| fatal!("failed to parse into a socket address: {}", addr));

@@ -2021,11 +2021,11 @@ impl Default for CdcConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TracingConfig {
-    pub jaeger_agent: String,
+    pub jaeger_thrift_compact_agent: String,
     pub num_report_threads: usize,
     pub duration_threshold: ReadableDuration,
     pub spans_max_length: usize,
@@ -2033,8 +2033,8 @@ pub struct TracingConfig {
 
 impl TracingConfig {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if !self.jaeger_agent.is_empty() {
-            config::check_addr(&self.jaeger_agent)?;
+        if !self.jaeger_thrift_compact_agent.is_empty() {
+            config::check_addr(&self.jaeger_thrift_compact_agent)?;
             if self.num_report_threads == 0 {
                 return Err("tracing.num_threads cannot be 0".into());
             }
@@ -2049,7 +2049,7 @@ impl TracingConfig {
 impl Default for TracingConfig {
     fn default() -> Self {
         Self {
-            jaeger_agent: "".to_owned(),
+            jaeger_thrift_compact_agent: "".to_owned(),
             num_report_threads: 1,
             duration_threshold: ReadableDuration::millis(100),
             spans_max_length: 1000,
