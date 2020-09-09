@@ -62,7 +62,26 @@ impl ErrorCodeExt for Error {
             Error::Io(_) => error_code::engine::IO,
             Error::CFName(_) => error_code::engine::CF_NAME,
             Error::Codec(_) => error_code::engine::CODEC,
+<<<<<<< HEAD
             Error::Other(_) => error_code::engine::UNKNOWN,
+=======
+            Error::Other(_) => error_code::UNKNOWN,
+            Error::EntriesUnavailable => error_code::engine::DATALOSS,
+            Error::EntriesCompacted => error_code::engine::DATACOMPACTED,
+        }
+    }
+}
+
+impl From<Error> for RaftError {
+    fn from(e: Error) -> RaftError {
+        match e {
+            Error::EntriesUnavailable => RaftError::Store(StorageError::Unavailable),
+            Error::EntriesCompacted => RaftError::Store(StorageError::Compacted),
+            e => {
+                let boxed = Box::new(e) as Box<dyn std::error::Error + Sync + Send>;
+                raft::Error::Store(StorageError::Other(boxed))
+            }
+>>>>>>> 3f94eb8... *: output error code to error logs (#8595)
         }
     }
 }

@@ -213,12 +213,11 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         }
 
         if let Err(e) = self.raft_router.report_unreachable(region_id, to_peer_id) {
-            error!(
+            error!(?e;
                 "report peer unreachable failed";
                 "region_id" => region_id,
                 "to_store_id" => store_id,
                 "to_peer_id" => to_peer_id,
-                "err" => ?e
             );
         }
     }
@@ -271,12 +270,11 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
             self.raft_router
                 .report_snapshot_status(self.region_id, self.to_peer_id, status)
         {
-            error!(
+            error!(?e;
                 "report snapshot to peer failes";
                 "to_peer_id" => self.to_peer_id,
                 "to_store_id" => self.to_store_id,
                 "region_id" => self.region_id,
-                "err" => ?e
             );
         }
     }

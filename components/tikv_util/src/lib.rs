@@ -1,7 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![cfg_attr(test, feature(test))]
+<<<<<<< HEAD
 #![feature(str_strip)]
+=======
+#![feature(thread_id_value)]
+#![feature(min_specialization)]
+#![feature(box_patterns)]
+>>>>>>> 3f94eb8... *: output error code to error logs (#8595)
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -13,8 +19,6 @@ extern crate lazy_static;
 extern crate quick_error;
 #[macro_use(slog_o)]
 extern crate slog;
-#[macro_use]
-extern crate slog_global;
 #[macro_use]
 extern crate derive_more;
 #[cfg(test)]
@@ -35,6 +39,8 @@ use fs2::FileExt;
 use rand;
 use rand::rngs::ThreadRng;
 
+#[macro_use]
+pub mod log;
 pub mod buffer_vec;
 pub mod codec;
 pub mod collections;
@@ -491,8 +497,13 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
+<<<<<<< HEAD
         if let Some(level) = log::max_level().to_level() {
             let drainer = logger::term_drainer();
+=======
+        if let Some(level) = ::log::max_level().to_level() {
+            let drainer = logger::text_format(logger::term_writer());
+>>>>>>> 3f94eb8... *: output error code to error logs (#8595)
             let _ = logger::init_log(
                 drainer,
                 logger::convert_log_level_to_slog_level(level),

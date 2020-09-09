@@ -12,8 +12,12 @@ use engine::rocks::DB;
 use engine::Engines;
 use engine_rocks::{Compat, RocksSnapshot, RocksWriteBatch};
 use engine_traits::CF_RAFT;
+<<<<<<< HEAD
 use engine_traits::{Iterable, KvEngine, Mutable, Peekable, SyncMutable};
 use error_code::ErrorCodeExt;
+=======
+use engine_traits::{Engines, KvEngine, Mutable, Peekable};
+>>>>>>> 3f94eb8... *: output error code to error logs (#8595)
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1277,16 +1281,34 @@ impl PeerStorage {
                 // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
                 // [b, c) will be kept in rocksdb until a covered snapshot is applied or
                 // store is restarted.
-                error!(
+                error!(?e;
                     "failed to cleanup data, may leave some dirty data";
                     "region_id" => self.region.get_id(),
                     "peer_id" => self.peer_id,
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             }
         }
 
+<<<<<<< HEAD
+=======
+        // Note that the correctness depends on the fact that these source regions MUST NOT
+        // serve read request otherwise a corrupt data may be returned.
+        // For now, it is ensured by
+        // 1. After `PrepareMerge` log is committed, the source region leader's lease will be
+        //    suspected immediately which makes the local reader not serve read request.
+        // 2. No read request can be responsed in peer fsm during merging.
+        // These conditions are used to prevent reading **stale** data in the past.
+        // At present, they are also used to prevent reading **corrupt** data.
+        for r in &ctx.destroyed_regions {
+            if let Err(e) = self.clear_extra_data(r, &snap_region) {
+                error!(?e;
+                    "failed to cleanup data, may leave some dirty data";
+                    "region_id" => r.get_id(),
+                );
+            }
+        }
+
+>>>>>>> 3f94eb8... *: output error code to error logs (#8595)
         self.schedule_applying_snapshot();
         let prev_region = self.region().clone();
         self.set_region(snap_region);

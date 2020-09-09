@@ -1,4 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+#![feature(min_specialization)]
+
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 #[macro_use]
@@ -23,6 +25,12 @@ macro_rules! define_error_codes {
         }
     };
 }
+
+pub const UNKNOWN: ErrorCode = ErrorCode {
+    code: "KV:Unknown",
+    description: "",
+    workaround: "",
+};
 
 pub mod codec;
 pub mod coprocessor;
@@ -62,6 +70,12 @@ impl Serialize for ErrorCode {
 
 pub trait ErrorCodeExt {
     fn error_code(&self) -> ErrorCode;
+}
+
+impl<T> ErrorCodeExt for T {
+    default fn error_code(&self) -> ErrorCode {
+        UNKNOWN
+    }
 }
 
 #[cfg(test)]

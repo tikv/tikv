@@ -107,7 +107,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         };
         match res {
             Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
-            Err(ref e) => error!("switch mode failed"; "mode" => ?req.get_mode(), "err" => %e),
+            Err(ref e) => error!(%e; "switch mode failed"; "mode" => ?req.get_mode(),),
         }
 
         ctx.spawn(
@@ -328,7 +328,26 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 Some(req.get_output_level())
             };
 
+<<<<<<< HEAD
             let res = compact_files_in_range(&engine, start, end, output_level);
+=======
+            let res = engine.compact_files_in_range(start, end, output_level);
+            match res {
+                Ok(_) => info!(
+                    "compact files in range";
+                    "start" => start.map(log_wrappers::Key),
+                    "end" => end.map(log_wrappers::Key),
+                    "output_level" => ?output_level, "takes" => ?timer.elapsed()
+                ),
+                Err(ref e) => error!(%e;
+                    "compact files in range failed";
+                    "start" => start.map(log_wrappers::Key),
+                    "end" => end.map(log_wrappers::Key),
+                    "output_level" => ?output_level,
+                ),
+            }
+            let res = engine.compact_files_in_range(start, end, output_level);
+>>>>>>> 3f94eb8... *: output error code to error logs (#8595)
             match res {
                 Ok(_) => info!(
                     "compact files in range";

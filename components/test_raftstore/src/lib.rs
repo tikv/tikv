@@ -1,7 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 #[macro_use]
+<<<<<<< HEAD
 extern crate slog_global;
+=======
+extern crate lazy_static;
+>>>>>>> 3f94eb8... *: output error code to error logs (#8595)
 #[macro_use]
 extern crate tikv_util;
 extern crate pd_client;

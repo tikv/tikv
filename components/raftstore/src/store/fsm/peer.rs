@@ -407,12 +407,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             match m {
                 PeerMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(
+                        error!(%e;
                             "handle raft message err";
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
-                            "err" => %e,
-                            "error_code" => %e.error_code(),
                         );
                     }
                 }
@@ -570,13 +568,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 let s = match self.ctx.snap_mgr.get_snapshot_for_sending(&key) {
                     Ok(s) => s,
                     Err(e) => {
-                        error!(
+                        error!(%e;
                             "failed to load snapshot";
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "snapshot" => ?key,
-                            "err" => %e,
-                            "error_code" => %e.error_code(),
                         );
                         continue;
                     }
@@ -627,13 +623,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 let a = match self.ctx.snap_mgr.get_snapshot_for_applying(&key) {
                     Ok(a) => a,
                     Err(e) => {
-                        error!(
+                        error!(%e;
                             "failed to load snapshot";
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "snap_file" => %key,
-                            "err" => %e,
-                            "error_code" => %e.error_code(),
                         );
                         continue;
                     }
@@ -1790,6 +1784,34 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 continue;
             }
 
+<<<<<<< HEAD
+=======
+            // Create new region
+            let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
+            if new_split_peer.result.is_some() {
+                if let Err(e) = self
+                    .fsm
+                    .peer
+                    .mut_store()
+                    .clear_extra_split_data(enc_start_key(&new_region), enc_end_key(&new_region))
+                {
+                    error!(?e;
+                        "failed to cleanup extra split data, may leave some dirty data";
+                        "region_id" => new_region.get_id(),
+                    );
+                }
+                continue;
+            }
+
+            {
+                let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+                assert_eq!(
+                    pending_create_peers.remove(&new_region_id),
+                    Some((new_split_peer.peer_id, true))
+                );
+            }
+
+>>>>>>> 3f94eb8... *: output error code to error logs (#8595)
             // Insert new regions and validation
             info!(
                 "insert new region";
@@ -2001,13 +2023,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // Now the target peer is not in region map.
         match self.is_merge_target_region_stale(target_region) {
             Err(e) => {
-                error!(
+                error!(%e;
                     "failed to load region state, ignore";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
-                    "err" => %e,
                     "target_region_id" => target_region_id,
-                    "error_code" => %e.error_code(),
                 );
                 Ok(false)
             }

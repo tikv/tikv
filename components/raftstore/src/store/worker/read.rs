@@ -22,13 +22,121 @@ use crate::store::{
     RequestPolicy,
 };
 use crate::Result;
+<<<<<<< HEAD
 use engine_traits::KvEngine;
+=======
+
+use engine_traits::{KvEngine, RaftEngine};
+>>>>>>> 3f94eb8... *: output error code to error logs (#8595)
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 
 use super::metrics::*;
 use crate::store::fsm::store::StoreMeta;
 
+<<<<<<< HEAD
+=======
+pub trait ReadExecutor<E: KvEngine> {
+    fn get_engine(&self) -> &E;
+    fn get_snapshot(&mut self, ts: Option<ThreadReadId>) -> Arc<E::Snapshot>;
+    fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
+        let key = req.get_get().get_key();
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, region)?;
+
+        let engine = self.get_engine();
+        let mut resp = Response::default();
+        let res = if !req.get_get().get_cf().is_empty() {
+            let cf = req.get_get().get_cf();
+            engine
+                .get_value_cf(cf, &keys::data_key(key))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "[region {}] failed to get {} with cf {}: {:?}",
+                        region.get_id(),
+                        hex::encode_upper(key),
+                        cf,
+                        e
+                    )
+                })
+        } else {
+            engine.get_value(&keys::data_key(key)).unwrap_or_else(|e| {
+                panic!(
+                    "[region {}] failed to get {}: {:?}",
+                    region.get_id(),
+                    hex::encode_upper(key),
+                    e
+                )
+            })
+        };
+        if let Some(res) = res {
+            resp.mut_get().set_value(res.to_vec());
+        }
+
+        Ok(resp)
+    }
+
+    fn execute(
+        &mut self,
+        msg: &RaftCmdRequest,
+        region: &Arc<metapb::Region>,
+        read_index: Option<u64>,
+        mut ts: Option<ThreadReadId>,
+    ) -> ReadResponse<E::Snapshot> {
+        let requests = msg.get_requests();
+        let mut response = ReadResponse {
+            response: RaftCmdResponse::default(),
+            snapshot: None,
+            txn_extra_op: TxnExtraOp::Noop,
+        };
+        let mut responses = Vec::with_capacity(requests.len());
+        for req in requests {
+            let cmd_type = req.get_cmd_type();
+            let mut resp = match cmd_type {
+                CmdType::Get => match self.get_value(req, region.as_ref()) {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        error!(?e;
+                            "failed to execute get command";
+                            "region_id" => region.get_id(),
+                        );
+                        response.response = cmd_resp::new_error(e);
+                        return response;
+                    }
+                },
+                CmdType::Snap => {
+                    let snapshot =
+                        RegionSnapshot::from_snapshot(self.get_snapshot(ts.take()), region.clone());
+                    response.snapshot = Some(snapshot);
+                    Response::default()
+                }
+                CmdType::ReadIndex => {
+                    let mut resp = Response::default();
+                    if let Some(read_index) = read_index {
+                        let mut res = ReadIndexResponse::default();
+                        res.set_read_index(read_index);
+                        resp.set_read_index(res);
+                    } else {
+                        panic!("[region {}] can not get readindex", region.get_id());
+                    }
+                    resp
+                }
+                CmdType::Prewrite
+                | CmdType::Put
+                | CmdType::Delete
+                | CmdType::DeleteRange
+                | CmdType::IngestSst
+                | CmdType::Invalid => unreachable!(),
+            };
+            resp.set_cmd_type(cmd_type);
+            responses.push(resp);
+        }
+        response.response.set_responses(responses.into());
+        response
+    }
+}
+
+>>>>>>> 3f94eb8... *: output error code to error logs (#8595)
 /// A read only delegate of `Peer`.
 #[derive(Clone, Debug)]
 pub struct ReadDelegate {
