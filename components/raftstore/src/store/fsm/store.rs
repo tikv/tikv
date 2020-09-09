@@ -555,6 +555,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 self.poll_ctx.store_id() == 1,
                 |_| {}
             );
+<<<<<<< HEAD
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
             self.poll_ctx
@@ -562,6 +563,18 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 .raft
                 .c()
                 .write_opt(&self.poll_ctx.raft_wb, &write_opts)
+=======
+
+            self.poll_ctx
+                .engines
+                .raft
+                .consume_and_shrink(
+                    &mut self.poll_ctx.raft_wb,
+                    true,
+                    RAFT_WB_SHRINK_SIZE,
+                    4 * 1024,
+                )
+>>>>>>> 5496d07... Remove sync-log config option (#8631)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
