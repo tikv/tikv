@@ -1727,7 +1727,7 @@ where
                     |_| {}
                 );
             }
-            if !committed_entries.is_empty() {
+            if !committed_entries.is_empty() && self.is_initialized() {
                 self.last_applying_idx = committed_entries.last().unwrap().get_index();
                 if self.last_applying_idx >= self.last_urgent_proposal_idx {
                     // Urgent requests are flushed, make it lazy again.

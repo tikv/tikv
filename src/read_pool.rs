@@ -1,64 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::config::UnifiedReadPoolConfig;
-use crate::storage::kv::{
-    destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics,
-};
-use crate::storage::metrics::*;
-use prometheus::local::*;
-use std::cell::RefCell;
+use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tikv_util::collections::HashMap;
 use tikv_util::read_pool::PoolTicker;
 pub use tikv_util::read_pool::{ReadPool, ReadPoolBuilder, ReadPoolError, ReadPoolHandle};
 use tikv_util::time::Instant;
-
-pub struct SchedLocalMetrics {
-    local_scan_details: HashMap<&'static str, Statistics>,
-    processing_read_duration: LocalHistogramVec,
-    processing_write_duration: LocalHistogramVec,
-    command_keyread_histogram_vec: LocalHistogramVec,
-}
-
-thread_local! {
-     static TLS_SCHED_METRICS: RefCell<SchedLocalMetrics> = RefCell::new(
-        SchedLocalMetrics {
-            local_scan_details: HashMap::default(),
-            processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
-            processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
-            command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
-        }
-    );
-}
-
-pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
-    TLS_SCHED_METRICS.with(|m| {
-        m.borrow_mut()
-            .local_scan_details
-            .entry(cmd)
-            .or_insert_with(Default::default)
-            .add(stats);
-    });
-}
-
-pub fn tls_collect_read_duration(cmd: &str, duration: Duration) {
-    TLS_SCHED_METRICS.with(|m| {
-        m.borrow_mut()
-            .processing_read_duration
-            .with_label_values(&[cmd])
-            .observe(tikv_util::time::duration_to_sec(duration))
-    });
-}
-
-pub fn tls_collect_keyread_histogram_vec(cmd: &str, count: f64) {
-    TLS_SCHED_METRICS.with(|m| {
-        m.borrow_mut()
-            .command_keyread_histogram_vec
-            .with_label_values(&[cmd])
-            .observe(count);
-    });
-}
 
 #[cfg(test)]
 pub fn get_unified_read_pool_name() -> String {
@@ -134,21 +82,6 @@ where
         self.last_tick_time = Instant::now();
         crate::storage::metrics::tls_flush(&self.reporter);
         crate::coprocessor::metrics::tls_flush(&self.reporter);
-        TLS_SCHED_METRICS.with(|m| {
-            let mut m = m.borrow_mut();
-            for (cmd, stat) in m.local_scan_details.drain() {
-                for (cf, cf_details) in stat.details().iter() {
-                    for (tag, count) in cf_details.iter() {
-                        KV_COMMAND_SCAN_DETAILS
-                            .with_label_values(&[cmd, *cf, *tag])
-                            .inc_by(*count as i64);
-                    }
-                }
-            }
-            m.processing_read_duration.flush();
-            m.processing_write_duration.flush();
-            m.command_keyread_histogram_vec.flush();
-        });
     }
 }
 
