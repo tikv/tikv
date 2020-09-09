@@ -13,6 +13,7 @@ use engine::Engines;
 use engine_rocks::{Compat, RocksSnapshot, RocksWriteBatch};
 use engine_traits::CF_RAFT;
 use engine_traits::{Iterable, KvEngine, Mutable, Peekable, SyncMutable};
+use error_code::ErrorCodeExt;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1281,6 +1282,7 @@ impl PeerStorage {
                     "region_id" => self.region.get_id(),
                     "peer_id" => self.peer_id,
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
             }
         }

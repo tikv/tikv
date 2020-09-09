@@ -2557,6 +2557,7 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "error_code",
+ "fail",
  "futures 0.1.29",
  "futures 0.3.4",
  "grpcio",
@@ -4211,6 +4212,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_pd"
+version = "0.0.1"
+dependencies = [
+ "fail",
+ "futures 0.1.29",
+ "grpcio",
+ "kvproto",
+ "pd_client",
+ "security",
+ "slog",
+ "slog-global",
+ "tikv_util",
+]
+
+[[package]]
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
@@ -4326,6 +4342,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "test_coprocessor",
+ "test_pd",
  "test_raftstore",
  "test_sst_importer",
  "test_storage",
@@ -4504,6 +4521,7 @@ dependencies = [
  "libc",
  "log",
  "log_wrappers",
+ "match_template",
  "mime",
  "more-asserts",
  "murmur3",
@@ -4539,6 +4557,7 @@ dependencies = [
  "test_sst_importer",
  "test_util",
  "tidb_query",
+ "tidb_query_datatype",
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
