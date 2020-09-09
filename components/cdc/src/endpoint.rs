@@ -670,28 +670,32 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             } else {
                 // Fallback to previous non-batch resolved ts event.
                 for region_id in &resolved_ts.regions {
-                    let downstream_id = match conn.downstream_id(*region_id) {
-                        Some(downstream_id) => downstream_id,
-                        // No such region registers in the connection.
-                        None => continue,
-                    };
-                    let delegate = match self.capture_regions.get(&region_id) {
-                        Some(delegate) => delegate,
-                        // No such region registers in the endpoint.
-                        None => continue,
-                    };
-                    let downstream = match delegate.downstream(downstream_id) {
-                        Some(downstream) => downstream,
-                        // No such downstream registers in the delegate.
-                        None => continue,
-                    };
-                    let mut event = Event::default();
-                    event.region_id = *region_id;
-                    event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.ts));
-                    downstream.sink_event(event);
+                    self.broadcast_resolved_ts_compact(*region_id, resolved_ts.ts, conn);
                 }
             }
         }
+    }
+
+    fn broadcast_resolved_ts_compact(&self, region_id: u64, resolved_ts: u64, conn: &Conn) {
+        let downstream_id = match conn.downstream_id(region_id) {
+            Some(downstream_id) => downstream_id,
+            // No such region registers in the connection.
+            None => return,
+        };
+        let delegate = match self.capture_regions.get(&region_id) {
+            Some(delegate) => delegate,
+            // No such region registers in the endpoint.
+            None => return,
+        };
+        let downstream = match delegate.downstream(downstream_id) {
+            Some(downstream) => downstream,
+            // No such downstream registers in the delegate.
+            None => return,
+        };
+        let mut event = Event::default();
+        event.region_id = region_id;
+        event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts));
+        downstream.sink_event(event);
     }
 
     fn register_min_ts_event(&self) {

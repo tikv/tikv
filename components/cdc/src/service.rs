@@ -84,7 +84,9 @@ impl Conn {
     // TODO refactor into Error::Version.
     pub fn check_version_and_set_feature(&mut self, ver: semver::Version) -> Option<Compatibility> {
         // Assume batch resolved ts will be release in v4.0.7
-        let v407_bacth_resoled_ts = semver::Version::new(4, 0, 7);
+        // For easy of testing (nightly CI), we lower the gate to v4.0.6
+        // TODO bump the version when cherry pick to release branch.
+        let v407_bacth_resoled_ts = semver::Version::new(4, 0, 6);
 
         match &self.version {
             Some((version, _)) => {
