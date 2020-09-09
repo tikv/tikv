@@ -44,31 +44,6 @@ where
     (callback, future)
 }
 
-// BatchCommandsWaker is used to make business pool notifiy completion queues directly.
-pub(crate) struct BatchCommandsWaker(Mutex<Option<BoxFuture<'static, ()>>>);
-impl ArcWake for BatchCommandsWaker {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        let mut future_slot = arc_self.0.lock().unwrap();
-        if let Some(mut future) = future_slot.take() {
-            let waker = task::waker_ref(&arc_self);
-            let cx = &mut Context::from_waker(&*waker);
-            match future.as_mut().poll(cx) {
-                Poll::Pending => {
-                    *future_slot = Some(future);
-                }
-                Poll::Ready(()) => {}
-            }
-        }
-    }
-}
-
-pub fn poll_future_notify<F: Future<Output = ()> + Send + 'static>(f: F) {
-    let f: BoxFuture<'static, ()> = Box::pin(f);
-    let spawn = Mutex::new(Some(f));
-    let waker = Arc::new(BatchCommandsWaker(spawn));
-    waker.wake();
-}
-
 /// Create a stream proxy with buffer representing the remote stream. The returned task
 /// will receive messages from the remote stream as much as possible.
 pub fn create_stream_with_buffer<T, S>(
@@ -95,7 +70,7 @@ where
 /// it will register the waker. When the event is ready, the waker will
 /// be notified, then the internal future is immediately polled in the
 /// thread calling `wake()`.
-pub fn poll_future_notify(f: impl Future<Output = ()> + Send + 'static) {
+pub fn poll_future_notify<F: Future<Output = ()> + Send + 'static>(f: F) {
     let f: BoxFuture<'static, ()> = Box::pin(f);
     let waker = Arc::new(BatchCommandsWaker(Mutex::new(Some(f))));
     waker.wake();
