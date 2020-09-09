@@ -21,8 +21,7 @@ use crate::storage::{
     SecondaryLocksStatus, Storage, TxnStatus,
 };
 use engine_rocks::RocksEngine;
-use futures::executor::{self, Notify, Spawn};
-use futures::{future, Async, Future, Sink, Stream};
+use futures::{future, Future, Sink, Stream};
 use futures03::compat::{Compat, Future01CompatExt};
 use futures03::future::{self as future03, Future as Future03, FutureExt, TryFutureExt};
 use futures03::stream::{StreamExt, TryStreamExt};
@@ -38,7 +37,7 @@ use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
-use tikv_util::future::paired_future_callback;
+use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -570,14 +569,14 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let stream = self
             .cop
             .parse_and_handle_stream_request(req, Some(ctx.peer()))
-            .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
-            .map_err(|e| {
-                let code = RpcStatusCode::UNKNOWN;
-                let msg = Some(format!("{:?}", e));
-                GrpcError::RpcFailure(RpcStatus::new(code, msg))
+            .map(|resp| {
+                GrpcResult::<(Response, WriteFlags)>::Ok((
+                    resp,
+                    WriteFlags::default().buffer_hint(true),
+                ))
             });
         let future = sink
-            .send_all(stream)
+            .send_all(Compat::new(stream))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM_STATIC
                     .coprocessor_stream
@@ -978,44 +977,18 @@ fn response_batch_commands_request<F>(
 ) where
     F: Future03<Output = Result<batch_commands_response::Response, ()>> + Send + 'static,
 {
-    let f = Compat::new(resp.boxed()).and_then(move |resp| {
-        if tx.send_and_notify((id, resp)).is_err() {
-            error!("KvService response batch commands fail");
-            return Err(());
+    let task = async move {
+        if let Ok(resp) = resp.await {
+            if tx.send_and_notify((id, resp)).is_err() {
+                error!("KvService response batch commands fail");
+            } else {
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .get(label_enum)
+                    .observe(begin_instant.elapsed_secs());
+            }
         }
-        GRPC_MSG_HISTOGRAM_STATIC
-            .get(label_enum)
-            .observe(begin_instant.elapsed_secs());
-        Ok(())
-    });
-    poll_future_notify(f);
-}
-
-// BatchCommandsNotify is used to make business pool notifiy completion queues directly.
-struct BatchCommandsNotify<F>(Arc<Mutex<Option<Spawn<F>>>>);
-impl<F> Clone for BatchCommandsNotify<F> {
-    fn clone(&self) -> BatchCommandsNotify<F> {
-        BatchCommandsNotify(Arc::clone(&self.0))
-    }
-}
-impl<F> Notify for BatchCommandsNotify<F>
-where
-    F: Future<Item = (), Error = ()> + Send + 'static,
-{
-    fn notify(&self, id: usize) {
-        let n = Arc::new(self.clone());
-        let mut s = self.0.lock().unwrap();
-        match s.as_mut().map(|spawn| spawn.poll_future_notify(&n, id)) {
-            Some(Ok(Async::NotReady)) | None => {}
-            _ => *s = None,
-        };
-    }
-}
-
-pub fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
-    let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
-    let notify = BatchCommandsNotify(spawn);
-    notify.notify(0);
+    };
+    poll_future_notify(task);
 }
 
 fn handle_batch_commands_request<E: Engine, L: LockManager>(
@@ -1127,7 +1100,7 @@ async fn future_handle_empty(
 ) -> ServerResult<BatchCommandsEmptyResponse> {
     let mut res = BatchCommandsEmptyResponse::default();
     res.set_test_id(req.get_test_id());
-    // `BatchCommandsNotify` processes futures in notify. If delay_time is too small, notify
+    // `BatchCommandsWaker` processes futures in notify. If delay_time is too small, notify
     // can be called immediately, so the future is polled recursively and lead to deadlock.
     if req.get_delay_time() < 10 {
         Ok(res)
@@ -1734,8 +1707,9 @@ impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures03::channel::oneshot;
+    use futures03::executor::block_on;
     use std::thread;
-    use tokio_sync::oneshot;
 
     #[test]
     fn test_poll_future_notify_with_slow_source() {
@@ -1745,21 +1719,20 @@ mod tests {
         thread::Builder::new()
             .name("source".to_owned())
             .spawn(move || {
-                signal_rx.wait().unwrap();
+                block_on(signal_rx).unwrap();
                 tx.send(100).unwrap();
             })
             .unwrap();
 
         let (tx1, rx1) = oneshot::channel::<usize>();
-        poll_future_notify(
-            rx.map(move |i| {
-                assert_eq!(thread::current().name(), Some("source"));
-                tx1.send(i + 100).unwrap();
-            })
-            .map_err(|_| ()),
-        );
+        let task = async move {
+            let i = rx.await.unwrap();
+            assert_eq!(thread::current().name(), Some("source"));
+            tx1.send(i + 100).unwrap();
+        };
+        poll_future_notify(task);
         signal_tx.send(()).unwrap();
-        assert_eq!(rx1.wait().unwrap(), 200);
+        assert_eq!(block_on(rx1).unwrap(), 200);
     }
 
     #[test]
@@ -1775,14 +1748,13 @@ mod tests {
             .unwrap();
 
         let (tx1, rx1) = oneshot::channel::<usize>();
-        signal_rx.wait().unwrap();
-        poll_future_notify(
-            rx.map(move |i| {
-                assert_ne!(thread::current().name(), Some("source"));
-                tx1.send(i + 100).unwrap();
-            })
-            .map_err(|_| ()),
-        );
-        assert_eq!(rx1.wait().unwrap(), 200);
+        block_on(signal_rx).unwrap();
+        let task = async move {
+            let i = rx.await.unwrap();
+            assert_ne!(thread::current().name(), Some("source"));
+            tx1.send(i + 100).unwrap();
+        };
+        poll_future_notify(task);
+        assert_eq!(block_on(rx1).unwrap(), 200);
     }
 }

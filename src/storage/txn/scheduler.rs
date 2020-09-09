@@ -20,7 +20,6 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use futures::future;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -660,7 +659,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                                     .get(tag)
                                     .observe(rows as f64);
-                                future::ok::<_, ()>(())
                             })
                             .unwrap()
                     });
