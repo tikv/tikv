@@ -3,6 +3,7 @@
 use std::cmp::Ord;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
@@ -405,7 +406,7 @@ where
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
     pub fn flush(&mut self) -> bool {
-        let need_sync = self.sync_log_hint;
+        let need_sync = self.core.enable_sync_log && self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
@@ -1935,7 +1936,13 @@ where
             ctx.flush();
             ctx.prepare_for(self);
         }
-        self.ready_source_region_id = f.await.unwrap();
+        let res = f.await;
+        self.ready_source_region_id = match res {
+            Ok(source_id) => source_id,
+            Err(e) => {
+                return Err(Error::Other(e.into()));
+            }
+        };
         self.handle_start = Instant::now_coarse();
         if self.ready_source_region_id != source_region_id {
             panic!(
@@ -2914,6 +2921,7 @@ pub struct ApplyContextCore<EK: KvEngine> {
     store_id: u64,
     yield_duration: Duration,
     perf_level: PerfLevel,
+    enable_sync_log: bool,
 }
 
 impl<EK: KvEngine> Clone for ApplyContextCore<EK> {
@@ -2930,6 +2938,7 @@ impl<EK: KvEngine> Clone for ApplyContextCore<EK> {
             store_id: self.store_id,
             yield_duration: self.yield_duration,
             perf_level: self.perf_level,
+            enable_sync_log: self.enable_sync_log,
         }
     }
 }
@@ -2940,6 +2949,11 @@ use std::ptr;
 thread_local! {
     // A pointer to thread local ApplyContext. Use raw pointer and `UnsafeCell` to reduce runtime check.
     static TLS_APPLY_CONTEXT: UnsafeCell<*mut ()> = UnsafeCell::new(ptr::null_mut());
+}
+
+thread_local! {
+    // A pointer to thread local ApplyContext. Use raw pointer and `UnsafeCell` to reduce runtime check.
+    static TLS_APPLY_CONTEXT_CORE: UnsafeCell<*mut ()> = UnsafeCell::new(ptr::null_mut());
 }
 
 /// Set the thread local ApplyContext.
@@ -2967,17 +2981,35 @@ where
     });
 }
 
-fn take_tls_ctx<EK, W>() -> Option<ApplyContext<EK, W>>
+fn set_tls_core<EK: KvEngine>(core: ApplyContextCore<EK>) {
+    TLS_APPLY_CONTEXT.with(|e| unsafe {
+        if (*e.get()).is_null() {
+            let ptr = Box::into_raw(Box::new(core)) as *mut ();
+            *e.get() = ptr;
+        }
+    });
+}
+
+fn take_tls_ctx<EK, W>() -> ApplyContext<EK, W>
 where
     EK: KvEngine,
     W: WriteBatch<EK>,
 {
-    TLS_APPLY_CONTEXT.with(|e| unsafe {
+    let ctx = TLS_APPLY_CONTEXT.with(|e| unsafe {
         if (*e.get()).is_null() {
             return None;
         }
         let ctx = &mut *(*e.get() as *mut Option<ApplyContext<EK, W>>);
         ctx.take()
+    });
+    ctx.unwrap_or_else(||{
+        TLS_APPLY_CONTEXT_CORE.with(|e| unsafe {
+            if (*e.get()).is_null() {
+                panic!("No apply context set before thread start");
+            }
+            let core = &*(*e.get() as *const ApplyContextCore<EK>);
+            ApplyContext::<EK, W>::new(core.clone())
+        })
     })
 }
 
@@ -3000,23 +3032,18 @@ where
     })
 }
 
-async fn handle_normal<EK, W>(
-    mut fsm: Box<ApplyFsm<EK>>,
-    mut receiver: Receiver<Msg<EK>>,
-    core: Arc<Mutex<ApplyContextCore<EK>>>,
-) where
+async fn handle_normal<EK, W>(mut fsm: Box<ApplyFsm<EK>>, mut receiver: Receiver<Msg<EK>>)
+where
     EK: KvEngine,
     W: WriteBatch<EK>,
 {
     fsm.handle_start = Instant::now_coarse();
-    let mut apply_ctx =
-        take_tls_ctx().or_else(|| Some(ApplyContext::<EK, W>::new(core.lock().unwrap().clone())));
+    let mut ctx = take_tls_ctx::<EK, W>();
     loop {
         let msg = match receiver.try_recv() {
             Ok(msg) => msg,
             Err(e) => match e {
                 TryRecvError::Empty => {
-                    let mut ctx = apply_ctx.take().unwrap();
                     let msg = if fsm.uncommit_data {
                         let (callback, f) = paired_future_callback();
                         ctx.flush_notifier.push(callback);
@@ -3038,9 +3065,7 @@ async fn handle_normal<EK, W>(
                     };
                     if let Some(msg) = msg {
                         fsm.handle_start = Instant::now_coarse();
-                        apply_ctx = take_tls_ctx().or_else(|| {
-                            Some(ApplyContext::<EK, W>::new(core.lock().unwrap().clone()))
-                        });
+                        ctx = take_tls_ctx();
                         msg
                     } else {
                         return;
@@ -3051,7 +3076,7 @@ async fn handle_normal<EK, W>(
                 }
             },
         };
-        fsm.handle_task(apply_ctx.as_mut().unwrap(), msg).await;
+        fsm.handle_task(&mut ctx, msg).await;
     }
 }
 
@@ -3103,10 +3128,10 @@ where
     EK: KvEngine,
     W: WriteBatch<EK> + 'static,
 {
-    core: Arc<Mutex<ApplyContextCore<EK>>>,
     pool: Arc<yatp::pool::ThreadPool<TaskCell>>,
     remote: Remote<TaskCell>,
-    _phatom: Arc<Mutex<W>>,
+    _phantom: Arc<Mutex<W>>,
+    _phantom_ek: PhantomData<EK>,
 }
 
 impl<EK, W> ApplyBatchSystem<EK> for ApplyBatchSystemImpl<EK, W>
@@ -3116,13 +3141,11 @@ where
 {
     fn register(&self, reg: Registration, receiver: Receiver<Msg<EK>>) {
         let fsm = Box::new(ApplyFsm::from_registration(reg));
-        let core = self.core.clone();
-
         // Set every task of apply to high priority.
         let extras = Extras::new_multilevel(0, Some(0));
         let task_cell = TaskCell::new(
             async move {
-                handle_normal::<EK, W>(fsm, receiver, core).await;
+                handle_normal::<EK, W>(fsm, receiver).await;
             },
             extras,
         );
@@ -3131,10 +3154,10 @@ where
 
     fn clone_box(&self) -> Box<dyn ApplyBatchSystem<EK>> {
         Box::new(Self {
-            core: self.core.clone(),
             remote: self.remote.clone(),
             pool: self.pool.clone(),
-            _phatom: self._phatom.clone(),
+            _phantom: self._phantom.clone(),
+            _phantom_ek: PhantomData,
         })
     }
     fn shutdown(&self) {
@@ -3155,38 +3178,39 @@ pub fn create_apply_batch_system<EK: KvEngine, W: WriteBatch<EK> + 'static>(
 ) -> Box<dyn ApplyBatchSystem<EK>> {
     let perf_level = cfg.perf_level;
     let pool_size = cfg.apply_batch_system.pool_size;
+    let core = ApplyContextCore {
+        tag,
+        host,
+        importer,
+        region_scheduler,
+        notifier,
+        pending_create_peers,
+        store_id,
+        engine: engine.clone(),
+        yield_duration: cfg.apply_yield_duration.0,
+        use_delete_range: cfg.use_delete_range,
+        perf_level: cfg.perf_level,
+        enable_sync_log: cfg.sync_log,
+    };
+    let shared_core = Arc::new(Mutex::new(core));
     let pool = ReadPoolBuilder::new(DefaultTicker::default())
         .name_prefix("apply")
         .thread_count(pool_size, pool_size)
         .after_start(move || {
             let mut perf_context_statistics = PerfContextStatistics::new(perf_level);
             perf_context_statistics.start();
+            let core = shared_core.lock().unwrap();
+            set_tls_core(core.clone());
         })
         .before_pause(flush_tls_ctx::<EK, W>)
         .before_stop(flush_tls_ctx::<EK, W>)
         .build_yatp_pool();
-    let core = ApplyContextCore {
-        tag,
-        host,
-        importer,
-        region_scheduler,
-        engine,
-        notifier,
-        pending_create_peers,
-        store_id,
-        yield_duration: cfg.apply_yield_duration.0,
-        use_delete_range: cfg.use_delete_range,
-        perf_level: cfg.perf_level,
-    };
-    let _phatom = Arc::new(Mutex::new(W::with_capacity(
-        &core.engine,
-        DEFAULT_APPLY_WB_SIZE,
-    )));
+    let _phantom = Arc::new(Mutex::new(W::with_capacity(&engine, 0)));
     let system = ApplyBatchSystemImpl::<EK, W> {
-        core: Arc::new(Mutex::new(core)),
         remote: pool.remote().clone(),
         pool: Arc::new(pool),
-        _phatom,
+        _phantom_ek: PhantomData,
+        _phantom,
     };
     Box::new(system)
 }

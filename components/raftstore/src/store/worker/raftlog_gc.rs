@@ -184,7 +184,6 @@ use std::sync::mpsc::sync_channel;
 mod tests {
     use super::*;
     use engine_rocks::util::new_engine;
-    use engine_rocks::RocksEngine;
     use engine_traits::{Engines, KvEngine, Mutable, WriteBatchExt, ALL_CFS, CF_DEFAULT};
     use std::sync::mpsc;
     use std::time::Duration;
