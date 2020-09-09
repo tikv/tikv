@@ -13,7 +13,12 @@ use engine_traits::{
     WriteBatchVecExt, WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+<<<<<<< HEAD
 use futures::Future;
+=======
+use futures::compat::Future01CompatExt;
+use futures::FutureExt;
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
@@ -30,7 +35,23 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
 use time::{self, Timespec};
+<<<<<<< HEAD
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
+=======
+
+use engine_rocks::CompactedEvent;
+use engine_traits::{RaftEngine, RaftLogBatch};
+use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
+use pd_client::PdClient;
+use sst_importer::SSTImporter;
+use tikv_util::collections::HashMap;
+use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use tikv_util::time::{duration_to_sec, Instant as TiInstant};
+use tikv_util::timer::SteadyTimer;
+use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
+use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
@@ -58,12 +79,14 @@ use crate::store::worker::{
     RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
+use crate::store::PeerTicks;
 use crate::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager, StoreMsg,
     StoreTick,
 };
 
 use crate::Result;
+<<<<<<< HEAD
 use engine::Engines;
 use engine_rocks::{CompactedEvent, CompactionListener};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -76,6 +99,10 @@ use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
+=======
+use concurrency_manager::ConcurrencyManager;
+use tikv_util::future::poll_future_notify;
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
 
 type Key = Vec<u8>;
 
@@ -205,7 +232,30 @@ impl<E: KvEngine> RaftRouter<E> {
     }
 }
 
+<<<<<<< HEAD
 pub struct PollContext<T, C: 'static> {
+=======
+#[derive(Default)]
+pub struct PeerTickBatch {
+    pub ticks: Vec<Box<dyn FnOnce() + Send>>,
+    pub wait_duration: Duration,
+}
+
+impl Clone for PeerTickBatch {
+    fn clone(&self) -> PeerTickBatch {
+        PeerTickBatch {
+            ticks: vec![],
+            wait_duration: self.wait_duration,
+        }
+    }
+}
+
+pub struct PollContext<EK, ER, T, C: 'static>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask>,
@@ -219,7 +269,20 @@ pub struct PollContext<T, C: 'static> {
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
+<<<<<<< HEAD
     pub future_poller: ThreadPoolSender,
+=======
+    /// region_id -> (peer_id, is_splitting)
+    /// Used for handling race between splitting and creating new peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    ///
+    /// WARNING:
+    /// To avoid deadlock, if you want to use `store_meta` and `pending_create_peers` together,
+    /// the lock sequence MUST BE:
+    /// 1. lock the store_meta.
+    /// 2. lock the pending_create_peers.
+    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager,
     pub applying_snap_count: Arc<AtomicUsize>,
@@ -240,6 +303,7 @@ pub struct PollContext<T, C: 'static> {
     pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
+    pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
 }
 
@@ -288,6 +352,21 @@ impl<T, C> PollContext<T, C> {
         }
         timeout
     }
+
+    pub fn update_ticks_timeout(&mut self) {
+        self.tick_batch[PeerTicks::RAFT.bits() as usize].wait_duration =
+            self.cfg.raft_base_tick_interval.0;
+        self.tick_batch[PeerTicks::RAFT_LOG_GC.bits() as usize].wait_duration =
+            self.cfg.raft_log_gc_tick_interval.0;
+        self.tick_batch[PeerTicks::PD_HEARTBEAT.bits() as usize].wait_duration =
+            self.cfg.pd_heartbeat_tick_interval.0;
+        self.tick_batch[PeerTicks::SPLIT_REGION_CHECK.bits() as usize].wait_duration =
+            self.cfg.split_region_check_tick_interval.0;
+        self.tick_batch[PeerTicks::CHECK_PEER_STALE_STATE.bits() as usize].wait_duration =
+            self.cfg.peer_stale_state_check_interval.0;
+        self.tick_batch[PeerTicks::CHECK_MERGE.bits() as usize].wait_duration =
+            self.cfg.merge_check_tick_interval.0;
+    }
 }
 
 impl<T: Transport, C> PollContext<T, C> {
@@ -295,6 +374,7 @@ impl<T: Transport, C> PollContext<T, C> {
     fn schedule_store_tick(&self, tick: StoreTick, timeout: Duration) {
         if !is_zero_duration(&timeout) {
             let mb = self.router.control_mailbox();
+<<<<<<< HEAD
             let f = self
                 .timer
                 .delay(timeout)
@@ -311,6 +391,18 @@ impl<T: Transport, C> PollContext<T, C> {
                     panic!("tick {:?} is lost due to timeout error: {:?}", tick, e);
                 });
             self.future_poller.spawn(f).unwrap();
+=======
+            let delay = self.timer.delay(timeout).compat().map(move |_| {
+                if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
+                    info!(
+                        "failed to schedule store tick, are we shutting down?";
+                        "tick" => ?tick,
+                        "err" => ?e
+                    );
+                }
+            });
+            poll_future_notify(delay);
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
         }
     }
 
@@ -626,6 +718,27 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.ready.snapshot
         );
     }
+
+    fn flush_ticks(&mut self) {
+        for t in PeerTicks::get_all_ticks() {
+            let idx = t.bits() as usize;
+            if self.poll_ctx.tick_batch[idx].ticks.is_empty() {
+                continue;
+            }
+            let peer_ticks = std::mem::replace(&mut self.poll_ctx.tick_batch[idx].ticks, vec![]);
+            let f = self
+                .poll_ctx
+                .timer
+                .delay(self.poll_ctx.tick_batch[idx].wait_duration)
+                .compat()
+                .map(move |_| {
+                    for tick in peer_ticks {
+                        tick();
+                    }
+                });
+            poll_future_notify(f);
+        }
+    }
 }
 
 impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for RaftPoller<T, C> {
@@ -658,6 +771,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
                 _ => {}
             }
             self.poll_ctx.cfg = incoming.clone();
+            self.poll_ctx.update_ticks_timeout();
         }
     }
 
@@ -728,7 +842,12 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
         expected_msg_count
     }
 
+<<<<<<< HEAD
     fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
+=======
+    fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
+        self.flush_ticks();
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -767,8 +886,13 @@ pub struct RaftPollerBuilder<T, C> {
     apply_router: ApplyRouter,
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
+<<<<<<< HEAD
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
+=======
+    pub store_meta: Arc<Mutex<StoreMeta>>,
+    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
     snap_mgr: SnapManager,
     pub coprocessor_host: CoprocessorHost,
     trans: T,
@@ -952,8 +1076,13 @@ where
 {
     type Handler = RaftPoller<T, C>;
 
+<<<<<<< HEAD
     fn build(&mut self) -> RaftPoller<T, C> {
         let ctx = PollContext {
+=======
+    fn build(&mut self) -> RaftPoller<EK, ER, T, C> {
+        let mut ctx = PollContext {
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
@@ -966,7 +1095,11 @@ where
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
+<<<<<<< HEAD
             future_poller: self.future_poller.clone(),
+=======
+            pending_create_peers: self.pending_create_peers.clone(),
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
             raft_metrics: RaftMetrics::default(),
             snap_mgr: self.snap_mgr.clone(),
             applying_snap_count: self.applying_snap_count.clone(),
@@ -987,8 +1120,10 @@ where
             queued_snapshot: HashSet::default(),
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
+            tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
         };
+        ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
             tag: tag.clone(),
@@ -1010,10 +1145,16 @@ struct Workers {
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
+<<<<<<< HEAD
     raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
     region_worker: Worker<RegionTask>,
     coprocessor_host: CoprocessorHost,
     future_poller: ThreadPool,
+=======
+    raftlog_gc_worker: Worker<RaftlogGcTask<ER>>,
+    region_worker: Worker<RegionTask<EK::Snapshot>>,
+    coprocessor_host: CoprocessorHost<EK>,
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
 }
 
 pub struct RaftBatchSystem {
@@ -1064,11 +1205,15 @@ impl RaftBatchSystem {
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_worker: Worker::new("cleanup-worker"),
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
+<<<<<<< HEAD
             coprocessor_host,
             future_poller: tokio_threadpool::Builder::new()
                 .name_prefix("future-poller")
                 .pool_size(cfg.value().future_poll_size)
                 .build(),
+=======
+            coprocessor_host: coprocessor_host.clone(),
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
         };
         let mut builder = RaftPollerBuilder {
             cfg,
@@ -1090,7 +1235,10 @@ impl RaftBatchSystem {
             global_stat: GlobalStoreStat::default(),
             store_meta,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
+<<<<<<< HEAD
             future_poller: workers.future_poller.sender().clone(),
+=======
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
         };
         let region_peers = builder.init()?;
         let engine = RocksEngine::from_db(builder.engines.kv.clone());
@@ -1249,7 +1397,10 @@ impl RaftBatchSystem {
             }
         }
         workers.coprocessor_host.shutdown();
+<<<<<<< HEAD
         workers.future_poller.shutdown_now().wait().unwrap();
+=======
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
     }
 }
 

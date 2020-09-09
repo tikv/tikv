@@ -72,6 +72,7 @@ where
     f2: Either<F2, <F2::Item as IntoFuture>::Future>,
 }
 
+<<<<<<< HEAD
 impl<F1, F2> AndThenWith<F1, F2>
 where
     F2: Future,
@@ -84,6 +85,16 @@ where
             f2: Either::Left(f2),
         }
     }
+=======
+/// Polls the provided future immediately. If the future is not ready,
+/// it will register the waker. When the event is ready, the waker will
+/// be notified, then the internal future is immediately polled in the
+/// thread calling `wake()`.
+pub fn poll_future_notify<F: Future<Output = ()> + Send + 'static>(f: F) {
+    let f: BoxFuture<'static, ()> = Box::pin(f);
+    let waker = Arc::new(BatchCommandsWaker(Mutex::new(Some(f))));
+    waker.wake();
+>>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
 }
 
 impl<E, F2> Future for AndThenWith<Result<(), E>, F2>
