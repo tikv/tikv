@@ -13,8 +13,6 @@ use engine::rocks::{util::config as rocks_config, PerfLevel};
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    // true for high reliability, prevent data loss when power failure.
-    pub sync_log: bool,
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
     pub prevote: bool,
     pub raftdb_path: String,
@@ -143,7 +141,6 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
-            sync_log: true,
             prevote: true,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),
@@ -361,6 +358,7 @@ impl Config {
     }
 
     pub fn write_into_metrics(&self) {
+<<<<<<< HEAD:src/raftstore/store/config.rs
         let metrics = register_gauge_vec!(
             "tikv_config_raftstore",
             "Config information of raftstore",
@@ -371,6 +369,9 @@ impl Config {
             .with_label_values(&["sync_log"])
             .set((self.sync_log as i32).into());
         metrics
+=======
+        CONFIG_RAFTSTORE_GAUGE
+>>>>>>> 5496d07... Remove sync-log config option (#8631):components/raftstore/src/store/config.rs
             .with_label_values(&["prevote"])
             .set((self.prevote as i32).into());
 

@@ -524,12 +524,30 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         }
         fail_point!("raft_between_save");
         if !self.poll_ctx.raft_wb.is_empty() {
+<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
             self.poll_ctx
                 .engines
                 .raft
                 .write_opt(&self.poll_ctx.raft_wb, &write_opts)
+=======
+            fail_point!(
+                "raft_before_save_on_store_1",
+                self.poll_ctx.store_id() == 1,
+                |_| {}
+            );
+
+            self.poll_ctx
+                .engines
+                .raft
+                .consume_and_shrink(
+                    &mut self.poll_ctx.raft_wb,
+                    true,
+                    RAFT_WB_SHRINK_SIZE,
+                    4 * 1024,
+                )
+>>>>>>> 5496d07... Remove sync-log config option (#8631):components/raftstore/src/store/fsm/store.rs
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });

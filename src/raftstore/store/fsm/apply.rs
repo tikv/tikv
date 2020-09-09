@@ -298,8 +298,6 @@ struct ApplyContext {
     last_applied_index: u64,
     committed_count: usize,
 
-    // Indicates that WAL can be synchronized when data is written to KV engine.
-    enable_sync_log: bool,
     // Whether synchronize WAL is preferred.
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
@@ -335,7 +333,6 @@ impl ApplyContext {
             kv_wb_last_keys: 0,
             last_applied_index: 0,
             committed_count: 0,
-            enable_sync_log: cfg.sync_log,
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
@@ -382,7 +379,13 @@ impl ApplyContext {
     }
 
     /// Writes all the changes into RocksDB.
+<<<<<<< HEAD:src/raftstore/store/fsm/apply.rs
     pub fn write_to_db(&mut self) {
+=======
+    /// If it returns true, all pending writes are persisted in engines.
+    pub fn write_to_db(&mut self) -> bool {
+        let need_sync = self.sync_log_hint;
+>>>>>>> 5496d07... Remove sync-log config option (#8631):components/raftstore/src/store/fsm/apply.rs
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
@@ -2284,6 +2287,57 @@ impl Msg {
             apply,
         }
     }
+<<<<<<< HEAD:src/raftstore/store/fsm/apply.rs
+=======
+}
+
+struct ObserveCmd {
+    id: ObserveID,
+    enabled: Arc<AtomicBool>,
+}
+
+impl Debug for ObserveCmd {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ObserveCmd").field("id", &self.id).finish()
+    }
+}
+
+#[derive(Debug)]
+pub enum ChangeCmd {
+    RegisterObserver {
+        observe_id: ObserveID,
+        region_id: u64,
+        enabled: Arc<AtomicBool>,
+    },
+    Snapshot {
+        observe_id: ObserveID,
+        region_id: u64,
+    },
+}
+
+pub enum Msg<EK>
+where
+    EK: KvEngine,
+{
+    Apply {
+        start: Instant,
+        apply: Apply<EK::Snapshot>,
+    },
+    Registration(Registration),
+    LogsUpToDate(CatchUpLogs),
+    Noop,
+    Destroy(Destroy),
+    Snapshot(GenSnapTask),
+    Change {
+        cmd: ChangeCmd,
+        region_epoch: RegionEpoch,
+        cb: Callback<EK::Snapshot>,
+    },
+    #[cfg(any(test, feature = "testexport"))]
+    #[allow(clippy::type_complexity)]
+    Validate(u64, Box<dyn FnOnce(*const u8) + Send>),
+}
+>>>>>>> 5496d07... Remove sync-log config option (#8631):components/raftstore/src/store/fsm/apply.rs
 
     pub fn register(peer: &Peer) -> Msg {
         Msg::Registration(Registration::new(peer))
@@ -2592,8 +2646,21 @@ impl ApplyFsm {
                 Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
                 Some(Msg::Noop) => {}
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
+<<<<<<< HEAD:src/raftstore/store/fsm/apply.rs
                 #[cfg(test)]
                 Some(Msg::Validate(_, f)) => f(&self.delegate),
+=======
+                Some(Msg::Change {
+                    cmd,
+                    region_epoch,
+                    cb,
+                }) => self.handle_change(apply_ctx, cmd, region_epoch, cb),
+                #[cfg(any(test, feature = "testexport"))]
+                Some(Msg::Validate(_, f)) => {
+                    let delegate: *const u8 = unsafe { std::mem::transmute(&self.delegate) };
+                    f(delegate)
+                }
+>>>>>>> 5496d07... Remove sync-log config option (#8631):components/raftstore/src/store/fsm/apply.rs
                 None => break,
             }
         }
@@ -2656,6 +2723,22 @@ pub struct ApplyPoller {
 
 impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     fn begin(&mut self, _batch_size: usize) {
+<<<<<<< HEAD:src/raftstore/store/fsm/apply.rs
+=======
+        if let Some(incoming) = self.cfg_tracker.any_new() {
+            match Ord::cmp(&incoming.messages_per_tick, &self.messages_per_tick) {
+                CmpOrdering::Greater => {
+                    self.msg_buf.reserve(incoming.messages_per_tick);
+                    self.messages_per_tick = incoming.messages_per_tick;
+                }
+                CmpOrdering::Less => {
+                    self.msg_buf.shrink_to(incoming.messages_per_tick);
+                    self.messages_per_tick = incoming.messages_per_tick;
+                }
+                _ => {}
+            }
+        }
+>>>>>>> 5496d07... Remove sync-log config option (#8631):components/raftstore/src/store/fsm/apply.rs
         self.apply_ctx.perf_context_statistics.start();
     }
 
@@ -2989,7 +3072,12 @@ mod tests {
             region_id,
             Msg::Validate(
                 region_id,
+<<<<<<< HEAD:src/raftstore/store/fsm/apply.rs
                 Box::new(move |delegate: &ApplyDelegate| {
+=======
+                Box::new(move |delegate: *const u8| {
+                    let delegate = unsafe { &*(delegate as *const ApplyDelegate<RocksEngine>) };
+>>>>>>> 5496d07... Remove sync-log config option (#8631):components/raftstore/src/store/fsm/apply.rs
                     validate(delegate);
                     validate_tx.send(()).unwrap();
                 }),

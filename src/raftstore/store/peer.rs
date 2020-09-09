@@ -558,9 +558,15 @@ impl Peer {
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
+<<<<<<< HEAD:src/raftstore/store/peer.rs
         write_opts.set_sync(ctx.cfg.sync_log);
         ctx.engines.write_kv_opt(&kv_wb, &write_opts)?;
         ctx.engines.write_raft_opt(&raft_wb, &write_opts)?;
+=======
+        write_opts.set_sync(true);
+        ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
+        ctx.engines.raft.consume(&mut raft_wb, true)?;
+>>>>>>> 5496d07... Remove sync-log config option (#8631):components/raftstore/src/store/peer.rs
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data

@@ -1706,4 +1706,354 @@ mod tests {
             toml::from_str::<LevelHolder>(&string).unwrap_err();
         }
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_to_config_change() {
+        assert_eq!(
+            to_change_value("10h", &ConfigValue::Duration(0)).unwrap(),
+            ConfigValue::from(ReadableDuration::hours(10))
+        );
+        assert_eq!(
+            to_change_value("100MB", &ConfigValue::Size(0)).unwrap(),
+            ConfigValue::from(ReadableSize::mb(100))
+        );
+        assert_eq!(
+            to_change_value("10000", &ConfigValue::U64(0)).unwrap(),
+            ConfigValue::from(10000u64)
+        );
+
+        let old = TiKvConfig::default();
+        let mut incoming = TiKvConfig::default();
+        incoming.coprocessor.region_split_keys = 10000;
+        incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
+        incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
+        let diff = old.diff(&incoming);
+        let mut change = HashMap::new();
+        change.insert(
+            "coprocessor.region-split-keys".to_owned(),
+            "10000".to_owned(),
+        );
+        change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
+        change.insert(
+            "rocksdb.defaultcf.block-cache-size".to_owned(),
+            "500MB".to_owned(),
+        );
+        let res = to_config_change(change).unwrap();
+        assert_eq!(diff, res);
+
+        // illegal cases
+        let cases = vec![
+            // wrong value type
+            ("gc.max-write-bytes-per-sec".to_owned(), "10s".to_owned()),
+            (
+                "pessimistic-txn.wait-for-lock-timeout".to_owned(),
+                "1MB".to_owned(),
+            ),
+            // missing or unknown config fields
+            ("xxx.yyy".to_owned(), "12".to_owned()),
+            (
+                "rocksdb.defaultcf.block-cache-size.xxx".to_owned(),
+                "50MB".to_owned(),
+            ),
+            ("rocksdb.xxx.block-cache-size".to_owned(), "50MB".to_owned()),
+            ("rocksdb.block-cache-size".to_owned(), "50MB".to_owned()),
+            // not support change config
+            (
+                "raftstore.raft-heartbeat-ticks".to_owned(),
+                "100".to_owned(),
+            ),
+            ("raftstore.prevote".to_owned(), "false".to_owned()),
+        ];
+        for (name, value) in cases {
+            let mut change = HashMap::new();
+            change.insert(name, value);
+            assert!(to_config_change(change).is_err());
+        }
+    }
+
+    #[test]
+    fn test_to_toml_encode() {
+        let mut change = HashMap::new();
+        change.insert(
+            "raftstore.pd-heartbeat-tick-interval".to_owned(),
+            "1h".to_owned(),
+        );
+        change.insert(
+            "coprocessor.region-split-keys".to_owned(),
+            "10000".to_owned(),
+        );
+        change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
+        change.insert(
+            "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
+            "read-only".to_owned(),
+        );
+        let res = to_toml_encode(change).unwrap();
+        assert_eq!(
+            res.get("raftstore.pd-heartbeat-tick-interval"),
+            Some(&"\"1h\"".to_owned())
+        );
+        assert_eq!(
+            res.get("coprocessor.region-split-keys"),
+            Some(&"10000".to_owned())
+        );
+        assert_eq!(
+            res.get("gc.max-write-bytes-per-sec"),
+            Some(&"\"100MB\"".to_owned())
+        );
+        assert_eq!(
+            res.get("rocksdb.defaultcf.titan.blob-run-mode"),
+            Some(&"\"read-only\"".to_owned())
+        );
+    }
+
+    fn new_engines(cfg: TiKvConfig) -> (RocksEngine, ConfigController) {
+        let engine = RocksEngine::from_db(Arc::new(
+            new_engine_opt(
+                &cfg.storage.data_dir,
+                cfg.rocksdb.build_opt(),
+                cfg.rocksdb
+                    .build_cf_opts(&cfg.storage.block_cache.build_shared_cache()),
+            )
+            .unwrap(),
+        ));
+
+        let (shared, cfg_controller) = (cfg.storage.block_cache.shared, ConfigController::new(cfg));
+        cfg_controller.register(
+            Module::Rocksdb,
+            Box::new(DBConfigManger::new(engine.clone(), DBType::Kv, shared)),
+        );
+        cfg_controller.register(
+            Module::Storage,
+            Box::new(StorageConfigManger::new(engine.clone(), shared)),
+        );
+        (engine, cfg_controller)
+    }
+
+    #[test]
+    fn test_change_rocksdb_config() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.rocksdb.max_background_jobs = 2;
+        cfg.rocksdb.defaultcf.disable_auto_compactions = false;
+        cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
+        cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
+        cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
+        cfg.storage.block_cache.shared = false;
+        cfg.validate().unwrap();
+        let (db, cfg_controller) = new_engines(cfg);
+
+        // update max_background_jobs
+        let db_opts = db.get_db_options();
+        assert_eq!(db_opts.get_max_background_jobs(), 2);
+
+        cfg_controller
+            .update_config("rocksdb.max-background-jobs", "8")
+            .unwrap();
+        assert_eq!(db.get_db_options().get_max_background_jobs(), 8);
+
+        // update rate_bytes_per_sec
+        let db_opts = db.get_db_options();
+        assert_eq!(
+            db_opts.get_rate_bytes_per_sec().unwrap(),
+            ReadableSize::mb(64).0 as i64
+        );
+
+        cfg_controller
+            .update_config("rocksdb.rate-bytes-per-sec", "128MB")
+            .unwrap();
+        assert_eq!(
+            db.get_db_options().get_rate_bytes_per_sec().unwrap(),
+            ReadableSize::mb(128).0 as i64
+        );
+
+        // update some configs on default cf
+        let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
+        let cf_opts = db.get_options_cf(defaultcf);
+        assert_eq!(cf_opts.get_disable_auto_compactions(), false);
+        assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(64).0);
+        assert_eq!(cf_opts.get_block_cache_capacity(), ReadableSize::mb(8).0);
+
+        let mut change = HashMap::new();
+        change.insert(
+            "rocksdb.defaultcf.disable-auto-compactions".to_owned(),
+            "true".to_owned(),
+        );
+        change.insert(
+            "rocksdb.defaultcf.target-file-size-base".to_owned(),
+            "32MB".to_owned(),
+        );
+        change.insert(
+            "rocksdb.defaultcf.block-cache-size".to_owned(),
+            "256MB".to_owned(),
+        );
+        cfg_controller.update(change).unwrap();
+
+        let cf_opts = db.get_options_cf(defaultcf);
+        assert_eq!(cf_opts.get_disable_auto_compactions(), true);
+        assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(32).0);
+        assert_eq!(cf_opts.get_block_cache_capacity(), ReadableSize::mb(256).0);
+
+        // Can not update block cache through storage module
+        // when shared block cache is disabled
+        assert!(cfg_controller
+            .update_config("storage.block-cache.capacity", "512MB")
+            .is_err());
+    }
+
+    #[test]
+    fn test_change_shared_block_cache() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.storage.block_cache.shared = true;
+        cfg.validate().unwrap();
+        let (db, cfg_controller) = new_engines(cfg);
+
+        // Can not update shared block cache through rocksdb module
+        assert!(cfg_controller
+            .update_config("rocksdb.defaultcf.block-cache-size", "256MB")
+            .is_err());
+
+        cfg_controller
+            .update_config("storage.block-cache.capacity", "256MB")
+            .unwrap();
+
+        let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
+        let defaultcf_opts = db.get_options_cf(defaultcf);
+        assert_eq!(
+            defaultcf_opts.get_block_cache_capacity(),
+            ReadableSize::mb(256).0
+        );
+    }
+
+    #[test]
+    fn test_dispatch_titan_blob_run_mode_config() {
+        let mut cfg = TiKvConfig::default();
+        let mut incoming = cfg.clone();
+        cfg.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
+        incoming.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Fallback;
+
+        let diff = cfg
+            .rocksdb
+            .defaultcf
+            .titan
+            .diff(&incoming.rocksdb.defaultcf.titan);
+        assert_eq!(diff.len(), 1);
+
+        let diff = config_value_to_string(diff.into_iter().collect());
+        assert_eq!(diff.len(), 1);
+        assert_eq!(diff[0].0.as_str(), "blob_run_mode");
+        assert_eq!(diff[0].1.as_str(), "kFallback");
+    }
+
+    #[test]
+    fn test_compatible_adjust_validate_equal() {
+        // After calling many time of `compatible_adjust` and `validate` should has
+        // the same effect as calling `compatible_adjust` and `validate` one time
+        let mut c = TiKvConfig::default();
+        let mut cfg = c.clone();
+        c.compatible_adjust();
+        c.validate().unwrap();
+
+        for _ in 0..10 {
+            cfg.compatible_adjust();
+            cfg.validate().unwrap();
+            assert_eq!(c, cfg);
+        }
+    }
+
+    #[test]
+    fn test_readpool_compatible_adjust_config() {
+        let content = r#"
+        [readpool.storage]
+        [readpool.coprocessor]
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.compatible_adjust();
+        assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
+        assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(true));
+
+        let content = r#"
+        [readpool.storage]
+        stack-size = "10MB"
+        [readpool.coprocessor]
+        normal-concurrency = 1
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.compatible_adjust();
+        assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
+        assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(false));
+    }
+
+    #[test]
+    fn test_unrecognized_config_keys() {
+        let mut temp_config_file = tempfile::NamedTempFile::new().unwrap();
+        let temp_config_writer = temp_config_file.as_file_mut();
+        temp_config_writer
+            .write_all(
+                br#"
+                    log-level = "debug"
+                    log-fmt = "json"
+                    [readpool.unified]
+                    min-threads-count = 5
+                    stack-size = "20MB"
+                    [import]
+                    num_threads = 4
+                    [gcc]
+                    batch-keys = 1024
+                    [[security.encryption.master-keys]]
+                    type = "file"
+                "#,
+            )
+            .unwrap();
+        temp_config_writer.sync_data().unwrap();
+
+        let mut unrecognized_keys = Vec::new();
+        let _ = TiKvConfig::from_file(temp_config_file.path(), Some(&mut unrecognized_keys));
+
+        assert_eq!(
+            unrecognized_keys,
+            vec![
+                "log-fmt".to_owned(),
+                "readpool.unified.min-threads-count".to_owned(),
+                "import.num_threads".to_owned(),
+                "gcc".to_owned(),
+                "security.encryption.master-keys".to_owned(),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_raft_engine() {
+        let content = r#"
+            [raft-engine]
+            enable = true
+            recovery_mode = "tolerate-corrupted-tail-records"
+            bytes-per-sync = "64KB"
+            purge-threshold = "1GB"
+        "#;
+        let cfg: TiKvConfig = toml::from_str(content).unwrap();
+        assert!(cfg.raft_engine.enable);
+        let config = &cfg.raft_engine.config;
+        assert_eq!(
+            config.recovery_mode,
+            RecoveryMode::TolerateCorruptedTailRecords
+        );
+        assert_eq!(config.bytes_per_sync.0, ReadableSize::kb(64).0);
+        assert_eq!(config.purge_threshold.0, ReadableSize::gb(1).0);
+    }
+
+    #[test]
+    fn test_raft_engine_dir() {
+        let content = r#"
+            [raft-engine]
+            enable = true
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(
+            cfg.raft_engine.config.dir,
+            config::canonicalize_sub_path(&cfg.storage.data_dir, "raft-engine").unwrap()
+        );
+    }
+>>>>>>> 5496d07... Remove sync-log config option (#8631)
 }

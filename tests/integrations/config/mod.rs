@@ -107,7 +107,6 @@ fn test_serde_custom_tikv_config() {
         job: "tikv_1".to_owned(),
     };
     value.raft_store = RaftstoreConfig {
-        sync_log: false,
         prevote: false,
         raftdb_path: "/var".to_owned(),
         capacity: ReadableSize(123),
