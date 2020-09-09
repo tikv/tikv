@@ -589,6 +589,8 @@ fn test_serde_custom_tikv_config() {
         },
         titan: titan_db_config,
     };
+    value.raft_engine.enable = true;
+    value.raft_engine.mut_config().dir = "test-dir".to_owned();
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
         gc_ratio_threshold: 1.2,

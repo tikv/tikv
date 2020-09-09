@@ -25,6 +25,7 @@ protobuf-codec = [
   "tikv/protobuf-codec",
   "txn_types/protobuf-codec",
   "cdc/protobuf-codec",
+  "raft_log_engine/protobuf-codec"
 ]
 prost-codec = [
   "backup/prost-codec",
@@ -37,6 +38,7 @@ prost-codec = [
   "tikv/prost-codec",
   "txn_types/prost-codec",
   "cdc/prost-codec",
+  "raft_log_engine/prost-codec"
 ]
 
 [lib]
@@ -57,6 +59,7 @@ concurrency_manager = { path = "../components/concurrency_manager" }
 encryption = { path = "../components/encryption" }
 engine_rocks = { path = "../components/engine_rocks" }
 engine_traits = { path = "../components/engine_traits" }
+error_code = { path = "../components/error_code" }
 fs2 = "0.4"
 futures = "0.3"
 tokio = { version = "0.2", features = ["rt-threaded"] }
@@ -72,6 +75,7 @@ prometheus = { version = "0.8", features = ["nightly", "push"] }
 promptly = "0.3.0"
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
+raft_log_engine = { path = "../components/raft_log_engine" }
 raftstore = { path = "../components/raftstore" }
 rand = "0.7"
 security = { path = "../components/security" }
