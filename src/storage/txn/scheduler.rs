@@ -28,7 +28,12 @@ use std::u64;
 
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
-use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
+use tikv_util::{
+    callback::must_call,
+    collections::HashMap,
+    minitrace::{self, prelude::*, Event},
+    time::Instant,
+};
 use txn_types::TimeStamp;
 
 use crate::storage::kv::{
@@ -59,6 +64,9 @@ pub(super) struct Task {
     pub(super) cid: u64,
     pub(super) cmd: Command,
     pub(super) extra_op: ExtraOp,
+
+    // trace context
+    trace_handle: Option<minitrace::TraceHandle>,
 }
 
 impl Task {
@@ -68,6 +76,9 @@ impl Task {
             cid,
             cmd,
             extra_op: ExtraOp::Noop,
+            trace_handle: Some(minitrace::trace_binder_fine(
+                Event::TiKvTxnTaskDispatching as u32,
+            )),
         }
     }
 }
@@ -355,6 +366,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// `SnapshotFinished` message back to the event loop when it finishes.
     fn get_snapshot(&self, cid: u64) {
         let mut task = self.inner.dequeue_task(cid);
+        let mut handle = task.trace_handle.take().unwrap();
+        let _g = handle.trace_enable(Event::TiKvTxnGetSnapShot as u32);
         let tag = task.cmd.tag();
         let ctx = task.cmd.ctx().clone();
         let sched = self.clone();
@@ -540,37 +553,43 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.get_sched_pool(task.cmd.priority())
             .clone()
             .pool
-            .spawn(async move {
-                fail_point!("scheduler_async_snapshot_finish");
+            .spawn(
+                async move {
+                    fail_point!("scheduler_async_snapshot_finish");
 
-                let read_duration = Instant::now_coarse();
+                    let read_duration = Instant::now_coarse();
 
-                let region_id = task.cmd.ctx().get_region_id();
-                let ts = task.cmd.ts();
-                let timer = Instant::now_coarse();
-                let mut statistics = Statistics::default();
+                    let region_id = task.cmd.ctx().get_region_id();
+                    let ts = task.cmd.ts();
+                    let timer = Instant::now_coarse();
+                    let mut statistics = Statistics::default();
 
-                if task.cmd.readonly() {
-                    self.process_read(snapshot, task, &mut statistics);
-                } else {
-                    // Safety: `self.sched_pool` ensures a TLS engine exists.
-                    unsafe {
-                        with_tls_engine(|engine| {
-                            self.process_write(engine, snapshot, task, &mut statistics)
-                        });
-                    }
-                };
-                tls_collect_scan_details(tag.get_str(), &statistics);
-                slow_log!(
-                    timer.elapsed(),
-                    "[region {}] scheduler handle command: {}, ts: {}",
-                    region_id,
-                    tag,
-                    ts
-                );
+                    if task.cmd.readonly() {
+                        self.process_read(snapshot, task, &mut statistics);
+                    } else {
+                        // Safety: `self.sched_pool` ensures a TLS engine exists.
+                        unsafe {
+                            with_tls_engine(|engine| {
+                                self.process_write(engine, snapshot, task, &mut statistics)
+                            });
+                        }
+                    };
+                    tls_collect_scan_details(tag.get_str(), &statistics);
+                    slow_log!(
+                        timer.elapsed(),
+                        "[region {}] scheduler handle command: {}, ts: {}",
+                        region_id,
+                        tag,
+                        ts
+                    );
 
-                tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
-            })
+                    tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
+                }
+                .trace_task_fine(
+                    Event::TiKvTxnProcessPending as u32,
+                    Event::TiKvTxnProcessing as u32,
+                ),
+            )
             .unwrap();
     }
 
