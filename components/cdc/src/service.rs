@@ -289,10 +289,12 @@ impl ChangeData for Service {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "prost-codec")]
-    use kvproto::cdcpb::event::{Entries as EventEntries, Event as Event_oneof_event};
-    use kvproto::cdcpb::{ChangeDataEvent, Event, EventRow, ResolvedTs};
+    use kvproto::cdcpb::event::{
+        Entries as EventEntries, Event as Event_oneof_event, Row as EventRow,
+    };
+    use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
     #[cfg(not(feature = "prost-codec"))]
-    use kvproto::cdcpb::{EventEntries, Event_oneof_event};
+    use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
 
     use crate::service::{CdcEvent, EventBatcher, CDC_MAX_RESP_SIZE};
 
@@ -344,8 +346,8 @@ mod tests {
                 vec![CdcEvent::ResolvedTs(ResolvedTs::default())],
                 vec![CdcEvent::ResolvedTs(ResolvedTs::default())],
                 vec![CdcEvent::Event(event_big.clone())],
-                vec![CdcEvent::Event(event_small.clone()); 2],
-                vec![CdcEvent::Event(event_big.clone())],
+                vec![CdcEvent::Event(event_small); 2],
+                vec![CdcEvent::Event(event_big)],
             ],
         );
     }
