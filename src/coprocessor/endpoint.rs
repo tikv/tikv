@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::{borrow::Cow, time::Duration};
 
 use async_stream::try_stream;
-use futures::Stream;
 use futures03::channel::mpsc;
 use futures03::prelude::*;
 use tokio::sync::Semaphore;
@@ -586,7 +585,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Stream<Item = coppb::Response, Error = ()> {
+    ) -> impl futures03::stream::Stream<Item = coppb::Response> {
         let result_of_stream = self
             .parse_request_and_check_memory_locks(req, peer, true)
             .and_then(|(handler_builder, req_ctx)| {
@@ -596,7 +595,7 @@ impl<E: Engine> Endpoint<E> {
         futures03::stream::once(futures03::future::ready(result_of_stream)) // Stream<Stream<Resp, Error>, Error>
             .try_flatten() // Stream<Resp, Error>
             .or_else(|e| futures03::future::ok(make_error_response(e))) // Stream<Resp, ()>
-            .compat()
+            .map(|item: std::result::Result<_, ()>| item.unwrap())
     }
 }
 

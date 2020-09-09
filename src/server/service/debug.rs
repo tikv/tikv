@@ -4,11 +4,12 @@ use std::sync::Arc;
 
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, MiscExt, RaftEngine};
-use futures::{future, stream, Future, Stream};
-use futures03::compat::{Compat, Future01CompatExt};
+use futures03::channel::oneshot;
+use futures03::compat::{Compat, Future01CompatExt, Sink01CompatExt};
 use futures03::future::Future as Future03;
-use futures03::future::FutureExt;
-use futures03::future::TryFutureExt;
+use futures03::future::{FutureExt, TryFutureExt};
+use futures03::sink::SinkExt;
+use futures03::stream::{self, TryStreamExt};
 use grpcio::{Error as GrpcError, WriteFlags};
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use kvproto::debugpb::{self, *};
@@ -17,10 +18,9 @@ use kvproto::raft_cmdpb::{
     StatusCmdType, StatusRequest,
 };
 use tokio::runtime::Handle;
-use tokio_sync::oneshot;
 
 use crate::config::ConfigController;
-use crate::server::debug::{Debugger, Error};
+use crate::server::debug::{Debugger, Error, Result};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::Callback;
 use security::{check_common_name, SecurityManager};
@@ -81,7 +81,7 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine>> Service<ER, T> {
         tag: &'static str,
     ) where
         P: Send + 'static,
-        F: Future03<Output = Result<P, Error>> + Send + 'static,
+        F: Future03<Output = Result<P>> + Send + 'static,
     {
         let ctx_task = async move {
             match resp.await {
@@ -235,22 +235,27 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         let from = req.take_from_key();
         let to = req.take_to_key();
         let limit = req.get_limit();
-        let future = future::result(debugger.scan_mvcc(&from, &to, limit))
-            .map_err(|e| error_to_grpc_error("scan_mvcc", e))
-            .and_then(|iter| {
-                stream::iter_result(iter)
-                    .map_err(|e| error_to_grpc_error("scan_mvcc", e))
-                    .map(|(key, mvcc_info)| {
-                        let mut resp = ScanMvccResponse::default();
-                        resp.set_key(key);
-                        resp.set_info(mvcc_info);
-                        (resp, WriteFlags::default())
-                    })
-                    .forward(sink)
-                    .map(|_| ())
-            })
-            .map_err(|e| on_grpc_error("scan_mvcc", &e));
-        self.pool.spawn(future.compat());
+
+        let future = async move {
+            let iter = debugger.scan_mvcc(&from, &to, limit);
+            if iter.is_err() {
+                return;
+            }
+            let mut s = stream::iter(iter.unwrap())
+                .map_err(|e| error_to_grpc_error("scan_mvcc", e))
+                .map_ok(|(key, mvcc_info)| {
+                    let mut resp = ScanMvccResponse::default();
+                    resp.set_key(key);
+                    resp.set_info(mvcc_info);
+                    (resp, WriteFlags::default())
+                });
+            let mut sink = sink.sink_compat();
+            if let Err(e) = sink.send_all(&mut s).await {
+                on_grpc_error("scan_mvcc", &e);
+            }
+            let _ = sink.close().await;
+        };
+        self.pool.spawn(future);
     }
 
     fn compact(
@@ -414,8 +419,8 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
 
         let consistency_check_task = async move {
             let store_id = debugger.get_store_id()?;
-            let detail = region_detail(router2, region_id, store_id).compat().await?;
-            consistency_check(router1, detail).compat().await
+            let detail = region_detail(router2, region_id, store_id).await?;
+            consistency_check(router1, detail).await
         };
         let f = self
             .pool
@@ -538,7 +543,7 @@ fn region_detail<T: RaftStoreRouter<RocksEngine>>(
     raft_router: T,
     region_id: u64,
     store_id: u64,
-) -> impl Future<Item = RegionDetailResponse, Error = Error> {
+) -> impl Future03<Output = Result<RegionDetailResponse>> {
     let mut header = RaftRequestHeader::default();
     header.set_region_id(region_id);
     header.mut_peer().set_store_id(store_id);
@@ -550,32 +555,35 @@ fn region_detail<T: RaftStoreRouter<RocksEngine>>(
 
     let (tx, rx) = oneshot::channel();
     let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
-    future::result(raft_router.send_command(raft_cmd, cb))
-        .map_err(|e| Error::Other(Box::new(e)))
-        .and_then(move |_| {
-            rx.map_err(|e| Error::Other(Box::new(e)))
-                .and_then(move |mut r| {
-                    if r.response.get_header().has_error() {
-                        let e = r.response.get_header().get_error();
-                        warn!("region_detail got error"; "err" => ?e);
-                        return Err(Error::Other(e.message.clone().into()));
-                    }
-                    let detail = r.response.take_status_response().take_region_detail();
-                    debug!("region_detail got region detail"; "detail" => ?detail);
-                    let leader_store_id = detail.get_leader().get_store_id();
-                    if leader_store_id != store_id {
-                        let msg = format!("Leader is on store {}", leader_store_id);
-                        return Err(Error::Other(msg.into()));
-                    }
-                    Ok(detail)
-                })
-        })
+
+    async move {
+        raft_router
+            .send_command(raft_cmd, cb)
+            .map_err(|e| Error::Other(Box::new(e)))?;
+
+        let mut r = rx.map_err(|e| Error::Other(Box::new(e))).await?;
+
+        if r.response.get_header().has_error() {
+            let e = r.response.get_header().get_error();
+            warn!("region_detail got error"; "err" => ?e);
+            return Err(Error::Other(e.message.clone().into()));
+        }
+
+        let detail = r.response.take_status_response().take_region_detail();
+        debug!("region_detail got region detail"; "detail" => ?detail);
+        let leader_store_id = detail.get_leader().get_store_id();
+        if leader_store_id != store_id {
+            let msg = format!("Leader is on store {}", leader_store_id);
+            return Err(Error::Other(msg.into()));
+        }
+        Ok(detail)
+    }
 }
 
 fn consistency_check<T: RaftStoreRouter<RocksEngine>>(
     raft_router: T,
     mut detail: RegionDetailResponse,
-) -> impl Future<Item = (), Error = Error> {
+) -> impl Future03<Output = Result<()>> {
     let mut header = RaftRequestHeader::default();
     header.set_region_id(detail.get_region().get_id());
     header.set_peer(detail.take_leader());
@@ -587,19 +595,21 @@ fn consistency_check<T: RaftStoreRouter<RocksEngine>>(
 
     let (tx, rx) = oneshot::channel();
     let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
-    future::result(raft_router.send_command(raft_cmd, cb))
-        .map_err(|e| Error::Other(Box::new(e)))
-        .and_then(move |_| {
-            rx.map_err(|e| Error::Other(Box::new(e)))
-                .and_then(move |r| {
-                    if r.response.get_header().has_error() {
-                        let e = r.response.get_header().get_error();
-                        warn!("consistency-check got error"; "err" => ?e);
-                        return Err(Error::Other(e.message.clone().into()));
-                    }
-                    Ok(())
-                })
-        })
+
+    async move {
+        raft_router
+            .send_command(raft_cmd, cb)
+            .map_err(|e| Error::Other(Box::new(e)))?;
+
+        let r = rx.map_err(|e| Error::Other(Box::new(e))).await?;
+
+        if r.response.get_header().has_error() {
+            let e = r.response.get_header().get_error();
+            warn!("consistency-check got error"; "err" => ?e);
+            return Err(Error::Other(e.message.clone().into()));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(feature = "protobuf-codec")]

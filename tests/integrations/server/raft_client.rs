@@ -17,7 +17,7 @@ use tikv::server::{load_statistics::ThreadLoad, Config, RaftClient};
 
 use super::{mock_kv_service, MockKv, MockKvService};
 
-pub fn get_raft_client(pool: &tokio_threadpool::ThreadPool) -> RaftClient<RaftStoreBlackHole> {
+pub fn get_raft_client(pool: &tokio::runtime::Runtime) -> RaftClient<RaftStoreBlackHole> {
     let env = Arc::new(Environment::new(2));
     let cfg = Arc::new(Config::default());
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
@@ -28,7 +28,7 @@ pub fn get_raft_client(pool: &tokio_threadpool::ThreadPool) -> RaftClient<RaftSt
         security_mgr,
         RaftStoreBlackHole,
         grpc_thread_load,
-        Some(pool.sender().clone()),
+        Some(pool.handle().clone()),
     )
 }
 
@@ -98,7 +98,11 @@ impl MockKvService for MockKvForRaft {
 
 #[test]
 fn test_batch_raft_fallback() {
-    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
+    let pool = tokio::runtime::Builder::new()
+        .threaded_scheduler()
+        .core_threads(1)
+        .build()
+        .unwrap();
     let mut raft_client = get_raft_client(&pool);
 
     let msg_count = Arc::new(AtomicUsize::new(0));
@@ -115,14 +119,18 @@ fn test_batch_raft_fallback() {
 
     assert!(msg_count.load(Ordering::SeqCst) > 0);
     assert_eq!(batch_msg_count.load(Ordering::SeqCst), 0);
-    pool.shutdown().wait().unwrap();
+    pool.shutdown_timeout(time::Duration::from_secs(1));
     drop(mock_server)
 }
 
 #[test]
 // Test raft_client auto reconnect to servers after connection break.
 fn test_raft_client_reconnect() {
-    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
+    let pool = tokio::runtime::Builder::new()
+        .threaded_scheduler()
+        .core_threads(1)
+        .build()
+        .unwrap();
     let mut raft_client = get_raft_client(&pool);
 
     let msg_count = Arc::new(AtomicUsize::new(0));
@@ -155,12 +163,16 @@ fn test_raft_client_reconnect() {
     check_msg_count(500, &msg_count, 100);
 
     drop(mock_server);
-    pool.shutdown().wait().unwrap();
+    pool.shutdown_timeout(time::Duration::from_secs(1));
 }
 
 #[test]
 fn test_batch_size_limit() {
-    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
+    let pool = tokio::runtime::Builder::new()
+        .threaded_scheduler()
+        .core_threads(1)
+        .build()
+        .unwrap();
     let mut raft_client = get_raft_client(&pool);
 
     let msg_count = Arc::new(AtomicUsize::new(0));
