@@ -66,6 +66,7 @@ use crate::store::{
 use crate::Result;
 use engine::Engines;
 use engine_rocks::{CompactedEvent, CompactionListener};
+use error_code::ErrorCodeExt;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
@@ -240,6 +241,7 @@ pub struct PollContext<T, C: 'static> {
     pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
+    pub node_start_time: Option<TiInstant>,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -272,6 +274,20 @@ impl<T, C> PollContext<T, C> {
     #[inline]
     pub fn store_id(&self) -> u64 {
         self.store.get_id()
+    }
+
+    /// Timeout is calculated from TiKV start, the node should not become
+    /// hibernated if it still within the hibernate timeout, see
+    /// https://github.com/tikv/tikv/issues/7747
+    pub fn is_hibernate_timeout(&mut self) -> bool {
+        let timeout = match self.node_start_time {
+            Some(t) => t.elapsed() >= self.cfg.hibernate_timeout.0,
+            None => return true,
+        };
+        if timeout {
+            self.node_start_time = None;
+        }
+        timeout
     }
 }
 
@@ -343,7 +359,8 @@ impl<T: Transport, C> PollContext<T, C> {
             error!(
                 "send gc message failed";
                 "region_id" => region_id,
-                "err" => ?e
+                "err" => ?e,
+                "error_code" => %e.error_code(),
             );
         }
         self.need_flush_trans = true;
@@ -429,6 +446,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                         error!(
                             "handle raft message failed";
                             "store_id" => self.fsm.store.id,
+                            "error_code" => %e.error_code(),
                             "err" => ?e
                         );
                     }
@@ -974,6 +992,7 @@ where
             queued_snapshot: HashSet::default(),
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
+            node_start_time: Some(TiInstant::now_coarse()),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
@@ -1365,6 +1384,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     error!(
                         "send check stale peer response message failed";
                         "region_id" => region_id,
+                        "error_code" => %e.error_code(),
                         "err" => ?e
                     );
                 }
@@ -1825,6 +1845,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             error!(
                 "handle gc snap failed";
                 "store_id" => self.fsm.store.id,
+                "error_code" => %e.error_code(),
                 "err" => ?e
             );
         }
@@ -2043,6 +2064,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 "cleanup import sst failed";
                 "store_id" => self.fsm.store.id,
                 "err" => ?e,
+                "error_code" => %e.error_code(),
             );
         }
         self.register_cleanup_import_sst_tick();

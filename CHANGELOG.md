@@ -3,6 +3,14 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.5] - 2020-08-28
++ New Features
+  + Define error code for errors [#8387](https://github.com/tikv/tikv/pull/8387)
++ Bug Fixes
+  + Speed up leader election when Hibernate Region is enabled [#8292](https://github.com/tikv/tikv/pull/8292)
+  + Fix the memory leak issue during scheduling [#8357](https://github.com/tikv/tikv/pull/8357)
+  + Add the `hibernate-timeout` configuration item to prevent the leader from becoming hibernate too fast [#8208](https://github.com/tikv/tikv/pull/8208)
+
 ## [4.0.3] - 2020-07-24
 
 + Improvements

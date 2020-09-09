@@ -152,6 +152,7 @@ store-pool-size = 3
 store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
+hibernate-timeout = "1h"
 early-apply = false
 dev-assert = true
 perf-level = 5
@@ -510,3 +511,5 @@ wait-for-lock-timeout = "10ms"
 wake-up-delay-duration = 100 # test backward compatible
 pipelined = true
 
+[cdc]
+min-ts-interval = "4s"

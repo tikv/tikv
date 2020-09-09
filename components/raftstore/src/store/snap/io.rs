@@ -9,8 +9,8 @@ use encryption::{
     Iv,
 };
 use engine_traits::{
-    CfName, EncryptionKeyManager, ImportExt, IngestExternalFileOptions, Iterable, KvEngine,
-    Mutable, Snapshot, SstWriter, SstWriterBuilder, WriteBatch,
+    CfName, EncryptionKeyManager, Error as EngineError, ImportExt, IngestExternalFileOptions,
+    Iterable, KvEngine, Mutable, Snapshot, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
@@ -132,7 +132,7 @@ where
     Ok(stats)
 }
 
-/// Apply the given snapshot file into a column family. `callback` will be invoked for each batch of
+/// Apply the given snapshot file into a column family. `callback` will be invoked after each batch of
 /// key value pairs written to db.
 pub fn apply_plain_cf_file<E, F>(
     path: &str,
@@ -155,12 +155,17 @@ where
         BufReader::new(Box::new(file) as Box<dyn Read + Send>)
     };
 
-    let mut write_to_wb = |batch: &mut Vec<_>, wb: &mut E::WriteBatch| {
-        callback(batch);
-        batch.drain(..).try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))
-    };
-
     let mut wb = db.write_batch();
+    let mut write_to_db =
+        |db: &E, batch: &mut Vec<(Vec<u8>, Vec<u8>)>| -> Result<(), EngineError> {
+            batch.iter().try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))?;
+            db.write(&wb)?;
+            wb.clear();
+            callback(batch);
+            batch.clear();
+            Ok(())
+        };
+
     // Collect keys to a vec rather than wb so that we can invoke the callback less times.
     let mut batch = Vec::with_capacity(1024);
     let mut batch_data_size = 0;
@@ -172,8 +177,7 @@ where
         let key = box_try!(decoder.decode_compact_bytes());
         if key.is_empty() {
             if !batch.is_empty() {
-                box_try!(write_to_wb(&mut batch, &mut wb));
-                box_try!(db.write(&wb));
+                box_try!(write_to_db(db, &mut batch));
             }
             return Ok(());
         }
@@ -181,9 +185,7 @@ where
         batch_data_size += key.len() + value.len();
         batch.push((key, value));
         if batch_data_size >= batch_size {
-            box_try!(write_to_wb(&mut batch, &mut wb));
-            box_try!(db.write(&wb));
-            wb.clear();
+            box_try!(write_to_db(db, &mut batch));
             batch_data_size = 0;
         }
     }
