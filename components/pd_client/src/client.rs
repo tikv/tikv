@@ -397,8 +397,12 @@ impl PdClient for RpcClient {
             let left = inner.hb_sender.as_mut().left().unwrap();
             let sender = left.take().expect("expect region heartbeat sink");
             let (tx, rx) = mpsc::unbounded();
-            tx.unbounded_send(req)
-                .unwrap_or_else(|e| panic!("send request to unbounded channel failed {:?}", e));
+            tx.unbounded_send(req).unwrap_or_else(|e| {
+                panic!(
+                    "send request to unbounded channel failed {} err {:?}",
+                    "region_heartbeat", e
+                )
+            });
             inner.hb_sender = Either::Right(tx);
             Box::pin(async move {
                 let mut sender = sender.sink_compat().sink_map_err(Error::Grpc);
@@ -681,9 +685,9 @@ impl PdClient for RpcClient {
                 let resp = resp_stream.compat().try_next().await?;
                 // Now we can safely drop sink without
                 // causing a Cancel error.
-                let _ = keep_req_rx
-                    .try_recv()
-                    .unwrap_or_else(|e| panic!("fail to receive tso sender err {:?}", e));
+                let _ = keep_req_rx.try_recv().unwrap_or_else(|e| {
+                    panic!("fail to receive tso sender {} err {:?}", "get_tso", e)
+                });
                 let resp = match resp {
                     Some(r) => r,
                     None => return Ok(TimeStamp::zero()),
