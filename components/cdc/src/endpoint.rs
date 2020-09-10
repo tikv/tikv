@@ -315,7 +315,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     }
 
     fn on_deregister(&mut self, deregister: Deregister) {
-        info!("cdc deregister region"; "deregister" => ?deregister);
+        info!("cdc deregister"; "deregister" => ?deregister);
         match deregister {
             Deregister::Downstream {
                 region_id,
