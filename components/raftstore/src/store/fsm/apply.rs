@@ -722,6 +722,9 @@ where
         committed_entries: Vec<Entry>,
     ) {
         apply_ctx.prepare_for(self);
+        if apply_ctx.timer.is_none() {
+            apply_ctx.timer = Some(Instant::now_coarse());
+        }
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
@@ -798,6 +801,7 @@ where
                     reschedule().await;
                     self.handle_start = Instant::now_coarse();
                 }
+                apply_ctx.timer = Some(Instant::now_coarse());
             }
             return self.process_raft_cmd(apply_ctx, index, term, cmd).await;
         }
@@ -1931,13 +1935,13 @@ where
             ctx.prepare_for(self);
         }
         let res = f.await;
+        self.handle_start = Instant::now_coarse();
         self.ready_source_region_id = match res {
             Ok(source_id) => source_id,
             Err(e) => {
                 return Err(Error::Other(e.into()));
             }
         };
-        self.handle_start = Instant::now_coarse();
         if self.ready_source_region_id != source_region_id {
             panic!(
                 "{} unexpected ready source region {}, expecting {}",
@@ -2590,11 +2594,6 @@ where
         apply_ctx: &mut ApplyContext<EK, W>,
         mut apply: Apply<EK::Snapshot>,
     ) {
-        let start_apply = if apply_ctx.timer.is_none() {
-            Some(Instant::now_coarse())
-        } else {
-            None
-        };
         fail_point!("on_handle_apply_1003", self.id() == 1003, |_| {});
         fail_point!("on_handle_apply_2", self.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
@@ -2633,9 +2632,6 @@ where
             self.handle_raft_committed_entries(apply_ctx, entries).await;
         }
 
-        if apply_ctx.timer.is_none() {
-            apply_ctx.timer = start_apply;
-        }
         fail_point!("post_handle_apply_1003", self.id() == 1003, |_| {});
     }
 
