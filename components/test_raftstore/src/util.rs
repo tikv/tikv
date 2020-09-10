@@ -113,7 +113,6 @@ pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
 
 pub fn new_store_cfg() -> Config {
     Config {
-        sync_log: false,
         raft_base_tick_interval: ReadableDuration::millis(10),
         raft_heartbeat_ticks: 2,
         raft_election_timeout_ticks: 25,
