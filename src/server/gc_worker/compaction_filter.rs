@@ -315,7 +315,7 @@ pub mod tests {
     use crate::config::DbConfig;
     use crate::storage::kv::{RocksEngine as StorageRocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::{must_get_none, must_prewrite_delete, must_prewrite_put};
-    use crate::storage::txn::action::commit::tests::must_succeed as must_commit;
+    use crate::storage::txn::tests::must_commit;
     use engine_rocks::raw::CompactOptions;
     use engine_rocks::util::get_cf_handle;
     use engine_rocks::RocksEngine;

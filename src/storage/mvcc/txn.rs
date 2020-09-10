@@ -103,7 +103,7 @@ pub enum SecondaryLockStatus {
     RolledBack,
 }
 
-/// The abstraction of a locally-transactional MVCC key-value store
+/// An abstraction of a locally-transactional MVCC key-value store
 pub struct MvccTxn<S: Snapshot> {
     pub(crate) reader: MvccReader<S>,
     pub(crate) start_ts: TimeStamp,
@@ -1128,11 +1128,10 @@ mod tests {
     use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
-    use crate::storage::txn::action;
-    use crate::storage::txn::action::commit::tests::{
-        must_err as must_commit_err, must_succeed as must_commit,
-    };
+
     use crate::storage::txn::commands::*;
+    use crate::storage::txn::commit;
+    use crate::storage::txn::tests::*;
     use crate::storage::SecondaryLocksStatus;
     use kvproto::kvrpcpb::Context;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
@@ -1705,7 +1704,7 @@ mod tests {
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 10.into(), true, cm);
-        action::commit::commit(&mut txn, key, 15.into()).unwrap();
+        commit(&mut txn, key, 15.into()).unwrap();
         assert!(txn.write_size() > 0);
         engine
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
@@ -2581,7 +2580,7 @@ mod tests {
             }
             write(WriteData::from_modifies(txn.into_modifies()));
             let mut txn = new_txn(start_ts.into(), cm);
-            action::commit::commit(&mut txn, key.clone(), commit_ts.into()).unwrap();
+            commit(&mut txn, key.clone(), commit_ts.into()).unwrap();
             engine
                 .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
                 .unwrap();

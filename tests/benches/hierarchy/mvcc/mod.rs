@@ -88,7 +88,7 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCo
         |(snapshot, keys)| {
             for key in keys {
                 let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
-                black_box(action::commit::commit(&mut txn, key, 1.into())).unwrap();
+                black_box(commit(&mut txn, key, 1.into())).unwrap();
             }
         },
         BatchSize::SmallInput,

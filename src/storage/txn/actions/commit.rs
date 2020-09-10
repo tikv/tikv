@@ -109,11 +109,9 @@ pub mod tests {
     use txn_types::TimeStamp;
 
     #[cfg(test)]
-    use crate::storage::mvcc::SHORT_VALUE_MAX_LEN;
-    #[cfg(test)]
-    use crate::storage::txn::commands::check_txn_status;
-    #[cfg(test)]
-    use crate::storage::{TestEngineBuilder, TxnStatus};
+    use crate::storage::{
+        mvcc::SHORT_VALUE_MAX_LEN, txn::commands::check_txn_status, TestEngineBuilder, TxnStatus,
+    };
 
     pub fn must_succeed<E: Engine>(
         engine: &E,

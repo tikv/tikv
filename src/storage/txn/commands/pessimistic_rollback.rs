@@ -94,8 +94,8 @@ pub mod tests {
     use crate::storage::kv::Engine;
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::action::commit::tests::must_succeed as must_commit;
     use crate::storage::txn::commands::{WriteCommand, WriteContext};
+    use crate::storage::txn::tests::*;
     use crate::storage::TestEngineBuilder;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
