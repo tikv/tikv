@@ -12,8 +12,8 @@ use futures::future::{self, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{StreamExt, TryStreamExt};
 use grpcio::{
-    self, DuplexSink, Environment, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
-    RpcStatusCode, UnarySink, WriteFlags,
+    self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
+    WriteFlags,
 };
 use kvproto::deadlock::*;
 use kvproto::metapb::Region;
@@ -800,9 +800,10 @@ where
             }
         });
         let send_task = async move {
+            let mut sink = sink.sink_map_err(Error::from);
             sink.send_all(&mut s).await?;
             sink.close().await?;
-            GrpcResult::Ok(())
+            Result::Ok(())
         }
         .map(|_| ());
         spawn_local(send_task);
