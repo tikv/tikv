@@ -107,7 +107,7 @@ fn test_region_ready_after_deregister() {
 
 #[test]
 fn test_connections_register() {
-    let mut suite = TestSuite::new(3);
+    let mut suite = TestSuite::new(1);
 
     let fp = "cdc_incremental_scan_start";
     fail::cfg(fp, "pause").unwrap();
@@ -159,22 +159,9 @@ fn test_connections_register() {
     suite.cluster.must_split(&region, b"k0");
     fail::remove(fp);
     // Receive events from conn 2
+    // As split happens before remove the pause fail point, so it must receive
+    // an epoch not match error.
     let mut events = receive_event(false).events.to_vec();
-    while events.len() < 2 {
-        events.extend(receive_event(false).events.into_iter());
-    }
-    assert_eq!(events.len(), 2, "{:?}", events.len());
-    match events.remove(0).event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 2, "{:?}", es);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
-            let e = &es.entries[1];
-            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
-        }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        other => panic!("unknown event {:?}", other),
-    }
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);

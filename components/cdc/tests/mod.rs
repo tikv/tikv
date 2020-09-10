@@ -1,9 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[cfg(feature = "failpoints")]
-mod failpoints;
-mod integrations;
-
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::*;
@@ -25,11 +21,6 @@ use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
 use cdc::{CdcObserver, Task};
-static INIT: Once = Once::new();
-
-pub fn init() {
-    INIT.call_once(test_util::setup_for_ci);
-}
 
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed(
@@ -54,6 +45,7 @@ pub fn new_event_feed(
         if !keep_resolved_ts && change_data_event.has_resolved_ts() {
             continue;
         }
+        tikv_util::info!("receive event {:?}", change_data_event);
         break change_data_event;
     };
     (req_tx, event_feed_wrap, receive_event)
@@ -78,7 +70,6 @@ impl TestSuite {
     }
 
     pub fn with_cluster(count: usize, mut cluster: Cluster<ServerCluster>) -> TestSuite {
-        init();
         let pd_cli = cluster.pd_client.clone();
         let mut endpoints = HashMap::default();
         let mut obs = HashMap::default();

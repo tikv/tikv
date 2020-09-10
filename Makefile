@@ -244,6 +244,7 @@ run-test:
 	cargo test --workspace \
 		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
 		--features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	pushd components/cdc && cargo test --features "${ENABLE_FEATURES} failpoints" ${EXTRA_CARGO_ARGS} -- --nocapture && popd && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored && \
