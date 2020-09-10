@@ -15,6 +15,7 @@ use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{Engines, KvEngine, Mutable, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
+use futures::FutureExt;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
@@ -24,11 +25,9 @@ use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::{Ready, StateRole};
 use time::{self, Timespec};
-use tokio::runtime::{self, Handle, Runtime};
 
 use engine_rocks::CompactedEvent;
 use engine_traits::{RaftEngine, RaftLogBatch};
-use error_code::ErrorCodeExt;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
@@ -63,12 +62,14 @@ use crate::store::worker::{
     RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
+use crate::store::PeerTicks;
 use crate::store::{
     util, Callback, CasualMessage, GlobalReplicationState, MergeResultKind, PeerMsg, RaftCommand,
     SignificantMsg, SnapManager, StoreMsg, StoreTick,
 };
 use crate::Result;
 use concurrency_manager::ConcurrencyManager;
+use tikv_util::future::poll_future_notify;
 
 type Key = Vec<u8>;
 
@@ -266,6 +267,21 @@ where
     }
 }
 
+#[derive(Default)]
+pub struct PeerTickBatch {
+    pub ticks: Vec<Box<dyn FnOnce() + Send>>,
+    pub wait_duration: Duration,
+}
+
+impl Clone for PeerTickBatch {
+    fn clone(&self) -> PeerTickBatch {
+        PeerTickBatch {
+            ticks: vec![],
+            wait_duration: self.wait_duration,
+        }
+    }
+}
+
 pub struct PollContext<EK, ER, T, C: 'static>
 where
     EK: KvEngine,
@@ -294,7 +310,6 @@ where
     /// 1. lock the store_meta.
     /// 2. lock the pending_create_peers.
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    pub poller_handle: Handle,
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager,
     pub applying_snap_count: Arc<AtomicUsize>,
@@ -315,6 +330,7 @@ where
     pub need_flush_trans: bool,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
+    pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
 }
 
@@ -372,6 +388,21 @@ where
         }
         timeout
     }
+
+    pub fn update_ticks_timeout(&mut self) {
+        self.tick_batch[PeerTicks::RAFT.bits() as usize].wait_duration =
+            self.cfg.raft_base_tick_interval.0;
+        self.tick_batch[PeerTicks::RAFT_LOG_GC.bits() as usize].wait_duration =
+            self.cfg.raft_log_gc_tick_interval.0;
+        self.tick_batch[PeerTicks::PD_HEARTBEAT.bits() as usize].wait_duration =
+            self.cfg.pd_heartbeat_tick_interval.0;
+        self.tick_batch[PeerTicks::SPLIT_REGION_CHECK.bits() as usize].wait_duration =
+            self.cfg.split_region_check_tick_interval.0;
+        self.tick_batch[PeerTicks::CHECK_PEER_STALE_STATE.bits() as usize].wait_duration =
+            self.cfg.peer_stale_state_check_interval.0;
+        self.tick_batch[PeerTicks::CHECK_MERGE.bits() as usize].wait_duration =
+            self.cfg.merge_check_tick_interval.0;
+    }
 }
 
 impl<EK, ER, T: Transport, C> PollContext<EK, ER, T, C>
@@ -383,24 +414,16 @@ where
     fn schedule_store_tick(&self, tick: StoreTick, timeout: Duration) {
         if !is_zero_duration(&timeout) {
             let mb = self.router.control_mailbox();
-            let delay = self.timer.delay(timeout).compat();
-            let f = async move {
-                match delay.await {
-                    Ok(_) => {
-                        if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
-                            info!(
-                                "failed to schedule store tick, are we shutting down?";
-                                "tick" => ?tick,
-                                "err" => ?e
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        panic!("tick {:?} is lost due to timeout error: {:?}", tick, e);
-                    }
+            let delay = self.timer.delay(timeout).compat().map(move |_| {
+                if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
+                    info!(
+                        "failed to schedule store tick, are we shutting down?";
+                        "tick" => ?tick,
+                        "err" => ?e
+                    );
                 }
-            };
-            self.poller_handle.spawn(f);
+            });
+            poll_future_notify(delay);
         }
     }
 
@@ -445,11 +468,9 @@ where
             gc_msg.set_is_tombstone(true);
         }
         if let Err(e) = self.trans.send(gc_msg) {
-            error!(
+            error!(?e;
                 "send gc message failed";
                 "region_id" => region_id,
-                "err" => ?e,
-                "error_code" => %e.error_code(),
             );
         }
         self.need_flush_trans = true;
@@ -541,11 +562,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(
+                        error!(?e;
                             "handle raft message failed";
                             "store_id" => self.fsm.store.id,
-                            "error_code" => %e.error_code(),
-                            "err" => ?e
                         );
                     }
                 }
@@ -652,13 +671,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
                 |_| {}
             );
 
-            let need_sync = self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log;
             self.poll_ctx
                 .engines
                 .raft
                 .consume_and_shrink(
                     &mut self.poll_ctx.raft_wb,
-                    need_sync,
+                    true,
                     RAFT_WB_SHRINK_SIZE,
                     4 * 1024,
                 )
@@ -715,6 +733,27 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
             self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.ready.snapshot
         );
     }
+
+    fn flush_ticks(&mut self) {
+        for t in PeerTicks::get_all_ticks() {
+            let idx = t.bits() as usize;
+            if self.poll_ctx.tick_batch[idx].ticks.is_empty() {
+                continue;
+            }
+            let peer_ticks = std::mem::replace(&mut self.poll_ctx.tick_batch[idx].ticks, vec![]);
+            let f = self
+                .poll_ctx
+                .timer
+                .delay(self.poll_ctx.tick_batch[idx].wait_duration)
+                .compat()
+                .map(move |_| {
+                    for tick in peer_ticks {
+                        tick();
+                    }
+                });
+            poll_future_notify(f);
+        }
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> PollHandler<PeerFsm<EK, ER>, StoreFsm>
@@ -746,6 +785,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> PollHandler<PeerFs
                 _ => {}
             }
             self.poll_ctx.cfg = incoming.clone();
+            self.poll_ctx.update_ticks_timeout();
         }
     }
 
@@ -817,6 +857,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> PollHandler<PeerFs
     }
 
     fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
+        self.flush_ticks();
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -850,7 +891,6 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T, C> {
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    poller_handle: Handle,
     snap_mgr: SnapManager,
     pub coprocessor_host: CoprocessorHost<EK>,
     trans: T,
@@ -1036,7 +1076,7 @@ where
     type Handler = RaftPoller<EK, ER, T, C>;
 
     fn build(&mut self) -> RaftPoller<EK, ER, T, C> {
-        let ctx = PollContext {
+        let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
@@ -1049,7 +1089,6 @@ where
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
             pending_create_peers: self.pending_create_peers.clone(),
-            poller_handle: self.poller_handle.clone(),
             raft_metrics: RaftMetrics::default(),
             snap_mgr: self.snap_mgr.clone(),
             applying_snap_count: self.applying_snap_count.clone(),
@@ -1070,9 +1109,11 @@ where
             need_flush_trans: false,
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
+            tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             apply_batch_system: self.apply_system.clone(),
         };
+        ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
             tag: tag.clone(),
@@ -1096,7 +1137,6 @@ struct Workers<EK: KvEngine> {
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     region_worker: Worker<RegionTask<EK::Snapshot>>,
     coprocessor_host: CoprocessorHost<EK>,
-    future_poller: Runtime,
 }
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
@@ -1145,12 +1185,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cleanup_worker: Worker::new("cleanup-worker"),
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
             coprocessor_host: coprocessor_host.clone(),
-            future_poller: runtime::Builder::new()
-                .threaded_scheduler()
-                .thread_name("future-poller")
-                .core_threads(cfg.value().future_poll_size)
-                .build()
-                .unwrap(),
         };
 
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
@@ -1188,7 +1222,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             store_meta,
             pending_create_peers,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
-            poller_handle: workers.future_poller.handle().clone(),
             apply_system: apply_system.clone(),
         };
         self.apply_system = Some(apply_system);
@@ -1335,9 +1368,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             }
         }
         workers.coprocessor_host.shutdown();
-        workers
-            .future_poller
-            .shutdown_timeout(Duration::from_nanos(0));
     }
 }
 
@@ -1468,11 +1498,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                 extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
                 extra_msg.set_check_peers(region.get_peers().into());
                 if let Err(e) = self.ctx.trans.send(send_msg) {
-                    error!(
+                    error!(?e;
                         "send check stale peer response message failed";
                         "region_id" => region_id,
-                        "error_code" => %e.error_code(),
-                        "err" => ?e
                     );
                 }
                 self.ctx.need_flush_trans = true;
@@ -2049,11 +2077,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
 
     fn on_snap_mgr_gc(&mut self) {
         if let Err(e) = self.handle_snap_mgr_gc() {
-            error!(
+            error!(?e;
                 "handle gc snap failed";
                 "store_id" => self.fsm.store.id,
-                "error_code" => %e.error_code(),
-                "err" => ?e
             );
         }
         self.register_snap_mgr_gc_tick();
@@ -2272,11 +2298,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
 
     fn on_cleanup_import_sst_tick(&mut self) {
         if let Err(e) = self.on_cleanup_import_sst() {
-            error!(
+            error!(?e;
                 "cleanup import sst failed";
                 "store_id" => self.fsm.store.id,
-                "err" => ?e,
-                "error_code" => %e.error_code(),
             );
         }
         self.register_cleanup_import_sst_tick();

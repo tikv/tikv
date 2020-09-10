@@ -155,32 +155,3 @@ fn test_update_raftstore_config() {
 
     system.shutdown();
 }
-
-#[test]
-fn test_update_apply_store_config() {
-    let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
-    config.raft_store.sync_log = true;
-    config.validate().unwrap();
-    let (cfg_controller, raft_router, mut system) = start_raftstore(config.clone(), &_dir);
-
-    // register region
-    let region_id = 1;
-    let mut reg = Registration::default();
-    reg.region.set_id(region_id);
-
-    validate_store(&raft_router, move |cfg: &Config| {
-        assert_eq!(cfg.sync_log, true);
-    });
-
-    // dispatch updated config
-    cfg_controller
-        .update_config("raftstore.sync-log", "false")
-        .unwrap();
-
-    // both configs should be updated
-    validate_store(&raft_router, move |cfg: &Config| {
-        assert_eq!(cfg.sync_log, false);
-    });
-
-    system.shutdown();
-}

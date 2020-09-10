@@ -15,7 +15,6 @@ use std::{cmp, usize};
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{KvEngine, RaftEngine, Snapshot, WriteBatch};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use error_code::ErrorCodeExt;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Peer as PeerMeta, PeerRole, Region, RegionEpoch};
@@ -321,7 +320,6 @@ where
     perf_context_statistics: PerfContextStatistics,
     core: ApplyContextCore<EK>,
     timer: Option<Instant>,
-    committed_count: usize,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -405,7 +403,7 @@ where
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
     pub fn flush(&mut self) -> bool {
-        let need_sync = self.core.enable_sync_log && self.sync_log_hint;
+        let need_sync = self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
@@ -966,12 +964,10 @@ where
                         "peer_id" => self.id(),
                         "err" => ?e
                     ),
-                    _ => error!(
+                    _ => error!(?e;
                         "execute raft command";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "err" => ?e,
-                        "error_code" => %e.error_code(),
                     ),
                 }
                 (cmd_resp::new_error(e), ApplyResult::None)
@@ -1358,14 +1354,12 @@ where
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
-            error!(
+            error!(?e;
                  "ingest fail";
                  "region_id" => self.region_id(),
                  "peer_id" => self.id(),
                  "sst" => ?sst,
                  "region" => ?&self.region,
-                 "err" => ?e,
-                "error_code" => %e.error_code(),
             );
             // This file is not valid, we can delete it here.
             let _ = importer.delete(sst);
@@ -2493,7 +2487,7 @@ where
     },
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
-    Validate(u64, Box<dyn FnOnce(&ApplyFsm<EK>) + Send>),
+    Validate(u64, Box<dyn FnOnce(*const u8) + Send>),
 }
 
 impl<EK> Msg<EK>
@@ -3336,7 +3330,8 @@ mod tests {
         let (validate_tx, validate_rx) = mpsc::channel();
         router.schedule(Msg::Validate(
             0,
-            Box::new(move |delegate| {
+            Box::new(move |delegate: *const u8| {
+                let delegate = unsafe { &*(delegate as *const ApplyDelegate<RocksEngine>) };
                 validate(delegate);
                 validate_tx.send(()).unwrap();
             }),

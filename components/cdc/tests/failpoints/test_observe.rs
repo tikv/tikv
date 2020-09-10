@@ -4,13 +4,10 @@ use futures::sink::Sink;
 use futures::Future;
 use futures03::executor::block_on;
 use grpcio::WriteFlags;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::event::{Event as Event_oneof_event, LogType as EventLogType};
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::{Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataRequest,
-};
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
@@ -28,9 +25,7 @@ fn test_observe_duplicate_cmd() {
     let mut suite = TestSuite::new(3);
 
     let region = suite.cluster.get_region(&[]);
-    let mut req = ChangeDataRequest::default();
-    req.region_id = region.get_id();
-    req.set_region_epoch(region.get_region_epoch().clone());
+    let req = suite.new_changedata_request(region.get_id());
     let (req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
     let _req_tx = req_tx
@@ -46,7 +41,7 @@ fn test_observe_duplicate_cmd() {
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         Event_oneof_event::Error(e) => panic!("{:?}", e),
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
 
     let (k, v) = ("key1".to_owned(), "value".to_owned());
@@ -69,7 +64,7 @@ fn test_observe_duplicate_cmd() {
             assert_eq!(entries.entries.len(), 1);
             assert_eq!(entries.entries[0].get_type(), EventLogType::Prewrite);
         }
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
     let fp = "before_cdc_flush_apply";
     fail::cfg(fp, "pause").unwrap();
@@ -109,7 +104,7 @@ fn test_observe_duplicate_cmd() {
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         Event_oneof_event::Error(e) => panic!("{:?}", e),
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
 
     // Make sure resolved ts can be advanced normally even with few tso failures.
@@ -161,9 +156,7 @@ fn test_delayed_change_cmd() {
         .cluster
         .add_send_filter(CloneFilterFactory(send_read_index_filter));
 
-    let mut req = ChangeDataRequest::default();
-    req.region_id = region.get_id();
-    req.set_region_epoch(region.get_region_epoch().clone());
+    let req = suite.new_changedata_request(region.get_id());
     let (req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
     let _req_tx = req_tx
@@ -202,7 +195,7 @@ fn test_delayed_change_cmd() {
                     let e = &es.entries[0];
                     assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
                 }
-                _ => panic!("unknown event"),
+                other => panic!("unknown event {:?}", other),
             }
         }
         if counter > 3 {
