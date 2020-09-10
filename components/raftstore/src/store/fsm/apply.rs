@@ -320,6 +320,7 @@ where
     perf_context_statistics: PerfContextStatistics,
     core: ApplyContextCore<EK>,
     timer: Option<Instant>,
+    committed_count: usize,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -2884,7 +2885,10 @@ where
                 cb,
             } => self.handle_change(apply_ctx, cmd, region_epoch, cb),
             #[cfg(any(test, feature = "testexport"))]
-            Msg::Validate(_, f) => f(&self),
+            Msg::Validate(_, f) => {
+                let fsm: *const u8 = unsafe { std::mem::transmute(self) };
+                f(fsm)
+            }
         }
     }
 }
@@ -2914,7 +2918,6 @@ pub struct ApplyContextCore<EK: KvEngine> {
     store_id: u64,
     yield_duration: Duration,
     perf_level: PerfLevel,
-    enable_sync_log: bool,
 }
 
 impl<EK: KvEngine> Clone for ApplyContextCore<EK> {
@@ -2931,7 +2934,6 @@ impl<EK: KvEngine> Clone for ApplyContextCore<EK> {
             store_id: self.store_id,
             yield_duration: self.yield_duration,
             perf_level: self.perf_level,
-            enable_sync_log: self.enable_sync_log,
         }
     }
 }
@@ -3170,7 +3172,6 @@ pub fn create_apply_batch_system<EK: KvEngine>(
         yield_duration: cfg.apply_yield_duration.0,
         use_delete_range: cfg.use_delete_range,
         perf_level: cfg.perf_level,
-        enable_sync_log: cfg.sync_log,
     };
     let shared_core = Arc::new(Mutex::new(core));
     let mut builder = ReadPoolBuilder::new(DefaultTicker::default());
@@ -3330,9 +3331,9 @@ mod tests {
         let (validate_tx, validate_rx) = mpsc::channel();
         router.schedule(Msg::Validate(
             0,
-            Box::new(move |delegate: *const u8| {
-                let delegate = unsafe { &*(delegate as *const ApplyDelegate<RocksEngine>) };
-                validate(delegate);
+            Box::new(move |fsm: *const u8| {
+                let fsm = unsafe { &*(fsm as *const ApplyFsm<RocksEngine>) };
+                validate(fsm);
                 validate_tx.send(()).unwrap();
             }),
         ));
