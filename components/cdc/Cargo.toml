@@ -71,5 +71,11 @@ test_util = { path = "../test_util" }
 panic_hook = { path = "../panic_hook" }
 
 [[test]]
-name = "tests"
-path = "tests/mod.rs"
+name = "integrations"
+path = "tests/integrations/mod.rs"
+
+# To avoid failpoints interfere with normal tests, we separate them.
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
+required-features = ["failpoints"]

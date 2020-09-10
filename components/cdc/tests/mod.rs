@@ -1,9 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[cfg(feature = "failpoints")]
-mod failpoints;
-mod integrations;
-
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::*;
@@ -56,6 +52,7 @@ pub fn new_event_feed(
         if !keep_resolved_ts && change_data_event.has_resolved_ts() {
             continue;
         }
+        tikv_util::info!("receive event {:?}", change_data_event);
         break change_data_event;
     };
     (req_tx, event_feed_wrap, receive_event)
