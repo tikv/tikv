@@ -12,10 +12,6 @@ use engine_rocks::{Compat, RocksEngine, RocksSnapshot, WRITE_BATCH_MAX_KEYS};
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, Peekable};
 use error_code::ErrorCodeExt;
-<<<<<<< HEAD
-use futures::Future;
-=======
->>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -884,38 +880,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
         };
         let peer_id = self.fsm.peer.peer_id();
-<<<<<<< HEAD
-        let f = self
-            .ctx
-            .timer
-            .delay(timeout)
-            .map(move |_| {
-                fail_point!(
-                    "on_raft_log_gc_tick_1",
-                    peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
-                    |_| unreachable!()
-                );
-                // This can happen only when the peer is about to be destroyed
-                // or the node is shutting down. So it's OK to not to clean up
-                // registry.
-                if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
-                    info!(
-                        "failed to schedule peer tick";
-                        "region_id" => region_id,
-                        "peer_id" => peer_id,
-                        "tick" => ?tick,
-                        "err" => %e,
-                    );
-                }
-            })
-            .map_err(move |e| {
-                panic!(
-                    "[region {}] {} tick {:?} is lost due to timeout error: {:?}",
-                    region_id, peer_id, tick, e
-                );
-            });
-        self.ctx.future_poller.spawn(f).unwrap();
-=======
         let cb = Box::new(move || {
             // This can happen only when the peer is about to be destroyed
             // or the node is shutting down. So it's OK to not to clean up
@@ -931,7 +895,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
         });
         self.ctx.tick_batch[idx].ticks.push(cb);
->>>>>>> 03c3ec6... raftstore: Remove future_poller pool and batch Ticks (#8457)
     }
 
     fn register_raft_base_tick(&mut self) {
