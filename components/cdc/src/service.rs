@@ -7,7 +7,6 @@ use std::sync::Arc;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
-use futures::{Future, Sink, Stream};
 use grpcio::{
     DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
     RpcStatusCode, WriteFlags,
