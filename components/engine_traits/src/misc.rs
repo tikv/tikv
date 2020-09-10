@@ -12,7 +12,7 @@ use crate::iterable::{Iterable, Iterator};
 use crate::options::IterOptions;
 use crate::range::Range;
 use crate::sst::{SstExt, SstWriter, SstWriterBuilder};
-use crate::write_batch::{Mutable, WriteBatch, WriteBatchExt};
+use crate::write_batch::{Mutable, WriteBatchExt};
 
 use tikv_util::keybuilder::KeyBuilder;
 

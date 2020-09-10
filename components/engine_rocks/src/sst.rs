@@ -166,7 +166,7 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         let mut io_options = if let Some(db) = self.db.as_ref() {
             env = db.env();
             let handle = db
-                .cf_handle(self.cf.as_ref().map(|cf| cf.as_str()).unwrap_or(CF_DEFAULT))
+                .cf_handle(self.cf.as_deref().unwrap_or(CF_DEFAULT))
                 .ok_or_else(|| format!("CF {:?} is not found", self.cf))?;
             db.get_options_cf(handle)
         } else {
