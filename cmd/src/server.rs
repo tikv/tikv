@@ -400,10 +400,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             let ch = ch.lock().unwrap();
             let event = StoreMsg::CompactedEvent(compacted_event);
             if let Err(e) = ch.send_control(event) {
-                error!(
-                    "send compaction finished event to raftstore failed";
-                    "err" => ?e,
-                );
+                error!(?e; "send compaction finished event to raftstore failed");
             }
         });
         engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
@@ -810,10 +807,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         // Start metrics flusher
         if let Err(e) = metrics_flusher.start() {
-            error!(
-                "failed to start metrics flusher";
-                "err" => %e
-            );
+            error!(%e; "failed to start metrics flusher");
         }
 
         self.to_stop.push(metrics_flusher);
@@ -845,10 +839,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
-                    error!(
-                        "failed to start runtime for status service";
-                        "err" => %e
-                    );
+                    error!(%e; "failed to start runtime for status service");
                     return;
                 }
             };
@@ -857,10 +848,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.config.server.status_addr.clone(),
                 self.config.server.advertise_status_addr.clone(),
             ) {
-                error!(
-                    "failed to bind addr for status service";
-                    "err" => %e
-                );
+                error!(%e; "failed to bind addr for status service");
             } else {
                 self.to_stop.push(status_server);
             }
