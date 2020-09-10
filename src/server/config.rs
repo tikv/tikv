@@ -160,7 +160,7 @@ impl Default for Config {
                 DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
-            end_point_check_memory_locks: false,
+            end_point_check_memory_locks: true,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,

@@ -751,20 +751,18 @@ where
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(ctx.cfg.sync_log);
+        write_opts.set_sync(true);
         ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
-        ctx.engines.raft.consume(&mut raft_wb, ctx.cfg.sync_log)?;
+        ctx.engines.raft.consume(&mut raft_wb, true)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
             // will be cleared by a newer snapshot applying or restart.
             if let Err(e) = self.get_store().clear_data() {
-                error!(
+                error!(?e;
                     "failed to schedule clear data task";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -3095,14 +3093,12 @@ where
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
             if let Err(e) = ctx.trans.send(send_msg) {
-                error!(
+                error!(?e;
                     "failed to send wake up message";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -3130,14 +3126,12 @@ where
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgCheckStalePeer);
             if let Err(e) = ctx.trans.send(send_msg) {
-                error!(
+                error!(?e;
                     "failed to send check stale peer message";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -3182,14 +3176,12 @@ where
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_premerge_commit(premerge_commit);
         if let Err(e) = ctx.trans.send(send_msg) {
-            error!(
+            error!(?e;
                 "failed to send want rollback merge message";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "target_peer_id" => to_peer.get_id(),
                 "target_store_id" => to_peer.get_store_id(),
-                "err" => ?e,
-                "error_code" => %e.error_code(),
             );
         } else {
             ctx.need_flush_trans = true;

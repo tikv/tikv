@@ -62,7 +62,6 @@ procfs = "0.7"
 git = "https://github.com/tikv/yatp.git"
 
 [dev-dependencies]
-futures-cpupool = "0.1"
 panic_hook = { path = "../panic_hook" }
 protobuf = "2"
 regex = "1.0"

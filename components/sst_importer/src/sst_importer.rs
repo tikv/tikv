@@ -58,7 +58,7 @@ impl SSTImporter {
                 Ok(f)
             }
             Err(e) => {
-                error!("create failed"; "meta" => ?meta, "err" => %e);
+                error!(%e; "create failed"; "meta" => ?meta,);
                 Err(e)
             }
         }
@@ -71,7 +71,7 @@ impl SSTImporter {
                 Ok(())
             }
             Err(e) => {
-                error!("delete failed"; "meta" => ?meta, "err" => %e);
+                error!(%e; "delete failed"; "meta" => ?meta,);
                 Err(e)
             }
         }
@@ -84,7 +84,7 @@ impl SSTImporter {
                 Ok(())
             }
             Err(e) => {
-                error!("ingest failed"; "meta" => ?meta, "err" => %e);
+                error!(%e; "ingest failed"; "meta" => ?meta,);
                 Err(e)
             }
         }
@@ -128,7 +128,7 @@ impl SSTImporter {
                 Ok(r)
             }
             Err(e) => {
-                error!("download failed"; "meta" => ?meta, "name" => name, "err" => %e);
+                error!(%e; "download failed"; "meta" => ?meta, "name" => name,);
                 Err(e)
             }
         }
@@ -646,9 +646,7 @@ impl ImportDir {
             let path = e.path();
             match path_to_sst_meta(&path) {
                 Ok(sst) => ssts.push(sst),
-                Err(e) => {
-                    error!("path_to_sst_meta failed"; "path" => %path.to_str().unwrap(), "err" => %e)
-                }
+                Err(e) => error!(%e; "path_to_sst_meta failed"; "path" => %path.to_str().unwrap(),),
             }
         }
         Ok(ssts)

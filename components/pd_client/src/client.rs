@@ -412,7 +412,7 @@ impl PdClient for RpcClient {
                         Ok(())
                     }
                     Err(e) => {
-                        error!("failed to send heartbeat"; "err" => ?e);
+                        error!(?e; "failed to send heartbeat");
                         Err(e)
                     }
                 }

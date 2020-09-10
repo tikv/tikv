@@ -143,6 +143,17 @@ impl PeerTicks {
             _ => unreachable!(),
         }
     }
+    pub fn get_all_ticks() -> &'static [PeerTicks] {
+        const TICKS: &[PeerTicks] = &[
+            PeerTicks::RAFT,
+            PeerTicks::RAFT_LOG_GC,
+            PeerTicks::SPLIT_REGION_CHECK,
+            PeerTicks::PD_HEARTBEAT,
+            PeerTicks::CHECK_MERGE,
+            PeerTicks::CHECK_PEER_STALE_STATE,
+        ];
+        TICKS
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

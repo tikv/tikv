@@ -1,17 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{Error, Result};
-use futures::unsync::mpsc::{self, UnboundedSender};
-use futures::{Future, Sink, Stream};
+use futures03::channel::mpsc::{self, UnboundedSender};
+use futures03::compat::{Sink01CompatExt, Stream01CompatExt};
+use futures03::future::{self, BoxFuture};
+use futures03::sink::SinkExt;
+use futures03::stream::{StreamExt, TryStreamExt};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use kvproto::deadlock::*;
 use security::SecurityManager;
 use std::sync::Arc;
 use std::time::Duration;
 
-type DeadlockFuture<T> = Box<dyn Future<Item = T, Error = Error>>;
+type DeadlockFuture<T> = BoxFuture<'static, Result<T>>;
 
-pub type Callback = Box<dyn Fn(DeadlockResponse)>;
+pub type Callback = Box<dyn Fn(DeadlockResponse) + Send>;
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "deadlock";
@@ -53,27 +56,25 @@ impl Client {
     ) -> (DeadlockFuture<()>, DeadlockFuture<()>) {
         let (tx, rx) = mpsc::unbounded();
         let (sink, receiver) = self.client.detect().unwrap();
-        let send = sink
-            .sink_map_err(Error::Grpc)
-            .send_all(rx.then(|r| match r {
-                Ok(r) => Ok((r, WriteFlags::default())),
-                Err(()) => Err(Error::Other(box_err!("failed to recv detect request"))),
-            }))
-            .then(|res| match res {
-                Ok((mut sink, _)) => {
+        let send_task = Box::pin(async move {
+            let mut sink = sink.sink_compat().sink_map_err(Error::Grpc);
+            sink.send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
+                .await
+                .map(|_| {
                     info!("cancel detect sender");
-                    sink.get_mut().cancel();
-                    Ok(())
-                }
-                Err(e) => Err(e),
-            });
+                    sink.get_mut().get_mut().cancel();
+                })
+        });
         self.sender = Some(tx);
 
-        let recv = receiver.map_err(Error::Grpc).for_each(move |resp| {
-            cb(resp);
-            Ok(())
-        });
-        (Box::new(send), Box::new(recv))
+        let recv_task = Box::pin(receiver.compat().map_err(Error::Grpc).try_for_each(
+            move |resp| {
+                cb(resp);
+                future::ok(())
+            },
+        ));
+
+        (send_task, recv_task)
     }
 
     pub fn detect(&self, req: DeadlockRequest) -> Result<()> {
