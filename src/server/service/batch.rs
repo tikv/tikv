@@ -1,15 +1,15 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::server::metrics::GRPC_MSG_HISTOGRAM_STATIC;
-use crate::server::service::kv::{batch_commands_response, poll_future_notify};
+use crate::server::service::kv::batch_commands_response;
 use crate::storage::{
     errors::{extract_key_error, extract_region_error},
     kv::Engine,
     lock_manager::LockManager,
     Storage,
 };
-use futures::Future;
 use kvproto::kvrpcpb::*;
+use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::batch::Sender;
 use tikv_util::time::{duration_to_sec, Instant};
 
@@ -90,8 +90,9 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
     tx: Sender<(u64, batch_commands_response::Response)>,
 ) {
     let begin_instant = Instant::now_coarse();
-    let f = storage.batch_get_command(gets).then(move |ret| {
-        match ret {
+    let ret = storage.batch_get_command(gets);
+    let f = async move {
+        match ret.await {
             Ok(ret) => {
                 for (v, req) in ret.into_iter().zip(requests) {
                     let mut resp = GetResponse::default();
@@ -130,8 +131,7 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
         GRPC_MSG_HISTOGRAM_STATIC
             .kv_batch_get_command
             .observe(begin_instant.elapsed_secs());
-        Ok(())
-    });
+    };
     poll_future_notify(f);
 }
 
@@ -142,8 +142,9 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
     tx: Sender<(u64, batch_commands_response::Response)>,
 ) {
     let begin_instant = Instant::now_coarse();
-    let f = storage.raw_batch_get_command(gets).then(move |v| {
-        match v {
+    let ret = storage.raw_batch_get_command(gets);
+    let f = async move {
+        match ret.await {
             Ok(v) => {
                 if requests.len() != v.len() {
                     error!("KvService batch response size mismatch");
@@ -185,7 +186,6 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
         GRPC_MSG_HISTOGRAM_STATIC
             .raw_batch_get_command
             .observe(duration_to_sec(begin_instant.elapsed()));
-        Ok(())
-    });
+    };
     poll_future_notify(f);
 }

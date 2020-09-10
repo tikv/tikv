@@ -6,12 +6,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::{Future, Stream};
+use futures03::compat::Stream01CompatExt;
+use futures03::stream::StreamExt;
 use grpcio::{
     ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
 };
 use kvproto::tikvpb::*;
-use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
+use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
@@ -60,10 +61,11 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
-    stats_pool: Option<ThreadPool>,
+    stats_pool: Option<Runtime>,
     grpc_thread_load: Arc<ThreadLoad>,
     yatp_read_pool: Option<ReadPool>,
     readpool_normal_thread_load: Arc<ThreadLoad>,
+    debug_thread_pool: Arc<Runtime>,
     timer: Handle,
 }
 
@@ -79,14 +81,17 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         snap_mgr: SnapManager,
         gc_worker: GcWorker<E, T>,
         yatp_read_pool: Option<ReadPool>,
+        debug_thread_pool: Arc<Runtime>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.stats_concurrency > 0 {
             Some(
-                ThreadPoolBuilder::new()
-                    .pool_size(cfg.stats_concurrency)
-                    .name_prefix(STATS_THREAD_PREFIX)
-                    .build(),
+                RuntimeBuilder::new()
+                    .threaded_scheduler()
+                    .thread_name(STATS_THREAD_PREFIX)
+                    .core_threads(cfg.stats_concurrency)
+                    .build()
+                    .unwrap(),
             )
         } else {
             None
@@ -161,10 +166,15 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
             grpc_thread_load,
             yatp_read_pool,
             readpool_normal_thread_load,
+            debug_thread_pool,
             timer: GLOBAL_TIMER_HANDLE.clone(),
         };
 
         Ok(svr)
+    }
+
+    pub fn get_debug_thread_pool(&self) -> &RuntimeHandle {
+        self.debug_thread_pool.handle()
     }
 
     pub fn transport(&self) -> ServerTransport<T, S> {
@@ -224,17 +234,17 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
             let tl = Arc::clone(&self.readpool_normal_thread_load);
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, READPOOL_NORMAL_THREAD_PREFIX, tl)
         };
+        let mut delay = self
+            .timer
+            .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
+            .compat();
         if let Some(ref p) = self.stats_pool {
-            p.spawn(
-                self.timer
-                    .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
-                    .map_err(|_| ())
-                    .for_each(move |i| {
-                        grpc_load_stats.record(i);
-                        readpool_normal_load_stats.record(i);
-                        Ok(())
-                    }),
-            )
+            p.spawn(async move {
+                while let Some(Ok(i)) = delay.next().await {
+                    grpc_load_stats.record(i);
+                    readpool_normal_load_stats.record(i);
+                }
+            });
         };
 
         info!("TiKV is ready to serve");
@@ -248,7 +258,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
             server.shutdown();
         }
         if let Some(pool) = self.stats_pool.take() {
-            let _ = pool.shutdown_now().wait();
+            let _ = pool.shutdown_timeout(Duration::from_secs(60));
         }
         let _ = self.yatp_read_pool.take();
         Ok(())
@@ -359,6 +369,7 @@ mod tests {
     use engine_rocks::RocksSnapshot;
     use kvproto::raft_serverpb::RaftMessage;
     use security::SecurityConfig;
+    use tokio::runtime::Builder as TokioBuilder;
 
     #[derive(Clone)]
     struct MockResolver {
@@ -431,7 +442,14 @@ mod tests {
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
         );
-
+        let debug_thread_pool = Arc::new(
+            TokioBuilder::new()
+                .threaded_scheduler()
+                .thread_name(thd_name!("debugger"))
+                .core_threads(1)
+                .build()
+                .unwrap(),
+        );
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
             &cfg,
@@ -446,6 +464,7 @@ mod tests {
             SnapManager::new(""),
             gc_worker,
             None,
+            debug_thread_pool,
         )
         .unwrap();
 

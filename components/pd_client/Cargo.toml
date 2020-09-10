@@ -15,6 +15,7 @@ prost-codec = [
   "kvproto/prost-codec",
   "txn_types/prost-codec",
 ]
+failpoints = ["fail/failpoints"]
 
 [dependencies]
 error_code = { path = "../error_code" }
@@ -36,3 +37,4 @@ tikv_util = { path = "../tikv_util" }
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types" }
 semver = "0.10"
+fail = "0.3"

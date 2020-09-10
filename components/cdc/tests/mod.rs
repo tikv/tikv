@@ -14,16 +14,7 @@ use engine_rocks::RocksEngine;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
 use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    create_change_data, event::Event as Event_oneof_event, ChangeDataClient, ChangeDataEvent,
-    ChangeDataRequest, Event,
-};
-#[cfg(not(feature = "prost-codec"))]
-use kvproto::cdcpb::{
-    create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest, Event,
-    Event_oneof_event,
-};
+use kvproto::cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest};
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
@@ -48,7 +39,7 @@ pub fn new_event_feed(
 ) -> (
     ClientDuplexSender<ChangeDataRequest>,
     Rc<Cell<Option<ClientDuplexReceiver<ChangeDataEvent>>>>,
-    impl Fn(bool) -> Vec<Event>,
+    impl Fn(bool) -> ChangeDataEvent,
 ) {
     let (req_tx, resp_rx) = client.event_feed().unwrap();
     let event_feed_wrap = Rc::new(Cell::new(Some(resp_rx)));
@@ -61,20 +52,11 @@ pub fn new_event_feed(
             Err(e) => panic!("receive failed {:?}", e.0),
         };
         event_feed.set(Some(events));
-        let mut change_data = change_data.unwrap();
-        let mut events: Vec<_> = change_data.take_events().into();
-        if !keep_resolved_ts {
-            events.retain(|e| {
-                if let Event_oneof_event::ResolvedTs(_) = e.event.as_ref().unwrap() {
-                    false
-                } else {
-                    true
-                }
-            });
+        let change_data_event = change_data.unwrap();
+        if !keep_resolved_ts && change_data_event.has_resolved_ts() {
+            continue;
         }
-        if !events.is_empty() {
-            return events;
-        }
+        break change_data_event;
     };
     (req_tx, event_feed_wrap, receive_event)
 }
@@ -92,7 +74,10 @@ pub struct TestSuite {
 
 impl TestSuite {
     pub fn new(count: usize) -> TestSuite {
-        Self::with_cluster(count, new_server_cluster(1, count))
+        let mut cluster = new_server_cluster(1, count);
+        // Increase the Raft tick interval to make this test case running reliably.
+        configure_for_lease_read(&mut cluster, Some(100), None);
+        Self::with_cluster(count, cluster)
     }
 
     pub fn with_cluster(count: usize, mut cluster: Cluster<ServerCluster>) -> TestSuite {
@@ -164,6 +149,17 @@ impl TestSuite {
             worker.stop().unwrap().join().unwrap();
         }
         self.cluster.shutdown();
+    }
+
+    pub fn new_changedata_request(&mut self, region_id: u64) -> ChangeDataRequest {
+        let mut req = ChangeDataRequest::default();
+        req.region_id = region_id;
+        req.set_region_epoch(self.get_context(region_id).take_region_epoch());
+        // Assume batch resolved ts will be release in v4.0.7
+        // For easy of testing (nightly CI), we lower the gate to v4.0.6
+        // TODO bump the version when cherry pick to release branch.
+        req.mut_header().set_ticdc_version("4.0.6".into());
+        req
     }
 
     pub fn must_kv_prewrite(

@@ -144,7 +144,6 @@ fn test_raft_client_reconnect() {
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
     let (mock_server, port) = create_mock_server(service, 60100, 60200).unwrap();
 
-    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
     let (tx, rx) = mpsc::channel();
     let (significant_msg_sender, _significant_msg_receiver) = mpsc::channel();
     let router = TestRaftStoreRouter::new(tx, significant_msg_sender);
@@ -174,7 +173,6 @@ fn test_raft_client_reconnect() {
     check_msg_count(1000, &msg_count, 100);
 
     drop(mock_server);
-    pool.shutdown().wait().unwrap();
 }
 
 #[test]

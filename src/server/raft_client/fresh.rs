@@ -320,12 +320,11 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
             self.raft_router
                 .report_snapshot_status(self.region_id, self.to_peer_id, status)
         {
-            error!(
+            error!(?e;
                 "report snapshot to peer failes";
                 "to_peer_id" => self.to_peer_id,
                 "to_store_id" => self.to_store_id,
                 "region_id" => self.region_id,
-                "err" => ?e
             );
         }
     }
@@ -344,11 +343,11 @@ where
         let res = router.report_snapshot_status(msg.region_id, to_peer.id, SnapshotStatus::Failure);
         if let Err(e) = res {
             error!(
+                ?e;
                 "reporting snapshot to peer fails";
                 "to_peer_id" => to_peer.id,
                 "to_store_id" => to_peer.store_id,
                 "region_id" => msg.region_id,
-                "err" => ?e
             );
         }
     }
@@ -642,7 +641,7 @@ async fn maybe_backoff(last_wake_time: &mut Instant, retry_times: &mut u64) {
         return;
     }
     if let Err(e) = GLOBAL_TIMER_HANDLE.delay(now + timeout).compat().await {
-        error!("failed to backoff: {:?}", e);
+        error!(?e; "failed to backoff");
     }
     *last_wake_time = Instant::now();
 }
@@ -680,7 +679,7 @@ async fn start<S, R>(
             Err(e) => {
                 RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
                 back_end.clear_pending_message();
-                error!("resolve store address failed"; "store_id" => back_end.store_id, "err" => ?e);
+                error!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
                 // TOMBSTONE
                 if format!("{}", e).contains("has been removed") {
                     let mut pool = pool.lock().unwrap();

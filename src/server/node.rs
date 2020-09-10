@@ -13,12 +13,11 @@ use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Peekable};
+use engine_traits::{Engines, Peekable, RaftEngine};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
-use raft_engine::RaftEngine;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::fsm::store::StoreMeta;
@@ -342,9 +341,7 @@ where
                     }
                 },
                 // TODO: should we clean region for other errors too?
-                Err(e) => {
-                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e)
-                }
+                Err(e) => error!(?e; "bootstrap cluster"; "cluster_id" => self.cluster_id,),
             }
             retry += 1;
             thread::sleep(Duration::from_secs(

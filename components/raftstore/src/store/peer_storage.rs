@@ -10,7 +10,6 @@ use std::{cmp, error, u64};
 
 use engine_traits::CF_RAFT;
 use engine_traits::{Engines, KvEngine, Mutable, Peekable};
-use error_code::ErrorCodeExt;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -24,8 +23,8 @@ use crate::store::fsm::GenSnapTask;
 use crate::store::util;
 use crate::store::ProposalContext;
 use crate::{Error, Result};
+use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
-use raft_engine::{RaftEngine, RaftLogBatch};
 use tikv_util::worker::Scheduler;
 
 use super::metrics::*;
@@ -1080,10 +1079,11 @@ where
             cache.flush_stats();
             return;
         }
-        let stats = self.engines.raft.flush_stats();
-        RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
-        RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as i64);
-        RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as i64);
+        if let Some(stats) = self.engines.raft.flush_stats() {
+            RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
+            RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as i64);
+            RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as i64);
+        }
     }
 
     // Apply the peer with given snapshot.
@@ -1418,12 +1418,10 @@ where
                 // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
                 // [b, c) will be kept in rocksdb until a covered snapshot is applied or
                 // store is restarted.
-                error!(
+                error!(?e;
                     "failed to cleanup data, may leave some dirty data";
                     "region_id" => self.get_region_id(),
                     "peer_id" => self.peer_id,
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -1438,11 +1436,9 @@ where
         // At present, they are also used to prevent reading **corrupt** data.
         for r in &ctx.destroyed_regions {
             if let Err(e) = self.clear_extra_data(r, &snap_region) {
-                error!(
+                error!(?e;
                     "failed to cleanup data, may leave some dirty data";
                     "region_id" => r.get_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             }
         }
