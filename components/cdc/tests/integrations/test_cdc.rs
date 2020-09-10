@@ -138,7 +138,6 @@ fn test_cdc_basic() {
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
         other => panic!("unknown event {:?}", other),
     }
     // Sleep a while to make sure the stream is registered.
@@ -178,9 +177,6 @@ fn test_cdc_basic() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
-        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
-        Event_oneof_event::Entries(e) => panic!("{:?}", e),
-        Event_oneof_event::Admin(e) => panic!("{:?}", e),
         other => panic!("unknown event {:?}", other),
     }
 
@@ -410,9 +406,6 @@ fn test_cdc_scan() {
             assert_eq!(e.key, k, "{:?}", es);
             assert_eq!(e.value, v, "{:?}", es);
         }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
-        Event_oneof_event::Admin(e) => panic!("{:?}", e),
         other => panic!("unknown event {:?}", other),
     }
     match events.pop().unwrap().event.unwrap() {
@@ -422,9 +415,6 @@ fn test_cdc_scan() {
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
-        Event_oneof_event::Admin(e) => panic!("{:?}", e),
         other => panic!("unknown event {:?}", other),
     }
 
@@ -470,9 +460,6 @@ fn test_cdc_scan() {
             assert_eq!(e.key, k, "{:?}", es);
             assert_eq!(e.value, v, "{:?}", es);
         }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
-        Event_oneof_event::Admin(e) => panic!("{:?}", e),
         other => panic!("unknown event {:?}", other),
     }
     assert_eq!(events.len(), 1, "{:?}", events);
@@ -483,9 +470,6 @@ fn test_cdc_scan() {
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
-        Event_oneof_event::Admin(e) => panic!("{:?}", e),
         other => panic!("unknown event {:?}", other),
     }
 
@@ -711,9 +695,6 @@ fn test_cdc_batch_size_limit() {
             assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
             assert_eq!(e.key, b"k1", "{:?}", e.key);
         }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
-        Event_oneof_event::Admin(e) => panic!("{:?}", e),
         other => panic!("unknown event {:?}", other),
     }
     match events.remove(0).event.unwrap() {
@@ -723,9 +704,6 @@ fn test_cdc_batch_size_limit() {
             assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
             assert_eq!(e.key, b"k2", "{:?}", e.key);
         }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
-        Event_oneof_event::Admin(e) => panic!("{:?}", e),
         other => panic!("unknown event {:?}", other),
     }
     match events.pop().unwrap().event.unwrap() {
@@ -740,9 +718,6 @@ fn test_cdc_batch_size_limit() {
                 e.get_type()
             );
         }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
-        Event_oneof_event::Admin(e) => panic!("{:?}", e),
         other => panic!("unknown event {:?}", other),
     }
 
@@ -772,9 +747,6 @@ fn test_cdc_batch_size_limit() {
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
             assert_eq!(e.key, b"k3", "{:?}", e.key);
         }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
-        Event_oneof_event::Admin(e) => panic!("{:?}", e),
         other => panic!("unknown event {:?}", other),
     }
 
@@ -856,9 +828,6 @@ fn test_old_value_basic() {
                         }
                     }
                 }
-                Event_oneof_event::Error(e) => panic!("{:?}", e),
-                Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
-                Event_oneof_event::Admin(e) => panic!("{:?}", e),
                 other => panic!("unknown event {:?}", other),
             }
         }
@@ -895,9 +864,6 @@ fn test_old_value_basic() {
                         }
                     }
                 }
-                Event_oneof_event::Error(e) => panic!("{:?}", e),
-                Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
-                Event_oneof_event::Admin(e) => panic!("{:?}", e),
                 other => panic!("unknown event {:?}", other),
             }
         }
@@ -912,7 +878,7 @@ fn test_old_value_basic() {
 
 #[test]
 fn test_cdc_resolve_ts_checking_concurrency_manager() {
-    let mut suite: super::super::TestSuite = TestSuite::new(1);
+    let mut suite: crate::TestSuite = TestSuite::new(1);
     let cm: ConcurrencyManager = suite.get_txn_concurrency_manager(1).unwrap();
     let lock_key = |key: &[u8], ts: u64| {
         let guard = block_on(cm.lock_key(&Key::from_raw(key)));
