@@ -735,6 +735,15 @@ where
                 break;
             }
 
+            if apply_ctx.kv_wb().should_write_to_engine() {
+                apply_ctx.commit(self);
+                if self.handle_start.elapsed() >= apply_ctx.core.yield_duration {
+                    reschedule().await;
+                    self.handle_start = Instant::now_coarse();
+                }
+                apply_ctx.timer = Some(Instant::now_coarse());
+            }
+
             let expect_index = self.apply_state.get_applied_index() + 1;
             if expect_index != entry.get_index() {
                 panic!(
@@ -794,19 +803,13 @@ where
 
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
-
-            if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
+            if should_write_to_engine(&cmd) {
                 apply_ctx.commit(self);
-                if self.handle_start.elapsed() >= apply_ctx.core.yield_duration {
-                    reschedule().await;
-                    self.handle_start = Instant::now_coarse();
-                }
                 apply_ctx.timer = Some(Instant::now_coarse());
             }
             return self.process_raft_cmd(apply_ctx, index, term, cmd).await;
         }
         // TOOD(cdc): should we observe empty cmd, aka leader change?
-
         self.apply_state.set_applied_index(index);
         self.applied_index_term = term;
         assert!(term > 0);
@@ -908,10 +911,9 @@ where
 
         // Set sync log hint if the cmd requires so.
         apply_ctx.sync_log_hint |= should_sync_log(&cmd);
-
-        let is_conf_change = get_change_peer_cmd(&cmd).is_some();
         apply_ctx.core.host.pre_apply(&self.region, &cmd);
         let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx, index, term, &cmd).await;
+        let is_conf_change = get_change_peer_cmd(&cmd).is_some();
         debug!(
             "applied command";
             "region_id" => self.region_id(),
