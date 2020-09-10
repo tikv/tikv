@@ -13,8 +13,6 @@ use engine::rocks::{util::config as rocks_config, PerfLevel};
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    // true for high reliability, prevent data loss when power failure.
-    pub sync_log: bool,
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
     pub prevote: bool,
     pub raftdb_path: String,
@@ -143,7 +141,6 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
-            sync_log: true,
             prevote: true,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),
@@ -367,9 +364,6 @@ impl Config {
             &["name"]
         )
         .unwrap();
-        metrics
-            .with_label_values(&["sync_log"])
-            .set((self.sync_log as i32).into());
         metrics
             .with_label_values(&["prevote"])
             .set((self.prevote as i32).into());
