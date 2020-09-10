@@ -70,7 +70,7 @@ where
 /// it will register the waker. When the event is ready, the waker will
 /// be notified, then the internal future is immediately polled in the
 /// thread calling `wake()`.
-pub fn poll_future_notify(f: impl Future<Output = ()> + Send + 'static) {
+pub fn poll_future_notify<F: Future<Output = ()> + Send + 'static>(f: F) {
     let f: BoxFuture<'static, ()> = Box::pin(f);
     let waker = Arc::new(BatchCommandsWaker(Mutex::new(Some(f))));
     waker.wake();
