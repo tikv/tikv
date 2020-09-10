@@ -585,9 +585,12 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             });
         let future = async move {
             match sink.send_all(&mut stream).await.map_err(Error::from) {
-                Ok(_) => GRPC_MSG_HISTOGRAM_STATIC
-                    .coprocessor_stream
-                    .observe(duration_to_sec(begin_instant.elapsed())),
+                Ok(_) => {
+                    GRPC_MSG_HISTOGRAM_STATIC
+                        .coprocessor_stream
+                        .observe(duration_to_sec(begin_instant.elapsed()));
+                    let _ = sink.close().await;
+                }
                 Err(e) => {
                     debug!("kv rpc failed";
                         "request" => "coprocessor_stream",
@@ -596,7 +599,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                     GRPC_MSG_FAIL_COUNTER.coprocessor_stream.inc();
                 }
             }
-            let _ = sink.close().await;
         };
 
         ctx.spawn(future);

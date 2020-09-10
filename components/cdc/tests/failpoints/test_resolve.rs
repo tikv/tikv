@@ -3,13 +3,10 @@ use crate::{new_event_feed, TestSuite};
 use futures::executor::block_on;
 use futures::sink::SinkExt;
 use grpcio::WriteFlags;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::event::{Event as Event_oneof_event, LogType as EventLogType};
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::{Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataRequest,
-};
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::sleep_ms;
@@ -23,9 +20,7 @@ fn test_stale_resolver() {
 
     // Close previous connection and open a new one twice time
     let region = suite.cluster.get_region(&[]);
-    let mut req = ChangeDataRequest::default();
-    req.region_id = region.get_id();
-    req.set_region_epoch(region.get_region_epoch().clone());
+    let req = suite.new_changedata_request(region.get_id());
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
     block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
@@ -94,7 +89,7 @@ fn test_stale_resolver() {
                 _ => panic!("{:?}", es),
             },
             Event_oneof_event::Error(e) => panic!("{:?}", e),
-            _ => panic!("unknown event"),
+            other => panic!("unknown event {:?}", other),
         }
     }
 
@@ -119,7 +114,7 @@ fn test_stale_resolver() {
                 }
             },
             Event_oneof_event::Error(e) => panic!("{:?}", e),
-            _ => panic!("unknown event"),
+            other => panic!("unknown event {:?}", other),
         }
     }
 

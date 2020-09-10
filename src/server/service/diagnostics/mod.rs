@@ -8,7 +8,10 @@ use futures::compat::Future01CompatExt;
 use futures::future::{FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
-use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
+use grpcio::{
+    Result as GrpcResult, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
+    WriteFlags,
+};
 use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
     ServerInfoType,
@@ -85,8 +88,12 @@ impl Diagnostics for Service {
             .spawn(async move {
                 match stream.await.unwrap() {
                     Ok(s) => {
-                        let res = sink.send_all(&mut s.map(|item| Ok(item))).await;
-                        let _ = sink.close().await;
+                        let res = async move {
+                            sink.send_all(&mut s.map(|item| Ok(item))).await?;
+                            sink.close().await?;
+                            GrpcResult::Ok(())
+                        }
+                        .await;
                         if let Err(e) = res {
                             error!("search log RPC error"; "error" => ?e);
                         }

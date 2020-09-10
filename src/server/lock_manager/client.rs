@@ -64,7 +64,6 @@ impl Client {
                     info!("cancel detect sender");
                     sink.get_mut().cancel();
                 });
-            let _ = sink.close().await;
             res
         });
         self.sender = Some(tx);

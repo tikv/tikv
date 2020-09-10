@@ -1,9 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[cfg(feature = "failpoints")]
-mod failpoints;
-mod integrations;
-
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::*;
@@ -48,12 +44,14 @@ pub fn new_event_feed(
 
     let receive_event = move |keep_resolved_ts: bool| loop {
         let event_feed = event_feed_wrap_clone.as_ref();
-        let (change_data, events) = block_on(event_feed.replace(None).unwrap().into_future());
+        let mut events = event_feed.replace(None).unwrap();
+        let change_data = block_on(events.next());
         event_feed.set(Some(events));
         let change_data_event = change_data.unwrap().unwrap();
         if !keep_resolved_ts && change_data_event.has_resolved_ts() {
             continue;
         }
+        tikv_util::info!("receive event {:?}", change_data_event);
         break change_data_event;
     };
     (req_tx, event_feed_wrap, receive_event)
@@ -72,7 +70,10 @@ pub struct TestSuite {
 
 impl TestSuite {
     pub fn new(count: usize) -> TestSuite {
-        Self::with_cluster(count, new_server_cluster(1, count))
+        let mut cluster = new_server_cluster(1, count);
+        // Increase the Raft tick interval to make this test case running reliably.
+        configure_for_lease_read(&mut cluster, Some(100), None);
+        Self::with_cluster(count, cluster)
     }
 
     pub fn with_cluster(count: usize, mut cluster: Cluster<ServerCluster>) -> TestSuite {
@@ -144,6 +145,17 @@ impl TestSuite {
             worker.stop().unwrap().join().unwrap();
         }
         self.cluster.shutdown();
+    }
+
+    pub fn new_changedata_request(&mut self, region_id: u64) -> ChangeDataRequest {
+        let mut req = ChangeDataRequest::default();
+        req.region_id = region_id;
+        req.set_region_epoch(self.get_context(region_id).take_region_epoch());
+        // Assume batch resolved ts will be release in v4.0.7
+        // For easy of testing (nightly CI), we lower the gate to v4.0.6
+        // TODO bump the version when cherry pick to release branch.
+        req.mut_header().set_ticdc_version("4.0.6".into());
+        req
     }
 
     pub fn must_kv_prewrite(

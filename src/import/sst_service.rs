@@ -103,7 +103,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         };
         match res {
             Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
-            Err(ref e) => error!("switch mode failed"; "mode" => ?req.get_mode(), "err" => %e),
+            Err(ref e) => error!(%e; "switch mode failed"; "mode" => ?req.get_mode(),),
         }
 
         let task = async move {
@@ -337,11 +337,11 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
                     "end" => end.map(log_wrappers::Key),
                     "output_level" => ?output_level, "takes" => ?timer.elapsed()
                 ),
-                Err(ref e) => error!(
+                Err(ref e) => error!(%e;
                     "compact files in range failed";
                     "start" => start.map(log_wrappers::Key),
                     "end" => end.map(log_wrappers::Key),
-                    "output_level" => ?output_level, "err" => %e
+                    "output_level" => ?output_level,
                 ),
             }
             let res = engine.compact_files_in_range(start, end, output_level);
@@ -365,11 +365,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             send_rpc_response!(res, sink, label, timer);
         };
 
-        let thread_handle = self.threads.clone();
-        let ctx_task = async move {
-            thread_handle.spawn_ok(handle_task);
-        };
-        ctx.spawn(ctx_task);
+        self.threads.spawn_ok(handle_task);
     }
 
     fn set_download_speed_limit(

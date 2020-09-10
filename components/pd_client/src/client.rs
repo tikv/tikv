@@ -8,12 +8,11 @@ use std::time::{Duration, Instant};
 use futures::channel::mpsc;
 use futures::compat::Future01CompatExt;
 use futures::executor::block_on;
-use futures::future;
+use futures::future::{self, FutureExt};
 use futures::sink::SinkExt;
-use futures::stream::StreamExt;
-use futures::stream::TryStreamExt;
+use futures::stream::{StreamExt, TryStreamExt};
 
-use grpcio::{CallOption, EnvBuilder, WriteFlags};
+use grpcio::{CallOption, EnvBuilder, Result as GrpcResult, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
@@ -412,7 +411,7 @@ impl PdClient for RpcClient {
                         Ok(())
                     }
                     Err(e) => {
-                        error!("failed to send heartbeat"; "err" => ?e);
+                        error!(?e; "failed to send heartbeat");
                         Err(e)
                     }
                 }
@@ -670,9 +669,11 @@ impl PdClient for RpcClient {
                 .tso()
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "tso", e));
             let send_once = async move {
-                let _ = req_sink.send((req, WriteFlags::default())).await;
-                let _ = req_sink.close().await;
-            };
+                req_sink.send((req, WriteFlags::default())).await?;
+                req_sink.close().await?;
+                GrpcResult::Ok(())
+            }
+            .map(|_| ());
             cli.client_stub.spawn(send_once);
             Box::pin(async move {
                 let resp = resp_stream.try_next().await?;

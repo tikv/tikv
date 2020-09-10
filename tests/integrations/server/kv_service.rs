@@ -33,6 +33,7 @@ fn test_batch_commands() {
         }
         block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
     }
+    block_on(sender.close()).unwrap();
 
     let (tx, rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
@@ -78,6 +79,7 @@ fn test_empty_commands() {
         }
         block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
     }
+    block_on(sender.close()).unwrap();
 
     let (tx, rx) = mpsc::sync_channel(1);
     thread::spawn(move || {

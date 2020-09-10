@@ -252,6 +252,7 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
                 });
             if let Err(e) = sink.send_all(&mut s).await {
                 on_grpc_error("scan_mvcc", &e);
+                return;
             }
             let _ = sink.close().await;
         };

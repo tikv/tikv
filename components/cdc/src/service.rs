@@ -7,9 +7,13 @@ use std::sync::Arc;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
-use grpcio::Result as GrpcResult;
-use grpcio::*;
-use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event, ResolvedTs};
+use grpcio::{
+    DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
+    RpcStatusCode, WriteFlags,
+};
+use kvproto::cdcpb::{
+    ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility, Event, ResolvedTs,
+};
 use protobuf::Message;
 use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
@@ -35,6 +39,7 @@ impl ConnID {
     }
 }
 
+#[derive(Debug)]
 pub enum CdcEvent {
     ResolvedTs(ResolvedTs),
     Event(Event),
@@ -49,19 +54,73 @@ impl CdcEvent {
     }
 }
 
+bitflags::bitflags! {
+    pub struct FeatureGate: u8 {
+        const BATCH_RESOLVED_TS = 0b00000001;
+        // Uncomment when its ready.
+        // const LargeTxn       = 0b00000010;
+    }
+}
+
 pub struct Conn {
     id: ConnID,
     sink: BatchSender<CdcEvent>,
     downstreams: HashMap<u64, DownstreamID>,
+    peer: String,
+    version: Option<(semver::Version, FeatureGate)>,
 }
 
 impl Conn {
-    pub fn new(sink: BatchSender<CdcEvent>) -> Conn {
+    pub fn new(sink: BatchSender<CdcEvent>, peer: String) -> Conn {
         Conn {
             id: ConnID::new(),
             sink,
             downstreams: HashMap::default(),
+            version: None,
+            peer,
         }
+    }
+
+    // TODO refactor into Error::Version.
+    pub fn check_version_and_set_feature(&mut self, ver: semver::Version) -> Option<Compatibility> {
+        // Assume batch resolved ts will be release in v4.0.7
+        // For easy of testing (nightly CI), we lower the gate to v4.0.6
+        // TODO bump the version when cherry pick to release branch.
+        let v407_bacth_resoled_ts = semver::Version::new(4, 0, 6);
+
+        match &self.version {
+            Some((version, _)) => {
+                if version == &ver {
+                    None
+                } else {
+                    error!("different version on the same connection";
+                        "previous version" => ?version, "version" => ?ver,
+                        "downstream" => ?self.peer, "conn_id" => ?self.id);
+                    let mut compat = Compatibility::default();
+                    compat.required_version = version.to_string();
+                    Some(compat)
+                }
+            }
+            None => {
+                let mut features = FeatureGate::empty();
+                if v407_bacth_resoled_ts <= ver {
+                    features.toggle(FeatureGate::BATCH_RESOLVED_TS);
+                }
+                info!("cdc connection version"; "version" => ver.to_string(), "features" => ?features);
+                self.version = Some((ver, features));
+                None
+            }
+        }
+        // Return Err(Compatibility) when TiKV reaches the next major release,
+        // so that we can remove feature gates.
+    }
+
+    pub fn get_feature(&self) -> Option<&FeatureGate> {
+        self.version.as_ref().map(|(_, f)| f)
+    }
+
+    pub fn get_peer(&self) -> &str {
+        &self.peer
     }
 
     pub fn get_id(&self) -> ConnID {
@@ -136,7 +195,8 @@ impl ChangeData for Service {
         }
         // TODO: make it a bounded channel.
         let (tx, rx) = batch::unbounded(CDC_MSG_NOTIFY_COUNT);
-        let conn = Conn::new(tx);
+        let peer = ctx.peer();
+        let conn = Conn::new(tx, peer);
         let conn_id = conn.get_id();
 
         if let Err(status) = self
@@ -160,15 +220,25 @@ impl ChangeData for Service {
         let recv_req = stream.try_for_each(move |request| {
             let region_epoch = request.get_region_epoch().clone();
             let req_id = request.get_request_id();
+            let version = match semver::Version::parse(request.get_header().get_ticdc_version()) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("empty or invalid TiCDC version, please upgrading TiCDC";
+                        "version" => request.get_header().get_ticdc_version(),
+                        "error" => ?e);
+                    semver::Version::new(0, 0, 0)
+                }
+            };
             let downstream = Downstream::new(peer.clone(), region_epoch, req_id, conn_id);
             let ret = scheduler
                 .schedule(Task::Register {
                     request,
                     downstream,
                     conn_id,
+                    version,
                 })
                 .map_err(|e| {
-                    Error::RpcFailure(RpcStatus::new(
+                    GrpcError::RpcFailure(RpcStatus::new(
                         RpcStatusCode::INVALID_ARGUMENT,
                         Some(format!("{:?}", e)),
                     ))
@@ -186,11 +256,11 @@ impl ChangeData for Service {
                 resp_vecs.push(ChangeDataEvent::default());
                 let mut current_events_size = 0;
                 for event in events {
-                    if current_events_size >= CDC_MAX_RESP_SIZE {
+                    let event_size = event.size();
+                    if current_events_size + event_size >= CDC_MAX_RESP_SIZE {
                         resp_vecs.push(ChangeDataEvent::default());
                         current_events_size = 0;
                     }
-                    let event_size = event.size();
                     match event {
                         CdcEvent::Event(e) => {
                             resp_vecs.last_mut().unwrap().mut_events().push(e);
@@ -227,10 +297,10 @@ impl ChangeData for Service {
             }
             match res {
                 Ok(()) => {
-                    info!("cdc send half closed"; "remote" => peer, "conn_id" => ?conn_id);
+                    info!("cdc send half closed"; "downstream" => peer, "conn_id" => ?conn_id);
                 }
                 Err(e) => {
-                    warn!("cdc send failed"; "error" => ?e, "remote" => peer, "conn_id" => ?conn_id);
+                    warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
                 }
             }
         });
@@ -247,11 +317,11 @@ impl ChangeData for Service {
             }
             match res {
                 Ok(_s) => {
-                    info!("cdc send half closed"; "remote" => peer, "conn_id" => ?conn_id);
+                    info!("cdc send half closed"; "downstream" => peer, "conn_id" => ?conn_id);
                     let _ = sink.close().await;
                 }
                 Err(e) => {
-                    warn!("cdc send failed"; "error" => ?e, "remote" => peer, "conn_id" => ?conn_id);
+                    warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
                     let _ = sink.fail(RpcStatus::new(RpcStatusCode::UNKNOWN, Some("cdc send failed".to_owned()))).await;
                 }
             }

@@ -86,8 +86,12 @@ impl Conn {
                 batch_msgs.set_msgs(v.into());
                 GrpcResult::Ok((batch_msgs, WriteFlags::default().buffer_hint(false)))
             });
-            let send_res = batch_sink.send_all(&mut s).await;
-            let _ = batch_sink.close().await;
+            let send_res = async move {
+                batch_sink.send_all(&mut s).await?;
+                batch_sink.close().await?;
+                Ok(())
+            }
+            .await;
             let recv_res = batch_receiver.await;
             let res = check_rpc_result("batch_raft", &addr1, send_res.err(), recv_res.err());
             if res.is_ok() {
@@ -114,9 +118,12 @@ impl Conn {
                 })
                 .flatten()
                 .map(|msg| Ok(msg));
-
-            let send_res = sink.send_all(&mut msgs).await;
-            let _ = sink.close().await;
+            let send_res = async move {
+                sink.send_all(&mut msgs).await?;
+                sink.close().await?;
+                Ok(())
+            }
+            .await;
             let recv_res = receiver.await;
             check_rpc_result("raft", &addr2, send_res.err(), recv_res.err())
         };

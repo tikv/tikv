@@ -92,7 +92,10 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     }
 
     pub fn stop(&mut self) {
-        self.server.take();
+        self.server
+            .take()
+            .expect("Server is not started")
+            .shutdown();
     }
 
     pub fn bind_addrs(&self) -> Vec<(String, u16)> {
@@ -189,6 +192,7 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
             }))
             .await
             .unwrap();
+            resp.close().await.unwrap();
         };
         ctx.spawn(fut);
     }
@@ -276,10 +280,9 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
                     Some(Err(e)) => future::err(box_err!("{:?}", e)),
                 }
             });
-            sink.sink_map_err(PdError::from)
-                .send_all(&mut stream)
-                .await
-                .unwrap();
+            let mut sink = sink.sink_map_err(PdError::from);
+            sink.send_all(&mut stream).await.unwrap();
+            let _ = sink.close().await;
         });
     }
 
