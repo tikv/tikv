@@ -3010,7 +3010,6 @@ mod tests {
         let mut incoming = TiKvConfig::default();
         incoming.coprocessor.region_split_keys = 10000;
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
-        incoming.raft_store.sync_log = false;
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
@@ -3019,7 +3018,6 @@ mod tests {
             "10000".to_owned(),
         );
         change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
-        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
         change.insert(
             "rocksdb.defaultcf.block-cache-size".to_owned(),
             "500MB".to_owned(),
@@ -3069,7 +3067,6 @@ mod tests {
             "10000".to_owned(),
         );
         change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
-        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
         change.insert(
             "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
             "read-only".to_owned(),
@@ -3087,7 +3084,6 @@ mod tests {
             res.get("gc.max-write-bytes-per-sec"),
             Some(&"\"100MB\"".to_owned())
         );
-        assert_eq!(res.get("raftstore.sync-log"), Some(&"false".to_owned()));
         assert_eq!(
             res.get("rocksdb.defaultcf.titan.blob-run-mode"),
             Some(&"\"read-only\"".to_owned())
