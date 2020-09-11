@@ -13,6 +13,7 @@ use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_vec_expr::RpnStackNode;
 use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+use tikv_util::minitrace::{self, Event};
 
 pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     context: EvalContext,
@@ -176,6 +177,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
 
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        let _guard = minitrace::new_span(Event::TiKvCoprSelectionExecutorNextBatch as u32);
         let mut src_result = self.src.next_batch(scan_rows);
 
         if let Err(e) = self.handle_src_result(&mut src_result) {

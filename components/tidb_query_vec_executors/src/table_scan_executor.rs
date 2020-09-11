@@ -7,6 +7,7 @@ use std::sync::Arc;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::collections::HashMap;
+use tikv_util::minitrace::{self, Event};
 use tipb::ColumnInfo;
 use tipb::FieldType;
 use tipb::TableScan;
@@ -107,6 +108,7 @@ impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
 
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        let _guard = minitrace::new_span(Event::TiKvCoprTableScanExecutorNextBatch as u32);
         self.0.next_batch(scan_rows)
     }
 

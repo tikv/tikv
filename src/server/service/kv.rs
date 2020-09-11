@@ -171,6 +171,7 @@ requests_to_trace!(
   kv_batch_get -> Event::TiKvBatchGet,
   kv_batch_rollback -> Event::TiKvBatchRollback,
   kv_gc -> Event::TiKvGc,
+  kv_scan_lock -> Event::TiKvScanLock,
 );
 
 macro_rules! handle_request {

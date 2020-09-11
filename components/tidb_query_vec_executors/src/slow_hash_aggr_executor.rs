@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::collections::HashMap;
 use tikv_util::collections::HashMapEntry;
+use tikv_util::minitrace::{self, Event};
 use tipb::Aggregation;
 use tipb::{Expr, FieldType};
 
@@ -42,6 +43,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src>
 
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        let _guard = minitrace::new_span(Event::TiKvCoprSlowHashAggrExecutorNextBatch as u32);
         self.0.next_batch(scan_rows)
     }
 
