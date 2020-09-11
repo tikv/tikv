@@ -617,12 +617,16 @@ where
         region_stat: RegionStat,
         replication_status: Option<RegionReplicationStatus>,
     ) {
-        self.store_stat
-            .region_bytes_written
-            .observe(region_stat.written_bytes as f64);
-        self.store_stat
-            .region_keys_written
-            .observe(region_stat.written_keys as f64);
+        if region_stat.written_bytes != 0 {
+            self.store_stat
+                .region_bytes_written
+                .observe(region_stat.written_bytes as f64);
+        }
+        if region_stat.read_bytes != 0 {
+            self.store_stat
+                .region_keys_written
+                .observe(region_stat.written_keys as f64);
+        }
         self.store_stat
             .region_bytes_read
             .observe(region_stat.read_bytes as f64);
