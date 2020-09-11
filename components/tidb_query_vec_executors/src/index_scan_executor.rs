@@ -387,7 +387,7 @@ impl IndexScanExecutorImpl {
     }
 
     #[inline]
-    fn split_command_handle_from_index_value<'a>(value: &'a [u8]) -> Result<(&'a [u8], &'a [u8])> {
+    fn split_common_handle_from_index_value<'a>(value: &'a [u8]) -> Result<(&'a [u8], &'a [u8])> {
         if value
             .get(0)
             .map_or(false, |c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
@@ -424,7 +424,7 @@ impl IndexScanExecutorImpl {
         let remaining = &value[1..value.len() - tail_len];
         let tail = &value[value.len() - tail_len..];
         let (common_handle_bytes, remaining) =
-            Self::split_command_handle_from_index_value(remaining)?;
+            Self::split_common_handle_from_index_value(remaining)?;
         let (partition_id_bytes, restore_values) = if remaining
             .get(0)
             .map_or(false, |c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
