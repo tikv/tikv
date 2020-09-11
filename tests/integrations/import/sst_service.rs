@@ -311,6 +311,7 @@ fn send_upload_sst(
     let (mut tx, rx) = client.upload().unwrap();
     let mut stream = stream::iter(reqs);
     block_on(tx.send_all(&mut stream)).unwrap();
+    block_on(tx.close()).unwrap();
     block_on(rx)
 }
 
@@ -346,6 +347,7 @@ fn send_write_sst(
     let (mut tx, rx) = client.write().unwrap();
     let mut stream = stream::iter(reqs);
     block_on(tx.send_all(&mut stream)).unwrap();
+    block_on(tx.close()).unwrap();
     block_on(rx)
 }
 
