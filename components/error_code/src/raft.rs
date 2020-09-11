@@ -15,6 +15,7 @@ define_error_codes!(
     CODEC_ERROR => ("CodecError", "", ""),
     EXISTS => ("Exists", "", ""),
     NOT_EXISTS => ("NotExists", "", ""),
+    CONF_CHANGE_ERROR => ("ConfChangeError", "", ""),
     REQUEST_SNAPSHOT_DROPPED => ("RequestSnapshotDropped", "", "")
 );
 
@@ -30,6 +31,7 @@ impl ErrorCodeExt for Error {
             Error::CodecError(_) => CODEC_ERROR,
             Error::Exists(_, _) => EXISTS,
             Error::NotExists(_, _) => NOT_EXISTS,
+            Error::ConfChangeError(_) => CONF_CHANGE_ERROR,
             Error::RequestSnapshotDropped => REQUEST_SNAPSHOT_DROPPED,
         }
     }
