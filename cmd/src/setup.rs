@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::Local;
 use clap::ArgMatches;
 use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
-use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::collections::HashMap;
 use tikv_util::{self, config, logger};
 
@@ -128,24 +127,14 @@ pub fn initial_logger(config: &TiKvConfig) {
         let rocksdb_info_log_path = if !config.rocksdb.info_log_dir.is_empty() {
             make_engine_log_path(&config.rocksdb.info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
         } else {
-            make_engine_log_path(
-                &config.storage.data_dir,
-                DEFAULT_ROCKSDB_SUB_DIR,
-                DEFAULT_ROCKSDB_LOG_FILE,
-            )
+            // Don't use `DEFAULT_ROCKSDB_SUB_DIR`, because of the logic of
+            // `RocksEngine::exists`.
+            make_engine_log_path(&config.storage.data_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
         };
         let raftdb_info_log_path = if !config.raftdb.info_log_dir.is_empty() {
             make_engine_log_path(&config.raftdb.info_log_dir, "", DEFAULT_RAFTDB_LOG_FILE)
         } else {
-            if !config.raft_store.raftdb_path.is_empty() {
-                make_engine_log_path(
-                    &config.raft_store.raftdb_path.clone(),
-                    "",
-                    DEFAULT_RAFTDB_LOG_FILE,
-                )
-            } else {
-                make_engine_log_path(&config.storage.data_dir, "raft", DEFAULT_RAFTDB_LOG_FILE)
-            }
+            make_engine_log_path(&config.storage.data_dir, "", DEFAULT_RAFTDB_LOG_FILE)
         };
         let rocksdb_log_writer = logger::file_writer(
             &rocksdb_info_log_path,

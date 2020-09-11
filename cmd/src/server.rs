@@ -48,7 +48,7 @@ use raftstore::{
 };
 use security::SecurityManager;
 use tikv::{
-    config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
+    config::{ConfigController, DBConfigManger, DBType, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
     read_pool::{build_yatp_read_pool, ReadPool},
@@ -67,7 +67,6 @@ use tikv::{
 use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
-    config::ensure_dir_exist,
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureWorker, Worker},
@@ -249,12 +248,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
-        ensure_dir_exist(&config.storage.data_dir).unwrap();
-        if !config.raft_engine.enable {
-            ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
-        } else {
-            ensure_dir_exist(&config.raft_engine.config().dir).unwrap();
-        }
         validate_and_persist_config(&mut config, true);
         check_system_config(&config);
 
@@ -897,9 +890,7 @@ impl TiKVServer<RocksEngine> {
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(&block_cache);
-        let db_path = self
-            .store_path
-            .join(Path::new(storage::config::DEFAULT_ROCKSDB_SUB_DIR));
+        let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
             db_path.to_str().unwrap(),
             kv_db_opts,
@@ -950,9 +941,7 @@ impl TiKVServer<RaftLogEngine> {
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(&block_cache);
-        let db_path = self
-            .store_path
-            .join(Path::new(storage::config::DEFAULT_ROCKSDB_SUB_DIR));
+        let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
             db_path.to_str().unwrap(),
             kv_db_opts,
