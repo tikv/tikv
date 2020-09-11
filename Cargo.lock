@@ -3061,6 +3061,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
+source = "git+https://github.com/hicqu/raft-engine?branch=rewrite#3dcb7693ae2981206d7a9e3c0e77bdfd8ee22730"
 dependencies = [
  "byteorder",
  "crc32fast",
