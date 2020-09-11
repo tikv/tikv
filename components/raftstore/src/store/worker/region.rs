@@ -903,8 +903,7 @@ mod tests {
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
-        let shared_block_cache = false;
-        let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
+        let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let (router, _) = mpsc::sync_channel(11);
         let runner = RegionRunner::new(
             engines,
