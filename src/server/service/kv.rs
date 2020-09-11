@@ -1618,7 +1618,8 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                     // If the caller_start_ts is max, it's a point get in the autocommit transaction.
                     // Even though the min_commit_ts is not pushed, the point get can ingore the lock
                     // next time because it's not committed. So we pretend it has been pushed.
-                    if lock.min_commit_ts > caller_start_ts || caller_start_ts.is_max() {
+                    // Also note that min_commit_ts of async commit locks are never pushed.
+                    if !lock.use_async_commit && (lock.min_commit_ts > caller_start_ts || caller_start_ts.is_max()) {
                         resp.set_action(Action::MinCommitTsPushed);
                     }
                     resp.set_lock_ttl(lock.ttl);
