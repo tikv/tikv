@@ -4266,7 +4266,6 @@ version = "0.1.0"
 dependencies = [
  "engine_rocks",
  "engine_traits",
- "rocksdb",
  "slog",
  "slog-global",
  "tempfile",

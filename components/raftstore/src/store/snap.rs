@@ -1193,6 +1193,11 @@ impl SnapManager {
                     None => return None,
                     Some(n) => n,
                 };
+                if name.starts_with(DEL_RANGE_PREFIX) {
+                    // This is a temp file to store delete keys and ingest them into Engine.
+                    return None;
+                }
+
                 let is_sending = name.starts_with(SNAP_GEN_PREFIX);
                 let numbers: Vec<u64> = name.split('.').next().map_or_else(
                     || vec![],

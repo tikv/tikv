@@ -900,7 +900,7 @@ mod tests {
         let engine = get_test_db_for_regions(&temp_dir, None, None, None, None, &[1]).unwrap();
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let shared_block_cache = false;

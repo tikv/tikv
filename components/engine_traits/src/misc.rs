@@ -19,7 +19,7 @@ use tikv_util::keybuilder::KeyBuilder;
 // FIXME: Find somewhere else to put this?
 pub const MAX_DELETE_BATCH_COUNT: usize = 512;
 
-const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
+pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
 
 #[derive(Clone)]
 pub enum DeleteStrategy {

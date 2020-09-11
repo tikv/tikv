@@ -168,7 +168,12 @@ mod tests {
         }
     }
 
-    fn test_delete_all_in_range(use_delete_range: bool) {
+    fn test_delete_all_in_range(
+        strategy: DeleteStrategy,
+        origin_keys: Vec<Vec<u8>>,
+        start: &[u8],
+        end: &[u8],
+    ) {
         let path = Builder::new()
             .prefix("engine_delete_all_in_range")
             .tempdir()
@@ -185,24 +190,19 @@ mod tests {
 
         let mut wb = db.write_batch();
         let ts: u8 = 12;
-        let keys: Vec<_> = vec![
-            b"k1".to_vec(),
-            b"k2".to_vec(),
-            b"k3".to_vec(),
-            b"k4".to_vec(),
-        ]
-        .into_iter()
-        .map(|mut k| {
-            k.append(&mut vec![ts; 8]);
-            k
-        })
-        .collect();
+        let keys: Vec<_> = origin_keys
+            .into_iter()
+            .map(|mut k| {
+                k.append(&mut vec![ts; 8]);
+                k
+            })
+            .collect();
 
         let mut kvs: Vec<(&[u8], &[u8])> = vec![];
         for (_, key) in keys.iter().enumerate() {
             kvs.push((key.as_slice(), b"value"));
         }
-        let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, kvs[0].1), (kvs[3].0, kvs[3].1)];
+        // let kvs_left = kvs.iter().filter(|k | k.0 < start || k.0 >= end).collect();
         for &(k, v) in kvs.as_slice() {
             for cf in ALL_CFS {
                 wb.put_cf(cf, k, v).unwrap();
@@ -211,22 +211,59 @@ mod tests {
         db.write(&wb).unwrap();
         check_data(&db, ALL_CFS, kvs.as_slice());
 
-        // Delete all in ["k2", "k4").
-        let start = b"k2";
-        let end = b"k4";
-        db.delete_all_in_range(DeleteStrategy::DeleteByKey, start, end)
-            .unwrap();
+        // Delete all in [start, end).
+        db.delete_all_in_range(strategy, start, end).unwrap();
+        let kvs_left: Vec<_> = kvs
+            .into_iter()
+            .filter(|k| k.0 < start || k.0 >= end)
+            .collect();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
     #[test]
     fn test_delete_all_in_range_use_delete_range() {
-        test_delete_all_in_range(true);
+        let data = vec![
+            b"k0".to_vec(),
+            b"k1".to_vec(),
+            b"k2".to_vec(),
+            b"k3".to_vec(),
+            b"k4".to_vec(),
+        ];
+        test_delete_all_in_range(DeleteStrategy::DeleteByRange, data, b"k1", b"k4");
     }
 
     #[test]
-    fn test_delete_all_in_range_not_use_delete_range() {
-        test_delete_all_in_range(false);
+    fn test_delete_all_in_range_by_key() {
+        let data = vec![
+            b"k0".to_vec(),
+            b"k1".to_vec(),
+            b"k2".to_vec(),
+            b"k3".to_vec(),
+            b"k4".to_vec(),
+        ];
+        test_delete_all_in_range(DeleteStrategy::DeleteByKey, data, b"k1", b"k4");
+    }
+
+    #[test]
+    fn test_delete_all_in_range_by_writer() {
+        let path = Builder::new()
+            .prefix("test_delete_all_in_range_by_writer")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path();
+        let sst_path = path_str.join("tmp_file").to_str().unwrap().to_owned();
+        let mut data = vec![];
+        for i in 1000..5000 {
+            data.push(i.to_string().as_bytes().to_vec());
+        }
+        let start = data[2].clone();
+        let end = data[3000].clone();
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByWriter { sst_path },
+            data,
+            &start,
+            &end,
+        );
     }
 
     #[test]
@@ -309,7 +346,7 @@ mod tests {
         check_data(&db, &[cf], kvs.as_slice());
 
         // Delete all in ["k2", "k4").
-        db.delete_all_in_range(b"kabcdefg2", b"kabcdefg4", true)
+        db.delete_all_in_range(DeleteStrategy::DeleteByRange, b"kabcdefg2", b"kabcdefg4")
             .unwrap();
         check_data(&db, &[cf], kvs_left.as_slice());
     }
