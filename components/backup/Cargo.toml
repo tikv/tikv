@@ -49,8 +49,8 @@ engine_traits = { path = "../engine_traits" }
 error_code = { path = "../error_code" }
 external_storage = { path = "../external_storage" }
 failure = "0.1"
-futures = { version = "0.3", features = ["compat"] }
-futures-util = { version = "0.3", default-features = false, features = ["io", "io-compat"] }
+futures = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { version = "0.6", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../keys" }

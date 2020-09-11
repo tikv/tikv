@@ -83,7 +83,7 @@ error_code = { path = "components/error_code" }
 fail = "0.3"
 failure = "0.1"
 fs2 = "0.4"
-futures = { version = "0.3", features = ["compat", "thread-pool"] }
+futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
 grpcio = { version = "0.6", default-features = false, features = ["openssl-vendored"] }
