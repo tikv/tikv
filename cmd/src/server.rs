@@ -250,8 +250,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
         ensure_dir_exist(&config.storage.data_dir).unwrap();
-        ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
-
+        if !config.raft_engine.enable {
+            ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
+        } else {
+            ensure_dir_exist(&config.raft_engine.config().dir).unwrap();
+        }
         validate_and_persist_config(&mut config, true);
         check_system_config(&config);
 

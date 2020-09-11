@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs;
 use std::path::Path;
 
 use engine_traits::{CacheStats, RaftEngine, RaftLogBatch as RaftLogBatchTrait, Result};
@@ -31,10 +30,7 @@ impl RaftLogEngine {
     /// If path is not an empty directory, we say db exists.
     pub fn exists(path: &str) -> bool {
         let path = Path::new(path);
-        if !path.exists() || !path.is_dir() {
-            return false;
-        }
-        fs::read_dir(&path).unwrap().next().is_some()
+        path.exists() && path.is_dir()
     }
 }
 
