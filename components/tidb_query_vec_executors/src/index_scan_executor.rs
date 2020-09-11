@@ -434,13 +434,13 @@ impl IndexScanExecutorImpl {
             remaining.split_at(0)
         };
 
-        if common_handle_bytes.len() > 0 && self.decode_handle_strategy != DecodeCommonHandle {
+        if !common_handle_bytes.is_empty() && self.decode_handle_strategy != DecodeCommonHandle {
             return Err(other_err!(
                 "Expect to decode index values with common handles in `DecodeCommonHandle` mode."
             ));
         }
         // If there are some restore data, the index value is in new collation.
-        if restore_values.len() > 0 {
+        if !restore_values.is_empty() {
             self.extract_columns_from_row_format(restore_values, columns)?;
         } else {
             // Otherwise, the index value is in old collation, we should extract the index columns from the key.
@@ -469,7 +469,7 @@ impl IndexScanExecutorImpl {
             }
 
             DecodeCommonHandle => {
-                if common_handle_bytes.len() == 0 {
+                if common_handle_bytes.is_empty() {
                     // This is a non-unique index value, we should extract the int handle from the key.
                     datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
                     Self::extract_columns_from_datum_format(
@@ -1447,14 +1447,14 @@ mod tests {
         }];
 
         // New collation unique common global handle.
-        let mut value = value_prefix.clone();
+        let mut value = value_prefix;
         value.extend(restore_data);
-        let store = FixtureStorage::from(vec![(key.clone(), value)]);
+        let store = FixtureStorage::from(vec![(key, value)]);
         let mut executor = BatchIndexScanExecutor::new(
             store,
             Arc::new(EvalConfig::default()),
-            columns_info.clone(),
-            key_ranges.clone(),
+            columns_info,
+            key_ranges,
             1,
             false,
             true,
