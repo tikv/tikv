@@ -2150,7 +2150,7 @@ dependencies = [
 [[package]]
 name = "minitrace"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace-rust.git?rev=9fe8544710a33caf6d5add86f67e62efce2375dc#9fe8544710a33caf6d5add86f67e62efce2375dc"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git?rev=9943d799673dde35fae97c2189f3de4c006af384#9943d799673dde35fae97c2189f3de4c006af384"
 dependencies = [
  "crossbeam",
  "futures 0.1.29",
@@ -2164,7 +2164,7 @@ dependencies = [
 [[package]]
 name = "minitrace-attribute"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace-rust.git?rev=9fe8544710a33caf6d5add86f67e62efce2375dc#9fe8544710a33caf6d5add86f67e62efce2375dc"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git?rev=9943d799673dde35fae97c2189f3de4c006af384#9943d799673dde35fae97c2189f3de4c006af384"
 dependencies = [
  "proc-macro-error 1.0.2",
  "quote",
@@ -4890,7 +4890,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/zhongzc/tipb.git?rev=27ee016396e06b93bf9cab0aae35ab1e0941abc6#27ee016396e06b93bf9cab0aae35ab1e0941abc6"
+source = "git+https://github.com/zhongzc/tipb.git?rev=6d5031f23e728be1a59a3b3b05b04a45384cd5a9#6d5031f23e728be1a59a3b3b05b04a45384cd5a9"
 dependencies = [
  "lazy_static",
  "prost",

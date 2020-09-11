@@ -64,9 +64,6 @@ pub(super) struct Task {
     pub(super) cid: u64,
     pub(super) cmd: Command,
     pub(super) extra_op: ExtraOp,
-
-    // trace context
-    trace_handle: Option<minitrace::TraceHandle>,
 }
 
 impl Task {
@@ -76,9 +73,6 @@ impl Task {
             cid,
             cmd,
             extra_op: ExtraOp::Noop,
-            trace_handle: Some(minitrace::trace_binder_fine(
-                Event::TiKvTxnTaskDispatching as u32,
-            )),
         }
     }
 }
@@ -364,16 +358,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
+    #[minitrace::trace(Event::TiKvTxnGetSnapShot as u32)]
     fn get_snapshot(&self, cid: u64) {
         let mut task = self.inner.dequeue_task(cid);
-        let mut handle = task.trace_handle.take().unwrap();
-        let _g = handle.trace_enable(Event::TiKvTxnGetSnapShot as u32);
         let tag = task.cmd.tag();
         let ctx = task.cmd.ctx().clone();
         let sched = self.clone();
 
         let cb = must_call(
             move |(cb_ctx, snapshot)| {
+                // let _g = task.trace_handle.trace_enable();
                 debug!(
                     "receive snapshot finish msg";
                     "cid" => task.cid, "cb_ctx" => ?cb_ctx
@@ -433,6 +427,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Calls the callback with an error.
+    #[minitrace::trace(Event::TiKvTxnFinishWithErr as u32)]
     fn finish_with_err(&self, cid: u64, err: Error) {
         debug!("write command finished with error"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -451,6 +446,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     ///
     /// If a next command is present, continues to execute; otherwise, delivers the result to the
     /// callback.
+    #[minitrace::trace(Event::TiKvTxnOnReadFinished as u32)]
     fn on_read_finished(&self, cid: u64, pr: ProcessResult, tag: metrics::CommandKind) {
         SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
 
@@ -467,6 +463,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Event handler for the success of write.
+    #[minitrace::trace(Event::TiKvTxnOnWriteFinished as u32)]
     fn on_write_finished(
         &self,
         cid: u64,
@@ -511,6 +508,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Event handler for the request of waiting for lock
+    #[minitrace::trace(Event::TiKvTxnOnWaitForLock as u32)]
     fn on_wait_for_lock(
         &self,
         cid: u64,
@@ -534,6 +532,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.release_lock(&tctx.lock, cid);
     }
 
+    #[minitrace::trace(Event::TiKvTxnOnPipelinedWrite as u32)]
     fn on_pipelined_write(&self, cid: u64, pr: ProcessResult, tag: metrics::CommandKind) {
         debug!("pipelined write"; "cid" => cid);
         SCHED_STAGE_COUNTER_VEC.get(tag).pipelined_write.inc();
@@ -587,7 +586,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 }
                 .trace_task_fine(
                     Event::TiKvTxnProcessPending as u32,
-                    Event::TiKvTxnProcessing as u32,
+                    Event::TiKvTxnProcess as u32,
                 ),
             )
             .unwrap();
@@ -595,6 +594,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
     /// `Scheduler`.
+    #[minitrace::trace(Event::TiKvTxnProcessRead as u32)]
     fn process_read(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_read");
         debug!("process read cmd in worker pool"; "cid" => task.cid);
@@ -610,6 +610,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
+    #[minitrace::trace(Event::TiKvTxnProcessWrite as u32)]
     fn process_write(self, engine: &E, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();

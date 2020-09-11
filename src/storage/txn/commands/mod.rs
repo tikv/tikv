@@ -63,7 +63,6 @@ use crate::storage::types::{
 use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use tikv_util::collections::HashMap;
-use tikv_util::minitrace::{self, Event};
 
 /// Store Transaction scheduler commands.
 ///
@@ -498,7 +497,6 @@ impl Command {
         }
     }
 
-    #[minitrace::trace(Event::TiKvTxnProcessWrite as u32)]
     pub(super) fn process_write<S: Snapshot, L: LockManager>(
         self,
         snapshot: S,

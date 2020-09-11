@@ -162,10 +162,6 @@ impl Reporter for JaegerReporter {
                 return;
             }
 
-            let total_cycles = (trace_details.elapsed_ns as u128
-                * trace_details.cycles_per_second as u128)
-                / 1_000_000_000u128;
-
             let mut root_index = 0;
             for (i, span) in trace_details.spans.iter().enumerate() {
                 if span.state == State::Root {
@@ -173,9 +169,6 @@ impl Reporter for JaegerReporter {
                 }
             }
             trace_details.spans.swap(0, root_index);
-
-            // reuse root span to represent the whole process
-            trace_details.spans[0].elapsed_cycles = total_cycles as u64;
 
             // Check if duration reaches `duration_threshold`
             if Duration::from_nanos(trace_details.elapsed_ns) < self.duration_threshold {

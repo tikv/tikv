@@ -554,7 +554,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
     }
 
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMessage>) {
-        for mut m in msgs.drain(..) {
+        for m in msgs.drain(..) {
             match m.msg {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {

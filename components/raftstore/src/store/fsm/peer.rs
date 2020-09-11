@@ -441,7 +441,7 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMessage<EK>>) {
-        for mut m in msgs.drain(..) {
+        for m in msgs.drain(..) {
             match m.msg {
                 PeerMsg::RaftMessage(msg) => {
                     let _g = m

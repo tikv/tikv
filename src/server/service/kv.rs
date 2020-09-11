@@ -142,9 +142,17 @@ impl<
 }
 
 macro_rules! requests_to_trace {
-    ($($name: ident -> $event: expr,)*) => {
+    ($($name: ident -> $event: ident,)*) => {
         macro_rules! trace_may_enable {
-            $(($name, $enable: expr) => { minitrace::trace_may_enable($enable, $event as u32) };)*
+            $(($name, $enable: expr) => { {
+                use Event::*;
+                minitrace::trace_may_enable_fine(
+                    $enable,
+                    concat_idents!(TiKv, $event) as u32,
+                    concat_idents!(TiKv, $event, Pending) as u32,
+                    concat_idents!(TiKv, $event, BuildFuture) as u32,
+                )
+            } };)*
             ($_: ident, $__: expr) => { minitrace::trace_may_enable(false, 0u32) }
         }
     }
@@ -154,24 +162,24 @@ macro_rules! requests_to_trace {
 // requests will be traced.
 //
 // As format:
-//  $request_name -> $event_enum_value,
+//  $request_name -> $event,
 requests_to_trace!(
-  raw_get -> Event::TiKvRawGet,
-  coprocessor -> Event::TiKvCoprocessor,
-  raw_put -> Event::TiKvRawPut,
-  raw_delete -> Event::TiKvRawDelete,
-  raw_delete_range -> Event::TiKvRawDeleteRange,
-  kv_prewrite -> Event::TiKvPrewrite,
-  kv_commit -> Event::TiKvCommit,
-  kv_get -> Event::TiKvGet,
-  kv_scan -> Event::TiKvScan,
-  kv_pessimistic_lock -> Event::TiKvPessimisticLock,
-  kv_pessimistic_rollback -> Event::TiKvPessimisticRollback,
-  kv_cleanup -> Event::TiKvCleanup,
-  kv_batch_get -> Event::TiKvBatchGet,
-  kv_batch_rollback -> Event::TiKvBatchRollback,
-  kv_gc -> Event::TiKvGc,
-  kv_scan_lock -> Event::TiKvScanLock,
+    raw_get -> RawGet,
+    coprocessor -> Coprocessor,
+    raw_put -> RawPut,
+    raw_delete -> RawDelete,
+    raw_delete_range -> RawDeleteRange,
+    kv_prewrite -> Prewrite,
+    kv_commit -> Commit,
+    kv_get -> Get,
+    kv_scan -> Scan,
+    kv_pessimistic_lock -> PessimisticLock,
+    kv_pessimistic_rollback -> PessimisticRollback,
+    kv_cleanup -> Cleanup,
+    kv_batch_get -> BatchGet,
+    kv_batch_rollback -> BatchRollback,
+    kv_gc -> Gc,
+    kv_scan_lock -> ScanLock,
 );
 
 macro_rules! handle_request {

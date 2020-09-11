@@ -1,7 +1,7 @@
 pub use minitrace::*;
 use protobuf::Message;
 
-pub type Event = tipb::TracingEvent;
+pub use tipb::TracingEvent as Event;
 
 #[cfg(feature = "protobuf-codec")]
 pub type Key = tipb::TracingPropertyKey;
