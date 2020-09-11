@@ -112,7 +112,6 @@ impl Peekable for SkiplistEngine {
             .with_label_values(&["get"])
             .start_coarse_timer();
         let engine = self.get_cf_engine(cf)?;
-        info!("get key"; "cf" => cf, "key" => hex::encode_upper(key));
         Ok(engine
             .get(key)
             .map(|e| SkiplistDBVector(e.value().to_vec())))
@@ -129,7 +128,6 @@ impl SyncMutable for SkiplistEngine {
             .start_coarse_timer();
         self.total_bytes.fetch_add(key.len(), Ordering::Relaxed);
         self.total_bytes.fetch_add(value.len(), Ordering::Relaxed);
-        info!("put key"; "cf" => cf, "key" => hex::encode_upper(key));
         let engine = self.get_cf_engine(cf)?;
         engine.insert(key.to_vec(), value.to_vec());
         Ok(())
@@ -143,7 +141,6 @@ impl SyncMutable for SkiplistEngine {
             .with_label_values(&["delete"])
             .start_coarse_timer();
         let engine = self.get_cf_engine(cf)?;
-        info!("delete key"; "cf" => cf, "key" => hex::encode_upper(key));
         if let Some(e) = engine.remove(key) {
             self.total_bytes.fetch_sub(e.key().len(), Ordering::Relaxed);
             self.total_bytes
@@ -161,7 +158,6 @@ impl SyncMutable for SkiplistEngine {
         };
         let engine = self.get_cf_engine(cf)?;
         engine.range(range).for_each(|e| {
-            info!("delete key"; "cf" => cf, "key" => hex::encode_upper(e.key()));
             e.remove();
             self.total_bytes.fetch_sub(e.key().len(), Ordering::Relaxed);
             self.total_bytes
