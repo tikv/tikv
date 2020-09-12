@@ -31,7 +31,6 @@ crossbeam = "0.7.2"
 engine_traits = { path = "../engine_traits" }
 engine_rocks = { path = "../engine_rocks" }
 futures = { version = "0.3", features = ["compat"] }
-futures-cpupool = "0.1"
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 lazy_static = "1.3"
@@ -53,5 +52,6 @@ tokio-threadpool = "0.1"
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types" }
 encryption = { path = "../encryption" }
+tokio = { version = "0.2", features = ["rt-threaded"]}
 concurrency_manager = { path = "../concurrency_manager" }
 fail = "0.3"

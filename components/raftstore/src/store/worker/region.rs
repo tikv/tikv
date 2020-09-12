@@ -13,7 +13,6 @@ use engine_traits::{DeleteStrategy, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
     Engines, IngestExternalFileOptions, KvEngine, Mutable, RaftEngine, SstWriter, SstWriterBuilder,
 };
-use error_code::ErrorCodeExt;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -290,7 +289,7 @@ where
             kv_snap,
             notifier,
         ) {
-            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e, "error_code" => %e.error_code());
+            error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
             return;
         }
 
@@ -395,7 +394,7 @@ where
                 SNAP_COUNTER.apply.abort.inc();
             }
             Err(e) => {
-                error!("failed to apply snap!!!"; "err" => %e);
+                error!(%e; "failed to apply snap!!!");
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.fail.inc();
             }

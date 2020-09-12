@@ -10,7 +10,6 @@ use std::{cmp, error, u64};
 
 use engine_traits::CF_RAFT;
 use engine_traits::{Engines, KvEngine, Mutable, Peekable};
-use error_code::ErrorCodeExt;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1419,12 +1418,10 @@ where
                 // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
                 // [b, c) will be kept in rocksdb until a covered snapshot is applied or
                 // store is restarted.
-                error!(
+                error!(?e;
                     "failed to cleanup data, may leave some dirty data";
                     "region_id" => self.get_region_id(),
                     "peer_id" => self.peer_id,
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -1439,11 +1436,9 @@ where
         // At present, they are also used to prevent reading **corrupt** data.
         for r in &ctx.destroyed_regions {
             if let Err(e) = self.clear_extra_data(r, &snap_region) {
-                error!(
+                error!(?e;
                     "failed to cleanup data, may leave some dirty data";
                     "region_id" => r.get_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             }
         }

@@ -4,13 +4,10 @@ use futures::sink::Sink;
 use futures::Future;
 use futures03::executor::block_on;
 use grpcio::WriteFlags;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::event::{Event as Event_oneof_event, LogType as EventLogType};
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::{Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataRequest,
-};
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::sleep_ms;
@@ -24,9 +21,7 @@ fn test_stale_resolver() {
 
     // Close previous connection and open a new one twice time
     let region = suite.cluster.get_region(&[]);
-    let mut req = ChangeDataRequest::default();
-    req.region_id = region.get_id();
-    req.set_region_epoch(region.get_region_epoch().clone());
+    let req = suite.new_changedata_request(region.get_id());
     let (req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
     let _req_tx = req_tx
@@ -81,9 +76,9 @@ fn test_stale_resolver() {
     // Unblock all scans
     fail::remove(fp1);
     // Receive events
-    let mut events = receive_event(false);
+    let mut events = receive_event(false).events.to_vec();
     while events.len() < 2 {
-        events.extend(receive_event(false).into_iter());
+        events.extend(receive_event(false).events.into_iter());
     }
     assert_eq!(events.len(), 2);
     for event in events {
@@ -101,14 +96,14 @@ fn test_stale_resolver() {
                 _ => panic!("{:?}", es),
             },
             Event_oneof_event::Error(e) => panic!("{:?}", e),
-            _ => panic!("unknown event"),
+            other => panic!("unknown event {:?}", other),
         }
     }
 
     event_feed_wrap.as_ref().replace(Some(resp_rx1));
     // Receive events
     for _ in 0..2 {
-        let mut events = receive_event(false);
+        let mut events = receive_event(false).events.to_vec();
         match events.pop().unwrap().event.unwrap() {
             Event_oneof_event::Entries(es) => match es.entries.len() {
                 1 => {
@@ -126,7 +121,7 @@ fn test_stale_resolver() {
                 }
             },
             Event_oneof_event::Error(e) => panic!("{:?}", e),
-            _ => panic!("unknown event"),
+            other => panic!("unknown event {:?}", other),
         }
     }
 
