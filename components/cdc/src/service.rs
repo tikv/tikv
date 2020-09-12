@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::hash_map::Entry;
+use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -28,6 +29,9 @@ static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 const CDC_MSG_NOTIFY_COUNT: usize = 8;
 const CDC_MAX_RESP_SIZE: u32 = 6 * 1024 * 1024; // 6MB
 const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
+// Assume the average size of event is 1KB.
+// 2 = (CDC_MSG_MAX_BATCH_SIZE * 1KB / CDC_EVENT_MAX_BATCH_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
+const CDC_EVENT_MAX_BATCH_SIZE: usize = 2;
 
 /// A unique identifier of a Connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -39,7 +43,7 @@ impl ConnID {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum CdcEvent {
     ResolvedTs(ResolvedTs),
     Event(Event),
@@ -48,7 +52,7 @@ pub enum CdcEvent {
 impl CdcEvent {
     pub fn size(&self) -> u32 {
         match self {
-            CdcEvent::ResolvedTs(_) => 0,
+            CdcEvent::ResolvedTs(ref r) => r.compute_size(),
             CdcEvent::Event(ref e) => e.compute_size(),
         }
     }
@@ -68,48 +72,69 @@ impl CdcEvent {
     }
 }
 
+impl fmt::Debug for CdcEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CdcEvent::ResolvedTs(ref r) => {
+                let mut d = f.debug_struct("ResolvedTs");
+                d.field("resolved ts", &r.ts);
+                d.field("region count", &r.regions.len());
+                d.finish()
+            }
+            CdcEvent::Event(e) => {
+                let mut d = f.debug_struct("Event");
+                d.field("region_id", &e.region_id);
+                d.field("request_id", &e.request_id);
+                // prost does not generate (has|get)_entries :(
+                #[cfg(not(feature = "prost-codec"))]
+                if e.has_entries() {
+                    d.field("entries count", &e.get_entries().get_entries().len());
+                }
+                d.finish()
+            }
+        }
+    }
+}
+
 struct EventBatcher {
-    events: Vec<ChangeDataEvent>,
+    buffer: Vec<ChangeDataEvent>,
     last_size: u32,
 }
 
 impl EventBatcher {
-    pub fn with_capacity(cap: usize) -> EventBatcher {
+    fn with_capacity(cap: usize) -> EventBatcher {
         EventBatcher {
-            events: Vec::with_capacity(cap),
+            buffer: Vec::with_capacity(cap),
             last_size: 0,
         }
     }
 
     // The size of the response should not exceed CDC_MAX_RESP_SIZE.
     // Split the events into multiple responses by CDC_MAX_RESP_SIZE here.
-    pub fn push(&mut self, event: CdcEvent) {
+    fn push(&mut self, event: CdcEvent) {
         let size = event.size();
-        if self.events.is_empty() || self.last_size + size >= CDC_MAX_RESP_SIZE {
-            self.last_size = 0;
-            self.events.push(ChangeDataEvent::default());
+        if size >= CDC_MAX_RESP_SIZE {
+            warn!("cdc event too large"; "size" => size, "event" => ?event);
         }
         match event {
             CdcEvent::Event(e) => {
+                if self.buffer.is_empty() || self.last_size + size >= CDC_MAX_RESP_SIZE {
+                    self.last_size = 0;
+                    self.buffer.push(ChangeDataEvent::default());
+                }
                 self.last_size += size;
-                self.events.last_mut().unwrap().mut_events().push(e);
+                self.buffer.last_mut().unwrap().mut_events().push(e);
             }
             CdcEvent::ResolvedTs(r) => {
                 let mut change_data_event = ChangeDataEvent::default();
                 change_data_event.set_resolved_ts(r);
-                self.events.push(change_data_event);
-                // Set last_size to MAX-1 for sending resolved ts as an individual event.
-                // '-1' is to avoid empty event when the next event is still resolved ts.
-                self.last_size = CDC_MAX_RESP_SIZE - 1;
+                self.buffer.push(change_data_event);
             }
         }
     }
 
-    pub fn build(self) -> Vec<ChangeDataEvent> {
-        self.events
-            .into_iter()
-            .filter(|e| e.has_resolved_ts() || !e.events.is_empty())
-            .collect()
+    fn build(self) -> Vec<ChangeDataEvent> {
+        self.buffer
     }
 }
 
@@ -303,16 +328,17 @@ impl ChangeData for Service {
         let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, VecCollector);
         let rx = rx
             .map(|events| {
-                let mut batcher = EventBatcher::with_capacity(events.len());
+                let mut batcher = EventBatcher::with_capacity(CDC_EVENT_MAX_BATCH_SIZE);
                 events.into_iter().for_each(|e| batcher.push(e));
-                let resps = batcher
-                    .build()
-                    .into_iter()
-                    .map(|e| (e, WriteFlags::default()));
-                stream::iter(resps)
+                let resps = batcher.build();
+                let last_idx = resps.len() - 1;
+                stream::iter(resps.into_iter().enumerate().map(move |(i, e)| {
+                    // Buffer messages and flush them at once.
+                    let write_flags = WriteFlags::default().buffer_hint(i != last_idx);
+                    GrpcResult::Ok((e, write_flags))
+                }))
             })
-            .flatten()
-            .map(|item| GrpcResult::Ok(item));
+            .flatten();
         let send_resp = sink.send_all(Compat::new(rx));
 
         let peer = ctx.peer();
