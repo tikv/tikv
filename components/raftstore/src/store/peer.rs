@@ -2,13 +2,13 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{Engines, KvEngine, Snapshot, WriteOptions};
+use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteOptions};
 use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -29,10 +29,8 @@ use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
-use raft_engine::RaftEngine;
 use smallvec::SmallVec;
 use time::Timespec;
-use txn_types::TxnExtra;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -47,7 +45,7 @@ use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
-use tikv_util::worker::Scheduler;
+use tikv_util::worker::{FutureScheduler, Scheduler};
 use tikv_util::Either;
 
 use super::cmd_resp;
@@ -89,13 +87,13 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
-    fn find_propose_time(&self, index: u64, term: u64) -> Option<Timespec> {
-        for p in self.queue.iter() {
-            if p.index == index && p.term == term {
-                return Some(p.renew_lease_time.unwrap());
-            }
-        }
-        None
+    fn find_propose_time(&self, key: (u64, u64)) -> Option<Timespec> {
+        let (front, back) = self.queue.as_slices();
+        let map = |p: &Proposal<_>| (p.term, p.index);
+        let idx = front
+            .binary_search_by_key(&key, map)
+            .or_else(|_| back.binary_search_by_key(&key, map));
+        idx.ok().map(|i| self.queue[i].renew_lease_time).flatten()
     }
 
     // Return all proposals that before (and included) the proposal
@@ -118,6 +116,11 @@ impl<S: Snapshot> ProposalQueue<S> {
     }
 
     fn push(&mut self, p: Proposal<S>) {
+        if let Some(f) = self.queue.front() {
+            // The term must be increasing among all log entries and the index
+            // must be increasing inside a given term
+            assert!((p.term, p.index) > (f.term, f.index));
+        }
         self.queue.push_back(p);
     }
 
@@ -166,6 +169,7 @@ pub struct ConsistencyState {
     pub last_check_time: Instant,
     // (computed_result_or_to_be_verified, index, hash)
     pub index: u64,
+    pub context: Vec<u8>,
     pub hash: Vec<u8>,
 }
 
@@ -433,6 +437,17 @@ where
     pub local_first_replicate: bool,
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+
+    /// The max timestamp recorded in the concurrency manager is only updated at leader.
+    /// So if a peer becomes leader from a follower, the max timestamp can be outdated.
+    /// We need to update the max timestamp with a latest timestamp from PD before this
+    /// peer can work.
+    /// From the least significant to the most, 1 bit marks whether the timestamp is
+    /// updated, 31 bits for the current epoch version, 32 bits for the current term.
+    /// The version and term are stored to prevent stale UpdateMaxTimestamp task from
+    /// marking the lowest bit.
+    pub max_ts_sync_status: Arc<AtomicU64>,
+
     /// Check whether this proposal can be proposed based on its epoch
     cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
 }
@@ -509,6 +524,7 @@ where
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
                 index: INVALID_INDEX,
+                context: vec![],
                 hash: vec![],
             },
             raft_log_size_hint: 0,
@@ -524,6 +540,7 @@ where
             check_stale_peers: vec![],
             local_first_replicate: false,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
+            max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
         };
 
@@ -734,20 +751,18 @@ where
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(ctx.cfg.sync_log);
+        write_opts.set_sync(true);
         ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
-        ctx.engines.raft.consume(&mut raft_wb, ctx.cfg.sync_log)?;
+        ctx.engines.raft.consume(&mut raft_wb, true)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
             // will be cleared by a newer snapshot applying or restart.
             if let Err(e) = self.get_store().clear_data() {
-                error!(
+                error!(?e;
                     "failed to schedule clear data task";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -1245,6 +1260,10 @@ where
                     // prewrites or commits will be just a waste.
                     self.last_urgent_proposal_idx = self.raft_group.raft.raft_log.last_index();
                     self.raft_group.skip_bcast_commit(false);
+
+                    // A more recent read may happen on the old leader. So max ts should
+                    // be updated after a peer becomes leader.
+                    self.require_updating_max_ts(&ctx.pd_scheduler);
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -1655,7 +1674,7 @@ where
                 if lease_to_be_updated {
                     let propose_time = self
                         .proposals
-                        .find_propose_time(entry.get_index(), entry.get_term());
+                        .find_propose_time((entry.get_term(), entry.get_index()));
                     if let Some(propose_time) = propose_time {
                         ctx.raft_metrics.commit_log.observe(duration_to_sec(
                             (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
@@ -2001,7 +2020,6 @@ where
         cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        txn_extra: TxnExtra,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -2056,7 +2074,6 @@ where
                     index: idx,
                     term: self.term(),
                     cb,
-                    txn_extra,
                     renew_lease_time: None,
                 };
                 if let Some(cmd_type) = req_admin_cmd_type {
@@ -2438,7 +2455,6 @@ where
                     index,
                     term: self.term(),
                     cb: Callback::None,
-                    txn_extra: TxnExtra::default(),
                     renew_lease_time: Some(renew_lease_time),
                 };
                 self.post_propose(poll_ctx, p);
@@ -2610,7 +2626,7 @@ where
             // The admin request is rejected because it may need to update epoch checker which
             // introduces an uncertainty and may breaks the correctness of epoch checker.
             return Err(box_err!(
-                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
                 self.get_store().applied_index_term(),
                 self.term()
@@ -2791,7 +2807,7 @@ where
         // `self.get_store().applied_index()` is passed.
         if self.get_store().applied_index_term() != self.term() {
             return Err(box_err!(
-                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
                 self.get_store().applied_index_term(),
                 self.term()
@@ -2860,6 +2876,9 @@ where
             }
         }
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
+        if let Some(snap) = resp.snapshot.as_mut() {
+            snap.max_ts_sync_status = Some(self.max_ts_sync_status.clone());
+        }
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -3074,14 +3093,12 @@ where
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
             if let Err(e) = ctx.trans.send(send_msg) {
-                error!(
+                error!(?e;
                     "failed to send wake up message";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -3109,14 +3126,12 @@ where
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgCheckStalePeer);
             if let Err(e) = ctx.trans.send(send_msg) {
-                error!(
+                error!(?e;
                     "failed to send check stale peer message";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -3161,17 +3176,39 @@ where
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_premerge_commit(premerge_commit);
         if let Err(e) = ctx.trans.send(send_msg) {
-            error!(
+            error!(?e;
                 "failed to send want rollback merge message";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "target_peer_id" => to_peer.get_id(),
                 "target_store_id" => to_peer.get_store_id(),
-                "err" => ?e,
-                "error_code" => %e.error_code(),
             );
         } else {
             ctx.need_flush_trans = true;
+        }
+    }
+
+    pub fn require_updating_max_ts(&self, pd_scheduler: &FutureScheduler<PdTask<EK>>) {
+        let epoch = self.region().get_region_epoch();
+        let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
+        let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits
+        let initial_status = (term_low_bits << 32) | (version_lot_bits << 1);
+        self.max_ts_sync_status
+            .store(initial_status, Ordering::SeqCst);
+        info!(
+            "require updating max ts";
+            "region_id" => self.region_id,
+            "initial_status" => initial_status,
+        );
+        if let Err(e) = pd_scheduler.schedule(PdTask::UpdateMaxTimestamp {
+            region_id: self.region_id,
+            initial_status,
+            max_ts_sync_status: self.max_ts_sync_status.clone(),
+        }) {
+            error!(
+                "failed to update max ts";
+                "err" => ?e,
+            );
         }
     }
 }
@@ -3575,6 +3612,33 @@ mod tests {
                 lease_state: LeaseState::Valid,
             };
             assert!(inspector.inspect(&req).is_err());
+        }
+    }
+
+    #[test]
+    fn test_propose_queue_find_propose_time() {
+        let mut pq: ProposalQueue<engine_panic::PanicSnapshot> = ProposalQueue::new();
+        let t = monotonic_raw_now();
+        for index in 1..=100 {
+            let renew_lease_time = if index % 3 == 1 { None } else { Some(t) };
+            pq.push(Proposal {
+                is_conf_change: false,
+                index,
+                term: (index / 10) + 1,
+                cb: Callback::None,
+                renew_lease_time,
+            });
+        }
+        for remove_i in &[0, 65, 98] {
+            let _ = pq.take(*remove_i, (*remove_i / 10) + 1);
+            for i in 1..=100 {
+                let pt = pq.find_propose_time(((i / 10) + 1, i));
+                if i <= *remove_i || i % 3 == 1 {
+                    assert!(pt.is_none())
+                } else {
+                    assert!(pt.is_some())
+                };
+            }
         }
     }
 

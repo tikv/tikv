@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
-use futures03::executor::block_on;
+use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::{create_debug, DebugClient};
@@ -16,15 +16,19 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use kvproto::tikvpb::TikvClient;
 use tempfile::{Builder, TempDir};
+use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
+use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
-use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
+use raftstore::router::{
+    LocalReadRouter, RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter,
+};
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::{
@@ -47,28 +51,27 @@ use tikv::server::{
     ServerTransport,
 };
 use tikv::storage;
-use tikv::storage::concurrency_manager::ConcurrencyManager;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 use tikv_util::HandyRwLock;
 
-type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine>>;
+type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
 type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
 struct ServerMeta {
-    node: Node<TestPdClient>,
+    node: Node<TestPdClient, RocksEngine>,
     server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
     worker: Worker<ResolveTask>,
-    gc_worker: GcWorker<RaftKv<SimulateStoreTransport>>,
+    gc_worker: GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -85,6 +88,7 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<RaftStoreBlackHole>,
+    concurrency_managers: HashMap<u64, ConcurrencyManager>,
 }
 
 impl ServerCluster {
@@ -115,6 +119,7 @@ impl ServerCluster {
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
             raft_client,
+            concurrency_managers: HashMap::default(),
         }
     }
 
@@ -131,8 +136,15 @@ impl ServerCluster {
     }
 
     /// To trigger GC manually.
-    pub fn get_gc_worker(&self, node_id: u64) -> &GcWorker<RaftKv<SimulateStoreTransport>> {
+    pub fn get_gc_worker(
+        &self,
+        node_id: u64,
+    ) -> &GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport> {
         &self.metas.get(&node_id).unwrap().gc_worker
+    }
+
+    pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
+        self.concurrency_managers.get(&node_id).unwrap().clone()
     }
 }
 
@@ -190,7 +202,7 @@ impl Simulator for ServerCluster {
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            Some(raft_router.clone()),
+            sim_router.clone(),
             cfg.gc.clone(),
             Default::default(),
         );
@@ -226,19 +238,6 @@ impl Simulator for ServerCluster {
             Arc::clone(&importer),
             security_mgr.clone(),
         );
-        // Create Debug service.
-        let pool = futures_cpupool::Builder::new()
-            .name_prefix(thd_name!("debugger"))
-            .pool_size(1)
-            .create();
-
-        let debug_service = DebugService::new(
-            engines.clone(),
-            pool,
-            raft_router,
-            ConfigController::default(),
-            security_mgr.clone(),
-        );
 
         // Create deadlock service.
         let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
@@ -254,9 +253,30 @@ impl Simulator for ServerCluster {
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         ));
-        let cop =
-            coprocessor::Endpoint::new(&server_cfg, cop_read_pool.handle(), concurrency_manager);
+        let cop = coprocessor::Endpoint::new(
+            &server_cfg,
+            cop_read_pool.handle(),
+            concurrency_manager.clone(),
+        );
         let mut server = None;
+        // Create Debug service.
+        let debug_thread_pool = Arc::new(
+            TokioBuilder::new()
+                .threaded_scheduler()
+                .thread_name(thd_name!("debugger"))
+                .core_threads(1)
+                .build()
+                .unwrap(),
+        );
+        let debug_thread_handle = debug_thread_pool.handle().clone();
+        let debug_service = DebugService::new(
+            engines.clone(),
+            debug_thread_handle,
+            raft_router,
+            ConfigController::default(),
+            security_mgr.clone(),
+        );
+
         for _ in 0..100 {
             let mut svr = Server::new(
                 &server_cfg,
@@ -268,6 +288,7 @@ impl Simulator for ServerCluster {
                 snap_mgr.clone(),
                 gc_worker.clone(),
                 None,
+                debug_thread_pool.clone(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
@@ -335,6 +356,7 @@ impl Simulator for ServerCluster {
             importer.clone(),
             split_check_worker,
             AutoSplitController::default(),
+            concurrency_manager.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -371,6 +393,8 @@ impl Simulator for ServerCluster {
             },
         );
         self.addrs.insert(node_id, format!("{}", addr));
+        self.concurrency_managers
+            .insert(node_id, concurrency_manager);
 
         Ok(node_id)
     }

@@ -9,15 +9,15 @@ mod metrics;
 pub use self::builder::{Builder, Config};
 
 use std::cell::Cell;
-use std::future::Future as StdFuture;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures03::channel::oneshot::{self, Canceled};
+use futures::channel::oneshot::{self, Canceled};
 use prometheus::{Histogram, IntCounter, IntGauge};
 use yatp::task::future;
 
-type ThreadPool = yatp::ThreadPool<future::TaskCell>;
+pub type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
 use crate::time::Instant;
 use yatp::pool::Local;
@@ -139,7 +139,7 @@ impl FuturePool {
     /// Spawns a future in the pool.
     pub fn spawn<F>(&self, future: F) -> Result<(), Full>
     where
-        F: StdFuture + Send + 'static,
+        F: Future + Send + 'static,
     {
         let timer = Instant::now_coarse();
         let h_schedule = self.env.metrics_pool_schedule_duration.clone();
@@ -160,9 +160,9 @@ impl FuturePool {
     pub fn spawn_handle<F>(
         &self,
         future: F,
-    ) -> Result<impl StdFuture<Output = Result<F::Output, Canceled>>, Full>
+    ) -> Result<impl Future<Output = Result<F::Output, Canceled>>, Full>
     where
-        F: StdFuture + Send + 'static,
+        F: Future + Send + 'static,
         F::Output: Send,
     {
         let timer = Instant::now_coarse();
@@ -226,7 +226,7 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
 
-    use futures03::executor::block_on;
+    use futures::executor::block_on;
 
     fn spawn_future_and_wait(pool: &FuturePool, duration: Duration) {
         block_on(
@@ -380,7 +380,7 @@ mod tests {
         pool: &FuturePool,
         id: u64,
         future_duration_ms: u64,
-    ) -> Result<impl StdFuture<Output = Result<u64, Canceled>>, Full> {
+    ) -> Result<impl Future<Output = Result<u64, Canceled>>, Full> {
         pool.spawn_handle(async move {
             thread::sleep(Duration::from_millis(future_duration_ms));
             id
@@ -389,7 +389,7 @@ mod tests {
 
     fn wait_on_new_thread<F>(sender: mpsc::Sender<F::Output>, future: F)
     where
-        F: StdFuture + Send + 'static,
+        F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
         thread::spawn(move || {

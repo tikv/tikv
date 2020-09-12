@@ -44,6 +44,8 @@ use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
+use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
+use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
@@ -1238,6 +1240,29 @@ impl RaftDbConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Default)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct RaftEngineConfig {
+    pub enable: bool,
+    #[serde(flatten)]
+    config: RawRaftEngineConfig,
+}
+
+impl RaftEngineConfig {
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.config.validate().map_err(|e| Box::new(e))?;
+        Ok(())
+    }
+
+    pub fn config(&self) -> RawRaftEngineConfig {
+        self.config.clone()
+    }
+
+    pub fn mut_config(&mut self) -> &mut RawRaftEngineConfig {
+        &mut self.config
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum DBType {
     Kv,
@@ -2011,12 +2036,14 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
+    pub old_value_cache_size: usize,
 }
 
 impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
+            old_value_cache_size: 1024,
         }
     }
 }
@@ -2084,6 +2111,9 @@ pub struct TiKvConfig {
     pub raftdb: RaftDbConfig,
 
     #[config(skip)]
+    pub raft_engine: RaftEngineConfig,
+
+    #[config(skip)]
     pub security: SecurityConfig,
 
     #[config(skip)]
@@ -2125,6 +2155,7 @@ impl Default for TiKvConfig {
             pd: PdConfig::default(),
             rocksdb: DbConfig::default(),
             raftdb: RaftDbConfig::default(),
+            raft_engine: RaftEngineConfig::default(),
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
@@ -2153,11 +2184,24 @@ impl TiKvConfig {
                 .to_owned();
         }
 
-        let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
-        if self.raft_store.raftdb_path.is_empty() {
-            self.raft_store.raftdb_path = default_raftdb_path;
-        } else if self.raft_store.raftdb_path != default_raftdb_path {
-            self.raft_store.raftdb_path = config::canonicalize_path(&self.raft_store.raftdb_path)?;
+        if !self.raft_engine.enable {
+            let default_raftdb_path =
+                config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
+            if self.raft_store.raftdb_path.is_empty() {
+                self.raft_store.raftdb_path = default_raftdb_path;
+            } else if self.raft_store.raftdb_path != default_raftdb_path {
+                self.raft_store.raftdb_path =
+                    config::canonicalize_path(&self.raft_store.raftdb_path)?;
+            }
+        } else {
+            let default_er_path =
+                config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
+            if self.raft_engine.config.dir.is_empty() {
+                self.raft_engine.config.dir = default_er_path;
+            } else if self.raft_engine.config.dir != default_er_path {
+                self.raft_engine.config.dir =
+                    config::canonicalize_path(&self.raft_engine.config.dir)?;
+            }
         }
 
         let kv_db_path =
@@ -2166,11 +2210,28 @@ impl TiKvConfig {
         if kv_db_path == self.raft_store.raftdb_path {
             return Err("raft_store.raftdb_path can not same with storage.data_dir/db".into());
         }
-        if RocksEngine::exists(&kv_db_path) && !RocksEngine::exists(&self.raft_store.raftdb_path) {
-            return Err("default rocksdb exist, buf raftdb not exist".into());
-        }
-        if !RocksEngine::exists(&kv_db_path) && RocksEngine::exists(&self.raft_store.raftdb_path) {
-            return Err("default rocksdb not exist, buf raftdb exist".into());
+        if !self.raft_engine.enable {
+            if RocksEngine::exists(&kv_db_path)
+                && !RocksEngine::exists(&self.raft_store.raftdb_path)
+            {
+                return Err("default rocksdb exist, buf raftdb not exist".into());
+            }
+            if !RocksEngine::exists(&kv_db_path)
+                && RocksEngine::exists(&self.raft_store.raftdb_path)
+            {
+                return Err("default rocksdb not exist, buf raftdb exist".into());
+            }
+        } else {
+            if RocksEngine::exists(&kv_db_path)
+                && !RaftLogEngine::exists(&self.raft_engine.config.dir)
+            {
+                return Err("default rocksdb exist, buf raft engine not exist".into());
+            }
+            if !RocksEngine::exists(&kv_db_path)
+                && RaftLogEngine::exists(&self.raft_engine.config.dir)
+            {
+                return Err("default rocksdb not exist, buf raft engine exist".into());
+            }
         }
 
         // Check blob file dir is empty when titan is disabled
@@ -2206,6 +2267,7 @@ impl TiKvConfig {
 
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
+        self.raft_engine.validate()?;
         self.server.validate()?;
         self.raft_store.validate()?;
         self.pd.validate()?;
@@ -2351,21 +2413,40 @@ impl TiKvConfig {
                 last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
             ));
         }
+        if last_cfg.raft_engine.enable
+            && self.raft_engine.enable
+            && last_cfg.raft_engine.config.dir != self.raft_engine.config.dir
+        {
+            return Err(format!(
+                "raft engine dir have been changed, former is '{}', \
+                 current is '{}', please check if it is expected.",
+                last_cfg.raft_engine.config.dir, self.raft_engine.config.dir
+            ));
+        }
+        if last_cfg.raft_engine.enable && !self.raft_engine.enable {
+            return Err("raft engine can't be disabled after switched on.".to_owned());
+        }
 
         Ok(())
     }
 
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
+    pub fn from_file(path: &Path, unrecognized_keys: Option<&mut Vec<String>>) -> Self {
         (|| -> Result<Self, Box<dyn Error>> {
-            let s = fs::read_to_string(&path)?;
-            let mut cfg: TiKvConfig = toml::from_str(&s)?;
-            cfg.cfg_path = path.as_ref().display().to_string();
+            let s = fs::read_to_string(path)?;
+            let mut deserializer = toml::Deserializer::new(&s);
+            let mut cfg = if let Some(keys) = unrecognized_keys {
+                serde_ignored::deserialize(&mut deserializer, |key| keys.push(key.to_string()))
+            } else {
+                <TiKvConfig as serde::Deserialize>::deserialize(&mut deserializer)
+            }?;
+            deserializer.end()?;
+            cfg.cfg_path = path.display().to_string();
             Ok(cfg)
         })()
         .unwrap_or_else(|e| {
             panic!(
                 "invalid auto generated configuration file {}, err {}",
-                path.as_ref().display(),
+                path.display(),
                 e
             );
         })
@@ -2414,7 +2495,7 @@ fn get_last_config(data_dir: &str) -> Option<TiKvConfig> {
     let store_path = Path::new(data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     if last_cfg_path.exists() {
-        return Some(TiKvConfig::from_file(&last_cfg_path));
+        return Some(TiKvConfig::from_file(&last_cfg_path, None));
     }
     None
 }
@@ -2424,6 +2505,13 @@ pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     let store_path = Path::new(&config.storage.data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     let tmp_cfg_path = store_path.join(TMP_CONFIG_FILE);
+
+    let same_as_last_cfg = fs::read_to_string(&last_cfg_path).map_or(false, |last_cfg| {
+        toml::to_string(&config).unwrap() == last_cfg
+    });
+    if same_as_last_cfg {
+        return Ok(());
+    }
 
     // Create parent directory if missing.
     if let Err(e) = fs::create_dir_all(&store_path) {
@@ -2608,6 +2696,7 @@ pub enum Module {
     Pd,
     Rocksdb,
     Raftdb,
+    RaftEngine,
     Storage,
     Security,
     Encryption,
@@ -2631,6 +2720,7 @@ impl From<&str> for Module {
             "split" => Module::Split,
             "rocksdb" => Module::Rocksdb,
             "raftdb" => Module::Raftdb,
+            "raft_engine" => Module::RaftEngine,
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,
@@ -2737,6 +2827,7 @@ mod tests {
     use crate::storage::config::StorageConfigManger;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
+    use raft_log_engine::RecoveryMode;
     use slog::Level;
     use std::sync::Arc;
 
@@ -2772,10 +2863,33 @@ mod tests {
     }
 
     #[test]
+    fn test_last_cfg_modified() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let store_path = Path::new(&cfg.storage.data_dir);
+        let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+
+        cfg.write_to_file(&last_cfg_path).unwrap();
+
+        let mut last_cfg_metadata = last_cfg_path.metadata().unwrap();
+        let first_modified = last_cfg_metadata.modified().unwrap();
+
+        // not write to file when config is the equivalent of last one.
+        assert!(persist_config(&cfg).is_ok());
+        last_cfg_metadata = last_cfg_path.metadata().unwrap();
+        assert_eq!(last_cfg_metadata.modified().unwrap(), first_modified);
+
+        // write to file when config is the inequivalent of last one.
+        cfg.log_level = slog::Level::Warning;
+        assert!(persist_config(&cfg).is_ok());
+        last_cfg_metadata = last_cfg_path.metadata().unwrap();
+        assert_ne!(last_cfg_metadata.modified().unwrap(), first_modified);
+    }
+
+    #[test]
     fn test_persist_cfg() {
         let dir = Builder::new().prefix("test_persist_cfg").tempdir().unwrap();
         let path_buf = dir.path().join(LAST_CONFIG_FILE);
-        let file = path_buf.as_path().to_str().unwrap();
+        let file = path_buf.as_path();
         let (s1, s2) = ("/xxx/wal_dir".to_owned(), "/yyy/wal_dir".to_owned());
 
         let mut tikv_cfg = TiKvConfig::default();
@@ -2783,7 +2897,7 @@ mod tests {
         tikv_cfg.rocksdb.wal_dir = s1.clone();
         tikv_cfg.raftdb.wal_dir = s2.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file);
+        let cfg_from_file = TiKvConfig::from_file(file, None);
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s1);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s2);
 
@@ -2791,7 +2905,7 @@ mod tests {
         tikv_cfg.rocksdb.wal_dir = s2.clone();
         tikv_cfg.raftdb.wal_dir = s1.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file);
+        let cfg_from_file = TiKvConfig::from_file(file, None);
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
     }
@@ -2896,7 +3010,6 @@ mod tests {
         let mut incoming = TiKvConfig::default();
         incoming.coprocessor.region_split_keys = 10000;
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
-        incoming.raft_store.sync_log = false;
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
@@ -2905,7 +3018,6 @@ mod tests {
             "10000".to_owned(),
         );
         change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
-        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
         change.insert(
             "rocksdb.defaultcf.block-cache-size".to_owned(),
             "500MB".to_owned(),
@@ -2955,7 +3067,6 @@ mod tests {
             "10000".to_owned(),
         );
         change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
-        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
         change.insert(
             "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
             "read-only".to_owned(),
@@ -2973,7 +3084,6 @@ mod tests {
             res.get("gc.max-write-bytes-per-sec"),
             Some(&"\"100MB\"".to_owned())
         );
-        assert_eq!(res.get("raftstore.sync-log"), Some(&"false".to_owned()));
         assert_eq!(
             res.get("rocksdb.defaultcf.titan.blob-run-mode"),
             Some(&"\"read-only\"".to_owned())
@@ -3154,5 +3264,77 @@ mod tests {
         cfg.compatible_adjust();
         assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(false));
+    }
+
+    #[test]
+    fn test_unrecognized_config_keys() {
+        let mut temp_config_file = tempfile::NamedTempFile::new().unwrap();
+        let temp_config_writer = temp_config_file.as_file_mut();
+        temp_config_writer
+            .write_all(
+                br#"
+                    log-level = "debug"
+                    log-fmt = "json"
+                    [readpool.unified]
+                    min-threads-count = 5
+                    stack-size = "20MB"
+                    [import]
+                    num_threads = 4
+                    [gcc]
+                    batch-keys = 1024
+                    [[security.encryption.master-keys]]
+                    type = "file"
+                "#,
+            )
+            .unwrap();
+        temp_config_writer.sync_data().unwrap();
+
+        let mut unrecognized_keys = Vec::new();
+        let _ = TiKvConfig::from_file(temp_config_file.path(), Some(&mut unrecognized_keys));
+
+        assert_eq!(
+            unrecognized_keys,
+            vec![
+                "log-fmt".to_owned(),
+                "readpool.unified.min-threads-count".to_owned(),
+                "import.num_threads".to_owned(),
+                "gcc".to_owned(),
+                "security.encryption.master-keys".to_owned(),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_raft_engine() {
+        let content = r#"
+            [raft-engine]
+            enable = true
+            recovery_mode = "tolerate-corrupted-tail-records"
+            bytes-per-sync = "64KB"
+            purge-threshold = "1GB"
+        "#;
+        let cfg: TiKvConfig = toml::from_str(content).unwrap();
+        assert!(cfg.raft_engine.enable);
+        let config = &cfg.raft_engine.config;
+        assert_eq!(
+            config.recovery_mode,
+            RecoveryMode::TolerateCorruptedTailRecords
+        );
+        assert_eq!(config.bytes_per_sync.0, ReadableSize::kb(64).0);
+        assert_eq!(config.purge_threshold.0, ReadableSize::gb(1).0);
+    }
+
+    #[test]
+    fn test_raft_engine_dir() {
+        let content = r#"
+            [raft-engine]
+            enable = true
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(
+            cfg.raft_engine.config.dir,
+            config::canonicalize_sub_path(&cfg.storage.data_dir, "raft-engine").unwrap()
+        );
     }
 }

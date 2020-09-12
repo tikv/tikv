@@ -49,14 +49,12 @@ fn test_deadline_3() {
         let engine = tikv::storage::TestEngineBuilder::new().build().unwrap();
         let mut cfg = tikv::server::Config::default();
         cfg.end_point_request_max_handle_duration = tikv_util::config::ReadableDuration::secs(1);
-        // Batch execution will check deadline after the first batch is executed, but our
-        // test data is not large enough for the second batch. So let's disable it.
-        cfg.end_point_enable_batch_if_possible = false;
         init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)
     };
     let req = DAGSelect::from(&product).build();
 
     fail::cfg("kv_cursor_seek", "sleep(2000)").unwrap();
+    fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
     let cop_resp = handle_request(&endpoint, req);
     let mut resp = SelectResponse::default();
     resp.merge_from_bytes(cop_resp.get_data()).unwrap();

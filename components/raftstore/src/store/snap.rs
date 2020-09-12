@@ -17,7 +17,7 @@ use encryption::{
 };
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{EncryptionKeyManager, KvEngine};
-use futures_executor::block_on;
+use futures::executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::metapb::Region;
@@ -692,12 +692,10 @@ impl Snap {
             match self.validate(engine, true) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
-                    error!(
+                    error!(?e;
                         "snapshot is corrupted, will rebuild";
                         "region_id" => region.get_id(),
                         "snapshot" => %self.path(),
-                        "err" => ?e,
-                        "error_code" => %e.error_code(),
                     );
                     if !retry_delete_snapshot(&self.mgr, &self.key, self) {
                         error!(
@@ -1625,11 +1623,9 @@ pub mod tests {
             kv.c()
                 .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
-        let shared_block_cache = false;
         Ok(Engines {
             kv: kv.c().clone(),
             raft: raft.c().clone(),
-            shared_block_cache,
         })
     }
 
