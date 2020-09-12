@@ -3095,8 +3095,22 @@ where
                 TrySendError::Full(_) => {
                     unreachable!();
                 }
-                TrySendError::Closed(_) => {
-                    error!("apply channel is closed incorrectly");
+                TrySendError::Closed(msg) => {
+                    warn!(
+                        "schedule msg( {:?} )  failed because the runner has stopped.",
+                        msg
+                    );
+                    match msg {
+                        Msg::Apply { mut apply, .. } => {
+                            warn!("target region is stopped, drop proposals";"region_id" => apply.region_id);
+                            for p in apply.cbs.drain(..) {
+                                let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
+                                notify_region_removed(apply.region_id, apply.peer_id, cmd);
+                            }
+                        }
+                        _ => (),
+                    }
+                    return;
                 }
             },
         }
