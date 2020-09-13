@@ -2458,6 +2458,7 @@ mod tests {
                     RangeOffsets {
                         size: 4 * 1024,
                         keys: 1,
+                        delete_keys: 0,
                     },
                 ),
                 (
@@ -2465,6 +2466,7 @@ mod tests {
                     RangeOffsets {
                         size: 8 * 1024,
                         keys: 2,
+                        delete_keys: 0,
                     },
                 ),
                 (
@@ -2472,6 +2474,7 @@ mod tests {
                     RangeOffsets {
                         size: 12 * 1024,
                         keys: 3,
+                        delete_keys: 0,
                     },
                 ),
             ],

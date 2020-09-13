@@ -4,6 +4,7 @@ use engine_traits::{DecodeProperties, IndexHandles};
 use std::cmp;
 use std::collections::HashMap;
 use std::io::Read;
+use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
@@ -21,8 +22,10 @@ use txn_types::{Key, TimeStamp, Write, WriteType};
 const PROP_TOTAL_SIZE: &str = "tikv.total_size";
 const PROP_SIZE_INDEX: &str = "tikv.size_index";
 const PROP_RANGE_INDEX: &str = "tikv.range_index";
+const PROP_DELETE_INDEX: &str = "tikv.delete_index";
 pub const DEFAULT_PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
+pub const DEFAULT_PROP_DELETE_KEYS_INDEX_DISTANCE: u64 = 20 * 1024;
 
 fn get_entry_size(value: &[u8], entry_type: DBEntryType) -> std::result::Result<u64, ()> {
     match entry_type {
@@ -119,12 +122,14 @@ impl<'a> DecodeProperties for UserCollectedPropertiesDecoder<'a> {
 pub enum RangeOffsetKind {
     Size,
     Keys,
+    DeleteKeys,
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct RangeOffsets {
     pub size: u64,
     pub keys: u64,
+    pub delete_keys: u64,
 }
 
 impl RangeOffsets {
@@ -132,6 +137,7 @@ impl RangeOffsets {
         match kind {
             RangeOffsetKind::Keys => self.keys,
             RangeOffsetKind::Size => self.size,
+            RangeOffsetKind::DeleteKeys => self.delete_keys,
         }
     }
 }
@@ -158,8 +164,13 @@ impl RangeProperties {
             buf.encode_u64(offsets.size).unwrap();
             buf.encode_u64(offsets.keys).unwrap();
         }
+        let mut delete_buf = Vec::with_capacity(self.offsets.len() * mem::size_of::<u64>());
+        for (_, offsets) in &self.offsets {
+            delete_buf.encode_u64(offsets.delete_keys).unwrap();
+        }
         let mut props = UserProperties::new();
         props.encode(PROP_RANGE_INDEX, buf);
+        props.encode(PROP_DELETE_INDEX, delete_buf);
         props
     }
 
@@ -183,6 +194,17 @@ impl RangeProperties {
             offsets.keys = number::decode_u64(&mut buf)?;
             res.offsets.push((k, offsets));
         }
+
+        let mut delete_count = 0;
+        if let Ok(mut delete_buf) = props.decode(PROP_DELETE_INDEX) {
+            let mut it = res.offsets.iter_mut();
+            while !delete_buf.is_empty() {
+                (*it.next().unwrap()).1.delete_keys = number::decode_u64(&mut delete_buf)?;
+                delete_count += 1;
+            }
+        }
+        assert!(res.offsets.len() == delete_count);
+
         Ok(res)
     }
 
@@ -204,35 +226,69 @@ impl RangeProperties {
         if start == end {
             return 0;
         }
-        let start_offset = match self.offsets.binary_search_by_key(&start, |&(ref k, _)| k) {
-            Ok(idx) => self.offsets[idx].1.get(kind),
+        let mut start_offset = &RangeOffsets::default();
+        match self.offsets.binary_search_by_key(&start, |&(ref k, _)| k) {
+            Ok(idx) => {
+                start_offset = &self.offsets[idx].1;
+            }
             Err(next_idx) => {
-                if next_idx == 0 {
-                    0
-                } else {
-                    self.offsets[next_idx - 1].1.get(kind)
+                if next_idx != 0 {
+                    start_offset = &self.offsets[next_idx - 1].1
                 }
             }
         };
 
-        let end_offset = match self.offsets.binary_search_by_key(&end, |&(ref k, _)| k) {
-            Ok(idx) => self.offsets[idx].1.get(kind),
+        let mut end_offset = &RangeOffsets::default();
+        match self.offsets.binary_search_by_key(&end, |&(ref k, _)| k) {
+            Ok(idx) => {
+                end_offset = &self.offsets[idx].1;
+            }
             Err(next_idx) => {
-                if next_idx == 0 {
-                    0
-                } else {
-                    self.offsets[next_idx - 1].1.get(kind)
+                if next_idx != 0 {
+                    end_offset = &self.offsets[next_idx - 1].1
                 }
             }
         };
 
-        if end_offset < start_offset {
+        let start_delete_keys = start_offset.get(RangeOffsetKind::DeleteKeys);
+        let start_keys = start_offset.get(RangeOffsetKind::Keys);
+        let start_size = start_offset.get(RangeOffsetKind::Size);
+
+        let end_delete_keys = end_offset.get(RangeOffsetKind::DeleteKeys);
+        let end_keys = end_offset.get(RangeOffsetKind::Keys);
+        let end_size = end_offset.get(RangeOffsetKind::Size);
+
+        if end_delete_keys < start_delete_keys || end_keys < start_keys || end_size < start_size {
             panic!(
-                "start {:?} end {:?} start_offset {} end_offset {}",
-                start, end, start_offset, end_offset
+                "start {:?} end {:?}, start_delete_keys {} end_delete_keys {}, start_keys {} end_keys {}, start_size {} end_size {} ",
+                start,
+                end,
+                start_delete_keys,
+                end_delete_keys,
+                start_keys,
+                end_keys,
+                start_size,
+                end_size,
             );
         }
-        end_offset - start_offset
+
+        let delete_keys = end_delete_keys - start_delete_keys;
+        let keys = end_keys - start_keys;
+        let size = end_size - start_size;
+
+        // RangeOffsetKind == Keys
+        if kind == RangeOffsetKind::Keys {
+            let remain_keys = keys - delete_keys;
+            return cmp::max(remain_keys, 0);
+        }
+
+        // RangeOffsetKind == Size
+        if keys == 0 {
+            return 0;
+        }
+        let average_size = size / keys;
+        let remain_size = size - delete_keys * average_size as u64;
+        cmp::max(remain_size, 0)
     }
 
     // equivalent to range(Excluded(start_key), Excluded(end_key))
@@ -307,6 +363,7 @@ pub struct RangePropertiesCollector {
     cur_offsets: RangeOffsets,
     prop_size_index_distance: u64,
     prop_keys_index_distance: u64,
+    prop_delete_keys_index_distance: u64,
 }
 
 impl Default for RangePropertiesCollector {
@@ -318,15 +375,21 @@ impl Default for RangePropertiesCollector {
             cur_offsets: RangeOffsets::default(),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            prop_delete_keys_index_distance: DEFAULT_PROP_DELETE_KEYS_INDEX_DISTANCE,
         }
     }
 }
 
 impl RangePropertiesCollector {
-    pub fn new(prop_size_index_distance: u64, prop_keys_index_distance: u64) -> Self {
+    pub fn new(
+        prop_size_index_distance: u64,
+        prop_keys_index_distance: u64,
+        prop_delete_keys_index_distance: u64,
+    ) -> Self {
         RangePropertiesCollector {
             prop_size_index_distance,
             prop_keys_index_distance,
+            prop_delete_keys_index_distance,
             ..Default::default()
         }
     }
@@ -339,6 +402,10 @@ impl RangePropertiesCollector {
         self.cur_offsets.keys - self.last_offsets.keys
     }
 
+    fn delete_keys_in_last_range(&self) -> u64 {
+        self.cur_offsets.delete_keys - self.last_offsets.delete_keys
+    }
+
     fn insert_new_point(&mut self, key: Vec<u8>) {
         self.last_offsets = self.cur_offsets.clone();
         self.props.offsets.push((key, self.cur_offsets.clone()));
@@ -347,18 +414,30 @@ impl RangePropertiesCollector {
 
 impl TablePropertiesCollector for RangePropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        // size
-        let size = match get_entry_size(value, entry_type) {
-            Ok(entry_size) => key.len() as u64 + entry_size,
-            Err(_) => return,
-        };
-        self.cur_offsets.size += size;
-        // keys
-        self.cur_offsets.keys += 1;
+        if entry_type != DBEntryType::Delete {
+            let size = match get_entry_size(value, entry_type) {
+                Ok(entry_size) => key.len() as u64 + entry_size,
+                Err(_) => return,
+            };
+            self.cur_offsets.size += size;
+            self.cur_offsets.keys += 1;
+        } else {
+            // handle delete entry type
+            self.cur_offsets.delete_keys += 1;
+            // Consider that we firstly insert a new point with a key, then delete the same key,
+            // the information of deleted keys should be changed in the last offset.
+            if let Some(last_point) = self.props.offsets.last_mut() {
+                if last_point.0 == key {
+                    last_point.1.delete_keys = self.cur_offsets.delete_keys;
+                }
+            }
+        }
+
         // Add the start key for convenience.
         if self.last_key.is_empty()
             || self.size_in_last_range() >= self.prop_size_index_distance
             || self.keys_in_last_range() >= self.prop_keys_index_distance
+            || self.delete_keys_in_last_range() > self.prop_delete_keys_index_distance
         {
             self.insert_new_point(key.to_owned());
         }
@@ -378,6 +457,7 @@ impl TablePropertiesCollector for RangePropertiesCollector {
 pub struct RangePropertiesCollectorFactory {
     pub prop_size_index_distance: u64,
     pub prop_keys_index_distance: u64,
+    pub prop_delete_keys_index_distance: u64,
 }
 
 impl Default for RangePropertiesCollectorFactory {
@@ -385,6 +465,7 @@ impl Default for RangePropertiesCollectorFactory {
         RangePropertiesCollectorFactory {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            prop_delete_keys_index_distance: DEFAULT_PROP_DELETE_KEYS_INDEX_DISTANCE,
         }
     }
 }
@@ -394,6 +475,7 @@ impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
         Box::new(RangePropertiesCollector::new(
             self.prop_size_index_distance,
             self.prop_keys_index_distance,
+            self.prop_delete_keys_index_distance,
         ))
     }
 }
@@ -737,6 +819,115 @@ mod tests {
                 count
             );
         }
+    }
+
+    #[test]
+    fn test_range_properties_with_delete() {
+        // The size, keys, and delete_keys are accumulative value.
+        // size = value_size + key_size
+        let cases = [
+            ("a", 0, DBEntryType::Put, 1),
+            ("a", 0, DBEntryType::Delete, 1),
+            // insert new point ("a", { size: 1, keys: 1, delete_keys: 1 })
+            (
+                "b",
+                DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8,
+                DBEntryType::Put,
+                1,
+            ),
+            (
+                "c",
+                DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4,
+                DBEntryType::Put,
+                1,
+            ),
+            (
+                "d",
+                DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2,
+                DBEntryType::Put,
+                1,
+            ),
+            (
+                "e",
+                DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8,
+                DBEntryType::Put,
+                1,
+            ),
+            // insert new point ("e", { size: DEFAULT_PROP_SIZE_INDEX_DISTANCE + 5, keys: 5, delete_keys: 1 })
+            (
+                "f",
+                DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4,
+                DBEntryType::Put,
+                1,
+            ),
+            (
+                "g",
+                DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2,
+                DBEntryType::Put,
+                1,
+            ),
+            (
+                "h",
+                DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8,
+                DBEntryType::Put,
+                1,
+            ),
+            ("h", 0, DBEntryType::Delete, 1),
+            (
+                "i",
+                DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4,
+                DBEntryType::Put,
+                1,
+            ),
+            // insert new point ("i", { size: DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9, keys: 9, delete_keys: 2 })
+            (
+                "j",
+                DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2,
+                DBEntryType::Put,
+                1,
+            ),
+            (
+                "k",
+                DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2,
+                DBEntryType::Put,
+                1,
+            ),
+            ("k", 0, DBEntryType::Delete, 1),
+            // insert new point ("k", { size: DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11, keys: 11, delete_keys: 3 })
+            ("l", 1, DBEntryType::Put, 1),
+            // insert new point ("l", { size: DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 1 + 12, keys: 12, delete_keys: 3 })
+        ];
+
+        let mut collector = RangePropertiesCollector::default();
+        for &(k, vlen, typ, count) in &cases {
+            let v = vec![0; vlen as usize];
+            for _ in 0..count {
+                collector.add(k.as_bytes(), &v, typ, 0, 0);
+            }
+        }
+        let result = UserProperties(collector.finish());
+
+        let props = RangeProperties::decode(&result).unwrap();
+        assert_eq!(props.smallest_key().unwrap(), cases[0].0.as_bytes());
+        assert_eq!(
+            props.largest_key().unwrap(),
+            cases[cases.len() - 1].0.as_bytes()
+        );
+        assert_eq!(props.get_approximate_size_in_range(b"", b"a"), 0);
+        assert_eq!(props.get_approximate_keys_in_range(b"", b"a"), 0);
+
+        let average_size = (DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11) / 11;
+        assert_eq!(
+            props.get_approximate_size_in_range(b"", b"k"),
+            (DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11) - average_size * 3
+        );
+        assert_eq!(props.get_approximate_keys_in_range(b"", b"k"), 8 as u64);
+        let average_size = (DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 1 + 12) / 12;
+        assert_eq!(
+            props.get_approximate_size_in_range(b"", b"l"),
+            (DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 1 + 12) - average_size * 3
+        );
+        assert_eq!(props.get_approximate_keys_in_range(b"", b"l"), 9 as u64);
     }
 
     #[test]
