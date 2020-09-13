@@ -1639,8 +1639,8 @@ mod tests {
     use crate::store::worker::RegionRunner;
     use crate::store::worker::RegionTask;
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
-    use engine_rocks::util::new_engine;
-    use engine_rocks::{RocksEngine, RocksSnapshot, RocksWriteBatch};
+    use engine_test::kv::{KvTestEngine, KvTestSnapshot, KvTestWriteBatch};
+    use engine_test::raft::{RaftTestEngine, RaftTestWriteBatch};
     use engine_traits::Engines;
     use engine_traits::{Iterable, SyncMutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
@@ -1660,12 +1660,12 @@ mod tests {
     use super::*;
 
     fn new_storage(
-        sched: Scheduler<RegionTask<RocksSnapshot>>,
+        sched: Scheduler<RegionTask<KvTestSnapshot>>,
         path: &TempDir,
-    ) -> PeerStorage<RocksEngine, RocksEngine> {
-        let kv_db = new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+    ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
+        let kv_db = engine_test::kv::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = path.path().join(Path::new("raft"));
-        let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
+        let raft_db = engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let engines = Engines::new(kv_db, raft_db);
         bootstrap_store(&engines, 1, 1).unwrap();
 
@@ -1675,13 +1675,13 @@ mod tests {
     }
 
     struct ReadyContext {
-        kv_wb: RocksWriteBatch,
-        raft_wb: RocksWriteBatch,
+        kv_wb: KvTestWriteBatch,
+        raft_wb: RaftTestWriteBatch,
         sync_log: bool,
     }
 
     impl ReadyContext {
-        fn new(s: &PeerStorage<RocksEngine, RocksEngine>) -> ReadyContext {
+        fn new(s: &PeerStorage<KvTestEngine, RaftTestEngine>) -> ReadyContext {
             ReadyContext {
                 kv_wb: s.engines.kv.write_batch(),
                 raft_wb: s.engines.raft.write_batch(),
@@ -1690,14 +1690,14 @@ mod tests {
         }
     }
 
-    impl HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch> for ReadyContext {
-        fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
+    impl HandleRaftReadyContext<KvTestWriteBatch, RaftTestWriteBatch> for ReadyContext {
+        fn wb_mut(&mut self) -> (&mut KvTestWriteBatch, &mut RaftTestWriteBatch) {
             (&mut self.kv_wb, &mut self.raft_wb)
         }
-        fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch {
+        fn kv_wb_mut(&mut self) -> &mut KvTestWriteBatch {
             &mut self.kv_wb
         }
-        fn raft_wb_mut(&mut self) -> &mut RocksWriteBatch {
+        fn raft_wb_mut(&mut self) -> &mut RaftTestWriteBatch {
             &mut self.raft_wb
         }
         fn sync_log(&self) -> bool {
@@ -1709,10 +1709,10 @@ mod tests {
     }
 
     fn new_storage_from_ents(
-        sched: Scheduler<RegionTask<RocksSnapshot>>,
+        sched: Scheduler<RegionTask<KvTestSnapshot>>,
         path: &TempDir,
         ents: &[Entry],
-    ) -> PeerStorage<RocksEngine, RocksEngine> {
+    ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
         let mut store = new_storage(sched, path);
         let mut kv_wb = store.engines.kv.write_batch();
         let mut ctx = InvokeContext::new(&store);
@@ -1734,7 +1734,7 @@ mod tests {
         store
     }
 
-    fn append_ents(store: &mut PeerStorage<RocksEngine, RocksEngine>, ents: &[Entry]) {
+    fn append_ents(store: &mut PeerStorage<KvTestEngine, RaftTestEngine>, ents: &[Entry]) {
         let mut ctx = InvokeContext::new(store);
         let mut ready_ctx = ReadyContext::new(store);
         store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
@@ -1743,7 +1743,7 @@ mod tests {
         store.raft_state = ctx.raft_state;
     }
 
-    fn validate_cache(store: &PeerStorage<RocksEngine, RocksEngine>, exp_ents: &[Entry]) {
+    fn validate_cache(store: &PeerStorage<KvTestEngine, RaftTestEngine>, exp_ents: &[Entry]) {
         assert_eq!(store.cache.as_ref().unwrap().cache, exp_ents);
         for e in exp_ents {
             let key = keys::raft_log_key(store.get_region_id(), e.get_index());
@@ -1787,7 +1787,7 @@ mod tests {
         }
     }
 
-    fn get_meta_key_count(store: &PeerStorage<RocksEngine, RocksEngine>) -> usize {
+    fn get_meta_key_count(store: &PeerStorage<KvTestEngine, RaftTestEngine>) -> usize {
         let region_id = store.get_region_id();
         let mut count = 0;
         let (meta_start, meta_end) = (
@@ -1955,8 +1955,8 @@ mod tests {
 
     fn generate_and_schedule_snapshot(
         gen_task: GenSnapTask,
-        engines: &Engines<RocksEngine, RocksEngine>,
-        sched: &Scheduler<RegionTask<RocksSnapshot>>,
+        engines: &Engines<KvTestEngine, RaftTestEngine>,
+        sched: &Scheduler<RegionTask<KvTestSnapshot>>,
     ) -> Result<()> {
         let apply_state: RaftApplyState = engines
             .kv
@@ -1969,7 +1969,7 @@ mod tests {
             .get_msg::<Entry>(&keys::raft_log_key(gen_task.region_id, idx))
             .unwrap()
             .unwrap();
-        gen_task.generate_and_schedule_snapshot::<RocksEngine>(
+        gen_task.generate_and_schedule_snapshot::<KvTestEngine>(
             engines.kv.clone().snapshot(),
             entry.get_term(),
             apply_state,
@@ -1995,7 +1995,7 @@ mod tests {
             mgr,
             0,
             true,
-            CoprocessorHost::<RocksEngine>::default(),
+            CoprocessorHost::<KvTestEngine>::default(),
             router,
         );
         worker.start(runner).unwrap();
@@ -2311,7 +2311,7 @@ mod tests {
             mgr,
             0,
             true,
-            CoprocessorHost::<RocksEngine>::default(),
+            CoprocessorHost::<KvTestEngine>::default(),
             router,
         );
         worker.start(runner).unwrap();
@@ -2489,15 +2489,15 @@ mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
-        let kv_db = new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let kv_db = engine_test::kv::new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = td.path().join(Path::new("raft"));
-        let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
+        let raft_db = engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let engines = Engines::new(kv_db, raft_db);
         bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines, &region).unwrap();
-        let build_storage = || -> Result<PeerStorage<RocksEngine, RocksEngine>> {
+        let build_storage = || -> Result<PeerStorage<KvTestEngine, RaftTestEngine>> {
             PeerStorage::new(engines.clone(), &region, sched.clone(), 0, "".to_owned())
         };
         let mut s = build_storage().unwrap();
