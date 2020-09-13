@@ -84,8 +84,7 @@ fail = "0.3"
 failure = "0.1"
 fs2 = "0.4"
 futures = "0.1"
-futures03 = { package = "futures", version = "0.3.1", features = ["compat"] }
-futures-cpupool = "0.1"
+futures03 = { package = "futures", version = "0.3.1", features = ["compat", "thread-pool"] }
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
@@ -149,11 +148,6 @@ tikv_util = { path = "components/tikv_util" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio = { version = "0.2", features = ["full"] }
-tokio-tcp = "0.1"
-tokio-core = "0.1"
-tokio-fs = "0.1.6"
-tokio-io = "0.1.12"
-tokio-sync = "0.1.7"
 tokio-threadpool = "0.1.13"
 tokio-timer = "0.2"
 tokio-openssl = "0.4"
@@ -205,6 +199,7 @@ members = [
   "components/test_coprocessor",
   "components/test_sst_importer",
   "components/test_util",
+  "components/test_pd",
   "components/tikv_alloc",
   "components/match_template",
   "components/engine_traits/tests",

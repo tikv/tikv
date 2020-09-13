@@ -19,7 +19,7 @@ use std::time::Duration;
 use std::{process, str, u64};
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
-use futures03::{
+use futures::{
     compat::Stream01CompatExt, executor::block_on, future, stream, Stream, StreamExt, TryStreamExt,
 };
 use grpcio::{CallOption, ChannelBuilder, Environment};
@@ -41,6 +41,7 @@ use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
+use raft_log_engine::RaftLogEngine;
 use raftstore::store::INIT_EPOCH_CONF_VER;
 use security::{SecurityConfig, SecurityManager};
 use std::pin::Pin;
@@ -75,8 +76,10 @@ fn new_debug_executor(
                 DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .unwrap()
                     .map(|key_manager| Arc::new(key_manager));
-            let env = get_env(key_manager, None).unwrap();
             let cache = cfg.storage.block_cache.build_shared_cache();
+            let shared_block_cache = cache.is_some();
+            let env = get_env(key_manager, None).unwrap();
+
             let mut kv_db_opts = cfg.rocksdb.build_opt();
             kv_db_opts.set_env(env.clone());
             kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
@@ -85,6 +88,8 @@ fn new_debug_executor(
             let kv_path = kv_path.to_str().unwrap();
             let kv_db =
                 engine_rocks::raw_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+            let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
+            kv_db.set_shared_block_cache(shared_block_cache);
 
             let mut raft_path = raft_db
                 .map(ToString::to_string)
@@ -95,23 +100,28 @@ fn new_debug_executor(
                 .to_str()
                 .map(ToString::to_string)
                 .unwrap();
-            let mut raft_db_opts = cfg.raftdb.build_opt();
-            raft_db_opts.set_env(env);
-            let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
-            let raft_db =
-                engine_rocks::raw_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts)
-                    .unwrap();
 
-            let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
-            let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
-            let shared_block_cache = cache.is_some();
-            kv_db.set_shared_block_cache(shared_block_cache);
-            raft_db.set_shared_block_cache(shared_block_cache);
-
-            Box::new(Debugger::new(
-                Engines::new(kv_db, raft_db),
-                ConfigController::default(),
-            )) as Box<dyn DebugExecutor>
+            let cfg_controller = ConfigController::default();
+            if !cfg.raft_engine.enable {
+                let mut raft_db_opts = cfg.raftdb.build_opt();
+                raft_db_opts.set_env(env);
+                let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
+                let raft_db = engine_rocks::raw_util::new_engine_opt(
+                    &raft_path,
+                    raft_db_opts,
+                    raft_db_cf_opts,
+                )
+                .unwrap();
+                let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
+                raft_db.set_shared_block_cache(shared_block_cache);
+                let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
+                Box::new(debugger) as Box<dyn DebugExecutor>
+            } else {
+                let config = cfg.raft_engine.config();
+                let raft_db = RaftLogEngine::new(config);
+                let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
+                Box::new(debugger) as Box<dyn DebugExecutor>
+            }
         }
         (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
         _ => unreachable!(),

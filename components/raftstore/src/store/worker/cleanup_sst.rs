@@ -8,7 +8,6 @@ use kvproto::import_sstpb::SstMeta;
 use crate::store::util::is_epoch_stale;
 use crate::store::{StoreMsg, StoreRouter};
 use engine_traits::KvEngine;
-use error_code::ErrorCodeExt;
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use std::marker::PhantomData;
@@ -91,7 +90,7 @@ where
                     invalid_ssts.push(sst);
                 }
                 Err(e) => {
-                    error!("get region failed"; "err" => %e, "error_code" => %e.error_code());
+                    error!(%e; "get region failed");
                 }
             }
         }
@@ -101,7 +100,7 @@ where
         // destroyed.
         let msg = StoreMsg::ValidateSSTResult { invalid_ssts };
         if let Err(e) = self.store_router.send(msg) {
-            error!("send validate sst result failed"; "err" => %e, "error_code" => %e.error_code());
+            error!(%e; "send validate sst result failed");
         }
     }
 }

@@ -251,7 +251,7 @@
 //! - "Plain old data" types in `engine` can be moved directly into
 //!   `engine_traits` and reexported from `engine` to ease the transition.
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
-
+#![feature(min_specialization)]
 #![recursion_limit = "200"]
 
 #[macro_use]
