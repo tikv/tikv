@@ -309,18 +309,36 @@ where
     EK: KvEngine,
     W: WriteBatch<EK>,
 {
+    tag: String,
+    timer: Option<Instant>,
+    host: CoprocessorHost<EK>,
+    importer: Arc<SSTImporter>,
+    region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    notifier: Box<dyn Notifier<EK>>,
+    engine: EK,
     cbs: Vec<ApplyCallback<EK>>,
-    apply_res: Vec<ApplyRes<EK::Snapshot>>,
     flush_notifier: Vec<FlushCallback>,
+    apply_res: Vec<ApplyRes<EK::Snapshot>>,
+
     kv_wb: Option<W>,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
+    committed_count: usize,
+
     // Whether synchronize WAL is preferred.
     sync_log_hint: bool,
+    // Whether to use the delete range API instead of deleting one by one.
+    use_delete_range: bool,
+
     perf_context_statistics: PerfContextStatistics,
-    core: ApplyContextCore<EK>,
-    timer: Option<Instant>,
-    committed_count: usize,
+
+    yield_duration: Duration,
+
+    store_id: u64,
+    /// region_id -> (peer_id, is_splitting)
+    /// Used for handling race between splitting and creating new peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -328,20 +346,38 @@ where
     EK: KvEngine,
     W: WriteBatch<EK>,
 {
-    pub fn new(core: ApplyContextCore<EK>) -> ApplyContext<EK, W> {
-        let perf_context_statistics = PerfContextStatistics::new(core.perf_level);
-        ApplyContext::<EK, W> {
-            core,
-            kv_wb: None,
+    pub fn new(
+        tag: String,
+        host: CoprocessorHost<EK>,
+        importer: Arc<SSTImporter>,
+        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        engine: EK,
+        notifier: Box<dyn Notifier<EK>>,
+        cfg: &Config,
+        store_id: u64,
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    ) -> ApplyContext<EK, W> {
+        ApplyContext {
+            tag,
             timer: None,
-            committed_count: 0,
+            host,
+            importer,
+            region_scheduler,
+            engine,
+            notifier,
+            kv_wb: None,
             cbs: vec![],
             apply_res: vec![],
             flush_notifier: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
-            perf_context_statistics,
+            committed_count: 0,
             sync_log_hint: false,
+            use_delete_range: cfg.use_delete_range,
+            perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
+            yield_duration: cfg.apply_yield_duration.0,
+            store_id,
+            pending_create_peers,
         }
     }
 
@@ -357,7 +393,7 @@ where
         if let Some(observe_cmd) = &fsm.observe_cmd {
             let region_id = fsm.region_id();
             if observe_cmd.enabled.load(Ordering::Acquire) {
-                self.core.host.prepare_for_apply(observe_cmd.id, region_id);
+                self.host.prepare_for_apply(observe_cmd.id, region_id);
             } else {
                 info!("region is no longer observerd";
                     "region_id" => region_id);
@@ -372,7 +408,7 @@ where
     /// Otherwise create `RocksWriteBatch`.
     pub fn prepare_write_batch(&mut self) {
         if self.kv_wb.is_none() {
-            let kv_wb = W::with_capacity(&self.core.engine, DEFAULT_APPLY_WB_SIZE);
+            let kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
             self.kv_wb = Some(kv_wb);
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
@@ -409,7 +445,7 @@ where
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
             self.kv_wb()
-                .write_to_engine(&self.core.engine, &write_opts)
+                .write_to_engine(&self.engine, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
@@ -421,7 +457,7 @@ where
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
-                let kv_wb = W::with_capacity(&self.core.engine, DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
                 self.kv_wb = Some(kv_wb);
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
@@ -430,18 +466,18 @@ where
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         } else if need_sync {
-            self.core.engine.sync().unwrap_or_else(|e| {
+            self.engine.sync().unwrap_or_else(|e| {
                 panic!("failed to sync wal of engine: {:?}", e);
             });
         }
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
-        self.core.host.on_flush_apply(self.core.engine.clone());
+        self.host.on_flush_apply(self.engine.clone());
         for cbs in self.cbs.drain(..) {
-            cbs.invoke_all(&self.core.host);
+            cbs.invoke_all(&self.host);
         }
         if !self.apply_res.is_empty() {
             let apply_res = std::mem::replace(&mut self.apply_res, vec![]);
-            self.core.notifier.notify(apply_res);
+            self.notifier.notify(apply_res);
         }
         if !self.flush_notifier.is_empty() {
             for cb in self.flush_notifier.drain(..) {
@@ -455,7 +491,7 @@ where
             slow_log!(
                 elapsed,
                 "{} handle ready {} committed entries slowly",
-                self.core.tag,
+                self.tag,
                 self.committed_count
             );
         }
@@ -737,7 +773,7 @@ where
 
             if apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
-                if self.handle_start.elapsed() >= apply_ctx.core.yield_duration {
+                if self.handle_start.elapsed() >= apply_ctx.yield_duration {
                     reschedule().await;
                     self.handle_start = Instant::now_coarse();
                 }
@@ -911,7 +947,7 @@ where
 
         // Set sync log hint if the cmd requires so.
         apply_ctx.sync_log_hint |= should_sync_log(&cmd);
-        apply_ctx.core.host.pre_apply(&self.region, &cmd);
+        apply_ctx.host.pre_apply(&self.region, &cmd);
         let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx, index, term, &cmd).await;
         let is_conf_change = get_change_peer_cmd(&cmd).is_some();
         debug!(
@@ -928,7 +964,6 @@ where
         let cmd_cb = self.find_pending(index, term, is_conf_change);
         if let Some(observe_cmd) = self.observe_cmd.as_ref() {
             apply_ctx
-                .core
                 .host
                 .on_apply_cmd(observe_cmd.id, self.region_id(), cmd.clone());
         }
@@ -1133,14 +1168,11 @@ where
             let mut resp = match cmd_type {
                 CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
                 CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
-                CmdType::DeleteRange => self.handle_delete_range(
-                    &ctx.core.engine,
-                    req,
-                    &mut ranges,
-                    ctx.core.use_delete_range,
-                ),
+                CmdType::DeleteRange => {
+                    self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
+                }
                 CmdType::IngestSst => {
-                    self.handle_ingest_sst(&ctx.core.importer, &ctx.core.engine, req, &mut ssts)
+                    self.handle_ingest_sst(&ctx.importer, &ctx.engine, req, &mut ssts)
                 }
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
@@ -1696,9 +1728,7 @@ where
             new_split_regions.insert(
                 new_region.get_id(),
                 NewSplitPeer {
-                    peer_id: util::find_peer(&new_region, ctx.core.store_id)
-                        .unwrap()
-                        .get_id(),
+                    peer_id: util::find_peer(&new_region, ctx.store_id).unwrap().get_id(),
                     result: None,
                 },
             );
@@ -1712,7 +1742,7 @@ where
 
         let mut replace_regions = HashSet::default();
         {
-            let mut pending_create_peers = ctx.core.pending_create_peers.lock().unwrap();
+            let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
             for (region_id, new_split_peer) in new_split_regions.iter_mut() {
                 match pending_create_peers.entry(*region_id) {
                     HashMapEntry::Occupied(mut v) => {
@@ -1736,7 +1766,6 @@ where
         for (region_id, new_split_peer) in new_split_regions.iter_mut() {
             let region_state_key = keys::region_state_key(*region_id);
             match ctx
-                .core
                 .engine
                 .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
             {
@@ -1759,7 +1788,7 @@ where
         }
 
         if !already_exist_regions.is_empty() {
-            let mut pending_create_peers = ctx.core.pending_create_peers.lock().unwrap();
+            let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
             for (region_id, peer_id) in &already_exist_regions {
                 assert_eq!(
                     pending_create_peers.remove(region_id),
@@ -1927,8 +1956,7 @@ where
             merge: merge.to_owned(),
             callback,
         });
-        ctx.core
-            .notifier
+        ctx.notifier
             .notify_one(source_region_id, PeerMsg::SignificantMsg(msg));
 
         // We must notify other fsm to avoid them block when this fsm is waiting for source region
@@ -1963,7 +1991,7 @@ where
         self.ready_source_region_id = 0;
 
         let region_state_key = keys::region_state_key(source_region_id);
-        let state: RegionLocalState = match ctx.core.engine.get_msg_cf(CF_RAFT, &region_state_key) {
+        let state: RegionLocalState = match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
             Ok(Some(s)) => s,
             e => panic!(
                 "{} failed to get regions state of {:?}: {:?}",
@@ -2034,7 +2062,7 @@ where
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
         let region_state_key = keys::region_state_key(self.region_id());
-        let state: RegionLocalState = match ctx.core.engine.get_msg_cf(CF_RAFT, &region_state_key) {
+        let state: RegionLocalState = match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
             Ok(Some(s)) => s,
             e => panic!("{} failed to get regions state: {:?}", self.tag, e),
         };
@@ -2150,7 +2178,7 @@ where
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
-                snap: ctx.core.engine.snapshot(),
+                snap: ctx.engine.snapshot(),
             }),
         ))
     }
@@ -2697,7 +2725,7 @@ where
         if !self.stopped {
             self.destroy(ctx);
 
-            ctx.core.notifier.notify_one(
+            ctx.notifier.notify_one(
                 self.region_id(),
                 PeerMsg::ApplyRes {
                     res: TaskRes::Destroy {
@@ -2759,10 +2787,10 @@ where
         }
 
         if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
-            apply_ctx.core.engine.snapshot(),
+            apply_ctx.engine.snapshot(),
             self.applied_index_term,
             self.apply_state.clone(),
-            &apply_ctx.core.region_scheduler,
+            &apply_ctx.region_scheduler,
         ) {
             error!(
                 "schedule snapshot failed";
@@ -2821,7 +2849,7 @@ where
                 ReadResponse {
                     response: Default::default(),
                     snapshot: Some(RegionSnapshot::from_snapshot(
-                        Arc::new(apply_ctx.core.engine.snapshot()),
+                        Arc::new(apply_ctx.engine.snapshot()),
                         Arc::new(self.region.clone()),
                     )),
                     txn_extra_op: TxnExtraOp::Noop,
@@ -2900,28 +2928,15 @@ where
     }
 }
 
-pub struct ApplyContextCore<EK: KvEngine> {
-    tag: String,
-    host: CoprocessorHost<EK>,
-    importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-    /// region_id -> (peer_id, is_splitting)
-    /// Used for handling race between splitting and creating new peer.
-    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
-    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    notifier: Box<dyn Notifier<EK>>,
-    engine: EK,
-    // Whether to use the delete range API instead of deleting one by one.
-    use_delete_range: bool,
-    store_id: u64,
-    yield_duration: Duration,
-    perf_level: PerfLevel,
-}
-
-impl<EK: KvEngine> Clone for ApplyContextCore<EK> {
+impl<EK, W> Clone for ApplyContext<EK, W>
+where
+    EK: KvEngine,
+    W: WriteBatch<EK>,
+{
     fn clone(&self) -> Self {
         Self {
             tag: self.tag.clone(),
+            timer: None,
             host: self.host.clone(),
             importer: self.importer.clone(),
             region_scheduler: self.region_scheduler.clone(),
@@ -2931,7 +2946,15 @@ impl<EK: KvEngine> Clone for ApplyContextCore<EK> {
             use_delete_range: self.use_delete_range,
             store_id: self.store_id,
             yield_duration: self.yield_duration,
-            perf_level: self.perf_level,
+            perf_context_statistics: self.perf_context_statistics.clone(),
+            kv_wb: None,
+            apply_res: vec![],
+            cbs: vec![],
+            flush_notifier: vec![],
+            kv_wb_last_bytes: 0,
+            kv_wb_last_keys: 0,
+            committed_count: 0,
+            sync_log_hint: false,
         }
     }
 }
@@ -2946,7 +2969,7 @@ thread_local! {
 
 thread_local! {
     // A pointer to thread local ApplyContext. Use raw pointer and `UnsafeCell` to reduce runtime check.
-    static TLS_APPLY_CONTEXT_CORE: UnsafeCell<*mut ()> = UnsafeCell::new(ptr::null_mut());
+    static TLS_APPLY_CONTEXT_REPLICA: UnsafeCell<*mut ()> = UnsafeCell::new(ptr::null_mut());
 }
 
 /// Set the thread local ApplyContext.
@@ -2974,8 +2997,12 @@ where
     });
 }
 
-fn set_tls_core<EK: KvEngine>(core: ApplyContextCore<EK>) {
-    TLS_APPLY_CONTEXT_CORE.with(|e| unsafe {
+fn set_tls_core<EK, W>(core: ApplyContext<EK, W>)
+where
+    EK: KvEngine,
+    W: WriteBatch<EK>,
+{
+    TLS_APPLY_CONTEXT_REPLICA.with(|e| unsafe {
         if (*e.get()).is_null() {
             let ptr = Box::into_raw(Box::new(core)) as *mut ();
             *e.get() = ptr;
@@ -2996,12 +3023,12 @@ where
         ctx.take()
     });
     ctx.unwrap_or_else(|| {
-        TLS_APPLY_CONTEXT_CORE.with(|e| unsafe {
+        TLS_APPLY_CONTEXT_REPLICA.with(|e| unsafe {
             if (*e.get()).is_null() {
                 panic!("No apply context set before thread start");
             }
-            let core = &*(*e.get() as *const ApplyContextCore<EK>);
-            ApplyContext::<EK, W>::new(core.clone())
+            let replica = &*(*e.get() as *const ApplyContext<EK, W>);
+            replica.clone()
         })
     })
 }
@@ -3110,7 +3137,6 @@ where
                         }
                         _ => (),
                     }
-                    return;
                 }
             },
         }
@@ -3170,41 +3196,52 @@ pub fn create_apply_batch_system<EK: KvEngine>(
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     cfg: &Config,
 ) -> ApplyBatchSystem<EK> {
-    let perf_level = cfg.perf_level;
     let pool_size = cfg.apply_batch_system.pool_size;
-    let core = ApplyContextCore {
-        tag,
-        host,
-        importer,
-        region_scheduler,
-        notifier,
-        pending_create_peers,
-        store_id,
-        engine: engine.clone(),
-        yield_duration: cfg.apply_yield_duration.0,
-        use_delete_range: cfg.use_delete_range,
-        perf_level: cfg.perf_level,
-    };
-    let shared_core = Arc::new(Mutex::new(core));
     let mut builder = ReadPoolBuilder::new(DefaultTicker::default());
     if engine.support_write_batch_vec() {
+        let replica = ApplyContext::<EK, EK::WriteBatchVec>::new(
+            tag,
+            host,
+            importer,
+            region_scheduler,
+            engine.clone(),
+            notifier,
+            cfg,
+            store_id,
+            pending_create_peers,
+        );
+        let shared_replica = Arc::new(Mutex::new(replica));
         builder
             .before_pause(flush_tls_ctx::<EK, EK::WriteBatchVec>)
-            .before_stop(flush_tls_ctx::<EK, EK::WriteBatchVec>);
+            .before_stop(flush_tls_ctx::<EK, EK::WriteBatchVec>)
+            .after_start(move || {
+                let replica = shared_replica.lock().unwrap();
+                set_tls_core(replica.clone());
+            });
     } else {
+        let replica = ApplyContext::<EK, EK::WriteBatch>::new(
+            tag,
+            host,
+            importer,
+            region_scheduler,
+            engine.clone(),
+            notifier,
+            cfg,
+            store_id,
+            pending_create_peers,
+        );
+        let shared_replica = Arc::new(Mutex::new(replica));
         builder
             .before_pause(flush_tls_ctx::<EK, EK::WriteBatch>)
-            .before_stop(flush_tls_ctx::<EK, EK::WriteBatch>);
+            .before_stop(flush_tls_ctx::<EK, EK::WriteBatch>)
+            .after_start(move || {
+                let replica = shared_replica.lock().unwrap();
+                set_tls_core(replica.clone());
+            });
     };
     let pool = builder
         .name_prefix("apply")
         .thread_count(pool_size, pool_size)
-        .after_start(move || {
-            let mut perf_context_statistics = PerfContextStatistics::new(perf_level);
-            perf_context_statistics.start();
-            let core = shared_core.lock().unwrap();
-            set_tls_core(core.clone());
-        })
         .build_yatp_pool();
 
     ApplyBatchSystem {
