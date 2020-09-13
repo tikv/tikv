@@ -134,13 +134,8 @@ impl CompactedEvent for RocksCompactedEvent {
 
     fn is_size_declining_trivial(&self, split_check_diff: u64) -> bool {
         let total_bytes_declined = self.total_bytes_declined();
-        if total_bytes_declined < split_check_diff
+        total_bytes_declined < split_check_diff
             || total_bytes_declined * 10 < self.total_input_bytes
-        {
-            true
-        } else {
-            false
-        }
     }
 
     fn output_level_label(&self) -> String {
