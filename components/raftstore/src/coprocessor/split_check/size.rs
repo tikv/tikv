@@ -255,7 +255,7 @@ pub mod tests {
     use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
     use engine_test::ctor::{ColumnFamilyOptions, DBOptions, CFOptions};
-    use engine_rocks::{RocksEngine};
+    use engine_test::kv::KvTestEngine;
     use engine_traits::CF_LOCK;
     use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use engine_traits::{MiscExt, SyncMutable};
@@ -276,7 +276,7 @@ pub mod tests {
     use super::*;
 
     fn must_split_at_impl(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
         ignore_split_keys: bool,
@@ -308,7 +308,7 @@ pub mod tests {
     }
 
     pub fn must_split_at(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
     ) {
@@ -539,12 +539,12 @@ pub mod tests {
         let mut ctx = ObserverContext::new(&region);
         loop {
             let data = KeyEntry::new(b"zxxxx".to_vec(), 0, 4, CF_WRITE);
-            if SplitChecker::<RocksEngine>::on_kv(&mut checker, &mut ctx, &data) {
+            if SplitChecker::<KvTestEngine>::on_kv(&mut checker, &mut ctx, &data) {
                 break;
             }
         }
 
-        assert!(!SplitChecker::<RocksEngine>::split_keys(&mut checker).is_empty());
+        assert!(!SplitChecker::<KvTestEngine>::split_keys(&mut checker).is_empty());
     }
 
     #[test]
@@ -554,12 +554,12 @@ pub mod tests {
         let mut ctx = ObserverContext::new(&region);
         for _ in 0..2 {
             let data = KeyEntry::new(b"zxxxx".to_vec(), 0, 5, CF_WRITE);
-            if SplitChecker::<RocksEngine>::on_kv(&mut checker, &mut ctx, &data) {
+            if SplitChecker::<KvTestEngine>::on_kv(&mut checker, &mut ctx, &data) {
                 break;
             }
         }
 
-        assert!(!SplitChecker::<RocksEngine>::split_keys(&mut checker).is_empty());
+        assert!(!SplitChecker::<KvTestEngine>::split_keys(&mut checker).is_empty());
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
