@@ -904,6 +904,7 @@ pub mod tests {
     use std::thread;
     use tempfile::TempDir;
     use tikv::storage::mvcc::tests::*;
+    use tikv::storage::txn::tests::must_commit;
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::time::Instant;
     use txn_types::SHORT_VALUE_MAX_LEN;

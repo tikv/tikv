@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tikv::storage::mvcc::tests::*;
+use tikv::storage::txn::tests::must_commit;
 use tikv::storage::TestEngineBuilder;
 
 #[test]

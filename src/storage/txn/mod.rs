@@ -6,6 +6,10 @@ pub mod commands;
 pub mod sched_pool;
 pub mod scheduler;
 
+mod actions;
+
+pub use actions::commit::commit;
+
 mod latch;
 mod store;
 
@@ -225,4 +229,9 @@ impl ErrorCodeExt for Error {
             }
         }
     }
+}
+
+pub mod tests {
+    use super::*;
+    pub use actions::commit::tests::{must_err as must_commit_err, must_succeed as must_commit};
 }
