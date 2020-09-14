@@ -14,7 +14,7 @@ use std::{error, ptr, result};
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{CfName, CF_DEFAULT};
 use engine_traits::{IterOptions, KvEngine as LocalEngine, MvccProperties, ReadOptions};
-use futures03::prelude::*;
+use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
 use txn_types::{Key, TimeStamp, TxnExtra, Value};

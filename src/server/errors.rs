@@ -5,7 +5,7 @@ use std::io::Error as IoError;
 use std::net::AddrParseError;
 use std::result;
 
-use futures03::channel::oneshot::Canceled;
+use futures::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
 use hyper::Error as HttpError;
 use openssl::error::ErrorStack as OpenSSLError;
