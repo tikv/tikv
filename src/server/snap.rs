@@ -6,11 +6,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures03::compat::{Future01CompatExt, Sink01CompatExt, Stream01CompatExt};
-use futures03::future::{Future, TryFutureExt};
-use futures03::sink::SinkExt;
-use futures03::stream::{Stream, StreamExt, TryStreamExt};
-use futures03::task::{Context, Poll};
+use futures::future::{Future, TryFutureExt};
+use futures::sink::SinkExt;
+use futures::stream::{Stream, StreamExt, TryStreamExt};
+use futures::task::{Context, Poll};
 use grpcio::{
     ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
     WriteFlags,
@@ -154,10 +153,10 @@ fn send_snap(
     let (sink, receiver) = client.snapshot()?;
 
     let send_task = async move {
-        let mut sink = sink.sink_compat().sink_map_err(Error::from);
+        let mut sink = sink.sink_map_err(Error::from);
         sink.send_all(&mut chunks).await?;
         sink.close().await?;
-        let recv_result = receiver.compat().map_err(Error::from).await;
+        let recv_result = receiver.map_err(Error::from).await;
         send_timer.observe_duration();
         drop(deregister);
         drop(client);
@@ -247,7 +246,7 @@ fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
     raft_router: R,
 ) -> impl Future<Output = Result<()>> {
     let recv_task = async move {
-        let mut stream = stream.compat().map_err(Error::from);
+        let mut stream = stream.map_err(Error::from);
         let head = stream.next().await.transpose()?;
         let mut context = RecvSnapContext::new(head, &snap_mgr)?;
         if context.file.is_none() {
@@ -277,14 +276,10 @@ fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
 
     async move {
         match recv_task.await {
-            Ok(()) => sink
-                .success(Done::default())
-                .compat()
-                .await
-                .map_err(Error::from),
+            Ok(()) => sink.success(Done::default()).await.map_err(Error::from),
             Err(e) => {
                 let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", e)));
-                sink.fail(status).compat().await.map_err(Error::from)
+                sink.fail(status).await.map_err(Error::from)
             }
         }
     }
@@ -345,7 +340,7 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable for Runner<R> {
                             task_num, self.cfg.concurrent_recv_snap_limit
                         )),
                     );
-                    self.pool.spawn(sink.fail(status).compat());
+                    self.pool.spawn(sink.fail(status));
                     return;
                 }
                 SNAP_TASK_COUNTER_STATIC.recv.inc();

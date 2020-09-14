@@ -1,8 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::{new_event_feed, TestSuite};
-use futures::sink::Sink;
-use futures::Future;
-use futures03::executor::block_on;
+use futures::executor::block_on;
+use futures::sink::SinkExt;
 use grpcio::WriteFlags;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::{Event as Event_oneof_event, LogType as EventLogType};
@@ -26,12 +25,9 @@ fn test_observe_duplicate_cmd() {
 
     let region = suite.cluster.get_region(&[]);
     let req = suite.new_changedata_request(region.get_id());
-    let (req_tx, event_feed_wrap, receive_event) =
+    let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
-    let _req_tx = req_tx
-        .send((req.clone(), WriteFlags::default()))
-        .wait()
-        .unwrap();
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -75,24 +71,21 @@ fn test_observe_duplicate_cmd() {
         suite.async_kv_commit(region.get_id(), vec![k.into_bytes()], start_ts, commit_ts);
     sleep_ms(200);
     // Close previous connection and open a new one twice time
-    let (req_tx, resp_rx) = suite
+    let (mut req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let _req_tx = req_tx
-        .send((req.clone(), WriteFlags::default()))
-        .wait()
-        .unwrap();
-    let (req_tx, resp_rx) = suite
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    let (mut req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     fail::remove(fp);
     // Receive Commit response
-    commit_resp.wait().unwrap();
+    block_on(commit_resp).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -157,21 +150,18 @@ fn test_delayed_change_cmd() {
         .add_send_filter(CloneFilterFactory(send_read_index_filter));
 
     let req = suite.new_changedata_request(region.get_id());
-    let (req_tx, event_feed_wrap, receive_event) =
+    let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
-    let _req_tx = req_tx
-        .send((req.clone(), WriteFlags::default()))
-        .wait()
-        .unwrap();
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
 
     suite.cluster.must_put(b"k2", b"v2");
 
-    let (req_tx, resp_rx) = suite
+    let (mut req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     sleep_ms(200);
 
     suite
