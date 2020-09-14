@@ -7,6 +7,7 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::{borrow::Cow, time::*};
 
+use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, IterOptions, SstCompressionType, DATA_KEY_PREFIX_LEN};
@@ -24,7 +25,7 @@ use tikv::storage::mvcc::Error as MvccError;
 use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
-use tikv::storage::{concurrency_manager::ConcurrencyManager, Statistics};
+use tikv::storage::Statistics;
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
@@ -51,7 +52,8 @@ struct Request {
     cancel: Arc<AtomicBool>,
     is_raw_kv: bool,
     cf: CfName,
-    compress_type: CompressionType,
+    compression_type: CompressionType,
+    compression_level: i32,
 }
 
 /// Backup Task.
@@ -116,7 +118,8 @@ impl Task {
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
                 cf,
-                compress_type: req.get_compression_type(),
+                compression_type: req.get_compression_type(),
+                compression_level: req.get_compression_level(),
             },
             resp,
         };
@@ -177,7 +180,7 @@ impl BackupRange {
         let snapshot = match engine.snapshot(&ctx) {
             Ok(s) => s,
             Err(e) => {
-                error!("backup snapshot failed"; "error" => ?e);
+                error!(?e; "backup snapshot failed");
                 return Err(e.into());
             }
         };
@@ -201,7 +204,7 @@ impl BackupRange {
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
-                error!("backup scan entries failed"; "error" => ?e);
+                error!(?e; "backup scan entries failed");
                 return Err(e.into());
             };
             if batch.is_empty() {
@@ -210,7 +213,7 @@ impl BackupRange {
             debug!("backup scan entries"; "len" => batch.len());
             // Build sst files.
             if let Err(e) = writer.write(batch.drain(), true) {
-                error!("backup build sst failed"; "error" => ?e);
+                error!(?e; "backup build sst failed");
                 return Err(e);
             }
         }
@@ -235,7 +238,7 @@ impl BackupRange {
         let snapshot = match engine.snapshot(&ctx) {
             Ok(s) => s,
             Err(e) => {
-                error!("backup raw kv snapshot failed"; "error" => ?e);
+                error!(?e; "backup raw kv snapshot failed");
                 return Err(e.into());
             }
         };
@@ -271,7 +274,7 @@ impl BackupRange {
             debug!("backup scan raw kv entries"; "len" => batch.len());
             // Build sst files.
             if let Err(e) = writer.write(batch.drain(..), false) {
-                error!("backup raw kv build sst failed"; "error" => ?e);
+                error!(?e; "backup raw kv build sst failed");
                 return Err(e);
             }
         }
@@ -291,15 +294,21 @@ impl BackupRange {
         backup_ts: TimeStamp,
         start_ts: TimeStamp,
         compression_type: Option<SstCompressionType>,
+        compression_level: i32,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer =
-            match BackupWriter::new(db, &file_name, storage.limiter.clone(), compression_type) {
-                Ok(w) => w,
-                Err(e) => {
-                    error!("backup writer failed"; "error" => ?e);
-                    return Err(e);
-                }
-            };
+        let mut writer = match BackupWriter::new(
+            db,
+            &file_name,
+            storage.limiter.clone(),
+            compression_type,
+            compression_level,
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                error!(?e; "backup writer failed");
+                return Err(e);
+            }
+        };
         let stat = match self.backup(
             &mut writer,
             engine,
@@ -314,7 +323,7 @@ impl BackupRange {
         match writer.save(&storage.storage) {
             Ok(files) => Ok((files, stat)),
             Err(e) => {
-                error!("backup save file failed"; "error" => ?e);
+                error!(?e; "backup save file failed");
                 Err(e)
             }
         }
@@ -327,16 +336,23 @@ impl BackupRange {
         storage: &LimitedStorage,
         file_name: String,
         cf: CfName,
-        ct: Option<SstCompressionType>,
+        compression_type: Option<SstCompressionType>,
+        compression_level: i32,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer =
-            match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone(), ct) {
-                Ok(w) => w,
-                Err(e) => {
-                    error!("backup writer failed"; "error" => ?e);
-                    return Err(e);
-                }
-            };
+        let mut writer = match BackupRawKVWriter::new(
+            db,
+            &file_name,
+            cf,
+            storage.limiter.clone(),
+            compression_type,
+            compression_level,
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                error!(?e; "backup writer failed");
+                return Err(e);
+            }
+        };
         let stat = match self.backup_raw(&mut writer, engine) {
             Ok(s) => s,
             Err(e) => return Err(e),
@@ -345,7 +361,7 @@ impl BackupRange {
         match writer.save(&storage.storage) {
             Ok(files) => Ok((files, stat)),
             Err(e) => {
-                error!("backup save file failed"; "error" => ?e);
+                error!(?e; "backup save file failed");
                 Err(e)
             }
         }
@@ -472,7 +488,7 @@ impl<R: RegionInfoProvider> Progress<R> {
         );
         if let Err(e) = res {
             // TODO: handle error.
-            error!("backup seek region failed"; "error" => ?e);
+            error!(?e; "backup seek region failed");
         }
 
         let branges: Vec<_> = rx.iter().collect();
@@ -662,11 +678,19 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     tikv_util::file::sha256(&input).ok().map(|b| hex::encode(b))
                 });
                 let name = backup_file_name(store_id, &brange.region, key);
-                let ct = to_sst_compression_type(request.compress_type);
+                let ct = to_sst_compression_type(request.compression_type);
 
                 let (res, start_key, end_key) = if is_raw_kv {
                     (
-                        brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf, ct),
+                        brange.backup_raw_kv_to_file(
+                            &engine,
+                            db.clone(),
+                            &storage,
+                            name,
+                            cf,
+                            ct,
+                            request.compression_level,
+                        ),
                         brange
                             .start_key
                             .map_or_else(|| vec![], |k| k.into_encoded()),
@@ -683,6 +707,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             backup_ts,
                             start_ts,
                             ct,
+                            request.compression_level,
                         ),
                         brange
                             .start_key
@@ -696,11 +721,11 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 let mut response = BackupResponse::default();
                 match res {
                     Err(e) => {
-                        error!("backup region failed";
+                        error!(?e; "backup region failed";
                             "region" => ?brange.region,
                             "start_key" => hex::encode_upper(&start_key),
                             "end_key" => hex::encode_upper(&end_key),
-                            "error" => ?e);
+                        );
                         response.set_error(e.into());
                     }
                     Ok((mut files, stat)) => {
@@ -723,7 +748,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 response.set_end_key(end_key);
 
                 if let Err(e) = tx.unbounded_send(response) {
-                    error!("backup failed to send response"; "error" => ?e);
+                    error!(?e; "backup failed to send response");
                     return;
                 }
             }
@@ -771,7 +796,9 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
+impl<E: Engine, R: RegionInfoProvider> Runnable for Endpoint<E, R> {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         if task.has_canceled() {
             warn!("backup task has canceled"; "task" => %task);
@@ -783,7 +810,9 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer<Task, ()> for Endpoint<E, R> {
+impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer for Endpoint<E, R> {
+    type TimeoutTask = ();
+
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
         self.pool.borrow_mut().check_active(pool_idle_duration);
@@ -1043,7 +1072,8 @@ pub mod tests {
                         cancel: Arc::default(),
                         is_raw_kv: false,
                         cf: engine_traits::CF_DEFAULT,
-                        compress_type: CompressionType::Unknown,
+                        compression_type: CompressionType::Unknown,
+                        compression_level: 0,
                     },
                     resp: tx,
                 };

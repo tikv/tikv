@@ -136,10 +136,12 @@ impl<S: Snapshot> MvccReader<S> {
             self.statistics.data.get += 1;
             self.snapshot.get(&k)?
         };
-        self.statistics.data.processed += 1;
 
         match val {
-            Some(val) => Ok(val),
+            Some(val) => {
+                self.statistics.data.processed_keys += 1;
+                Ok(val)
+            }
             None => Err(default_not_found_error(key.to_raw()?, "get")),
         }
     }
@@ -165,10 +167,6 @@ impl<S: Snapshot> MvccReader<S> {
                 None => None,
             }
         };
-
-        if res.is_some() {
-            self.statistics.lock.processed += 1;
-        }
 
         Ok(res)
     }
@@ -210,7 +208,6 @@ impl<S: Snapshot> MvccReader<S> {
             return Ok(None);
         }
         let write = WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned();
-        self.statistics.write.processed += 1;
         Ok(Some((commit_ts, write)))
     }
 
@@ -218,8 +215,11 @@ impl<S: Snapshot> MvccReader<S> {
     /// Returns the blocking lock as the `Err` variant.
     fn check_lock(&mut self, key: &Key, ts: TimeStamp) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
-            return Lock::check_ts_conflict(Cow::Owned(lock), key, ts, &Default::default())
-                .map_err(From::from);
+            if let Err(e) = Lock::check_ts_conflict(Cow::Owned(lock), key, ts, &Default::default())
+            {
+                self.statistics.lock.processed_keys += 1;
+                return Err(e.into());
+            }
         }
         Ok(())
     }
@@ -380,7 +380,7 @@ impl<S: Snapshot> MvccReader<S> {
             }
             cursor.next(&mut self.statistics.lock);
         }
-        self.statistics.lock.processed += locks.len();
+        self.statistics.lock.processed_keys += locks.len();
         // If we reach here, `cursor.valid()` is `false`, so there MUST be no more locks.
         Ok((locks, false))
     }
@@ -403,7 +403,7 @@ impl<S: Snapshot> MvccReader<S> {
                 return Ok((keys, None));
             }
             if keys.len() >= limit {
-                self.statistics.write.processed += keys.len();
+                self.statistics.write.processed_keys += keys.len();
                 return Ok((keys, start));
             }
             let key =
@@ -470,10 +470,8 @@ mod tests {
     use super::*;
 
     use crate::storage::kv::Modify;
-    use crate::storage::{
-        concurrency_manager::ConcurrencyManager,
-        mvcc::{MvccReader, MvccTxn},
-    };
+    use crate::storage::mvcc::{MvccReader, MvccTxn};
+    use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::raw::DB;
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};

@@ -12,9 +12,7 @@
 
 #[macro_use]
 extern crate failure;
-#[macro_use(debug)]
-extern crate slog_global;
-#[macro_use(box_err, box_try, try_opt)]
+#[macro_use(box_err, box_try, try_opt, debug)]
 extern crate tikv_util;
 
 #[cfg(test)]

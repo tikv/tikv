@@ -7,13 +7,13 @@ use std::time::Duration;
 use std::time::Instant;
 
 use futures::channel::mpsc as future_mpsc;
-use futures::compat::Future01CompatExt;
 use futures::StreamExt;
 use futures_executor::block_on;
 use futures_util::io::AsyncReadExt;
 use grpcio::{ChannelBuilder, Environment};
 
 use backup::Task;
+use concurrency_manager::ConcurrencyManager;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
@@ -30,7 +30,6 @@ use tidb_query_common::storage::{IntervalRange, Range};
 use tikv::config::BackupConfig;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
-use tikv::storage::concurrency_manager::ConcurrencyManager;
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv_util::collections::HashMap;
@@ -77,7 +76,7 @@ impl TestSuite {
         cluster.run();
 
         let concurrency_manager =
-            ConcurrencyManager::new(block_on(cluster.pd_client.get_tso().compat()).unwrap());
+            ConcurrencyManager::new(block_on(cluster.pd_client.get_tso()).unwrap());
         let mut endpoints = HashMap::default();
         for (id, engines) in &cluster.engines {
             // Create and run backup endpoints.

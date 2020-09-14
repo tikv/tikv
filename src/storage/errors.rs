@@ -187,6 +187,13 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
         | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e))),
         )))))) => Some(e.to_owned()),
+        Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::MaxTimestampNotSynced {
+            ..
+        })))) => {
+            let mut err = errorpb::Error::default();
+            err.set_max_timestamp_not_synced(Default::default());
+            Some(err)
+        }
         Err(Error(box ErrorInner::SchedTooBusy)) => {
             let mut err = errorpb::Error::default();
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
@@ -226,7 +233,8 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
     match err {
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
-        ))))) => {
+        )))))
+        | Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info)))) => {
             key_error.set_locked(info.clone());
         }
         // failed in prewrite or pessimistic lock
@@ -303,7 +311,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_commit_ts_expired(commit_ts_expired);
         }
         _ => {
-            error!("txn aborts"; "err" => ?err);
+            error!(?err; "txn aborts");
             key_error.set_abort(format!("{:?}", err));
         }
     }

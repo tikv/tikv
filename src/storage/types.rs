@@ -87,29 +87,14 @@ pub enum TxnStatus {
     /// The txn is just rolled back due to lock not exist.
     LockNotExist,
     /// The txn haven't yet been committed.
-    Uncommitted {
-        lock_ttl: u64,
-        min_commit_ts: TimeStamp,
-        use_async_commit: bool,
-        secondaries: Vec<Vec<u8>>,
-    },
+    Uncommitted { lock: Lock },
     /// The txn was committed.
     Committed { commit_ts: TimeStamp },
 }
 
 impl TxnStatus {
-    pub fn uncommitted(
-        lock_ttl: u64,
-        min_commit_ts: TimeStamp,
-        use_async_commit: bool,
-        secondaries: Vec<Vec<u8>>,
-    ) -> Self {
-        Self::Uncommitted {
-            lock_ttl,
-            min_commit_ts,
-            use_async_commit,
-            secondaries,
-        }
+    pub fn uncommitted(lock: Lock) -> Self {
+        Self::Uncommitted { lock }
     }
 
     pub fn committed(commit_ts: TimeStamp) -> Self {
