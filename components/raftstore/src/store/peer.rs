@@ -2150,21 +2150,23 @@ where
             return Err(box_err!("{} ignore remove leader", self.tag));
         }
 
-        let total = {
-            let status = self.raft_group.status();
-            let total = status.progress.unwrap().conf().voters().ids().len();
-            if total == 1 {
+        let before_progress = {
+            let pr = self.raft_group.status().progress.unwrap().clone();
+            if pr.is_singleton() {
                 // It's always safe if there is only one node in the cluster.
                 return Ok(());
             }
-            total
+            pr
         };
 
-        let mut progress = self.check_joint_state(cc)?;
-        let promoted_commit_index = progress.maximal_committed_index().0;
-        if promoted_commit_index >= self.get_store().truncated_index() {
-            return Ok(());
-        }
+        let (after_progress, promoted_commit_index) = {
+            let mut pr = self.check_joint_state(cc)?;
+            let idx = pr.maximal_committed_index().0;
+            if idx >= self.get_store().truncated_index() {
+                return Ok(());
+            }
+            (pr, idx)
+        };
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["conf_change", "reject_unsafe"])
@@ -2175,17 +2177,16 @@ where
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "request" => ?change_peer,
-            "total" => total,
-            "after" => progress.conf().voters().ids().len(),
+            "before" => ?before_progress.conf().to_conf_state(),
+            "after" => ?after_progress.conf().to_conf_state(),
             "truncated_index" => self.get_store().truncated_index(),
             "promoted_commit_index" => promoted_commit_index,
         );
         // Waking it up to replicate logs to candidate.
         self.should_wake_up = true;
         Err(box_err!(
-            "unsafe to perform conf change {:?}, total {}, truncated index {}, promoted commit index {}",
+            "unsafe to perform conf change {:?}, truncated index {}, promoted commit index {}",
             change_peer,
-            total,
             self.get_store().truncated_index(),
             promoted_commit_index
         ))
@@ -2829,20 +2830,22 @@ where
             return Ok(Either::Right(index));
         }
 
-        ctx.raft_metrics.propose.conf_change += 1;
-
-        let data = req.write_to_bytes()?;
-
-        // TODO: use local histogram metrics
-        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
-
-        let change_peer = apply::get_change_peer_cmd(req).unwrap();
-        let mut cc = eraftpb::ConfChange::default();
-        cc.set_change_type(change_peer.get_change_type());
-        cc.set_node_id(change_peer.get_peer().get_id());
-        cc.set_context(data);
+        let cc = {
+            let data = req.write_to_bytes()?;
+            let change_peer = apply::get_change_peer_cmd(req).unwrap();
+            let mut cc = eraftpb::ConfChange::default();
+            cc.set_change_type(change_peer.get_change_type());
+            cc.set_node_id(change_peer.get_peer().get_id());
+            cc.set_context(data);
+            cc
+        };
 
         self.check_conf_change(ctx, &cc, req)?;
+
+        ctx.raft_metrics.propose.conf_change += 1;
+
+        // TODO: use local histogram metrics
+        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(cc.get_context().len() as f64);
 
         info!(
             "propose conf change peer";
