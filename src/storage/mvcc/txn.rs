@@ -2543,6 +2543,34 @@ mod tests {
     }
 
     #[test]
+    fn test_async_commit_pushed_min_commit_ts() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
+        let cm = ConcurrencyManager::new(42.into());
+
+        // Simulate that min_commit_ts is pushed forward larger than latest_ts
+        must_acquire_pessimistic_lock_impl(&engine, b"key", b"key", 2, 20000, 2, false, 100);
+
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm);
+        let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+        let min_commit_ts = txn
+            .pessimistic_prewrite(
+                mutation,
+                b"key",
+                &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+                true,
+                0,
+                4.into(),
+                4,
+                TimeStamp::zero(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(min_commit_ts.into_inner(), 100);
+    }
+
+    #[test]
     fn test_txn_timestamp_overlapping() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let (k, v) = (b"k1", b"v1");

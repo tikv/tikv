@@ -54,7 +54,7 @@ pub fn prewrite_key_value<S: Snapshot>(
             let min_commit_ts = cmp::max(cmp::max(max_read_ts, txn.start_ts), for_update_ts).next();
             lock.min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
             *l = Some(lock.clone());
-            min_commit_ts
+            lock.min_commit_ts
         });
 
         txn.guards.push(key_guard);
