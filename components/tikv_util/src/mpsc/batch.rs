@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::pin::Pin;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -8,13 +9,13 @@ use std::time::Duration;
 use crossbeam::channel::{
     self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
 };
-use futures::task::{self, Task};
-use futures::{Async, Poll, Stream};
+use futures::stream::Stream;
+use futures::task::{Context, Poll, Waker};
 
 struct State {
     // If the receiver can't get any messages temporarily in `poll` context, it will put its
     // current task here.
-    recv_task: AtomicPtr<Task>,
+    recv_task: AtomicPtr<Waker>,
     notify_size: usize,
     // How many messages are sent without notify.
     pending: AtomicUsize,
@@ -49,7 +50,7 @@ impl State {
             self.pending.store(0, Ordering::Release);
             // Safety: see comment on `recv_task`.
             let t = unsafe { Box::from_raw(t) };
-            t.notify();
+            t.wake();
         }
     }
 
@@ -58,8 +59,8 @@ impl State {
     /// and puts the current task handle to `recv_task`, so that the `Sender`
     /// respectively can notify it after sending some messages into the channel.
     #[inline]
-    fn yield_poll(&self) -> bool {
-        let t = Box::into_raw(Box::new(task::current()));
+    fn yield_poll(&self, waker: Waker) -> bool {
+        let t = Box::into_raw(Box::new(waker));
         let origin = self.recv_task.swap(t, Ordering::AcqRel);
         if !origin.is_null() {
             // Safety: see comment on `recv_task`.
@@ -222,21 +223,20 @@ pub fn bounded<T>(cap: usize, notify_size: usize) -> (Sender<T>, Receiver<T>) {
 }
 
 impl<T> Stream for Receiver<T> {
-    type Error = ();
     type Item = T;
 
-    fn poll(&mut self) -> Poll<Option<T>, ()> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.try_recv() {
-            Ok(m) => Ok(Async::Ready(Some(m))),
+            Ok(m) => Poll::Ready(Some(m)),
             Err(TryRecvError::Empty) => {
-                if self.state.yield_poll() {
-                    Ok(Async::NotReady)
+                if self.state.yield_poll(cx.waker().clone()) {
+                    Poll::Pending
                 } else {
                     // For the case that all senders are dropped before the current task is saved.
-                    self.poll()
+                    self.poll_next(cx)
                 }
             }
-            Err(TryRecvError::Disconnected) => Ok(Async::Ready(None)),
+            Err(TryRecvError::Disconnected) => Poll::Ready(None),
         }
     }
 }
@@ -258,7 +258,7 @@ impl<E> BatchCollector<Vec<E>, E> for VecCollector {
 }
 
 /// `BatchReceiver` is a `futures::Stream`, which returns a batched type.
-pub struct BatchReceiver<T, E, I: Fn() -> E, C: BatchCollector<E, T>> {
+pub struct BatchReceiver<T, E, I, C> {
     rx: Receiver<T>,
     max_batch_size: usize,
     elem: Option<E>,
@@ -266,7 +266,13 @@ pub struct BatchReceiver<T, E, I: Fn() -> E, C: BatchCollector<E, T>> {
     collector: C,
 }
 
-impl<T, E, I: Fn() -> E, C: BatchCollector<E, T>> BatchReceiver<T, E, I, C> {
+impl<T, E, I, C> BatchReceiver<T, E, I, C>
+where
+    T: Unpin,
+    E: Unpin,
+    I: Fn() -> E + Unpin,
+    C: BatchCollector<E, T> + Unpin,
+{
     /// Creates a new `BatchReceiver` with given `initializer` and `collector`. `initializer` is
     /// used to generate a initial value, and `collector` will collect every (at most
     /// `max_batch_size`) raw items into the batched value.
@@ -281,46 +287,52 @@ impl<T, E, I: Fn() -> E, C: BatchCollector<E, T>> BatchReceiver<T, E, I, C> {
     }
 }
 
-impl<T, E, I: Fn() -> E, C: BatchCollector<E, T>> Stream for BatchReceiver<T, E, I, C> {
-    type Error = ();
+impl<T, E, I, C> Stream for BatchReceiver<T, E, I, C>
+where
+    T: Unpin,
+    E: Unpin,
+    I: Fn() -> E + Unpin,
+    C: BatchCollector<E, T> + Unpin,
+{
     type Item = E;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, ()> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let ctx = self.get_mut();
         let (mut count, mut received) = (0, None);
         let finished = loop {
-            match self.rx.try_recv() {
+            match ctx.rx.try_recv() {
                 Ok(m) => {
-                    let collection = self.elem.get_or_insert_with(&self.initializer);
-                    if let Some(m) = self.collector.collect(collection, m) {
+                    let collection = ctx.elem.get_or_insert_with(&ctx.initializer);
+                    if let Some(m) = ctx.collector.collect(collection, m) {
                         received = Some(m);
                         break false;
                     }
                     count += 1;
-                    if count >= self.max_batch_size {
+                    if count >= ctx.max_batch_size {
                         break false;
                     }
                 }
                 Err(TryRecvError::Disconnected) => break true,
                 Err(TryRecvError::Empty) => {
-                    if self.rx.state.yield_poll() {
+                    if ctx.rx.state.yield_poll(cx.waker().clone()) {
                         break false;
                     }
                 }
             }
         };
 
-        if self.elem.is_none() && finished {
-            return Ok(Async::Ready(None));
-        } else if self.elem.is_none() {
-            return Ok(Async::NotReady);
+        if ctx.elem.is_none() && finished {
+            return Poll::Ready(None);
+        } else if ctx.elem.is_none() {
+            return Poll::Pending;
         }
-        let elem = self.elem.take();
+        let elem = ctx.elem.take();
         if let Some(m) = received {
-            let collection = self.elem.get_or_insert_with(&self.initializer);
-            let _received = self.collector.collect(collection, m);
+            let collection = ctx.elem.get_or_insert_with(&ctx.initializer);
+            let _received = ctx.collector.collect(collection, m);
             debug_assert!(_received.is_none());
         }
-        Ok(Async::Ready(elem))
+        Poll::Ready(elem)
     }
 }
 
@@ -329,9 +341,10 @@ mod tests {
     use std::sync::{mpsc, Mutex};
     use std::{thread, time};
 
-    use futures::executor::{self, Notify, Spawn};
-    use futures::{stream, Async, Future};
-    use futures_cpupool::CpuPool;
+    use futures::future::{self, BoxFuture, FutureExt};
+    use futures::stream::{self, StreamExt};
+    use futures::task::{self, ArcWake, Poll};
+    use tokio::runtime::Builder;
 
     use super::*;
 
@@ -341,10 +354,14 @@ mod tests {
 
         let msg_counter = Arc::new(AtomicUsize::new(0));
         let msg_counter1 = Arc::clone(&msg_counter);
-        let pool = CpuPool::new(1);
+        let pool = Builder::new()
+            .threaded_scheduler()
+            .core_threads(1)
+            .build()
+            .unwrap();
         let _res = pool.spawn(rx.for_each(move |_| {
             msg_counter1.fetch_add(1, Ordering::AcqRel);
-            Ok(())
+            future::ready(())
         }));
 
         // Wait until the receiver is suspended.
@@ -383,17 +400,24 @@ mod tests {
         let msg_counter = Arc::new(AtomicUsize::new(0));
         let msg_counter_spawned = Arc::clone(&msg_counter);
         let (nty, polled) = mpsc::sync_channel(1);
-        let pool = CpuPool::new(1);
+        let pool = Builder::new()
+            .threaded_scheduler()
+            .core_threads(1)
+            .build()
+            .unwrap();
         let _res = pool.spawn(
-            rx.select(stream::poll_fn(move || -> Poll<Option<Vec<u64>>, ()> {
-                nty.send(()).unwrap();
-                Ok(Async::Ready(None))
-            }))
+            stream::select(
+                rx,
+                stream::poll_fn(move |_| -> Poll<Option<Vec<u64>>> {
+                    nty.send(()).unwrap();
+                    Poll::Ready(None)
+                }),
+            )
             .for_each(move |v| {
                 let len = v.len();
                 assert!(len <= 8);
                 msg_counter_spawned.fetch_add(len, Ordering::AcqRel);
-                Ok(())
+                future::ready(())
             }),
         );
 
@@ -422,33 +446,47 @@ mod tests {
 
     #[test]
     fn test_switch_between_sender_and_receiver() {
-        struct Notifier<F>(Arc<Mutex<Option<Spawn<F>>>>);
-        impl<F> Clone for Notifier<F> {
-            fn clone(&self) -> Notifier<F> {
-                Notifier(Arc::clone(&self.0))
-            }
-        }
-        impl<F> Notify for Notifier<F>
-        where
-            F: Future<Item = (), Error = ()> + Send + 'static,
-        {
-            fn notify(&self, id: usize) {
-                let n = Arc::new(self.clone());
-                let mut s = self.0.lock().unwrap();
-                match s.as_mut().map(|spawn| spawn.poll_future_notify(&n, id)) {
-                    Some(Ok(Async::NotReady)) | None => {}
-                    _ => *s = None,
+        let (tx, mut rx) = unbounded::<i32>(4);
+        let future = async move { rx.next().await };
+        let task = Task {
+            future: Arc::new(Mutex::new(Some(future.boxed()))),
+        };
+        // Receiver has not received any messages, so the future is not be finished
+        // in this tick.
+        task.tick();
+        assert!(task.future.lock().unwrap().is_some());
+        // After sender is dropped, the task will be waked and then it tick self
+        // again to advance the progress.
+        drop(tx);
+        assert!(task.future.lock().unwrap().is_none());
+    }
+
+    #[derive(Clone)]
+    struct Task {
+        future: Arc<Mutex<Option<BoxFuture<'static, Option<i32>>>>>,
+    }
+
+    impl Task {
+        fn tick(&self) {
+            let task = Arc::new(self.clone());
+            let mut future_slot = self.future.lock().unwrap();
+            if let Some(mut future) = future_slot.take() {
+                let waker = task::waker_ref(&task);
+                let cx = &mut Context::from_waker(&*waker);
+                match future.as_mut().poll(cx) {
+                    Poll::Pending => {
+                        *future_slot = Some(future);
+                    }
+                    Poll::Ready(None) => {}
+                    _ => unimplemented!(),
                 }
             }
         }
+    }
 
-        let (tx, rx) = unbounded::<u64>(4);
-        let f = rx.for_each(|_| Ok(())).map_err(|_| ());
-        let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
-        Notifier(Arc::clone(&spawn)).notify(0);
-
-        // Switch to `receiver` in one thread in where `sender` is dropped.
-        drop(tx);
-        assert!(spawn.lock().unwrap().is_none());
+    impl ArcWake for Task {
+        fn wake_by_ref(arc_self: &Arc<Self>) {
+            arc_self.tick();
+        }
     }
 }

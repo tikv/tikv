@@ -589,10 +589,9 @@ mod tests {
         Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
         TestEngineBuilder, WriteData,
     };
-    use crate::storage::{
-        concurrency_manager::ConcurrencyManager,
-        mvcc::{Mutation, MvccTxn},
-    };
+    use crate::storage::mvcc::{Mutation, MvccTxn};
+    use crate::storage::txn::commit;
+    use concurrency_manager::ConcurrencyManager;
     use engine_traits::CfName;
     use engine_traits::{IterOptions, ReadOptions};
     use kvproto::kvrpcpb::Context;
@@ -660,7 +659,7 @@ mod tests {
                 let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();
+                    commit(&mut txn, Key::from_raw(key), COMMIT_TS).unwrap();
                 }
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 self.engine.write(&self.ctx, write_data).unwrap();

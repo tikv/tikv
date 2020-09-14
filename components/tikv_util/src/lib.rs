@@ -2,20 +2,17 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
+#![feature(min_specialization)]
 #![feature(box_patterns)]
 
 #[macro_use(fail_point)]
 extern crate fail;
-#[macro_use]
-extern crate futures;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate quick_error;
 #[macro_use(slog_o)]
 extern crate slog;
-#[macro_use]
-extern crate slog_global;
 #[macro_use]
 extern crate derive_more;
 #[cfg(test)]
@@ -35,6 +32,8 @@ use std::{env, thread, u64};
 use fs2::FileExt;
 use rand::rngs::ThreadRng;
 
+#[macro_use]
+pub mod log;
 pub mod buffer_vec;
 pub mod codec;
 pub mod collections;
@@ -492,7 +491,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
-        if let Some(level) = log::max_level().to_level() {
+        if let Some(level) = ::log::max_level().to_level() {
             let drainer = logger::text_format(logger::term_writer());
             let _ = logger::init_log(
                 drainer,

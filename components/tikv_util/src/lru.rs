@@ -213,10 +213,12 @@ where
     }
 
     #[inline]
-    pub fn remove(&mut self, key: &K) {
+    pub fn remove(&mut self, key: &K) -> Option<V> {
         if let Some(v) = self.map.remove(key) {
             self.trace.delete(v.record);
+            return Some(v.value);
         }
+        None
     }
 
     #[inline]
@@ -229,6 +231,23 @@ where
             None => None,
         }
     }
+
+    #[inline]
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        match self.map.get_mut(key) {
+            Some(v) => {
+                self.trace.maybe_promote(v.record);
+                Some(&mut v.value)
+            }
+            None => None,
+        }
+    }
+
+    pub fn iter(&self) -> Iter<K, V> {
+        Iter {
+            base: self.map.iter(),
+        }
+    }
 }
 
 unsafe impl<K: Send, V: Send> Send for LruCache<K, V> {}
@@ -236,6 +255,18 @@ unsafe impl<K: Send, V: Send> Send for LruCache<K, V> {}
 impl<K, V> Drop for LruCache<K, V> {
     fn drop(&mut self) {
         self.clear();
+    }
+}
+
+pub struct Iter<'a, K: 'a, V: 'a> {
+    base: std::collections::hash_map::Iter<'a, K, ValueEntry<K, V>>,
+}
+
+impl<'a, K, V> Iterator for Iter<'a, K, V> {
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.base.next().map(|(k, v)| (k, &v.value))
     }
 }
 

@@ -3,7 +3,8 @@
 use std::path::Path;
 use std::sync::*;
 
-use futures::{future, Future, Stream};
+use futures::executor::block_on;
+use futures::{future, TryStreamExt};
 use grpcio::{Error, RpcStatusCode};
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
@@ -11,6 +12,7 @@ use kvproto::raft_serverpb::*;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::Writable;
 use engine_rocks::Compat;
 use engine_traits::Peekable;
@@ -731,12 +733,12 @@ fn test_debug_scan_mvcc() {
     req.set_limit(1);
 
     let receiver = debug_client.scan_mvcc(&req).unwrap();
-    let future = receiver.fold(Vec::new(), |mut keys, mut resp| {
+    let future = receiver.try_fold(Vec::new(), |mut keys, mut resp| {
         let key = resp.take_key();
         keys.push(key);
         future::ok::<_, Error>(keys)
     });
-    let keys = future.wait().unwrap();
+    let keys = block_on(future).unwrap();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0], keys::data_key(b"meta_lock_1"));
 }
@@ -773,6 +775,7 @@ fn test_double_run_node() {
             importer,
             Worker::new("split"),
             AutoSplitController::default(),
+            ConcurrencyManager::new(1.into()),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

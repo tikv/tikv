@@ -5,10 +5,11 @@ use std::sync::Arc;
 use crate::engine::RocksEngine;
 use crate::options::RocksWriteOptions;
 use crate::util::get_cf_handle;
-use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteBatchVecExt, WriteOptions};
+use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteOptions};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 const WRITE_BATCH_MAX_BATCH: usize = 16;
+const WRITE_BATCH_LIMIT: usize = 16;
 
 impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatch;
@@ -53,10 +54,6 @@ impl WriteBatchExt for RocksEngine {
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
         Self::WriteBatch::with_capacity(Arc::clone(&self.as_inner()), cap)
     }
-
-    fn write_batch_vec(&self, vec_size: usize, cap: usize) -> Self::WriteBatchVec {
-        RocksWriteBatchVec::new(Arc::clone(&self.as_inner()), vec_size, cap)
-    }
 }
 
 pub struct RocksWriteBatch {
@@ -94,7 +91,17 @@ impl RocksWriteBatch {
     }
 }
 
-impl engine_traits::WriteBatch for RocksWriteBatch {
+impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
+    fn with_capacity(e: &RocksEngine, cap: usize) -> RocksWriteBatch {
+        e.write_batch_with_cap(cap)
+    }
+
+    fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
+        e.write_opt(self, opts)
+    }
+}
+
+impl Mutable for RocksWriteBatch {
     fn data_size(&self) -> usize {
         self.wb.data_size()
     }
@@ -126,9 +133,7 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
     fn rollback_to_save_point(&mut self) -> Result<()> {
         self.wb.rollback_to_save_point().map_err(Error::Engine)
     }
-}
 
-impl Mutable for RocksWriteBatch {
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.wb.put(key, value).map_err(Error::Engine)
     }
@@ -209,7 +214,17 @@ impl RocksWriteBatchVec {
     }
 }
 
-impl engine_traits::WriteBatch for RocksWriteBatchVec {
+impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
+    fn with_capacity(e: &RocksEngine, cap: usize) -> RocksWriteBatchVec {
+        RocksWriteBatchVec::new(e.as_inner().clone(), WRITE_BATCH_LIMIT, cap)
+    }
+
+    fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
+        e.write_vec_opt(self, opts)
+    }
+}
+
+impl Mutable for RocksWriteBatchVec {
     fn data_size(&self) -> usize {
         self.wbs.iter().fold(0, |a, b| a + b.data_size())
     }
@@ -257,9 +272,7 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         }
         Err(Error::Engine("no save point".into()))
     }
-}
 
-impl Mutable for RocksWriteBatchVec {
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.check_switch_batch();
         self.wbs[self.index].put(key, value).map_err(Error::Engine)
@@ -292,25 +305,6 @@ impl Mutable for RocksWriteBatchVec {
         self.wbs[self.index]
             .delete_range_cf(handle, begin_key, end_key)
             .map_err(Error::Engine)
-    }
-}
-impl WriteBatchVecExt<RocksEngine> for RocksWriteBatch {
-    fn write_batch_vec(e: &RocksEngine, _vec_size: usize, cap: usize) -> RocksWriteBatch {
-        e.write_batch_with_cap(cap)
-    }
-
-    fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
-        e.write_opt(self, opts)
-    }
-}
-
-impl WriteBatchVecExt<RocksEngine> for RocksWriteBatchVec {
-    fn write_batch_vec(e: &RocksEngine, vec_size: usize, cap: usize) -> RocksWriteBatchVec {
-        e.write_batch_vec(vec_size, cap)
-    }
-
-    fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
-        e.write_vec_opt(self, opts)
     }
 }
 
@@ -347,8 +341,8 @@ mod tests {
         assert!(!wb.should_write_to_engine());
         wb.put(b"aaa", b"bbb").unwrap();
         assert!(wb.should_write_to_engine());
-        let mut wb = engine.write_batch_vec(4, 1024);
-        for _i in 0..WRITE_BATCH_MAX_BATCH * 4 {
+        let mut wb = RocksWriteBatchVec::with_capacity(&engine, 1024);
+        for _i in 0..WRITE_BATCH_MAX_BATCH * WRITE_BATCH_LIMIT {
             wb.put(b"aaa", b"bbb").unwrap();
         }
         assert!(!wb.should_write_to_engine());
