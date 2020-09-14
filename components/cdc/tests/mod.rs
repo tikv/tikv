@@ -1,9 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[cfg(feature = "failpoints")]
-mod failpoints;
-mod integrations;
-
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::*;
@@ -11,7 +7,8 @@ use std::time::Duration;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use futures::{Future, Stream};
+use futures::executor::block_on;
+use futures::StreamExt;
 use grpcio::{ChannelBuilder, Environment};
 use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
 use kvproto::cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest};
@@ -47,15 +44,14 @@ pub fn new_event_feed(
 
     let receive_event = move |keep_resolved_ts: bool| loop {
         let event_feed = event_feed_wrap_clone.as_ref();
-        let (change_data, events) = match event_feed.replace(None).unwrap().into_future().wait() {
-            Ok(res) => res,
-            Err(e) => panic!("receive failed {:?}", e.0),
-        };
+        let mut events = event_feed.replace(None).unwrap();
+        let change_data = block_on(events.next());
         event_feed.set(Some(events));
-        let change_data_event = change_data.unwrap();
+        let change_data_event = change_data.unwrap().unwrap();
         if !keep_resolved_ts && change_data_event.has_resolved_ts() {
             continue;
         }
+        tikv_util::info!("receive event {:?}", change_data_event);
         break change_data_event;
     };
     (req_tx, event_feed_wrap, receive_event)

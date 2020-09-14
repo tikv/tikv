@@ -9,7 +9,7 @@ use std::time::Duration;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use futures03::compat::Future01CompatExt;
+use futures::compat::Future01CompatExt;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::Event as Event_oneof_event;
 use kvproto::cdcpb::*;
@@ -315,7 +315,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     }
 
     fn on_deregister(&mut self, deregister: Deregister) {
-        info!("cdc deregister region"; "deregister" => ?deregister);
+        info!("cdc deregister"; "deregister" => ?deregister);
         match deregister {
             Deregister::Downstream {
                 region_id,
@@ -731,7 +731,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 let scheduler_clone = scheduler.clone();
                 let raft_router_clone = raft_router.clone();
                 async move {
-                    let (tx, rx) = futures03::channel::oneshot::channel();
+                    let (tx, rx) = futures::channel::oneshot::channel();
                     if let Err(e) = raft_router_clone.significant_send(
                         region_id,
                         SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
@@ -759,7 +759,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     rx.await.unwrap_or(None)
                 }
             }).collect();
-            let resps = futures03::future::join_all(regions).await;
+            let resps = futures::future::join_all(regions).await;
             let regions = resps
                 .into_iter()
                 .filter_map(|resp| resp)
