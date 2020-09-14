@@ -12,7 +12,7 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
-use std::mem;
+use std::{cmp, mem};
 
 command! {
     /// Check the status of a transaction. This is usually invoked by a transaction that meets
@@ -58,9 +58,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
     /// the `current_ts` is literally the timestamp when this function is invoked. It may not be
     /// accurate.
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
-        // to prevent this case from happening.
-        context.concurrency_manager.update_max_ts(self.lock_ts);
+        let new_max_ts = cmp::max(
+            cmp::max(self.lock_ts, self.caller_start_ts),
+            self.current_ts,
+        );
+        context.concurrency_manager.update_max_ts(new_max_ts);
 
         let mut txn = MvccTxn::new(
             snapshot,
