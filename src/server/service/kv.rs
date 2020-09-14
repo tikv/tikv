@@ -546,16 +546,16 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             }
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
-                .physical_scan_lock
+                .unsafe_destroy_range
                 .observe(duration_to_sec(begin_instant.elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
             debug!("kv rpc failed";
-                "request" => "physical_scan_lock",
+                "request" => "unsafe_destroy_range",
                 "err" => ?e
             );
-            GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
+            GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
         })
         .map(|_| ());
 
