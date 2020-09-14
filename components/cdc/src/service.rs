@@ -4,9 +4,9 @@ use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use futures::future::{self, FutureExt};
+use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
-use futures::stream::{self, StreamExt, TryFutureExt, TryStreamExt};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use grpcio::{
     DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
     RpcStatusCode, WriteFlags,

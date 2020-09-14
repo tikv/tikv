@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use futures::{future, FutureExt, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
+use futures::{future, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 use grpcio::{
     DuplexSink, EnvBuilder, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
     RpcStatusCode, Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,

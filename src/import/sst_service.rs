@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use engine_traits::{name_to_cf, CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
-use futures::{FutureExt, TryFutureExt, TryStreamExt};
+use futures::{TryFutureExt, TryStreamExt};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::errorpb;
 
