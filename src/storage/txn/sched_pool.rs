@@ -6,8 +6,7 @@ use std::time::Duration;
 
 use prometheus::local::*;
 use tikv_util::collections::HashMap;
-use tikv_util::future_pool::Builder as FuturePoolBuilder;
-use tikv_util::future_pool::FuturePool;
+use tikv_util::yatp_pool::{FuturePool, PoolTicker, YatpPoolBuilder};
 
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, Statistics};
 use crate::storage::metrics::*;
@@ -35,13 +34,21 @@ pub struct SchedPool {
     pub pool: FuturePool,
 }
 
+#[derive(Clone)]
+pub struct SchedTicker;
+
+impl PoolTicker for SchedTicker {
+    fn on_tick(&mut self) {
+        tls_flush();
+    }
+}
+
 impl SchedPool {
     pub fn new<E: Engine>(engine: E, pool_size: usize, name_prefix: &str) -> Self {
         let engine = Arc::new(Mutex::new(engine));
-        let pool = FuturePoolBuilder::new()
-            .pool_size(pool_size)
+        let pool = YatpPoolBuilder::new(SchedTicker {})
+            .thread_count(pool_size, pool_size)
             .name_prefix(name_prefix)
-            .on_tick(tls_flush)
             // Safety: by setting `after_start` and `before_stop`, `FuturePool` ensures
             // the tls_engine invariants.
             .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
@@ -52,7 +59,7 @@ impl SchedPool {
                 }
                 tls_flush();
             })
-            .build();
+            .build_future_pool();
         SchedPool { pool }
     }
 }

@@ -1,12 +1,20 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use self::metrics::*;
 use crate::config::UnifiedReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
+use futures::channel::oneshot;
+use futures::future::TryFutureExt;
+use kvproto::kvrpcpb::CommandPri;
+use prometheus::IntGauge;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tikv_util::read_pool::PoolTicker;
-pub use tikv_util::read_pool::{ReadPool, ReadPoolBuilder, ReadPoolError, ReadPoolHandle};
 use tikv_util::time::Instant;
+use tikv_util::yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder};
+use yatp::queue::Extras;
+use yatp::task::future::TaskCell;
+use yatp::Remote;
 
 #[cfg(test)]
 pub fn get_unified_read_pool_name() -> String {
@@ -84,6 +92,157 @@ where
         crate::coprocessor::metrics::tls_flush(&self.reporter);
     }
 }
+pub enum ReadPool {
+    FuturePools {
+        read_pool_high: FuturePool,
+        read_pool_normal: FuturePool,
+        read_pool_low: FuturePool,
+    },
+    Yatp {
+        pool: yatp::ThreadPool<TaskCell>,
+        running_tasks: IntGauge,
+        max_tasks: usize,
+    },
+}
+
+impl ReadPool {
+    pub fn handle(&self) -> ReadPoolHandle {
+        match self {
+            ReadPool::FuturePools {
+                read_pool_high,
+                read_pool_normal,
+                read_pool_low,
+            } => ReadPoolHandle::FuturePools {
+                read_pool_high: read_pool_high.clone(),
+                read_pool_normal: read_pool_normal.clone(),
+                read_pool_low: read_pool_low.clone(),
+            },
+            ReadPool::Yatp {
+                pool,
+                running_tasks,
+                max_tasks,
+            } => ReadPoolHandle::Yatp {
+                remote: pool.remote().clone(),
+                running_tasks: running_tasks.clone(),
+                max_tasks: *max_tasks,
+            },
+        }
+    }
+
+    pub fn remote(&self) -> Option<Remote<TaskCell>> {
+        match self {
+            ReadPool::Yatp { pool, .. } => Some(pool.remote().clone()),
+            ReadPool::FuturePools { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum ReadPoolHandle {
+    FuturePools {
+        read_pool_high: FuturePool,
+        read_pool_normal: FuturePool,
+        read_pool_low: FuturePool,
+    },
+    Yatp {
+        remote: Remote<TaskCell>,
+        running_tasks: IntGauge,
+        max_tasks: usize,
+    },
+}
+
+impl ReadPoolHandle {
+    pub fn spawn<F>(&self, f: F, priority: CommandPri, task_id: u64) -> Result<(), ReadPoolError>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        match self {
+            ReadPoolHandle::FuturePools {
+                read_pool_high,
+                read_pool_normal,
+                read_pool_low,
+            } => {
+                let pool = match priority {
+                    CommandPri::High => read_pool_high,
+                    CommandPri::Normal => read_pool_normal,
+                    CommandPri::Low => read_pool_low,
+                };
+
+                pool.spawn(f)?;
+            }
+            ReadPoolHandle::Yatp {
+                remote,
+                running_tasks,
+                max_tasks,
+            } => {
+                let running_tasks = running_tasks.clone();
+                // Note that the running task number limit is not strict.
+                // If several tasks are spawned at the same time while the running task number
+                // is close to the limit, they may all pass this check and the number of running
+                // tasks may exceed the limit.
+                if running_tasks.get() as usize >= *max_tasks {
+                    return Err(ReadPoolError::UnifiedReadPoolFull);
+                }
+
+                let fixed_level = match priority {
+                    CommandPri::High => Some(0),
+                    CommandPri::Normal => None,
+                    CommandPri::Low => Some(2),
+                };
+                let extras = Extras::new_multilevel(task_id, fixed_level);
+                let task_cell = TaskCell::new(
+                    async move {
+                        running_tasks.inc();
+                        f.await;
+                        running_tasks.dec();
+                    },
+                    extras,
+                );
+                remote.spawn(task_cell);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn spawn_handle<F, T>(
+        &self,
+        f: F,
+        priority: CommandPri,
+        task_id: u64,
+    ) -> impl Future<Output = Result<T, ReadPoolError>>
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel::<T>();
+        let res = self.spawn(
+            async move {
+                let res = f.await;
+                let _ = tx.send(res);
+            },
+            priority,
+            task_id,
+        );
+        async move {
+            res?;
+            rx.map_err(ReadPoolError::from).await
+        }
+    }
+}
+
+impl From<Vec<FuturePool>> for ReadPool {
+    fn from(mut v: Vec<FuturePool>) -> ReadPool {
+        assert_eq!(v.len(), 3);
+        let read_pool_high = v.remove(2);
+        let read_pool_normal = v.remove(1);
+        let read_pool_low = v.remove(0);
+        ReadPool::FuturePools {
+            read_pool_high,
+            read_pool_normal,
+            read_pool_low,
+        }
+    }
+}
 
 pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &UnifiedReadPoolConfig,
@@ -91,10 +250,10 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     engine: E,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
-    let mut builder = ReadPoolBuilder::new(ReporterTicker::new(reporter));
+    let mut builder = YatpPoolBuilder::new(ReporterTicker::new(reporter));
     let raftkv = Arc::new(Mutex::new(engine));
-    builder
-        .name_prefix(unified_read_pool_name)
+    let pool = builder
+        .name_prefix(&unified_read_pool_name)
         .stack_size(config.stack_size.0 as usize)
         .thread_count(config.min_thread_count, config.max_thread_count)
         .after_start(move || {
@@ -104,7 +263,48 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .before_stop(|| unsafe {
             destroy_tls_engine::<E>();
         })
-        .build()
+        .build_multi_level_pool();
+    let max_tasks = config
+        .max_tasks_per_worker
+        .saturating_mul(config.max_thread_count);
+    ReadPool::Yatp {
+        pool,
+        running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
+            .with_label_values(&[&unified_read_pool_name]),
+        max_tasks,
+    }
+}
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum ReadPoolError {
+        FuturePoolFull(err: yatp_pool::Full) {
+            from()
+            cause(err)
+            display("{}", err)
+        }
+        UnifiedReadPoolFull {
+            display("Unified read pool is full")
+        }
+        Canceled(err: oneshot::Canceled) {
+            from()
+            cause(err)
+            display("{}", err)
+        }
+    }
+}
+
+mod metrics {
+    use prometheus::*;
+
+    lazy_static! {
+        pub static ref UNIFIED_READ_POOL_RUNNING_TASKS: IntGaugeVec = register_int_gauge_vec!(
+            "tikv_unified_read_pool_running_tasks",
+            "The number of running tasks in the unified read pool",
+            &["name"]
+        )
+        .unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -117,7 +317,7 @@ mod tests {
     use raftstore::store::ReadStats;
     use std::sync::{Arc, Mutex};
     use std::thread;
-    use tikv_util::read_pool::{ReadPoolBuilder, ReadPoolError};
+    use tikv_util::read_pool::{ReadPoolError, YatpPoolBuilder};
 
     #[derive(Clone)]
     struct DummyReporter;
@@ -133,7 +333,7 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let ticker = ReporterTicker::new(DummyReporter {});
         let kv = Arc::new(Mutex::new(engine));
-        let pool = ReadPoolBuilder::new(ticker)
+        let pool = YatpPoolBuilder::new(ticker)
             .after_start(move || {
                 let engine = kv.lock().unwrap().clone();
                 set_tls_engine(engine);
