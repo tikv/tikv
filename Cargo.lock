@@ -1096,6 +1096,8 @@ name = "engine_panic"
 version = "0.0.1"
 dependencies = [
  "engine_traits",
+ "kvproto",
+ "raft",
  "tikv_alloc",
  "tikv_util",
 ]

@@ -39,3 +39,5 @@ mod write_batch;
 pub use crate::write_batch::*;
 pub mod range_properties;
 pub use crate::range_properties::*;
+
+mod raft_engine;
