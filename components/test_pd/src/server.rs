@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use futures::{future, FutureExt, SinkExt, StreamExt, TryStreamExt};
+use futures::{future, FutureExt, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 use grpcio::{
     DuplexSink, EnvBuilder, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
     RpcStatusCode, Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
@@ -126,13 +126,13 @@ fn hijack_unary<F, R, C: PdMocker>(
     match resp {
         Some(Ok(resp)) => ctx.spawn(
             sink.success(resp)
-                .map(|res| res.unwrap_or_else(|e| error!("failed to reply: {:?}", e))),
+                .unwrap_or_else(|e| error!("failed to reply: {:?}", e)),
         ),
         Some(Err(err)) => {
             let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", err)));
             ctx.spawn(
                 sink.fail(status)
-                    .map(|res| res.unwrap_or_else(|e| error!("failed to reply: {:?}", e))),
+                    .unwrap_or_else(|e| error!("failed to reply: {:?}", e)),
             );
         }
         _ => {
@@ -142,7 +142,7 @@ fn hijack_unary<F, R, C: PdMocker>(
             );
             ctx.spawn(
                 sink.fail(status)
-                    .map(|res| res.unwrap_or_else(|e| error!("failed to reply: {:?}", e))),
+                    .unwrap_or_else(|e| error!("failed to reply: {:?}", e)),
             );
         }
     }

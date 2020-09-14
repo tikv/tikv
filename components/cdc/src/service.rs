@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use futures::future::{self, FutureExt};
 use futures::sink::SinkExt;
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::stream::{self, StreamExt, TryFutureExt, TryStreamExt};
 use grpcio::{
     DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
     RpcStatusCode, WriteFlags,
@@ -264,9 +264,10 @@ impl ChangeData for Service {
             .map_err(|e| RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, Some(format!("{:?}", e))))
         {
             error!("cdc connection initiate failed"; "error" => ?status);
-            ctx.spawn(sink.fail(status).map(|res| {
-                res.unwrap_or_else(|e| error!("cdc failed to send error"; "error" => ?e))
-            }));
+            ctx.spawn(
+                sink.fail(status)
+                    .unwrap_or_else(|e| error!("cdc failed to send error"; "error" => ?e)),
+            );
             return;
         }
 

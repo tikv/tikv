@@ -241,7 +241,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)
-                    .map(|res| res.unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e))),
+                    .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
             );
             return;
         }
@@ -264,7 +264,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             resp.set_error(e.into());
             ctx.spawn(
                 sink.success(resp)
-                    .map(|res| res.unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e))),
+                    .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
             );
             return;
         }

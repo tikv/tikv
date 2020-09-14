@@ -128,13 +128,11 @@ impl Conn {
             check_rpc_result("raft", &addr2, send_res.err(), recv_res.err())
         };
 
-        client1.spawn(batch_send_or_fallback.map(move |res| {
-            res.unwrap_or_else(move |_| {
-                REPORT_FAILURE_MSG_COUNTER
-                    .with_label_values(&["unreachable", &*store_id.to_string()])
-                    .inc();
-                router.broadcast_unreachable(store_id);
-            })
+        client1.spawn(batch_send_or_fallback.unwrap_or_else(move |_| {
+            REPORT_FAILURE_MSG_COUNTER
+                .with_label_values(&["unreachable", &*store_id.to_string()])
+                .inc();
+            router.broadcast_unreachable(store_id);
         }));
 
         Conn {

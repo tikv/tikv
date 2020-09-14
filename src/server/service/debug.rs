@@ -89,7 +89,7 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine>> Service<ER, T> {
             }
             Ok(())
         };
-        ctx.spawn(ctx_task.map(move |res| res.unwrap_or_else(|e| on_grpc_error(tag, &e))));
+        ctx.spawn(ctx_task.unwrap_or_else(|e| on_grpc_error(tag, &e)));
     }
 }
 

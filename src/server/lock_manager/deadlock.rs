@@ -892,9 +892,7 @@ impl Deadlock for Service {
                         resp
                     })
                     .and_then(|resp| sink.success(resp).map_err(Error::Grpc))
-                    .map(|res| {
-                        res.unwrap_or_else(|e| debug!("get_wait_for_entries failed"; "err" => ?e))
-                    }),
+                    .unwrap_or_else(|e| debug!("get_wait_for_entries failed"; "err" => ?e)),
             );
         }
     }

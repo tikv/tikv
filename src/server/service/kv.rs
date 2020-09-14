@@ -301,7 +301,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
         ctx.spawn(
             sink.fail(e)
-                .map(|res| res.unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e))),
+                .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
         );
     }
 
@@ -879,10 +879,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             }
             future::ok(())
         });
-        ctx.spawn(
-            request_handler
-                .map(|res| res.unwrap_or_else(|e| error!("batch_commands error"; "err" => %e))),
-        );
+        ctx.spawn(request_handler.unwrap_or_else(|e| error!("batch_commands error"; "err" => %e)));
 
         let thread_load = Arc::clone(&self.grpc_thread_load);
         let response_retriever = BatchReceiver::new(

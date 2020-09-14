@@ -2,7 +2,7 @@ use std::sync::atomic::*;
 use std::sync::Arc;
 
 use futures::channel::mpsc;
-use futures::{FutureExt, SinkExt, StreamExt};
+use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::backup::*;
 use security::{check_common_name, SecurityManager};
@@ -53,9 +53,10 @@ impl Backup for Service {
             )),
         } {
             error!("backup task initiate failed"; "error" => ?status);
-            ctx.spawn(sink.fail(status).map(|res| {
-                res.unwrap_or_else(|e| error!("backup failed to send error"; "error" => ?e))
-            }));
+            ctx.spawn(
+                sink.fail(status)
+                    .unwrap_or_else(|e| error!("backup failed to send error"; "error" => ?e)),
+            );
             return;
         };
 
