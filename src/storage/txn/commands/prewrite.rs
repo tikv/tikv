@@ -205,7 +205,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 self.min_commit_ts,
             ) {
                 Ok(ts) => {
-                    if secondaries.is_some() {
+                    if secondaries.is_some() && async_commit_ts > ts {
                         async_commit_ts = ts;
                     }
                 }
