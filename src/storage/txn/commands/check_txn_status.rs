@@ -58,10 +58,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
     /// the `current_ts` is literally the timestamp when this function is invoked. It may not be
     /// accurate.
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        let new_max_ts = cmp::max(
-            cmp::max(self.lock_ts, self.caller_start_ts),
-            self.current_ts,
-        );
+        let new_max_ts = cmp::max(self.lock_ts, self.current_ts);
         context.concurrency_manager.update_max_ts(new_max_ts);
 
         let mut txn = MvccTxn::new(
