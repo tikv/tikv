@@ -18,7 +18,7 @@ use kvproto::raft_cmdpb::{
     RaftRequestHeader, Request, Response,
 };
 use kvproto::{errorpb, metapb};
-use txn_types::{Key,TimeStamp,  TxnExtraScheduler, Value};
+use txn_types::{Key, TimeStamp, TxnExtraScheduler, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
