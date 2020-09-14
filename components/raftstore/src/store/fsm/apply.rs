@@ -3908,11 +3908,11 @@ mod tests {
     }
 
     // Make sure msgs are handled in the same batch.
-    fn batch_messages(
-        router: &ApplyRouter<RocksEngine>,
+    fn batch_messages<E>(
+        router: &ApplyRouter<E>,
         region_id: u64,
-        msgs: Vec<Msg<RocksEngine>>,
-    ) {
+        msgs: Vec<Msg<E>>,
+    ) where E: KvEngine {
         let (notify1, wait1) = mpsc::channel();
         let (notify2, wait2) = mpsc::channel();
         router.schedule_task(
@@ -3934,9 +3934,9 @@ mod tests {
         notify2.send(()).unwrap();
     }
 
-    fn fetch_apply_res(
-        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>,
-    ) -> ApplyRes<RocksSnapshot> {
+    fn fetch_apply_res<E>(
+        receiver: &::std::sync::mpsc::Receiver<PeerMsg<E>>,
+    ) -> ApplyRes<E::Snapshot> where E: KvEngine {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,
@@ -4316,7 +4316,7 @@ mod tests {
         }
     }
 
-    impl CmdObserver<RocksEngine> for ApplyObserver {
+    impl<E> CmdObserver<E> for ApplyObserver where E: KvEngine {
         fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
             self.cmd_batches
                 .borrow_mut()
@@ -4331,7 +4331,7 @@ mod tests {
                 .push(observe_id, region_id, cmd);
         }
 
-        fn on_flush_apply(&self, _: RocksEngine) {
+        fn on_flush_apply(&self, _: E) {
             if !self.cmd_batches.borrow().is_empty() {
                 let batches = self.cmd_batches.replace(Vec::default());
                 for b in batches {
@@ -4939,13 +4939,13 @@ mod tests {
         req
     }
 
-    struct SplitResultChecker<'a> {
-        engine: RocksEngine,
+    struct SplitResultChecker<'a, E> where E: KvEngine {
+        engine: E,
         origin_peers: &'a [metapb::Peer],
         epoch: Rc<RefCell<RegionEpoch>>,
     }
 
-    impl<'a> SplitResultChecker<'a> {
+    impl<'a, E> SplitResultChecker<'a, E> where E: KvEngine {
         fn check(&self, start: &[u8], end: &[u8], id: u64, children: &[u64], check_initial: bool) {
             let key = keys::region_state_key(id);
             let state: RegionLocalState = self.engine.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
