@@ -2,56 +2,50 @@
 
 use std::error;
 use std::fmt::{self, Display, Formatter};
-use std::marker::PhantomData;
 use std::sync::mpsc::Sender;
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine_traits::{KvEngine, RaftEngine};
-use tikv_util::worker::Runnable;
 
-pub enum Task<ER: RaftEngine> {
+use engine_traits::{Engines, KvEngine, RaftEngine};
+use tikv_util::time::Duration;
+use tikv_util::timer::Timer;
+use tikv_util::worker::{Runnable, RunnableWithTimer};
+
+const MAX_GC_REGION_BATCH: usize = 128;
+const COMPACT_LOG_INTERVAL: Duration = Duration::from_secs(60);
+
+pub enum Task {
     Gc {
-        raft_engine: ER,
         region_id: u64,
         start_idx: u64,
         end_idx: u64,
     },
-    Purge {
-        raft_engine: ER,
-    },
+    Purge,
 }
 
-impl<ER: RaftEngine> Task<ER> {
-    pub fn gc(engine: ER, region_id: u64, start: u64, end: u64) -> Self {
+impl Task {
+    pub fn gc(region_id: u64, start: u64, end: u64) -> Self {
         Task::Gc {
-            raft_engine: engine,
             region_id,
             start_idx: start,
             end_idx: end,
         }
     }
-
-    pub fn purge(engine: ER) -> Self {
-        Task::Purge {
-            raft_engine: engine,
-        }
-    }
 }
 
-impl<ER: RaftEngine> Display for Task<ER> {
+impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Task::Gc {
                 region_id,
                 start_idx,
                 end_idx,
-                ..
             } => write!(
                 f,
                 "GC Raft Logs [region: {}, from: {}, to: {}]",
                 region_id, start_idx, end_idx
             ),
-            Task::Purge { .. } => write!(f, "Purge Expired Files",),
+            Task::Purge => write!(f, "Purge Expired Files",),
         }
     }
 }
@@ -69,15 +63,17 @@ quick_error! {
 
 pub struct Runner<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> {
     ch: R,
-    _phantom: PhantomData<(EK, ER)>,
+    tasks: Vec<Task>,
+    engines: Engines<EK, ER>,
     gc_entries: Option<Sender<usize>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
-    pub fn new(ch: R) -> Runner<EK, ER, R> {
+    pub fn new(ch: R, engines: Engines<EK, ER>) -> Runner<EK, ER, R> {
         Runner {
             ch,
-            _phantom: Default::default(),
+            engines,
+            tasks: vec![],
             gc_entries: None,
         }
     }
@@ -85,12 +81,11 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
     /// Does the GC job and returns the count of logs collected.
     fn gc_raft_log(
         &mut self,
-        raft_engine: ER,
         region_id: u64,
         start_idx: u64,
         end_idx: u64,
     ) -> Result<usize, Error> {
-        let deleted = box_try!(raft_engine.gc(region_id, start_idx, end_idx));
+        let deleted = box_try!(self.engines.raft.gc(region_id, start_idx, end_idx));
         Ok(deleted)
     }
 
@@ -98,6 +93,53 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
         if let Some(ref ch) = self.gc_entries {
             ch.send(collected).unwrap();
         }
+    }
+
+    fn flush(&mut self) {
+        // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
+        self.engines.kv.sync().unwrap_or_else(|e| {
+            panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
+        });
+        let tasks = std::mem::replace(&mut self.tasks, vec![]);
+        for t in tasks {
+            match t {
+                Task::Gc {
+                    region_id,
+                    start_idx,
+                    end_idx,
+                } => {
+                    debug!("gc raft log"; "region_id" => region_id, "end_index" => end_idx);
+                    match self.gc_raft_log(region_id, start_idx, end_idx) {
+                        Err(e) => {
+                            error!("failed to gc"; "region_id" => region_id, "err" => %e);
+                            self.report_collected(0);
+                        }
+                        Ok(n) => {
+                            debug!("gc log entries"; "region_id" => region_id, "entry_count" => n);
+                            self.report_collected(n);
+                        }
+                    }
+                }
+                Task::Purge => {
+                    let regions = match self.engines.raft.purge_expired_files() {
+                        Ok(regions) => regions,
+                        Err(e) => {
+                            warn!("purge expired files"; "err" => %e);
+                            return;
+                        }
+                    };
+                    for region_id in regions {
+                        let _ = self.ch.send(region_id, CasualMessage::ForceCompactRaftLogs);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn new_timer(&self) -> Timer<()> {
+        let mut timer = Timer::new(1);
+        timer.add_task(COMPACT_LOG_INTERVAL, ());
+        timer
     }
 }
 
@@ -107,78 +149,63 @@ where
     ER: RaftEngine,
     R: CasualRouter<EK>,
 {
-    type Task = Task<ER>;
+    type Task = Task;
 
-    fn run(&mut self, task: Task<ER>) {
-        match task {
-            Task::Gc {
-                raft_engine,
-                region_id,
-                start_idx,
-                end_idx,
-            } => {
-                debug!("gc raft log"; "region_id" => region_id, "end_index" => end_idx);
-                match self.gc_raft_log(raft_engine, region_id, start_idx, end_idx) {
-                    Err(e) => {
-                        error!("failed to gc"; "region_id" => region_id, "err" => %e);
-                        self.report_collected(0);
-                    }
-                    Ok(n) => {
-                        debug!("gc log entries"; "region_id" => region_id, "entry_count" => n);
-                        self.report_collected(n);
-                    }
-                }
-            }
-            Task::Purge { raft_engine } => {
-                let regions = match raft_engine.purge_expired_files() {
-                    Ok(regions) => regions,
-                    Err(e) => {
-                        warn!("purge expired files"; "err" => %e);
-                        return;
-                    }
-                };
-                for region_id in regions {
-                    let _ = self.ch.send(region_id, CasualMessage::ForceCompactRaftLogs);
-                }
-            }
+    fn run(&mut self, task: Task) {
+        self.tasks.push(task);
+        if self.tasks.len() < MAX_GC_REGION_BATCH {
+            return;
         }
+        self.flush();
+    }
+
+    fn shutdown(&mut self) {
+        self.flush();
+    }
+}
+
+impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+    R: CasualRouter<EK>,
+{
+    type TimeoutTask = ();
+    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+        self.flush();
+        timer.add_task(COMPACT_LOG_INTERVAL, ());
     }
 }
 
 #[cfg(test)]
-use std::sync::mpsc::{sync_channel, SyncSender};
-
-#[cfg(test)]
-impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER, SyncSender<(u64, CasualMessage<EK>)>> {
-    fn new_for_test(
-        gc_entries: Sender<usize>,
-    ) -> Runner<EK, ER, SyncSender<(u64, CasualMessage<EK>)>> {
-        let (tx, _) = sync_channel(1);
-        Runner {
-            ch: tx,
-            _phantom: Default::default(),
-            gc_entries: Some(gc_entries),
-        }
-    }
-}
+use std::sync::mpsc::sync_channel;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use engine_rocks::util::new_engine;
-    use engine_rocks::RocksEngine;
-    use engine_traits::{KvEngine, Mutable, WriteBatchExt, CF_DEFAULT};
+    use engine_traits::{Engines, KvEngine, Mutable, WriteBatchExt, ALL_CFS, CF_DEFAULT};
     use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
 
     #[test]
     fn test_gc_raft_log() {
-        let path = Builder::new().prefix("gc-raft-log-test").tempdir().unwrap();
-        let raft_db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
+        let dir = Builder::new().prefix("gc-raft-log-test").tempdir().unwrap();
+        let path_raft = dir.path().join("raft");
+        let path_kv = dir.path().join("kv");
+        let raft_db = new_engine(path_kv.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
+        let kv_db = new_engine(path_raft.to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let engines = Engines::new(kv_db, raft_db.clone());
 
         let (tx, rx) = mpsc::channel();
-        let mut runner = Runner::<RocksEngine, RocksEngine, _>::new_for_test(tx);
+        let (r, _) = sync_channel(1);
+        let mut runner = Runner {
+            gc_entries: Some(tx),
+            engines,
+            ch: r,
+            tasks: vec![],
+        };
 
         // generate raft logs
         let region_id = 1;
@@ -190,34 +217,15 @@ mod tests {
         raft_db.write(&raft_wb).unwrap();
 
         let tbls = vec![
-            (
-                Task::gc(raft_db.clone(), region_id, 0, 10),
-                10,
-                (0, 10),
-                (10, 100),
-            ),
-            (
-                Task::gc(raft_db.clone(), region_id, 0, 50),
-                40,
-                (0, 50),
-                (50, 100),
-            ),
-            (
-                Task::gc(raft_db.clone(), region_id, 50, 50),
-                0,
-                (0, 50),
-                (50, 100),
-            ),
-            (
-                Task::gc(raft_db.clone(), region_id, 50, 60),
-                10,
-                (0, 60),
-                (60, 100),
-            ),
+            (Task::gc(region_id, 0, 10), 10, (0, 10), (10, 100)),
+            (Task::gc(region_id, 0, 50), 40, (0, 50), (50, 100)),
+            (Task::gc(region_id, 50, 50), 0, (0, 50), (50, 100)),
+            (Task::gc(region_id, 50, 60), 10, (0, 60), (60, 100)),
         ];
 
         for (task, expected_collectd, not_exist_range, exist_range) in tbls {
             runner.run(task);
+            runner.flush();
             let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
             assert_eq!(res, expected_collectd);
             raft_log_must_not_exist(&raft_db, 1, not_exist_range.0, not_exist_range.1);
