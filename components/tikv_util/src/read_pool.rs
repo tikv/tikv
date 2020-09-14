@@ -209,10 +209,10 @@ impl<T: PoolTicker> Runner for ReadPoolRunner<T> {
     type TaskCell = TaskCell;
 
     fn start(&mut self, local: &mut Local<Self::TaskCell>) {
+        self.inner.start(local);
         if let Some(f) = self.after_start.take() {
             f();
         }
-        self.inner.start(local);
         tikv_alloc::add_thread_memory_accessor()
     }
 
