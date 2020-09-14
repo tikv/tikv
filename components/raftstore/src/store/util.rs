@@ -707,24 +707,24 @@ pub fn is_learner(p: &metapb::Peer) -> bool {
 
 /// Abstracts over ChangePeerV2Request and (legacy) ChangePeerRequest to allow
 /// treating them in a unified manner.
-pub trait ChangePeerI: Copy {
+pub trait ChangePeerI {
     type CC: ConfChangeI;
     type CP: AsRef<[ChangePeerRequest]>;
 
-    fn get_change_peers(self) -> Self::CP;
+    fn get_change_peers(&self) -> Self::CP;
 
-    fn to_confchange(self, _: Vec<u8>) -> Self::CC;
+    fn to_confchange(&self, _: Vec<u8>) -> Self::CC;
 }
 
 impl<'a> ChangePeerI for &'a ChangePeerRequest {
     type CC = eraftpb::ConfChange;
     type CP = Vec<ChangePeerRequest>;
 
-    fn get_change_peers(self) -> Vec<ChangePeerRequest> {
+    fn get_change_peers(&self) -> Vec<ChangePeerRequest> {
         vec![ChangePeerRequest::clone(self)]
     }
 
-    fn to_confchange(self, ctx: Vec<u8>) -> eraftpb::ConfChange {
+    fn to_confchange(&self, ctx: Vec<u8>) -> eraftpb::ConfChange {
         let mut cc = eraftpb::ConfChange::default();
         cc.set_change_type(self.get_change_type());
         cc.set_node_id(self.get_peer().get_id());
@@ -737,11 +737,11 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
     type CC = eraftpb::ConfChangeV2;
     type CP = &'a [ChangePeerRequest];
 
-    fn get_change_peers(self) -> &'a [ChangePeerRequest] {
+    fn get_change_peers(&self) -> &'a [ChangePeerRequest] {
         self.get_changes()
     }
 
-    fn to_confchange(self, ctx: Vec<u8>) -> eraftpb::ConfChangeV2 {
+    fn to_confchange(&self, ctx: Vec<u8>) -> eraftpb::ConfChangeV2 {
         let mut cc = eraftpb::ConfChangeV2::default();
         let changes: Vec<_> = self
             .get_changes()
