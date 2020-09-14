@@ -16,82 +16,6 @@ use yatp::queue::Extras;
 use yatp::task::future::TaskCell;
 use yatp::Remote;
 
-#[cfg(test)]
-pub fn get_unified_read_pool_name() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    format!(
-        "unified-read-pool-test-{}",
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    )
-}
-
-#[cfg(not(test))]
-pub fn get_unified_read_pool_name() -> String {
-    "unified-read-pool".to_string()
-}
-
-pub struct ReporterTicker<R>
-where
-    R: FlowStatsReporter,
-{
-    reporter: R,
-    last_tick_time: Instant,
-    tick_count: usize,
-}
-
-impl<R> Clone for ReporterTicker<R>
-where
-    R: FlowStatsReporter,
-{
-    fn clone(&self) -> Self {
-        Self {
-            reporter: self.reporter.clone(),
-            last_tick_time: self.last_tick_time,
-            tick_count: 0,
-        }
-    }
-}
-
-impl<R> PoolTicker for ReporterTicker<R>
-where
-    R: FlowStatsReporter,
-{
-    fn on_tick(&mut self) {
-        self.flush_metrics_on_tick();
-    }
-}
-
-impl<R> ReporterTicker<R>
-where
-    R: FlowStatsReporter,
-{
-    pub fn new(reporter: R) -> Self {
-        Self {
-            reporter,
-            last_tick_time: Instant::now(),
-            tick_count: 0,
-        }
-    }
-
-    fn flush_metrics_on_tick(&mut self) {
-        const TICK_INTERVAL: Duration = Duration::from_secs(1);
-        const TICK_COUNT_LIMIT: usize = 10;
-        // Do nothing if no tick passed
-        self.tick_count += 1;
-        if self.tick_count < TICK_COUNT_LIMIT {
-            return;
-        }
-        self.tick_count = 0;
-        if self.last_tick_time.elapsed() < TICK_INTERVAL {
-            return;
-        }
-        self.last_tick_time = Instant::now();
-        crate::storage::metrics::tls_flush(&self.reporter);
-        crate::coprocessor::metrics::tls_flush(&self.reporter);
-    }
-}
 pub enum ReadPool {
     FuturePools {
         read_pool_high: FuturePool,
@@ -126,13 +50,6 @@ impl ReadPool {
                 running_tasks: running_tasks.clone(),
                 max_tasks: *max_tasks,
             },
-        }
-    }
-
-    pub fn remote(&self) -> Option<Remote<TaskCell>> {
-        match self {
-            ReadPool::Yatp { pool, .. } => Some(pool.remote().clone()),
-            ReadPool::FuturePools { .. } => None,
         }
     }
 }
@@ -230,18 +147,52 @@ impl ReadPoolHandle {
     }
 }
 
-impl From<Vec<FuturePool>> for ReadPool {
-    fn from(mut v: Vec<FuturePool>) -> ReadPool {
-        assert_eq!(v.len(), 3);
-        let read_pool_high = v.remove(2);
-        let read_pool_normal = v.remove(1);
-        let read_pool_low = v.remove(0);
-        ReadPool::FuturePools {
-            read_pool_high,
-            read_pool_normal,
-            read_pool_low,
+#[derive(Clone)]
+pub struct ReporterTicker<R: FlowStatsReporter> {
+    reporter: R,
+    last_tick_time: Instant,
+}
+
+impl<R: FlowStatsReporter> PoolTicker for ReporterTicker<R> {
+    fn on_tick(&mut self) {
+        self.flush_metrics_on_tick();
+    }
+}
+
+impl<R: FlowStatsReporter> ReporterTicker<R> {
+    pub fn new(reporter: R) -> Self {
+        Self {
+            reporter,
+            last_tick_time: Instant::now_coarse(),
         }
     }
+
+    fn flush_metrics_on_tick(&mut self) {
+        const TICK_INTERVAL: Duration = Duration::from_secs(1);
+        let now = Instant::now_coarse();
+        if now.duration_since(self.last_tick_time) < TICK_INTERVAL {
+            return;
+        }
+        self.last_tick_time = now;
+        crate::storage::metrics::tls_flush(&self.reporter);
+        crate::coprocessor::metrics::tls_flush(&self.reporter);
+    }
+}
+
+#[cfg(test)]
+fn get_unified_read_pool_name() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "unified-read-pool-test-{}",
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+#[cfg(not(test))]
+fn get_unified_read_pool_name() -> String {
+    "unified-read-pool".to_string()
 }
 
 pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
@@ -264,14 +215,27 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
             destroy_tls_engine::<E>();
         })
         .build_multi_level_pool();
-    let max_tasks = config
-        .max_tasks_per_worker
-        .saturating_mul(config.max_thread_count);
     ReadPool::Yatp {
         pool,
         running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
             .with_label_values(&[&unified_read_pool_name]),
-        max_tasks,
+        max_tasks: config
+            .max_tasks_per_worker
+            .saturating_mul(config.max_thread_count),
+    }
+}
+
+impl From<Vec<FuturePool>> for ReadPool {
+    fn from(mut v: Vec<FuturePool>) -> ReadPool {
+        assert_eq!(v.len(), 3);
+        let read_pool_high = v.remove(2);
+        let read_pool_normal = v.remove(1);
+        let read_pool_low = v.remove(0);
+        ReadPool::FuturePools {
+            read_pool_high,
+            read_pool_normal,
+            read_pool_low,
+        }
     }
 }
 
@@ -310,14 +274,10 @@ mod metrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
-    use crate::storage::{RocksEngine as RocksKV, TestEngineBuilder};
+    use crate::storage::TestEngineBuilder;
     use futures::channel::oneshot;
-    use kvproto::kvrpcpb::CommandPri;
     use raftstore::store::ReadStats;
-    use std::sync::{Arc, Mutex};
     use std::thread;
-    use tikv_util::read_pool::{ReadPoolError, YatpPoolBuilder};
 
     #[derive(Clone)]
     struct DummyReporter;
@@ -328,22 +288,17 @@ mod tests {
 
     #[test]
     fn test_yatp_full() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let config = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 2,
+            max_tasks_per_worker: 1,
+            ..Default::default()
+        };
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let ticker = ReporterTicker::new(DummyReporter {});
-        let kv = Arc::new(Mutex::new(engine));
-        let pool = YatpPoolBuilder::new(ticker)
-            .after_start(move || {
-                let engine = kv.lock().unwrap().clone();
-                set_tls_engine(engine);
-            })
-            .before_stop(|| unsafe {
-                destroy_tls_engine::<RocksKV>();
-            })
-            .max_tasks(2)
-            .thread_count(1, 1)
-            .build();
+        let pool = build_yatp_read_pool(&config, DummyReporter, engine);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();

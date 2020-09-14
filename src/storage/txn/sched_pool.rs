@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use tikv_util::time::{Duration, Instant};
 
 use prometheus::local::*;
 use tikv_util::collections::HashMap;
@@ -35,10 +35,17 @@ pub struct SchedPool {
 }
 
 #[derive(Clone)]
-pub struct SchedTicker;
+pub struct SchedTicker {
+    last_tick_time: Instant,
+}
 
 impl PoolTicker for SchedTicker {
     fn on_tick(&mut self) {
+        const TICK_INTERVAL: Duration = Duration::from_secs(1);
+        if self.last_tick_time.elapsed() < TICK_INTERVAL {
+            return;
+        }
+        self.last_tick_time = Instant::now_coarse();
         tls_flush();
     }
 }
@@ -46,17 +53,16 @@ impl PoolTicker for SchedTicker {
 impl SchedPool {
     pub fn new<E: Engine>(engine: E, pool_size: usize, name_prefix: &str) -> Self {
         let engine = Arc::new(Mutex::new(engine));
-        let pool = YatpPoolBuilder::new(SchedTicker {})
+        let last_tick_time = Instant::now_coarse();
+        let pool = YatpPoolBuilder::new(SchedTicker { last_tick_time })
             .thread_count(pool_size, pool_size)
             .name_prefix(name_prefix)
             // Safety: by setting `after_start` and `before_stop`, `FuturePool` ensures
             // the tls_engine invariants.
             .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-            .before_stop(move || {
+            .before_stop(move || unsafe {
                 // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.
-                unsafe {
-                    destroy_tls_engine::<E>();
-                }
+                destroy_tls_engine::<E>();
                 tls_flush();
             })
             .build_future_pool();

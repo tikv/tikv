@@ -8,10 +8,7 @@ use tikv_util::time::{Duration, Instant};
 use tikv_util::yatp_pool::{Config, DefaultTicker, FuturePool, PoolTicker, YatpPoolBuilder};
 
 #[derive(Clone)]
-pub struct FuturePoolTicker<R>
-where
-    R: FlowStatsReporter,
-{
+pub struct FuturePoolTicker<R: FlowStatsReporter> {
     reporter: R,
     last_tick: Instant,
 }

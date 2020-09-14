@@ -5,7 +5,6 @@
 
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
 
 use futures::channel::oneshot::{self, Canceled};
 use prometheus::{Histogram, IntCounter, IntGauge};
@@ -173,6 +172,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::thread;
+    use std::time::Duration;
 
     use super::super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder};
     use futures::executor::block_on;
