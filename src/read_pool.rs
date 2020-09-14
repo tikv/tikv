@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures03::channel::oneshot;
-use futures03::future::TryFutureExt;
+use futures::channel::oneshot;
+use futures::future::TryFutureExt;
 use kvproto::kvrpcpb::CommandPri;
 use std::cell::Cell;
 use std::future::Future;
@@ -316,7 +316,7 @@ mod metrics {
 mod tests {
     use super::*;
     use crate::storage::TestEngineBuilder;
-    use futures03::channel::oneshot;
+    use futures::channel::oneshot;
     use raftstore::store::ReadStats;
     use std::thread;
 

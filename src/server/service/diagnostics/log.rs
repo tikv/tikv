@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 
 use chrono::DateTime;
-use futures03::stream::{self, Stream};
+use futures::stream::{self, Stream};
 use itertools::Itertools;
 use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
 use lazy_static::lazy_static;
@@ -342,8 +342,8 @@ pub fn search<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures03::executor::block_on;
-    use futures03::stream::StreamExt;
+    use futures::executor::block_on;
+    use futures::stream::StreamExt;
     use std::io::Write;
     use tempfile::tempdir;
 

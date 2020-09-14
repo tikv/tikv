@@ -392,13 +392,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         let ch = Mutex::new(self.router.clone());
-        let compacted_handler = Box::new(move |compacted_event: engine_rocks::CompactedEvent| {
-            let ch = ch.lock().unwrap();
-            let event = StoreMsg::CompactedEvent(compacted_event);
-            if let Err(e) = ch.send_control(event) {
-                error!(?e; "send compaction finished event to raftstore failed");
-            }
-        });
+        let compacted_handler =
+            Box::new(move |compacted_event: engine_rocks::RocksCompactedEvent| {
+                let ch = ch.lock().unwrap();
+                let event = StoreMsg::CompactedEvent(compacted_event);
+                if let Err(e) = ch.send_control(event) {
+                    error!(?e; "send compaction finished event to raftstore failed");
+                }
+            });
         engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
     }
 
