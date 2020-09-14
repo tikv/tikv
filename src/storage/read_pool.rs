@@ -4,37 +4,16 @@ use crate::config::StorageReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 use crate::storage::metrics;
 use std::sync::{Arc, Mutex};
-use tikv_util::time::{Duration, Instant};
 use tikv_util::yatp_pool::{Config, DefaultTicker, FuturePool, PoolTicker, YatpPoolBuilder};
 
 #[derive(Clone)]
-pub struct FuturePoolTicker<R: FlowStatsReporter> {
-    reporter: R,
-    last_tick: Instant,
+struct FuturePoolTicker<R: FlowStatsReporter> {
+    pub reporter: R,
 }
 
-impl<R: FlowStatsReporter> FuturePoolTicker<R> {
-    pub fn new(reporter: R) -> Self {
-        Self {
-            reporter,
-            last_tick: Instant::now_coarse(),
-        }
-    }
-}
-
-const TICK_INTERVAL: Duration = Duration::from_secs(1);
-
-impl<R> PoolTicker for FuturePoolTicker<R>
-where
-    R: FlowStatsReporter,
-{
+impl<R: FlowStatsReporter> PoolTicker for FuturePoolTicker<R> {
     fn on_tick(&mut self) {
-        let now = Instant::now_coarse();
-        if now.duration_since(self.last_tick) < TICK_INTERVAL {
-            return;
-        }
         metrics::tls_flush(&self.reporter);
-        self.last_tick = now;
     }
 }
 
@@ -52,18 +31,14 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
         .zip(names)
         .map(|(config, name)| {
             let reporter = reporter.clone();
-            let reporter2 = reporter.clone();
             let engine = Arc::new(Mutex::new(engine.clone()));
-            YatpPoolBuilder::new(FuturePoolTicker::new(reporter))
+            YatpPoolBuilder::new(FuturePoolTicker { reporter })
                 .name_prefix(name)
                 .config(config)
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                .before_stop(move || {
+                .before_stop(move || unsafe {
                     // Safety: we call `set_` and `destroy_` with the same engine type.
-                    unsafe {
-                        destroy_tls_engine::<E>();
-                    }
-                    metrics::tls_flush(&reporter2)
+                    destroy_tls_engine::<E>();
                 })
                 .build_future_pool()
         })

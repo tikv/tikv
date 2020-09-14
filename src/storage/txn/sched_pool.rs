@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
-use tikv_util::time::{Duration, Instant};
+use tikv_util::time::Duration;
 
 use prometheus::local::*;
 use tikv_util::collections::HashMap;
@@ -35,17 +35,10 @@ pub struct SchedPool {
 }
 
 #[derive(Clone)]
-pub struct SchedTicker {
-    last_tick_time: Instant,
-}
+pub struct SchedTicker;
 
 impl PoolTicker for SchedTicker {
     fn on_tick(&mut self) {
-        const TICK_INTERVAL: Duration = Duration::from_secs(1);
-        if self.last_tick_time.elapsed() < TICK_INTERVAL {
-            return;
-        }
-        self.last_tick_time = Instant::now_coarse();
         tls_flush();
     }
 }
@@ -53,8 +46,7 @@ impl PoolTicker for SchedTicker {
 impl SchedPool {
     pub fn new<E: Engine>(engine: E, pool_size: usize, name_prefix: &str) -> Self {
         let engine = Arc::new(Mutex::new(engine));
-        let last_tick_time = Instant::now_coarse();
-        let pool = YatpPoolBuilder::new(SchedTicker { last_tick_time })
+        let pool = YatpPoolBuilder::new(SchedTicker {})
             .thread_count(pool_size, pool_size)
             .name_prefix(name_prefix)
             // Safety: by setting `after_start` and `before_stop`, `FuturePool` ensures

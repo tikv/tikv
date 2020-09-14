@@ -4,14 +4,45 @@ mod future_pool;
 mod metrics;
 pub use future_pool::{Full, FuturePool};
 
+use crate::time::{Duration, Instant};
 use std::sync::Arc;
 use yatp::pool::{CloneRunnerBuilder, Local, Runner};
 use yatp::queue::{multilevel, QueueType};
 use yatp::task::future::{Runner as FutureRunner, TaskCell};
 use yatp::ThreadPool;
 
+pub(crate) const TICK_INTERVAL: Duration = Duration::from_secs(1);
+
 pub trait PoolTicker: Send + Clone + 'static {
     fn on_tick(&mut self);
+}
+
+#[derive(Clone)]
+pub struct TickerWrapper<T: PoolTicker> {
+    ticker: T,
+    last_tick_time: Instant,
+}
+
+impl<T: PoolTicker> TickerWrapper<T> {
+    pub fn new(ticker: T) -> Self {
+        Self {
+            ticker,
+            last_tick_time: Instant::now_coarse(),
+        }
+    }
+
+    pub fn try_tick(&mut self) {
+        let now = Instant::now_coarse();
+        if now.duration_since(self.last_tick_time) < TICK_INTERVAL {
+            return;
+        }
+        self.last_tick_time = now;
+        self.ticker.on_tick();
+    }
+
+    pub fn on_tick(&mut self) {
+        self.ticker.on_tick();
+    }
 }
 
 #[derive(Clone, Default)]
@@ -41,7 +72,7 @@ impl Config {
 #[derive(Clone)]
 pub struct YatpPoolRunner<T: PoolTicker> {
     inner: FutureRunner,
-    ticker: T,
+    ticker: TickerWrapper<T>,
     after_start: Option<Arc<dyn Fn() + Send + Sync>>,
     before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
     before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -60,7 +91,7 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
 
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, task_cell: Self::TaskCell) -> bool {
         let finished = self.inner.handle(local, task_cell);
-        self.ticker.on_tick();
+        self.ticker.try_tick();
         finished
     }
 
@@ -88,7 +119,7 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
 impl<T: PoolTicker> YatpPoolRunner<T> {
     pub fn new(
         inner: FutureRunner,
-        ticker: T,
+        ticker: TickerWrapper<T>,
         after_start: Option<Arc<dyn Fn() + Send + Sync>>,
         before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
         before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -105,7 +136,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
 
 pub struct YatpPoolBuilder<T: PoolTicker> {
     name_prefix: Option<String>,
-    ticker: T,
+    ticker: TickerWrapper<T>,
     after_start: Option<Arc<dyn Fn() + Send + Sync>>,
     before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
     before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -118,7 +149,7 @@ pub struct YatpPoolBuilder<T: PoolTicker> {
 impl<T: PoolTicker> YatpPoolBuilder<T> {
     pub fn new(ticker: T) -> Self {
         Self {
-            ticker,
+            ticker: TickerWrapper::new(ticker),
             name_prefix: None,
             after_start: None,
             before_stop: None,

@@ -19,7 +19,6 @@ pub mod txn;
 
 mod read_pool;
 mod types;
-pub use read_pool::FuturePoolTicker;
 
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},

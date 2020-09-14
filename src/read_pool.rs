@@ -9,8 +9,6 @@ use kvproto::kvrpcpb::CommandPri;
 use prometheus::IntGauge;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tikv_util::time::Instant;
 use tikv_util::yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder};
 use yatp::queue::Extras;
 use yatp::task::future::TaskCell;
@@ -150,7 +148,6 @@ impl ReadPoolHandle {
 #[derive(Clone)]
 pub struct ReporterTicker<R: FlowStatsReporter> {
     reporter: R,
-    last_tick_time: Instant,
 }
 
 impl<R: FlowStatsReporter> PoolTicker for ReporterTicker<R> {
@@ -160,20 +157,7 @@ impl<R: FlowStatsReporter> PoolTicker for ReporterTicker<R> {
 }
 
 impl<R: FlowStatsReporter> ReporterTicker<R> {
-    pub fn new(reporter: R) -> Self {
-        Self {
-            reporter,
-            last_tick_time: Instant::now_coarse(),
-        }
-    }
-
     fn flush_metrics_on_tick(&mut self) {
-        const TICK_INTERVAL: Duration = Duration::from_secs(1);
-        let now = Instant::now_coarse();
-        if now.duration_since(self.last_tick_time) < TICK_INTERVAL {
-            return;
-        }
-        self.last_tick_time = now;
         crate::storage::metrics::tls_flush(&self.reporter);
         crate::coprocessor::metrics::tls_flush(&self.reporter);
     }
@@ -201,7 +185,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     engine: E,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
-    let mut builder = YatpPoolBuilder::new(ReporterTicker::new(reporter));
+    let mut builder = YatpPoolBuilder::new(ReporterTicker { reporter });
     let raftkv = Arc::new(Mutex::new(engine));
     let pool = builder
         .name_prefix(&unified_read_pool_name)
@@ -278,6 +262,7 @@ mod tests {
     use futures::channel::oneshot;
     use raftstore::store::ReadStats;
     use std::thread;
+    use std::time::Duration;
 
     #[derive(Clone)]
     struct DummyReporter;
@@ -288,7 +273,6 @@ mod tests {
 
     #[test]
     fn test_yatp_full() {
-        let engine = TestEngineBuilder::new().build().unwrap();
         let config = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: 2,

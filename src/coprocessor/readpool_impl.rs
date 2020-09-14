@@ -4,10 +4,21 @@ use std::sync::{Arc, Mutex};
 
 use crate::config::CoprReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
-use crate::storage::{Engine, FlowStatsReporter, FuturePoolTicker};
-use tikv_util::yatp_pool::{Config, DefaultTicker, FuturePool, YatpPoolBuilder};
+use crate::storage::{Engine, FlowStatsReporter};
+use tikv_util::yatp_pool::{Config, DefaultTicker, FuturePool, PoolTicker, YatpPoolBuilder};
 
 use super::metrics::*;
+
+#[derive(Clone)]
+struct FuturePoolTicker<R: FlowStatsReporter> {
+    pub reporter: R,
+}
+
+impl<R: FlowStatsReporter> PoolTicker for FuturePoolTicker<R> {
+    fn on_tick(&mut self) {
+        tls_flush(&self.reporter);
+    }
+}
 
 pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &CoprReadPoolConfig,
@@ -23,18 +34,14 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
         .zip(names)
         .map(|(config, name)| {
             let reporter = reporter.clone();
-            let reporter2 = reporter.clone();
             let engine = Arc::new(Mutex::new(engine.clone()));
-            YatpPoolBuilder::new(FuturePoolTicker::new(reporter))
+            YatpPoolBuilder::new(FuturePoolTicker { reporter })
                 .config(config)
                 .name_prefix(name)
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                .before_stop(move || {
+                .before_stop(move || unsafe {
                     // Safety: we call `set_` and `destroy_` with the same engine type.
-                    unsafe {
-                        destroy_tls_engine::<E>();
-                    }
-                    tls_flush(&reporter2)
+                    destroy_tls_engine::<E>();
                 })
                 .build_future_pool()
         })

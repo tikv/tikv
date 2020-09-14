@@ -174,7 +174,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use super::super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder};
+    use super::super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder, TICK_INTERVAL};
     use futures::executor::block_on;
 
     fn spawn_future_and_wait(pool: &FuturePool, duration: Duration) {
@@ -196,12 +196,8 @@ mod tests {
 
     #[derive(Clone)]
     pub struct SequenceTicker {
-        last_tick: Instant,
         tick: Arc<dyn Fn() + Send + Sync>,
-        start: bool,
     }
-
-    const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
     impl SequenceTicker {
         pub fn new<F>(tick: F) -> SequenceTicker
@@ -209,26 +205,14 @@ mod tests {
             F: Fn() + Send + Sync + 'static,
         {
             SequenceTicker {
-                last_tick: Instant::now_coarse(),
                 tick: Arc::new(tick),
-                start: false,
             }
         }
     }
 
     impl PoolTicker for SequenceTicker {
         fn on_tick(&mut self) {
-            let now = Instant::now_coarse();
-            if !self.start {
-                self.last_tick = now;
-                self.start = true;
-            }
-            if now.duration_since(self.last_tick) < TICK_INTERVAL {
-                return;
-            }
-            self.last_tick = now;
-            let tick = self.tick.clone();
-            tick();
+            (self.tick)();
         }
     }
 
@@ -244,10 +228,6 @@ mod tests {
 
         let pool = Builder::new(ticker).thread_count(1, 1).build_future_pool();
 
-        assert!(rx.try_recv().is_err());
-
-        // Tick is not emitted since there is no task
-        thread::sleep(TICK_INTERVAL * 2);
         assert!(rx.try_recv().is_err());
 
         // Tick is emitted because long enough time has elapsed since pool is created
