@@ -45,7 +45,7 @@ use crate::storage::{
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
-use futures03::prelude::*;
+use futures::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
@@ -326,6 +326,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res =
             self.read_pool.spawn_handle(
                 async move {
+                    for get in &requests {
+                        let key = get.key.to_owned();
+                        let region_id = get.get_context().get_region_id();
+                        let peer = get.get_context().get_peer();
+                        tls_collect_qps(region_id, peer, &key, &key, false);
+                    }
                     KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
@@ -808,6 +814,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
+                for get in &gets {
+                    let key = get.key.to_owned();
+                    let region_id = get.get_context().get_region_id();
+                    let peer = get.get_context().get_peer();
+                    tls_collect_qps(region_id, peer, &key, &key, false);
+                }
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
@@ -1642,7 +1654,7 @@ mod tests {
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
-    use futures03::executor::block_on;
+    use futures::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, LockInfo, Op};
     use std::{
         sync::{

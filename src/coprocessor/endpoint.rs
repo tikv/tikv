@@ -6,9 +6,8 @@ use std::sync::Arc;
 use std::{borrow::Cow, time::Duration};
 
 use async_stream::try_stream;
-use futures::Stream;
-use futures03::channel::mpsc;
-use futures03::prelude::*;
+use futures::channel::mpsc;
+use futures::prelude::*;
 use tokio::sync::Semaphore;
 
 use kvproto::kvrpcpb::IsolationLevel;
@@ -490,7 +489,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl futures03::stream::Stream<Item = Result<coppb::Response>> {
+    ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
             let _permit = if let Some(semaphore) = semaphore.as_ref() {
                 Some(semaphore.acquire().await)
@@ -557,7 +556,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<impl futures03::stream::Stream<Item = Result<coppb::Response>>> {
+    ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
@@ -566,7 +565,7 @@ impl<E: Engine> Endpoint<E> {
         self.read_pool
             .spawn(
                 Self::handle_stream_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                    .then(futures03::future::ok::<_, mpsc::SendError>)
+                    .then(futures::future::ok::<_, mpsc::SendError>)
                     .forward(tx)
                     .unwrap_or_else(|e| {
                         warn!("coprocessor stream send error"; "error" => %e);
@@ -586,17 +585,17 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Stream<Item = coppb::Response, Error = ()> {
+    ) -> impl futures::stream::Stream<Item = coppb::Response> {
         let result_of_stream = self
             .parse_request_and_check_memory_locks(req, peer, true)
             .and_then(|(handler_builder, req_ctx)| {
                 self.handle_stream_request(req_ctx, handler_builder)
             }); // Result<Stream<Resp, Error>, Error>
 
-        futures03::stream::once(futures03::future::ready(result_of_stream)) // Stream<Stream<Resp, Error>, Error>
+        futures::stream::once(futures::future::ready(result_of_stream)) // Stream<Stream<Resp, Error>, Error>
             .try_flatten() // Stream<Resp, Error>
-            .or_else(|e| futures03::future::ok(make_error_response(e))) // Stream<Resp, ()>
-            .compat()
+            .or_else(|e| futures::future::ok(make_error_response(e))) // Stream<Resp, ()>
+            .map(|item: std::result::Result<_, ()>| item.unwrap())
     }
 }
 
@@ -646,7 +645,7 @@ mod tests {
     use std::thread;
     use std::vec;
 
-    use futures03::executor::{block_on, block_on_stream};
+    use futures::executor::{block_on, block_on_stream};
 
     use tipb::Executor;
     use tipb::Expr;

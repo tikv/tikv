@@ -7,7 +7,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
-use futures::compat::{Compat01As03, Future01CompatExt, Stream01CompatExt};
+use futures::compat::Future01CompatExt;
 use futures::executor::block_on;
 use futures::future;
 use futures::future::TryFutureExt;
@@ -51,7 +51,7 @@ pub struct Inner {
 }
 
 pub struct HeartbeatReceiver {
-    receiver: Option<Compat01As03<ClientDuplexReceiver<RegionHeartbeatResponse>>>,
+    receiver: Option<ClientDuplexReceiver<RegionHeartbeatResponse>>,
     inner: Arc<RwLock<Inner>>,
 }
 
@@ -79,7 +79,7 @@ impl Stream for HeartbeatReceiver {
             if receiver.is_some() {
                 debug!("heartbeat receiver is refreshed");
                 drop(inner);
-                self.receiver = receiver.map(Stream01CompatExt::compat);
+                self.receiver = receiver;
             } else {
                 inner.hb_receiver = Either::Right(cx.waker().clone());
                 return Poll::Pending;
@@ -277,7 +277,7 @@ where
             // Error::Incompatible is returned by response header from PD, no need to retry
             Err(Error::Incompatible) => true,
             Err(err) => {
-                error!("request failed, retry"; "err" => ?err);
+                error!(?err; "request failed, retry");
                 false
             }
         }
@@ -319,9 +319,9 @@ where
                 return Ok(r);
             }
             Err(e) => {
-                error!("request failed"; "err" => ?e);
+                error!(?e; "request failed");
                 if let Err(e) = block_on(client.reconnect()) {
-                    error!("reconnect failed"; "err" => ?e);
+                    error!(?e; "reconnect failed");
                 }
                 err.replace(e);
             }
@@ -406,7 +406,6 @@ async fn connect(
     let response = client
         .get_members_async_opt(&GetMembersRequest::default(), option)
         .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
-        .compat()
         .await;
     match response {
         Ok(resp) => Ok((client, resp)),
@@ -444,7 +443,7 @@ pub async fn try_connect_leader(
                     }
                 }
                 Err(e) => {
-                    error!("connect failed"; "endpoints" => ep, "err" => ?e);
+                    error!(?e; "connect failed"; "endpoints" => ep,);
                     continue;
                 }
             }

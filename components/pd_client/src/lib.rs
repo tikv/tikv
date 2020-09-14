@@ -1,12 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+#![feature(min_specialization)]
+
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use]
-extern crate slog_global;
 extern crate hex;
 extern crate kvproto;
 #[macro_use(fail_point)]

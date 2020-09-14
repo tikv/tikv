@@ -157,7 +157,7 @@
 ## Whether to check memory locks before handling coprocessor requests.
 ## This option must be enabled if async commit is enable.
 ## DO NOT use it in production. This option may be removed in the future.
-# end-point-check-memory-locks = false
+# end-point-check-memory-locks = true
 
 ## Max bytes that snapshot can be written to disk in one second.
 ## It should be set based on your disk performance.
@@ -198,7 +198,7 @@
 
 ## Whether to enable the async commit feature.
 ## DO NOT use it in production. This option may be removed in the future.
-# enable-async-commit = false
+# enable-async-commit = true
 
 [storage.block-cache]
 ## Whether to create a shared block cache for all RocksDB column families.
@@ -243,11 +243,6 @@
 # retry-max-count = -1
 
 [raftstore]
-## Whether to force to flush logs.
-## Set to `true` (default) for best reliability, which prevents data loss when there is a power
-## failure. Set to `false` for higher performance (ensure that you run multiple TiKV nodes!).
-# sync-log = true
-
 ## Whether to enable Raft prevote.
 ## Prevote minimizes disruption when a partitioned node rejoins the cluster by using a two phase
 ## election.
@@ -794,6 +789,17 @@
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
+
+[raft-engine]
+## Enable raft-engine will ignore all settings about `raftdb`.
+# enable = false
+## Recovery mode. Candidates are `tolerate-corrupted-tail-records` and `absolute-consistency`.
+# recovery_mode = "tolerate-corrupted-tail-records"
+# bytes-per-sync = "256KB"
+# target-file-size = "128MB"
+# purge-threshold = "10GB"
+## Raft engine has builtin entry cache. `cache-limit` limits the memory usage of the cache.
+# cache-limit = "1GB"
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.

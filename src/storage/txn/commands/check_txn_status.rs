@@ -6,7 +6,7 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC;
 use crate::storage::mvcc::txn::MissingLockAction;
-use crate::storage::mvcc::{Error as MvccError, MvccTxn};
+use crate::storage::mvcc::MvccTxn;
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
@@ -71,10 +71,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
 
         let mut released_locks = ReleasedLocks::new(self.lock_ts, TimeStamp::zero());
         let ctx = mem::take(&mut self.ctx);
-        fail_point!("check_txn_status", |err| Err(MvccError::from(
-            crate::storage::mvcc::txn::make_txn_error(err, &self.primary_key, self.lock_ts)
-        )
-        .into()));
+        fail_point!("check_txn_status", |err| Err(
+            crate::storage::mvcc::Error::from(crate::storage::mvcc::txn::make_txn_error(
+                err,
+                &self.primary_key,
+                self.lock_ts
+            ))
+            .into()
+        ));
 
         let result = match txn.reader.load_lock(&self.primary_key)? {
             Some(mut lock) if lock.ts == self.lock_ts => {
