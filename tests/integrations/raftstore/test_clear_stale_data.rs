@@ -20,20 +20,6 @@ fn init_db_with_sst_files(db: &DB, level: i32, n: u8) {
     }
 }
 
-fn check_db_files_at_level(db: &DB, level: i32, num_files: u64) {
-    for cf_name in &[CF_DEFAULT, CF_LOCK] {
-        let handle = db.cf_handle(cf_name).unwrap();
-        let name = format!("rocksdb.num-files-at-level{}", level);
-        let value = db.get_property_int_cf(handle, &name).unwrap();
-        if value != num_files {
-            panic!(
-                "cf {} level {} should have {} files, got {}",
-                cf_name, level, num_files, value
-            );
-        }
-    }
-}
-
 fn check_kv_in_all_cfs(db: &DB, i: u8, found: bool) {
     for cf_name in &[CF_DEFAULT, CF_LOCK] {
         let handle = db.cf_handle(cf_name).unwrap();
@@ -86,7 +72,6 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
     // Generate `n` files in db at level 6.
     let level = 6;
     init_db_with_sst_files(&db, level, n);
-    check_db_files_at_level(&db, level, u64::from(n));
     for i in 0..n {
         check_kv_in_all_cfs(&db, i, true);
     }
@@ -110,7 +95,6 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
     for i in 0..n {
         check_kv_in_all_cfs(&db, i, i % 2 == 0);
     }
-    check_db_files_at_level(&db, level, u64::from(n) / 2);
 }
 
 #[test]
