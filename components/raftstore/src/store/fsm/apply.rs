@@ -51,7 +51,7 @@ use crate::store::util::{
 use crate::store::util::{KeysInfoFormatter, PerfContextStatistics};
 
 use crate::store::{cmd_resp, util, RegionSnapshot};
-use crate::{observe_perf_context_type, report_perf_context, Error, ErrorPtr, Result, ResultPtr};
+use crate::{observe_perf_context_type, report_perf_context, Error, Result};
 use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 use tokio::sync::mpsc::{channel, Receiver, Sender as FutureSender};
 
@@ -241,13 +241,7 @@ pub enum ExecResult<S> {
 
 pub enum ApplyResult<S> {
     None,
-    Res(Box<ExecResult<S>>),
-}
-
-impl<S: Snapshot> ApplyResult<S> {
-    fn res(ret: ExecResult<S>) -> Self {
-        ApplyResult::Res(Box::new(ret))
-    }
+    Res(ExecResult<S>),
 }
 
 struct ExecContext {
@@ -322,6 +316,8 @@ where
     kv_wb: Option<W>,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
+
+    last_applied_index: u64,
     committed_count: usize,
 
     // Whether synchronize WAL is preferred.
@@ -370,6 +366,7 @@ where
             flush_notifier: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
+            last_applied_index: 0,
             committed_count: 0,
             sync_log_hint: false,
             use_delete_range: cfg.use_delete_range,
@@ -385,18 +382,19 @@ where
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
-    pub fn prepare_for(&mut self, fsm: &mut ApplyFsm<EK>) {
+    pub fn prepare_for(&mut self, delegate: &mut ApplyFsm<EK>) {
         self.prepare_write_batch();
-        self.cbs.push(ApplyCallback::new(fsm.region.clone()));
+        self.cbs.push(ApplyCallback::new(delegate.region.clone()));
+        self.last_applied_index = delegate.apply_state.get_applied_index();
 
-        if let Some(observe_cmd) = &fsm.observe_cmd {
-            let region_id = fsm.region_id();
+        if let Some(observe_cmd) = &delegate.observe_cmd {
+            let region_id = delegate.region_id();
             if observe_cmd.enabled.load(Ordering::Acquire) {
                 self.host.prepare_for_apply(observe_cmd.id, region_id);
             } else {
                 info!("region is no longer observerd";
                     "region_id" => region_id);
-                fsm.observe_cmd.take();
+                delegate.observe_cmd.take();
             }
         }
     }
@@ -418,11 +416,13 @@ where
     /// write the changes into rocksdb.
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
-    pub fn commit(&mut self, fsm: &mut ApplyFsm<EK>) {
-        fsm.write_apply_state(self.kv_wb.as_mut().unwrap());
+    pub fn commit(&mut self, delegate: &mut ApplyFsm<EK>) {
+        if self.last_applied_index < delegate.apply_state.get_applied_index() {
+            delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
+        }
         // last_applied_index doesn't need to be updated, set persistent to true will
         // force it call `prepare_for` automatically.
-        self.commit_opt(fsm, true);
+        self.commit_opt(delegate, true);
     }
 
     fn commit_opt(&mut self, fsm: &mut ApplyFsm<EK>, persistent: bool) {
@@ -503,7 +503,7 @@ where
     pub fn finish_for(
         &mut self,
         fsm: &mut ApplyFsm<EK>,
-        results: VecDeque<Box<ExecResult<EK::Snapshot>>>,
+        results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
         if !fsm.pending_remove {
             fsm.write_apply_state(self.kv_wb.as_mut().unwrap());
@@ -878,10 +878,10 @@ where
         match self.process_raft_cmd(apply_ctx, index, term, cmd).await {
             ApplyResult::None => {
                 // If failed, tell Raft that the `ConfChange` was aborted.
-                ApplyResult::res(ExecResult::ChangePeer(Default::default()))
+                ApplyResult::Res(ExecResult::ChangePeer(Default::default()))
             }
             ApplyResult::Res(mut res) => {
-                if let ExecResult::ChangePeer(ref mut cp) = *res {
+                if let ExecResult::ChangePeer(ref mut cp) = res {
                     cp.conf_change = conf_change;
                 } else {
                     panic!(
@@ -994,10 +994,9 @@ where
                 ctx.kv_wb_mut().pop_save_point().unwrap();
                 a
             }
-            Err(err_ptr) => {
+            Err(e) => {
                 // clear dirty values.
                 ctx.kv_wb_mut().rollback_to_save_point().unwrap();
-                let e = *err_ptr.0;
                 match e {
                     Error::EpochNotMatch(..) => debug!(
                         "epoch not match";
@@ -1017,10 +1016,10 @@ where
         self.apply_state.set_applied_index(index);
         self.applied_index_term = term;
 
-        if let ApplyResult::Res(res) = exec_result {
+        if let ApplyResult::Res(ref exec_result) = exec_result {
             let epoch = self.region.get_region_epoch().clone();
-            match res.as_ref() {
-                ExecResult::ChangePeer(cp) => {
+            match *exec_result {
+                ExecResult::ChangePeer(ref cp) => {
                     self.region = cp.region.clone();
                 }
                 ExecResult::ComputeHash { .. }
@@ -1028,20 +1027,20 @@ where
                 | ExecResult::CompactLog { .. }
                 | ExecResult::DeleteRange { .. }
                 | ExecResult::IngestSst { .. } => {}
-                ExecResult::SplitRegion { derived, .. } => {
+                ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
                     self.metrics.delete_keys_hint = 0;
                 }
-                ExecResult::PrepareMerge { region, .. } => {
+                ExecResult::PrepareMerge { ref region, .. } => {
                     self.region = region.clone();
                     self.is_merging = true;
                 }
-                ExecResult::CommitMerge { region, .. } => {
+                ExecResult::CommitMerge { ref region, .. } => {
                     self.region = region.clone();
                     self.last_merge_version = region.get_region_epoch().get_version();
                 }
-                ExecResult::RollbackMerge { region, .. } => {
+                ExecResult::RollbackMerge { ref region, .. } => {
                     self.region = region.clone();
                     self.is_merging = false;
                 }
@@ -1057,10 +1056,9 @@ where
                 panic!("{} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
                         self.tag, req, epoch_state, epoch, self.region.get_region_epoch());
             }
-            return (resp, ApplyResult::Res(res));
         }
 
-        (resp, ApplyResult::None)
+        (resp, exec_result)
     }
 
     fn clear_all_commands_as_stale(&mut self) {
@@ -1083,11 +1081,11 @@ where
         index: u64,
         term: u64,
         req: &RaftCmdRequest,
-    ) -> ResultPtr<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
-        check_region_epoch(req, &self.region, include_region).map_err(|e| ErrorPtr::from(e))?;
+        check_region_epoch(req, &self.region, include_region)?;
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, index, term, req).await
         } else {
@@ -1101,7 +1099,7 @@ where
         index: u64,
         term: u64,
         req: &RaftCmdRequest,
-    ) -> ResultPtr<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         let mut exec_ctx = self.new_ctx(index, term);
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
@@ -1130,8 +1128,7 @@ where
             AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request).await,
             AdminCmdType::RollbackMerge => self.exec_rollback_merge(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
-        }
-        .map_err(|e| ErrorPtr::from(e))?;
+        }?;
         response.set_cmd_type(cmd_type);
 
         let mut resp = RaftCmdResponse::default();
@@ -1148,7 +1145,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         req: &RaftCmdRequest,
-    ) -> ResultPtr<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!(
             "on_apply_write_cmd",
             cfg!(release) || self.id() == 3,
@@ -1206,9 +1203,9 @@ where
 
         assert!(ranges.is_empty() || ssts.is_empty());
         let exec_res = if !ranges.is_empty() {
-            ApplyResult::res(ExecResult::DeleteRange { ranges })
+            ApplyResult::Res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
-            ApplyResult::res(ExecResult::IngestSst { ssts })
+            ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
             ApplyResult::None
         };
@@ -1222,10 +1219,10 @@ impl<EK> ApplyFsm<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> ResultPtr<Response> {
+    fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, &self.region).map_err(|e| ErrorPtr::from(e))?;
+        util::check_key_in_region(key, &self.region).map_err(|e| Error::from(e))?;
 
         let resp = Response::default();
         let key = keys::data_key(key);
@@ -1267,10 +1264,10 @@ where
         &mut self,
         wb: &mut W,
         req: &Request,
-    ) -> ResultPtr<Response> {
+    ) -> Result<Response> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, &self.region).map_err(|e| ErrorPtr::from(e))?;
+        util::check_key_in_region(key, &self.region).map_err(|e| Error::from(e))?;
 
         let key = keys::data_key(key);
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
@@ -1315,7 +1312,7 @@ where
         req: &Request,
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
-    ) -> ResultPtr<Response> {
+    ) -> Result<Response> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
         let notify_only = req.get_delete_range().get_notify_only();
@@ -1388,7 +1385,7 @@ where
         engine: &EK,
         req: &Request,
         ssts: &mut Vec<SstMeta>,
-    ) -> ResultPtr<Response> {
+    ) -> Result<Response> {
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
@@ -1611,7 +1608,7 @@ where
 
         Ok((
             resp,
-            ApplyResult::res(ExecResult::ChangePeer(ChangePeer {
+            ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
                 index: exec_ctx.index,
                 conf_change: Default::default(),
                 peer: peer.clone(),
@@ -1837,7 +1834,7 @@ where
 
         Ok((
             resp,
-            ApplyResult::res(ExecResult::SplitRegion {
+            ApplyResult::Res(ExecResult::SplitRegion {
                 regions,
                 derived,
                 new_split_regions,
@@ -1897,7 +1894,7 @@ where
 
         Ok((
             AdminResponse::default(),
-            ApplyResult::res(ExecResult::PrepareMerge {
+            ApplyResult::Res(ExecResult::PrepareMerge {
                 region,
                 state: merging_state,
             }),
@@ -2047,7 +2044,7 @@ where
         let resp = AdminResponse::default();
         Ok((
             resp,
-            ApplyResult::res(ExecResult::CommitMerge {
+            ApplyResult::Res(ExecResult::CommitMerge {
                 region,
                 source: source_region.to_owned(),
             }),
@@ -2089,7 +2086,7 @@ where
         let resp = AdminResponse::default();
         Ok((
             resp,
-            ApplyResult::res(ExecResult::RollbackMerge {
+            ApplyResult::Res(ExecResult::RollbackMerge {
                 region,
                 commit: rollback.get_commit(),
             }),
@@ -2153,7 +2150,7 @@ where
 
         Ok((
             resp,
-            ApplyResult::res(ExecResult::CompactLog {
+            ApplyResult::Res(ExecResult::CompactLog {
                 state: exec_ctx.apply_state.get_truncated_state().clone(),
                 first_index,
             }),
@@ -2169,7 +2166,7 @@ where
         let resp = AdminResponse::default();
         Ok((
             resp,
-            ApplyResult::res(ExecResult::ComputeHash {
+            ApplyResult::Res(ExecResult::ComputeHash {
                 region: self.region.clone(),
                 index: exec_ctx.index,
                 context: req.get_compute_hash().get_context().to_vec(),
@@ -2194,7 +2191,7 @@ where
         let resp = AdminResponse::default();
         Ok((
             resp,
-            ApplyResult::res(ExecResult::VerifyHash {
+            ApplyResult::Res(ExecResult::VerifyHash {
                 index,
                 context,
                 hash,
@@ -2593,7 +2590,7 @@ where
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
-    pub exec_res: VecDeque<Box<ExecResult<S>>>,
+    pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
 }
 
@@ -2946,6 +2943,7 @@ where
             store_id: self.store_id,
             yield_duration: self.yield_duration,
             perf_context_statistics: self.perf_context_statistics.clone(),
+            last_applied_index: 0,
             kv_wb: None,
             apply_res: vec![],
             cbs: vec![],
@@ -3126,7 +3124,7 @@ where
                         "schedule msg( {:?} )  failed because the runner has stopped.",
                         msg
                     );
-                    if let Msg::Apply {mut apply, .. } = msg {
+                    if let Msg::Apply { mut apply, .. } = msg {
                         warn!("target region is stopped, drop proposals";"region_id" => apply.region_id);
                         for p in apply.cbs.drain(..) {
                             let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
@@ -3227,7 +3225,7 @@ pub fn create_apply_batch_system<EK: KvEngine>(
     };
     let pool = builder
         .name_prefix("apply")
-        .thread_count( cfg.apply_pool_size,  cfg.apply_pool_size)
+        .thread_count(cfg.apply_pool_size, cfg.apply_pool_size)
         .build_single_level_pool();
 
     ApplyBatchSystem {
