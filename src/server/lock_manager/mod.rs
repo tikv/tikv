@@ -284,7 +284,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use futures03::executor::block_on;
+    use futures::executor::block_on;
     use kvproto::metapb::{Peer, Region};
     use raft::StateRole;
 
