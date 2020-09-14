@@ -26,6 +26,8 @@ const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 // of GC are distributed to other replicas by Raft.
 const COMPACTION_FILTER_MINIMAL_VERSION: &str = "5.0.0";
 
+const NEAR_SEEK_LIMIT: usize = 20;
+
 struct GcContext {
     db: Arc<DB>,
     safe_point: Arc<AtomicU64>,
@@ -402,12 +404,31 @@ impl CompactionFilter for DefaultCompactionFilter {
 
             // Is it possible that the key is still locked? The answer is no
             // because safe points can only be updated after all locks are resolved.
-            let mut valid = self.write_iter.seek(SeekKey::Key(key_prefix)).unwrap();
+            let mut valid = false;
+            if self.versions > 1 {
+                // `write_iter` must be initialized.
+                let mut next_time = 0;
+                while next_time < NEAR_SEEK_LIMIT && self.write_iter.valid().unwrap() {
+                    next_time += 1;
+                    let key = self.write_iter.key();
+                    if key.starts_with(key_prefix) {
+                        valid = true;
+                        break;
+                    }
+                }
+            }
+            valid = valid || self.write_iter.seek(SeekKey::Key(key_prefix)).unwrap();
+
             while valid {
                 let (key, value) = (self.write_iter.key(), self.write_iter.value());
                 if !key.starts_with(key_prefix) {
                     // All versions in write cf are scaned.
                     break;
+                }
+                match Key::decode_ts_from(key) {
+                    Ok(ts) if ts.into_inner() > self.safe_point => continue,
+                    Err(_) => continue,
+                    _ => {}
                 }
                 let write = WriteRef::parse(value).unwrap();
                 self.valid_transactions.push(write.start_ts.into_inner());
@@ -452,8 +473,9 @@ pub mod tests {
     use crate::config::DbConfig;
     use crate::storage::kv::{RocksEngine as StorageRocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::{
-        must_commit, must_get, must_get_none, must_prewrite_delete, must_prewrite_put,
+        must_get, must_get_none, must_prewrite_delete, must_prewrite_put,
     };
+    use crate::storage::txn::tests::must_commit;
     use engine_rocks::raw::CompactOptions;
     use engine_rocks::util::get_cf_handle;
     use engine_rocks::RocksEngine;
