@@ -6,8 +6,8 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use futures03::compat::Stream01CompatExt;
-use futures03::stream::StreamExt;
+use futures::compat::Stream01CompatExt;
+use futures::stream::StreamExt;
 use grpcio::{
     ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
 };

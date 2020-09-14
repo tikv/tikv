@@ -4,7 +4,7 @@ use std::sync::*;
 use std::thread;
 use std::time::*;
 
-use futures03::executor::block_on;
+use futures::executor::block_on;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
