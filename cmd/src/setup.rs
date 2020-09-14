@@ -127,8 +127,7 @@ pub fn initial_logger(config: &TiKvConfig) {
         let rocksdb_info_log_path = if !config.rocksdb.info_log_dir.is_empty() {
             make_engine_log_path(&config.rocksdb.info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
         } else {
-            // Don't use `DEFAULT_ROCKSDB_SUB_DIR`, because of the logic of
-            // `RocksEngine::exists`.
+            // Don't use `DEFAULT_ROCKSDB_SUB_DIR`, because of the logic of `RocksEngine::exists`.
             make_engine_log_path(&config.storage.data_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
         };
         let raftdb_info_log_path = if !config.raftdb.info_log_dir.is_empty() {

@@ -67,6 +67,7 @@ use tikv::{
 use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
+    config::ensure_dir_exist,
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureWorker, Worker},
@@ -248,6 +249,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
+        ensure_dir_exist(&config.storage.data_dir).unwrap();
+        if config.raft_engine.enable {
+            ensure_dir_exist(&config.raft_engine.config().dir).unwrap();
+        } else {
+            ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
+        }
         validate_and_persist_config(&mut config, true);
         check_system_config(&config);
 

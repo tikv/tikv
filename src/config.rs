@@ -43,8 +43,7 @@ use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
 use security::SecurityConfig;
 use tikv_util::config::{
-    self, ensure_dir_exist, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize,
-    TomlWriter, GB, MB,
+    self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
 };
 use tikv_util::future_pool;
 use tikv_util::sys::sys_quota::SysQuota;
@@ -2174,8 +2173,6 @@ impl Default for TiKvConfig {
 impl TiKvConfig {
     // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        ensure_dir_exist(&self.storage.data_dir).unwrap();
-
         self.readpool.validate()?;
         self.storage.validate()?;
 
@@ -2211,13 +2208,11 @@ impl TiKvConfig {
 
         let kv_db_path =
             config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;
-        ensure_dir_exist(&kv_db_path).unwrap();
 
         if kv_db_path == self.raft_store.raftdb_path {
             return Err("raft_store.raftdb_path can not same with storage.data_dir/db".into());
         }
         if !self.raft_engine.enable {
-            ensure_dir_exist(&self.raft_store.raftdb_path).unwrap();
             if RocksEngine::exists(&kv_db_path)
                 && !RocksEngine::exists(&self.raft_store.raftdb_path)
             {
@@ -2229,7 +2224,6 @@ impl TiKvConfig {
                 return Err("default rocksdb not exist, buf raftdb exist".into());
             }
         } else {
-            ensure_dir_exist(&self.raft_engine.config().dir).unwrap();
             if RocksEngine::exists(&kv_db_path)
                 && !RaftLogEngine::exists(&self.raft_engine.config.dir)
             {
