@@ -398,8 +398,8 @@ impl TiKVServer {
 
     fn init_engines(&mut self) {
         let engines = Engines::new(
-            SkiplistEngineBuilder::new().cf_names(ALL_CFS).build(),
-            SkiplistEngineBuilder::new().build(),
+            SkiplistEngineBuilder::new("kv").cf_names(ALL_CFS).build(),
+            SkiplistEngineBuilder::new("raft").build(),
             false,
         );
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));

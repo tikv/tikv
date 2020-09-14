@@ -20,12 +20,16 @@ use crate::write_batch::SkiplistWriteBatch;
 static ENGINE_SEQ_NO_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 pub struct SkiplistEngineBuilder {
+    name: &'static str,
     cf_names: Vec<CfName>,
 }
 
 impl SkiplistEngineBuilder {
-    pub fn new() -> Self {
-        Self { cf_names: vec![] }
+    pub fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            cf_names: vec![],
+        }
     }
 
     pub fn cf_names(mut self, names: &[CfName]) -> Self {
@@ -56,6 +60,7 @@ impl SkiplistEngineBuilder {
             }
         }
         SkiplistEngine {
+            name: self.name,
             engines,
             cf_handles,
             total_bytes: Arc::new(AtomicUsize::new(0)),
@@ -65,6 +70,7 @@ impl SkiplistEngineBuilder {
 
 #[derive(Clone, Debug)]
 pub struct SkiplistEngine {
+    pub name: &'static str,
     pub total_bytes: Arc<AtomicUsize>,
     pub(crate) engines: HashMap<SkiplistCFHandle, Arc<SkipMap<Vec<u8>, Vec<u8>>>>,
     pub(crate) cf_handles: HashMap<CfName, SkiplistCFHandle>,
@@ -109,7 +115,7 @@ impl Peekable for SkiplistEngine {
         key: &[u8],
     ) -> Result<Option<Self::DBVector>> {
         let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
-            .with_label_values(&["get"])
+            .with_label_values(&[self.name, "get"])
             .start_coarse_timer();
         let engine = self.get_cf_engine(cf)?;
         Ok(engine
@@ -124,7 +130,7 @@ impl SyncMutable for SkiplistEngine {
     }
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
-            .with_label_values(&["put"])
+            .with_label_values(&[self.name, "put"])
             .start_coarse_timer();
         self.total_bytes.fetch_add(key.len(), Ordering::Relaxed);
         self.total_bytes.fetch_add(value.len(), Ordering::Relaxed);
@@ -138,7 +144,7 @@ impl SyncMutable for SkiplistEngine {
     }
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
-            .with_label_values(&["delete"])
+            .with_label_values(&[self.name, "delete"])
             .start_coarse_timer();
         let engine = self.get_cf_engine(cf)?;
         if let Some(e) = engine.remove(key) {
@@ -150,7 +156,7 @@ impl SyncMutable for SkiplistEngine {
     }
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
-            .with_label_values(&["delete_range"])
+            .with_label_values(&[self.name, "delete_range"])
             .start_coarse_timer();
         let range = Range {
             start: begin_key.to_vec(),
@@ -178,6 +184,7 @@ impl Iterable for SkiplistEngine {
         let lower_bound = opts.lower_bound().map(|e| e.to_vec());
         let upper_bound = opts.upper_bound().map(|e| e.to_vec());
         Ok(SkiplistEngineIterator::new(
+            self.name,
             engine,
             lower_bound,
             upper_bound,
@@ -188,6 +195,7 @@ impl Iterable for SkiplistEngine {
 static ITERATOR_ID: AtomicUsize = AtomicUsize::new(0);
 
 pub struct SkiplistEngineIterator {
+    name: &'static str,
     engine: Arc<SkipMap<Vec<u8>, Vec<u8>>>,
     lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
@@ -196,6 +204,7 @@ pub struct SkiplistEngineIterator {
 
 impl SkiplistEngineIterator {
     fn new(
+        name: &'static str,
         engine: Arc<SkipMap<Vec<u8>, Vec<u8>>>,
         lower_bound: Option<Vec<u8>>,
         upper_bound: Option<Vec<u8>>,
@@ -217,6 +226,7 @@ impl SkiplistEngineIterator {
             None
         };
         Self {
+            name,
             lower_bound,
             upper_bound,
             engine,
@@ -264,7 +274,7 @@ fn check_in_range(
 impl Iterator for SkiplistEngineIterator {
     fn seek(&mut self, key: SeekKey) -> Result<bool> {
         let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
-            .with_label_values(&["seek"])
+            .with_label_values(&[self.name, "seek"])
             .start_coarse_timer();
 
         self.last_kv = match key {
@@ -329,7 +339,7 @@ impl Iterator for SkiplistEngineIterator {
     }
     fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool> {
         let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
-            .with_label_values(&["seek_for_prev"])
+            .with_label_values(&[self.name, "seek_for_prev"])
             .start_coarse_timer();
 
         match key {
@@ -366,7 +376,7 @@ impl Iterator for SkiplistEngineIterator {
 
     fn prev(&mut self) -> Result<bool> {
         let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
-            .with_label_values(&["prev"])
+            .with_label_values(&[self.name, "prev"])
             .start_coarse_timer();
         if self.last_kv.is_none() {
             return Ok(false);
@@ -392,7 +402,7 @@ impl Iterator for SkiplistEngineIterator {
     }
     fn next(&mut self) -> Result<bool> {
         let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
-            .with_label_values(&["next"])
+            .with_label_values(&[self.name, "next"])
             .start_coarse_timer();
         if self.last_kv.is_none() {
             return Ok(false);
@@ -439,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_skiplist_seek() {
-        let engine = SkiplistEngineBuilder::new().cf_names(ALL_CFS).build();
+        let engine = SkiplistEngineBuilder::new("test").cf_names(ALL_CFS).build();
         let _ = engine.get_cf_engine(CF_WRITE);
         let data = vec![
             (b"k0", b"v0"),
@@ -481,7 +491,7 @@ mod tests {
 
     #[test]
     fn test_skiplist_seek_for_prev() {
-        let engine = SkiplistEngineBuilder::new().cf_names(ALL_CFS).build();
+        let engine = SkiplistEngineBuilder::new("test").cf_names(ALL_CFS).build();
         let _ = engine.get_cf_engine(CF_WRITE);
         let data = vec![
             (b"k0", b"v0"),

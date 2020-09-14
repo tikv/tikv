@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::SkiplistEngine;
+use crate::metrics::*;
 use engine_traits::{
     CfName, Error, KvEngine, Mutable, MvccPropertiesExt, Result, SyncMutable, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT,
@@ -26,6 +27,12 @@ impl WriteBatchExt for SkiplistEngine {
                 }
             }
         }
+        SKIPLIST_WRITE_SIZE_HISTOGRAM_VEC
+            .with_label_values(&[self.name])
+            .observe(wb.data_size as f64);
+        SKIPLIST_WRITE_KEYS_HISTOGRAM_VEC
+            .with_label_values(&[self.name])
+            .observe(wb.written_keys as f64);
         Ok(())
     }
 
@@ -54,6 +61,7 @@ enum WriteAction {
 
 pub struct SkiplistWriteBatch {
     data_size: usize,
+    written_keys: usize,
     actions: Vec<WriteAction>,
     safe_points: Vec<usize>,
     engine: SkiplistEngine,
@@ -69,6 +77,7 @@ impl WriteBatch<SkiplistEngine> for SkiplistWriteBatch {
     fn with_capacity(e: &SkiplistEngine, cap: usize) -> SkiplistWriteBatch {
         Self {
             data_size: 0,
+            written_keys: 0,
             actions: Vec::with_capacity(cap),
             safe_points: Vec::default(),
             engine: e.clone(),
@@ -91,6 +100,7 @@ impl Mutable for SkiplistWriteBatch {
     }
     fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         self.data_size += key.len() + value.len();
+        self.written_keys += 1;
         self.actions.push(WriteAction::Put((
             cf.to_owned(),
             key.to_vec(),
