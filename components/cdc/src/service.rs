@@ -4,7 +4,7 @@ use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use futures::future::{self, FutureExt, TryFutureExt};
+use futures::future::{self, FutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use grpcio::{
@@ -264,13 +264,9 @@ impl ChangeData for Service {
             .map_err(|e| RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, Some(format!("{:?}", e))))
         {
             error!("cdc connection initiate failed"; "error" => ?status);
-            ctx.spawn(
-                sink.fail(status)
-                    .map_err(|e| {
-                        error!("cdc failed to send error"; "error" => ?e);
-                    })
-                    .map(|_| ()),
-            );
+            ctx.spawn(sink.fail(status).map(|res| {
+                res.unwrap_or_else(|e| error!("cdc failed to send error"; "error" => ?e))
+            }));
             return;
         }
 

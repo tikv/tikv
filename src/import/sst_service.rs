@@ -156,12 +156,8 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             send_rpc_response!(res, sink, label, timer);
         };
 
-        let thread_handle = self.threads.clone();
-        let ctx_task = async move {
-            thread_handle.spawn_ok(buf_driver);
-            thread_handle.spawn_ok(handle_task);
-        };
-        ctx.spawn(ctx_task);
+        self.threads.spawn_ok(buf_driver);
+        self.threads.spawn_ok(handle_task);
     }
 
     /// Downloads the file and performs key-rewrite for later ingesting.
@@ -209,11 +205,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             send_rpc_response!(resp, sink, label, timer);
         };
 
-        let thread_handle = self.threads.clone();
-        let ctx_task = async move {
-            thread_handle.spawn_ok(handle_task);
-        };
-        ctx.spawn(ctx_task);
+        self.threads.spawn_ok(handle_task);
     }
 
     /// Ingest the file by sending a raft command to raftstore.
@@ -249,10 +241,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)
-                    .map_err(|e| {
-                        warn!("send rpc failed"; "err" => %e);
-                    })
-                    .map(|_| ()),
+                    .map(|res| res.unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e))),
             );
             return;
         }
@@ -275,10 +264,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             resp.set_error(e.into());
             ctx.spawn(
                 sink.success(resp)
-                    .map_err(|e| {
-                        warn!("send rpc failed"; "err" => %e);
-                    })
-                    .map(|_| ()),
+                    .map(|res| res.unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e))),
             );
             return;
         }
@@ -464,11 +450,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             send_rpc_response!(res, sink, label, timer);
         };
 
-        let thread_handle = self.threads.clone();
-        let ctx_task = async move {
-            thread_handle.spawn_ok(buf_driver);
-            thread_handle.spawn_ok(handle_task);
-        };
-        ctx.spawn(ctx_task);
+        self.threads.spawn_ok(buf_driver);
+        self.threads.spawn_ok(handle_task);
     }
 }

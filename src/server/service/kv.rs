@@ -301,8 +301,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
         ctx.spawn(
             sink.fail(e)
-                .map_err(|e| error!("kv rpc failed"; "err" => ?e))
-                .map(|_| ()),
+                .map(|res| res.unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e))),
         );
     }
 
@@ -862,38 +861,28 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let storage = self.storage.clone();
         let cop = self.cop.clone();
         let enable_req_batch = self.enable_req_batch;
-        let request_handler = stream.for_each(move |req| {
-            match req {
-                Err(e) => error!("batch_commands error"; "err" => %e),
-                Ok(mut req) => {
-                    let request_ids = req.take_request_ids();
-                    let requests: Vec<_> = req.take_requests().into();
-                    let mut batcher = if enable_req_batch && requests.len() > 2 {
-                        Some(ReqBatcher::new())
-                    } else {
-                        None
-                    };
-                    GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
-                    for (id, req) in request_ids.into_iter().zip(requests) {
-                        handle_batch_commands_request(
-                            &mut batcher,
-                            &storage,
-                            &cop,
-                            &peer,
-                            id,
-                            req,
-                            &tx,
-                        );
-                    }
-                    if let Some(mut batch) = batcher {
-                        batch.commit(&storage, &tx);
-                        storage.release_snapshot();
-                    }
-                }
+        let request_handler = stream.try_for_each(move |mut req| {
+            let request_ids = req.take_request_ids();
+            let requests: Vec<_> = req.take_requests().into();
+            let mut batcher = if enable_req_batch && requests.len() > 2 {
+                Some(ReqBatcher::new())
+            } else {
+                None
+            };
+            GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
+            for (id, req) in request_ids.into_iter().zip(requests) {
+                handle_batch_commands_request(&mut batcher, &storage, &cop, &peer, id, req, &tx);
             }
-            future::ready(())
+            if let Some(mut batch) = batcher {
+                batch.commit(&storage, &tx);
+                storage.release_snapshot();
+            }
+            future::ok(())
         });
-        ctx.spawn(request_handler);
+        ctx.spawn(
+            request_handler
+                .map(|res| res.unwrap_or_else(|e| error!("batch_commands error"; "err" => %e))),
+        );
 
         let thread_load = Arc::clone(&self.grpc_thread_load);
         let response_retriever = BatchReceiver::new(

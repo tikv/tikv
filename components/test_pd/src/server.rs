@@ -126,15 +126,13 @@ fn hijack_unary<F, R, C: PdMocker>(
     match resp {
         Some(Ok(resp)) => ctx.spawn(
             sink.success(resp)
-                .map_err(move |err| error!("failed to reply: {:?}", err))
-                .map(|_| ()),
+                .map(|res| res.unwrap_or_else(|e| error!("failed to reply: {:?}", e))),
         ),
         Some(Err(err)) => {
             let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", err)));
             ctx.spawn(
                 sink.fail(status)
-                    .map_err(move |err| error!("failed to reply: {:?}", err))
-                    .map(|_| ()),
+                    .map(|res| res.unwrap_or_else(|e| error!("failed to reply: {:?}", e))),
             );
         }
         _ => {
@@ -144,8 +142,7 @@ fn hijack_unary<F, R, C: PdMocker>(
             );
             ctx.spawn(
                 sink.fail(status)
-                    .map_err(move |err| error!("failed to reply: {:?}", err))
-                    .map(|_| ()),
+                    .map(|res| res.unwrap_or_else(|e| error!("failed to reply: {:?}", e))),
             );
         }
     }
