@@ -5,7 +5,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use futures03::executor::block_on;
+use futures::executor::block_on;
 use grpcio::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;

@@ -112,7 +112,7 @@ mod tests {
     use super::*;
     use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
     use crate::storage::{RocksEngine as RocksKV, TestEngineBuilder};
-    use futures03::channel::oneshot;
+    use futures::channel::oneshot;
     use kvproto::kvrpcpb::CommandPri;
     use raftstore::store::ReadStats;
     use std::sync::{Arc, Mutex};

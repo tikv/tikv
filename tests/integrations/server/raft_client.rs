@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{thread, time};
 
-use futures::{Future, Stream};
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use grpcio::{
     ClientStreamingSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, Server,
 };
@@ -61,14 +61,15 @@ impl MockKvService for MockKvForRaft {
         sink: ClientStreamingSink<Done>,
     ) {
         let counter = Arc::clone(&self.msg_count);
-        ctx.spawn(
+        ctx.spawn(async move {
             stream
                 .for_each(move |_| {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
+                    futures::future::ready(())
                 })
-                .map_err(|_| drop(sink)),
-        );
+                .await;
+            drop(sink);
+        });
     }
 
     fn batch_raft(
@@ -79,20 +80,22 @@ impl MockKvService for MockKvForRaft {
     ) {
         if !self.allow_batch {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
-            ctx.spawn(sink.fail(status).map_err(|_| ()));
+            ctx.spawn(sink.fail(status).map(|_| ()));
             return;
         }
         let msg_count = Arc::clone(&self.msg_count);
         let batch_msg_count = Arc::clone(&self.batch_msg_count);
-        ctx.spawn(
+        ctx.spawn(async move {
             stream
-                .for_each(move |msgs| {
+                .try_for_each(move |msgs| {
                     batch_msg_count.fetch_add(1, Ordering::SeqCst);
                     msg_count.fetch_add(msgs.msgs.len(), Ordering::SeqCst);
-                    Ok(())
+                    futures::future::ok(())
                 })
-                .map_err(|_| drop(sink)),
-        );
+                .await
+                .unwrap();
+            drop(sink);
+        });
     }
 }
 
