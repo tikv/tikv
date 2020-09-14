@@ -68,11 +68,6 @@ error = 'KV-Coprocessor-InvalidCharacterString'
 description = ''
 workaround = ''
 
-[error.KV-Coprocessor-Unknown]
-error = 'KV-Coprocessor-Unknown'
-description = ''
-workaround = ''
-
 [error.KV-Encryption-Rocks]
 error = 'KV-Encryption-Rocks'
 description = ''
@@ -108,11 +103,6 @@ error = 'KV-Encryption-BothMasterKeyFail'
 description = ''
 workaround = ''
 
-[error.KV-Encryption-Unknown]
-error = 'KV-Encryption-Unknown'
-description = ''
-workaround = ''
-
 [error.KV-Engine-Engine]
 error = 'KV-Engine-Engine'
 description = ''
@@ -143,8 +133,13 @@ error = 'KV-Engine-Codec'
 description = ''
 workaround = ''
 
-[error.KV-Engine-Unknown]
-error = 'KV-Engine-Unknown'
+[error.KV-Engine-DataLoss]
+error = 'KV-Engine-DataLoss'
+description = ''
+workaround = ''
+
+[error.KV-Engine-DataCompacted]
+error = 'KV-Engine-DataCompacted'
 description = ''
 workaround = ''
 
@@ -235,6 +230,11 @@ workaround = ''
 
 [error.KV-Raft-RequestSnapshotDropped]
 error = 'KV-Raft-RequestSnapshotDropped'
+description = ''
+workaround = ''
+
+[error.KV-Raftstore-Engine]
+error = 'KV-Raftstore-Engine'
 description = ''
 workaround = ''
 
@@ -473,11 +473,6 @@ error = 'KV-Storage-KeyIsLocked'
 description = ''
 workaround = ''
 
-[error.KV-Storage-MaxTimestampNotSynced]
-error = 'KV-Storage-MaxTimestampNotSynced'
-description = ''
-workaround = ''
-
 [error.KV-Storage-Committed]
 error = 'KV-Storage-Committed'
 description = ''
@@ -535,6 +530,11 @@ workaround = ''
 
 [error.KV-Storage-PessimisticLockNotFound]
 error = 'KV-Storage-PessimisticLockNotFound'
+description = ''
+workaround = ''
+
+[error.KV-Storage-PessimisticTxnNotEnable]
+error = 'KV-Storage-PessimisticTxnNotEnable'
 description = ''
 workaround = ''
 
