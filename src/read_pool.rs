@@ -27,15 +27,43 @@ pub enum ReadPool {
     },
 }
 
-#[cfg(test)]
-pub fn get_unified_read_pool_name() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
+impl ReadPool {
+    pub fn handle(&self) -> ReadPoolHandle {
+        match self {
+            ReadPool::FuturePools {
+                read_pool_high,
+                read_pool_normal,
+                read_pool_low,
+            } => ReadPoolHandle::FuturePools {
+                read_pool_high: read_pool_high.clone(),
+                read_pool_normal: read_pool_normal.clone(),
+                read_pool_low: read_pool_low.clone(),
+            },
+            ReadPool::Yatp {
+                pool,
+                running_tasks,
+                max_tasks,
+            } => ReadPoolHandle::Yatp {
+                remote: pool.remote().clone(),
+                running_tasks: running_tasks.clone(),
+                max_tasks: *max_tasks,
+            },
+        }
+    }
+}
 
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    format!(
-        "unified-read-pool-test-{}",
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    )
+#[derive(Clone)]
+pub enum ReadPoolHandle {
+    FuturePools {
+        read_pool_high: FuturePool,
+        read_pool_normal: FuturePool,
+        read_pool_low: FuturePool,
+    },
+    Yatp {
+        remote: Remote<TaskCell>,
+        running_tasks: IntGauge,
+        max_tasks: usize,
+    },
 }
 
 impl ReadPoolHandle {
@@ -135,6 +163,22 @@ impl<R: FlowStatsReporter> ReporterTicker<R> {
     }
 }
 
+#[cfg(test)]
+fn get_unified_read_pool_name() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "unified-read-pool-test-{}",
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+#[cfg(not(test))]
+fn get_unified_read_pool_name() -> String {
+    "unified-read-pool".to_string()
+}
+
 pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &UnifiedReadPoolConfig,
     reporter: R,
@@ -217,7 +261,6 @@ mod tests {
     use crate::storage::TestEngineBuilder;
     use futures::channel::oneshot;
     use raftstore::store::ReadStats;
-    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 

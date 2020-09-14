@@ -30,9 +30,9 @@ use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::escape;
 use tikv_util::future::paired_future_callback;
-use tikv_util::read_pool::{DefaultTicker, ReadPoolBuilder};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
+use tikv_util::yatp_pool::{DefaultTicker, YatpPoolBuilder};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
@@ -58,7 +58,6 @@ use tokio::sync::mpsc::{channel, Receiver, Sender as FutureSender};
 use super::metrics::*;
 
 use super::super::RegionTask;
-use yatp::queue::Extras;
 use yatp::task::future::{reschedule, TaskCell};
 use yatp::Remote;
 
@@ -3127,15 +3126,12 @@ where
                         "schedule msg( {:?} )  failed because the runner has stopped.",
                         msg
                     );
-                    match msg {
-                        Msg::Apply { mut apply, .. } => {
-                            warn!("target region is stopped, drop proposals";"region_id" => apply.region_id);
-                            for p in apply.cbs.drain(..) {
-                                let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
-                                notify_region_removed(apply.region_id, apply.peer_id, cmd);
-                            }
+                    if let Msg::Apply {mut apply, .. } = msg {
+                        warn!("target region is stopped, drop proposals";"region_id" => apply.region_id);
+                        for p in apply.cbs.drain(..) {
+                            let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
+                            notify_region_removed(apply.region_id, apply.peer_id, cmd);
                         }
-                        _ => (),
                     }
                 }
             },
@@ -3160,24 +3156,15 @@ impl<EK: KvEngine> ApplyBatchSystem<EK> {
 
     pub fn register(&self, reg: Registration, receiver: Receiver<Msg<EK>>) {
         let fsm = Box::new(ApplyFsm::from_registration(reg));
-        // Set every task of apply to high priority.
-        let extras = Extras::new_multilevel(0, Some(0));
-        let task_cell = if self.engine.support_write_batch_vec() {
-            TaskCell::new(
-                async move {
-                    handle_normal::<EK, EK::WriteBatchVec>(fsm, receiver).await;
-                },
-                extras,
-            )
+        if self.engine.support_write_batch_vec() {
+            self.remote.spawn(async move {
+                handle_normal::<EK, EK::WriteBatchVec>(fsm, receiver).await;
+            });
         } else {
-            TaskCell::new(
-                async move {
-                    handle_normal::<EK, EK::WriteBatch>(fsm, receiver).await;
-                },
-                extras,
-            )
+            self.remote.spawn(async move {
+                handle_normal::<EK, EK::WriteBatch>(fsm, receiver).await;
+            });
         };
-        self.remote.spawn(task_cell);
     }
 
     pub fn shutdown(&self) {
@@ -3196,8 +3183,7 @@ pub fn create_apply_batch_system<EK: KvEngine>(
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     cfg: &Config,
 ) -> ApplyBatchSystem<EK> {
-    let pool_size = cfg.apply_batch_system.pool_size;
-    let mut builder = ReadPoolBuilder::new(DefaultTicker::default());
+    let mut builder = YatpPoolBuilder::new(DefaultTicker::default());
     if engine.support_write_batch_vec() {
         let replica = ApplyContext::<EK, EK::WriteBatchVec>::new(
             tag,
@@ -3241,8 +3227,8 @@ pub fn create_apply_batch_system<EK: KvEngine>(
     };
     let pool = builder
         .name_prefix("apply")
-        .thread_count(pool_size, pool_size)
-        .build_yatp_pool();
+        .thread_count( cfg.apply_pool_size,  cfg.apply_pool_size)
+        .build_single_level_pool();
 
     ApplyBatchSystem {
         remote: pool.remote().clone(),

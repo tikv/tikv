@@ -128,10 +128,6 @@ fn test_serde_custom_tikv_config() {
         address: "example.com:443".to_owned(),
         job: "tikv_1".to_owned(),
     };
-    let mut apply_batch_system = BatchSystemConfig::default();
-    apply_batch_system.max_batch_size = 22;
-    apply_batch_system.pool_size = 4;
-    apply_batch_system.reschedule_duration = ReadableDuration::secs(3);
     let mut store_batch_system = BatchSystemConfig::default();
     store_batch_system.max_batch_size = 21;
     store_batch_system.pool_size = 3;
@@ -189,7 +185,7 @@ fn test_serde_custom_tikv_config() {
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
         local_read_batch_size: 33,
-        apply_batch_system,
+        apply_pool_size: 4,
         store_batch_system,
         future_poll_size: 2,
         hibernate_regions: false,
