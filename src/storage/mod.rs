@@ -45,7 +45,7 @@ use crate::storage::{
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
-use futures03::prelude::*;
+use futures::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
@@ -1654,7 +1654,7 @@ mod tests {
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
-    use futures03::executor::block_on;
+    use futures::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, LockInfo, Op};
     use std::{
         sync::{

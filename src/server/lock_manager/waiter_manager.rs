@@ -22,10 +22,10 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use futures03::compat::Compat01As03;
-use futures03::compat::Future01CompatExt;
-use futures03::future::Future;
-use futures03::task::{Context, Poll};
+use futures::compat::Compat01As03;
+use futures::compat::Future01CompatExt;
+use futures::future::Future;
+use futures::task::{Context, Poll};
 use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
 use tikv_util::config::ReadableDuration;
@@ -611,8 +611,8 @@ pub mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use futures03::executor::block_on;
-    use futures03::future::FutureExt;
+    use futures::executor::block_on;
+    use futures::future::FutureExt;
     use kvproto::kvrpcpb::LockInfo;
     use rand::prelude::*;
     use tikv_util::config::ReadableDuration;
@@ -691,7 +691,7 @@ pub mod tests {
     pub(crate) type WaiterCtx = (
         Waiter,
         LockInfo,
-        futures03::channel::oneshot::Receiver<
+        futures::channel::oneshot::Receiver<
             Result<Result<PessimisticLockRes, StorageError>, StorageError>,
         >,
     );
