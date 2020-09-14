@@ -773,7 +773,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     fn read_index(
         &mut self,
         ctx: RpcContext<'_>,
-        req: ReadIndexRequest,
+        mut req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
@@ -805,6 +805,12 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             return;
         }
 
+        let check_memory_locks_fut = self.storage.check_memory_locks_in_ranges(
+            req.take_context(),
+            req.get_start_ts().into(),
+            req.take_ranges().into_vec(),
+        );
+
         let task = async move {
             let mut res = f.await?;
             let mut resp = ReadIndexResponse::default();
@@ -823,8 +829,24 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                         raft_resps
                     ));
                 } else {
-                    let read_index = raft_resps[0].get_read_index().get_read_index();
-                    resp.set_read_index(read_index);
+                    // Update max_read_ts and check memory locks after read index command finishes.
+                    // It reduces the chance of encountering locks if we check it as late as possibile.
+                    match check_memory_locks_fut.await {
+                        Ok(Some(lock)) => {
+                            resp.set_locked(lock);
+                        }
+                        Ok(None) => {
+                            let read_index = raft_resps[0].get_read_index().get_read_index();
+                            resp.set_read_index(read_index);
+                        }
+                        res => {
+                            if let Some(err) = extract_region_error(&res) {
+                                resp.set_region_error(err);
+                            } else {
+                                warn!("unknown error: {:?}", res);
+                            }
+                        }
+                    }
                 }
             }
             sink.success(resp).await?;
@@ -1156,11 +1178,7 @@ fn future_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: ScanRequest,
 ) -> impl Future<Output = ServerResult<ScanResponse>> {
-    let end_key = if req.get_end_key().is_empty() {
-        None
-    } else {
-        Some(Key::from_raw(req.get_end_key()))
-    };
+    let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
     let v = storage.scan(
         req.take_context(),
         Key::from_raw(req.get_start_key()),
