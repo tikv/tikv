@@ -293,3 +293,27 @@ pub mod ctor {
     }
 }
 
+
+/// Create a new set of engines in a temporary directory
+///
+/// This is little-used and probably shouldn't exist.
+pub fn new_temp_engine(path: &tempfile::TempDir) -> engine_traits::Engines<crate::kv::KvTestEngine, crate::raft::RaftTestEngine> {
+    let raft_path = path.path().join(std::path::Path::new("raft"));
+    engine_traits::Engines::new(
+        crate::kv::new_engine(
+            path.path().to_str().unwrap(),
+            None,
+            engine_traits::ALL_CFS,
+            None,
+        )
+        .unwrap(),
+        crate::raft::new_engine(
+            raft_path.to_str().unwrap(),
+            None,
+            &[engine_traits::CF_DEFAULT],
+            None,
+        )
+        .unwrap(),
+    )
+}
+

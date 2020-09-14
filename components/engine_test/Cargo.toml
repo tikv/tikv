@@ -17,6 +17,7 @@ test-engine-raft-rocksdb = []
 engine_traits = { path = "../engine_traits" }
 engine_rocks = { path = "../engine_rocks" }
 engine_panic = { path = "../engine_panic" }
+tempfile = "3.0"
 tikv_alloc = { path = "../tikv_alloc" }
 # FIXME: Remove this dep from the engine_traits interface
 tikv_util = { path = "../tikv_util" }
