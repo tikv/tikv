@@ -4051,7 +4051,6 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
-        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
 
         // These locks (transaction ts=99) are not going to be resolved.
@@ -4405,7 +4404,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        assert_eq!(cm.max_ts(), ts(9, 0));
+        assert_eq!(cm.max_ts(), ts(9, 1));
 
         // No lock and no commit info. If specified rollback_if_not_exist, the key will be rolled
         // back.
