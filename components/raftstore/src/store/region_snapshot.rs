@@ -383,8 +383,8 @@ mod tests {
     use crate::Result;
 
     use engine_rocks::util::new_temp_engine;
-    use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_traits::{CompactExt, Engines, MiscExt, Peekable, SyncMutable};
+    use engine_rocks::{RocksSnapshot};
+    use engine_traits::{Engines, Peekable, SyncMutable, KvEngine, RaftEngine};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -394,17 +394,17 @@ mod tests {
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn new_peer_storage(
-        engines: Engines<RocksEngine, RocksEngine>,
+    fn new_peer_storage<EK, ER>(
+        engines: Engines<EK, ER>,
         r: &Region,
-    ) -> PeerStorage<RocksEngine, RocksEngine> {
+    ) -> PeerStorage<EK, ER> where EK: KvEngine, ER: RaftEngine, {
         let (sched, _) = worker::dummy_scheduler();
         PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
     }
 
-    fn load_default_dataset(
-        engines: Engines<RocksEngine, RocksEngine>,
-    ) -> (PeerStorage<RocksEngine, RocksEngine>, DataSet) {
+    fn load_default_dataset<EK, ER>(
+        engines: Engines<EK, ER>,
+    ) -> (PeerStorage<EK, ER>, DataSet) where EK: KvEngine, ER: RaftEngine, {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -426,9 +426,9 @@ mod tests {
         (store, base_data)
     }
 
-    fn load_multiple_levels_dataset(
-        engines: Engines<RocksEngine, RocksEngine>,
-    ) -> (PeerStorage<RocksEngine, RocksEngine>, DataSet) {
+    fn load_multiple_levels_dataset<EK, ER>(
+        engines: Engines<EK, ER>,
+    ) -> (PeerStorage<EK, ER>, DataSet) where EK: KvEngine, ER: RaftEngine, {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
