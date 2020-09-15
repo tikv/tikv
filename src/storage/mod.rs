@@ -1398,6 +1398,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
+    /// Update max_ts with the start_ts and check the given range for locks
+    /// which blocks the reading.
     pub fn check_memory_locks_in_ranges(
         &self,
         mut ctx: Context,
@@ -1408,7 +1410,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.read_pool
             .spawn_handle(
                 async move {
-                    concurrency_manager.update_max_read_ts(start_ts);
+                    concurrency_manager.update_max_ts(start_ts);
                     let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                     for range in &ranges {
                         let start_key = Key::from_raw_maybe_unbounded(range.get_start_key());

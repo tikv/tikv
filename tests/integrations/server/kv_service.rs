@@ -200,15 +200,15 @@ fn test_read_index_check_memory_locks() {
 
     let (resp, start_ts) = read_index(&[(b"l", b"yz")]);
     assert!(!resp.has_locked());
-    assert_eq!(cm.max_read_ts(), start_ts);
+    assert_eq!(cm.max_ts(), start_ts);
 
     let (resp, start_ts) = read_index(&[(b"a", b"b"), (b"j", b"k0")]);
     assert_eq!(resp.get_locked(), &lock.into_lock_info(b"k".to_vec()));
-    assert_eq!(cm.max_read_ts(), start_ts);
+    assert_eq!(cm.max_ts(), start_ts);
 
     drop(guards);
 
     let (resp, start_ts) = read_index(&[(b"a", b"z")]);
     assert!(!resp.has_locked());
-    assert_eq!(cm.max_read_ts(), start_ts);
+    assert_eq!(cm.max_ts(), start_ts);
 }
