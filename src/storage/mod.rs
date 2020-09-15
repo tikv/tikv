@@ -198,6 +198,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.clone()
     }
 
+    #[cfg(test)]
     pub fn get_concurrency_manager(&self) -> ConcurrencyManager {
         self.concurrency_manager.clone()
     }
