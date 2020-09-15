@@ -359,6 +359,7 @@ impl IndexScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
+        let tail_len = value[0] as usize;
         let handle_len = (&value[2..]).read_u16().map_err(|_| {
             other_err!(
                 "Fail to read common handle's length from value: {}",
@@ -372,7 +373,7 @@ impl IndexScanExecutorImpl {
         }
 
         // If there are some restore data, the index value is in new collation.
-        if handle_end_offset < value.len() {
+        if handle_end_offset < value.len() - tail_len {
             let restore_values = &value[handle_end_offset..];
             self.extract_columns_from_row_format(restore_values, columns)?;
         } else {
@@ -860,7 +861,7 @@ mod tests {
             .unwrap();
 
         // Tail length
-        value_prefix.push(0);
+        value_prefix.push(1);
         // Common handle flag
         value_prefix.push(127);
         // Common handle length
@@ -884,6 +885,10 @@ mod tests {
         // 1. New collation unique common handle.
         let mut value = value_prefix.clone();
         value.extend(restore_data);
+
+        // Push untouch flag.
+        value.push(0);
+
         let store = FixtureStorage::from(vec![(key.clone(), value)]);
         let mut executor = BatchIndexScanExecutor::new(
             store,
