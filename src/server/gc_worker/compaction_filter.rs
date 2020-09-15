@@ -140,7 +140,7 @@ impl WriteCompactionFilter {
         let engine = RocksEngine::from_db(db.clone());
         let write_batch = RocksWriteBatch::with_capacity(db, DEFAULT_DELETE_BATCH_SIZE);
         let bottommost_level = context.is_bottommost_level();
-        let write_iter = if context.is_bottommost_level() {
+        let write_iter = if bottommost_level {
             // TODO: give lower bound and upper bound to the iterator.
             let opts = IterOptions::default();
             Some(engine.iterator_cf_opt(CF_WRITE, opts).unwrap())
@@ -256,7 +256,7 @@ impl CompactionFilter for WriteCompactionFilter {
             self.switch_key_metrics();
         }
 
-        if commit_ts > self.safe_point {
+        if commit_ts >= self.safe_point {
             return false;
         }
 
@@ -295,13 +295,18 @@ pub struct DefaultCompactionFilterFactory;
 impl CompactionFilterFactory for DefaultCompactionFilterFactory {
     fn create_compaction_filter(
         &self,
-        _context: &CompactionFilterContext,
+        context: &CompactionFilterContext,
     ) -> *mut DBCompactionFilter {
         let gc_context_option = GC_CONTEXT.lock().unwrap();
         let gc_context = match *gc_context_option {
             Some(ref ctx) => ctx,
             None => return std::ptr::null_mut(),
         };
+
+        if !context.is_bottommost_level() {
+            // Only delete stale versions on the bottommmost level.
+            return std::ptr::null_mut();
+        }
 
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
         if safe_point == 0 {
@@ -397,11 +402,10 @@ impl CompactionFilter for DefaultCompactionFilter {
             Err(_) => return false,
         };
 
-        if start_ts > self.safe_point {
+        if start_ts >= self.safe_point {
             return false;
         }
 
-        self.versions += 1;
         if self.key_prefix != key_prefix {
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
@@ -411,39 +415,39 @@ impl CompactionFilter for DefaultCompactionFilter {
             // Is it possible that the key is still locked? The answer is no
             // because safe points can only be updated after all locks are resolved.
             let mut valid = false;
-            if self.total_versions > 0 || self.versions > 1 {
+            if self.total_versions > 0 || self.versions > 0 {
                 // `write_iter` must be initialized.
+                valid = self.write_iter.valid().unwrap();
                 let mut next_time = 0;
-                while next_time < NEAR_SEEK_LIMIT && self.write_iter.valid().unwrap() {
-                    next_time += 1;
-                    let key = self.write_iter.key();
-                    if key.starts_with(key_prefix) {
-                        valid = true;
-                        break;
+                while valid && next_time < NEAR_SEEK_LIMIT {
+                    match Key::truncate_ts_for(self.write_iter.key()) {
+                        Ok(write_prefix) if key_prefix <= write_prefix => break,
+                        _ => {
+                            next_time += 1;
+                            valid = self.write_iter.next().unwrap();
+                        }
                     }
                 }
+                valid = valid && next_time < NEAR_SEEK_LIMIT;
             }
             valid = valid || self.write_iter.seek(SeekKey::Key(key_prefix)).unwrap();
 
             while valid {
                 let (key, value) = (self.write_iter.key(), self.write_iter.value());
-                if !key.starts_with(key_prefix) {
+                match Key::truncate_ts_for(key) {
                     // All versions in write cf are scaned.
-                    break;
-                }
-                let parse_value = match Key::decode_ts_from(key) {
-                    Ok(ts) if ts.into_inner() > self.safe_point => false,
-                    Err(_) => false,
-                    _ => true,
-                };
-                if parse_value {
-                    let write = WriteRef::parse(value).unwrap();
-                    self.valid_transactions.push(write.start_ts.into_inner());
+                    Ok(write_prefix) if write_prefix != key_prefix => break,
+                    Ok(_) => {
+                        let write = WriteRef::parse(value).unwrap();
+                        self.valid_transactions.push(write.start_ts.into_inner());
+                    }
+                    Err(_) => {}
                 }
                 valid = self.write_iter.next().unwrap();
             }
             self.valid_transactions.sort();
         }
+        self.versions += 1;
 
         if self.valid_transactions.binary_search(&start_ts).is_err() {
             // The version can be filtered if it's not in valid transactions.
@@ -579,17 +583,30 @@ pub mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let raw_engine = engine.get_rocksdb();
         let large_value = vec![b'x'; 1024];
-        must_prewrite_put(&engine, b"key", &large_value, b"key", 100);
-        must_commit(&engine, b"key", 100, 110);
-        must_prewrite_put(&engine, b"key", &large_value, b"key", 120);
-        must_commit(&engine, b"key", 120, 130);
-        must_prewrite_put(&engine, b"key", &large_value, b"key", 140);
+
+        must_prewrite_put(&engine, b"zkey1", &large_value, b"zkey1", 100);
+        must_commit(&engine, b"zkey1", 100, 110);
+        must_prewrite_put(&engine, b"zkey1", &large_value, b"zkey1", 110);
+        must_commit(&engine, b"zkey1", 110, 120);
+
+        must_prewrite_put(&engine, b"zkey2", &large_value, b"zkey2", 100);
+        must_commit(&engine, b"zkey2", 100, 110);
+        must_prewrite_put(&engine, b"zkey2", &large_value, b"zkey2", 110);
+        must_commit(&engine, b"zkey2", 110, 120);
+
+        for i in 0..(NEAR_SEEK_LIMIT + 5) as u64 {
+            must_prewrite_put(&engine, b"zkey3", b"short value", b"zkey3", 100 + i * 2);
+            must_commit(&engine, b"zkey3", 100 + i * 2, 100 + i * 2 + 1);
+        }
+
+        must_prewrite_put(&engine, b"zkey4", &large_value, b"zkey4", 100);
+        must_commit(&engine, b"zkey4", 100, 110);
+
         gc_by_compact(&engine, b"", 200);
         gc_default_cf(&raw_engine, 200);
-        must_commit(&engine, b"key", 140, 150);
-        must_get_none(&engine, b"key", 110);
-        must_get(&engine, b"key", 130, &large_value);
-        must_get(&engine, b"key", 150, &large_value);
+        must_get(&engine, b"zkey1", 200, &large_value);
+        must_get(&engine, b"zkey2", 200, &large_value);
+        must_get(&engine, b"zkey4", 200, &large_value);
     }
 
     // Test a key can be GCed correctly if its MVCC versions cover multiple SST files.
