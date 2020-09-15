@@ -1,13 +1,12 @@
 use crate::{SkiplistEngine, SkiplistWriteBatch};
 
 use engine_traits::{
-    Iterable, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT, MAX_DELETE_BATCH_SIZE,
+    Error, Iterable, MiscExt, Mutable, Peekable, RaftEngine, RaftLogBatch, Result, SyncMutable,
+    WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, MAX_DELETE_BATCH_COUNT,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::{eraftpb::Entry, StorageError};
-use raft_engine::{CacheStats, Error, RaftEngine, RaftLogBatch, Result};
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
@@ -53,7 +52,7 @@ impl RaftEngine for SkiplistEngine {
                 }
                 let key = keys::raft_log_key(region_id, i);
                 match self.get_value(&key) {
-                    Ok(None) => return Err(Error::Storage(StorageError::Unavailable)),
+                    Ok(None) => return Err(Error::EntriesCompacted),
                     Ok(Some(v)) => {
                         let mut entry = Entry::default();
                         entry.merge_from_bytes(&v)?;
@@ -104,7 +103,7 @@ impl RaftEngine for SkiplistEngine {
         }
 
         // Here means we don't fetch enough entries.
-        Err(Error::Storage(StorageError::Unavailable))
+        Err(Error::EntriesUnavailable)
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync_log: bool) -> Result<usize> {
@@ -186,11 +185,11 @@ impl RaftEngine for SkiplistEngine {
             }
         }
 
-        let mut raft_wb = self.write_batch_with_cap(MAX_DELETE_BATCH_SIZE);
+        let mut raft_wb = self.write_batch_with_cap(MAX_DELETE_BATCH_COUNT);
         for idx in from..to {
             let key = keys::raft_log_key(raft_group_id, idx);
             box_try!(raft_wb.delete(&key));
-            if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
+            if raft_wb.data_size() >= MAX_DELETE_BATCH_COUNT {
                 // Avoid large write batch to reduce latency.
                 self.write(&raft_wb).unwrap();
                 raft_wb.clear();
@@ -208,8 +207,12 @@ impl RaftEngine for SkiplistEngine {
         false
     }
 
-    fn flush_stats(&self) -> CacheStats {
-        CacheStats::default()
+    fn purge_expired_files(&self) -> Result<Vec<u64>> {
+        Ok(vec![])
+    }
+
+    fn dump_stats(&self) -> Result<String> {
+        MiscExt::dump_stats(self)
     }
 }
 

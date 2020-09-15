@@ -10,8 +10,7 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, KvEngines, Mutable};
-use error_code::ErrorCodeExt;
+use engine_traits::{Engines, KvEngine, Mutable, RaftEngine};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -216,9 +215,9 @@ impl PendingDeleteRanges {
 struct SnapContext<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
-    engines: KvEngines<EK, ER>,
+    engines: Engines<EK, ER>,
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
@@ -230,7 +229,7 @@ where
 impl<EK, ER, R> SnapContext<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK>,
 {
     /// Generates the snapshot of the Region.
@@ -287,7 +286,7 @@ where
             kv_snap,
             notifier,
         ) {
-            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e, "error_code" => %e.error_code());
+            error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
             return;
         }
 
@@ -395,7 +394,7 @@ where
                 SNAP_COUNTER.apply.abort.inc();
             }
             Err(e) => {
-                error!("failed to apply snap!!!"; "err" => %e, "error_code" => %e.error_code());
+                error!(%e; "failed to apply snap!!!");
 
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.fail.inc();
@@ -419,13 +418,11 @@ where
                 .kv
                 .delete_all_files_in_range(start_key, end_key)
             {
-                error!(
+                error!(%e;
                     "failed to delete files in range";
                     "region_id" => region_id,
                     "start_key" => log_wrappers::Key(start_key),
                     "end_key" => log_wrappers::Key(end_key),
-                    "err" => %e,
-                    "error_code" => %e.error_code(),
                 );
                 return;
             }
@@ -435,13 +432,11 @@ where
                 .kv
                 .delete_all_in_range(start_key, end_key, self.use_delete_range)
         {
-            error!(
+            error!(%e;
                 "failed to delete data in range";
                 "region_id" => region_id,
                 "start_key" => log_wrappers::Key(start_key),
                 "end_key" => log_wrappers::Key(end_key),
-                "err" => %e,
-                "error_code" => %e.error_code(),
             );
         } else {
             info!(
@@ -559,7 +554,7 @@ where
 pub struct Runner<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pool: ThreadPool<TaskCell>,
     ctx: SnapContext<EK, ER, R>,
@@ -571,11 +566,11 @@ where
 impl<EK, ER, R> Runner<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK>,
 {
     pub fn new(
-        engines: KvEngines<EK, ER>,
+        engines: Engines<EK, ER>,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
@@ -629,12 +624,14 @@ where
     }
 }
 
-impl<EK, ER, R> Runnable<Task<EK::Snapshot>> for Runner<EK, ER, R>
+impl<EK, ER, R> Runnable for Runner<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
+    type Task = Task<EK::Snapshot>;
+
     fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
             Task::Gen {
@@ -698,12 +695,14 @@ pub enum Event {
     CheckApply,
 }
 
-impl<EK, ER, R> RunnableWithTimer<Task<EK::Snapshot>, Event> for Runner<EK, ER, R>
+impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
+    type TimeoutTask = Event;
+
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
             Event::CheckApply => {
@@ -742,7 +741,7 @@ mod tests {
     use engine_traits::{
         CFHandleExt, CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
     };
-    use engine_traits::{KvEngine, KvEngines};
+    use engine_traits::{Engines, KvEngine};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
@@ -843,8 +842,7 @@ mod tests {
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
-        let shared_block_cache = false;
-        let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
+        let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let (router, _) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
             engines,
@@ -921,8 +919,7 @@ mod tests {
             }
         }
 
-        let shared_block_cache = false;
-        let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
+        let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("snap-manager");

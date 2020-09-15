@@ -68,11 +68,13 @@ impl SkiplistEngineBuilder {
     }
 }
 
+type EngineMap = HashMap<SkiplistCFHandle, Arc<SkipMap<Vec<u8>, Vec<u8>>>>;
+
 #[derive(Clone, Debug)]
 pub struct SkiplistEngine {
     pub name: &'static str,
     pub total_bytes: Arc<AtomicUsize>,
-    pub(crate) engines: HashMap<SkiplistCFHandle, Arc<SkipMap<Vec<u8>, Vec<u8>>>>,
+    pub(crate) engines: EngineMap,
     pub(crate) cf_handles: HashMap<CfName, SkiplistCFHandle>,
 }
 
@@ -254,17 +256,17 @@ impl SkiplistEngineIterator {
 }
 
 fn check_in_range(
-    key: &Vec<u8>,
+    key: &[u8],
     upper_bound: Option<&Vec<u8>>,
     lower_bound: Option<&Vec<u8>>,
 ) -> bool {
     if let Some(upper) = upper_bound {
-        if upper <= key {
+        if upper.as_slice() <= key {
             return false;
         }
     }
     if let Some(lower) = lower_bound {
-        if lower > key {
+        if lower.as_slice() > key {
             return false;
         }
     }

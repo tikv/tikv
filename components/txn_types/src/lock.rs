@@ -26,6 +26,7 @@ const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 const TXN_SIZE_PREFIX: u8 = b't';
 const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 const ASYNC_COMMIT_PREFIX: u8 = b'a';
+const ROLLBACK_TS_PREFIX: u8 = b'r';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
@@ -72,6 +73,12 @@ pub struct Lock {
     // Only valid when `use_async_commit` is true, and the lock is primary. Do not set
     // `secondaries` for secondaries.
     pub secondaries: Vec<Vec<u8>>,
+    // In some rare cases, a protected rollback may happen when there's already another
+    // transaction's lock on the key. In this case, if the other transaction uses calculated
+    // timestamp as commit_ts, the protected rollback record may be overwritten. Checking Write CF
+    // while committing is relatively expensive. So the solution is putting the ts of the rollback
+    // to the lock.
+    pub rollback_ts: Vec<TimeStamp>,
 }
 
 impl Lock {
@@ -96,12 +103,18 @@ impl Lock {
             min_commit_ts,
             use_async_commit: false,
             secondaries: Vec::default(),
+            rollback_ts: Vec::default(),
         }
     }
 
     pub fn use_async_commit(mut self, secondaries: Vec<Vec<u8>>) -> Self {
         self.use_async_commit = true;
         self.secondaries = secondaries;
+        self
+    }
+
+    pub fn with_rollback_ts(mut self, rollback_ts: Vec<TimeStamp>) -> Self {
+        self.rollback_ts = rollback_ts;
         self
     }
 
@@ -135,6 +148,13 @@ impl Lock {
                 b.encode_compact_bytes(k).unwrap();
             }
         }
+        if !self.rollback_ts.is_empty() {
+            b.push(ROLLBACK_TS_PREFIX);
+            b.encode_var_u64(self.rollback_ts.len() as _).unwrap();
+            for ts in &self.rollback_ts {
+                b.encode_u64(ts.into_inner()).unwrap();
+            }
+        }
         b
     }
 
@@ -160,6 +180,9 @@ impl Lock {
                     .iter()
                     .map(|k| MAX_VAR_I64_LEN + k.len())
                     .sum::<usize>();
+        }
+        if !self.rollback_ts.is_empty() {
+            size += 1 + MAX_VAR_U64_LEN + size_of::<u64>() * self.rollback_ts.len();
         }
         size
     }
@@ -196,6 +219,7 @@ impl Lock {
         let mut min_commit_ts = TimeStamp::zero();
         let mut use_async_commit = false;
         let mut secondaries = Vec::new();
+        let mut rollback_ts = Vec::new();
         while !b.is_empty() {
             match b.read_u8()? {
                 SHORT_VALUE_PREFIX => {
@@ -220,6 +244,15 @@ impl Lock {
                         .map(|_| bytes::decode_compact_bytes(&mut b).map_err(Into::into))
                         .collect::<Result<_>>()?;
                 }
+                ROLLBACK_TS_PREFIX => {
+                    let len = number::decode_var_u64(&mut b)? as usize;
+                    // Allocate one more place to avoid reallocation when pushing a new timestamp
+                    // to it.
+                    rollback_ts = Vec::with_capacity(len + 1);
+                    for _ in 0..len {
+                        rollback_ts.push(number::decode_u64(&mut b)?.into());
+                    }
+                }
                 flag => panic!("invalid flag [{}] in lock", flag),
             }
         }
@@ -236,6 +269,7 @@ impl Lock {
         if use_async_commit {
             lock = lock.use_async_commit(secondaries);
         }
+        lock.rollback_ts = rollback_ts;
         Ok(lock)
     }
 
@@ -286,7 +320,7 @@ impl Lock {
 
         let raw_key = key.to_raw()?;
 
-        if ts == TimeStamp::max() && raw_key == lock.primary {
+        if ts == TimeStamp::max() && raw_key == lock.primary && !lock.use_async_commit {
             // When `ts == TimeStamp::max()` (which means to get latest committed version for
             // primary key), and current key is the primary key, we ignore this lock.
             return Ok(());
@@ -296,6 +330,10 @@ impl Lock {
         Err(Error::from(ErrorInner::KeyIsLocked(
             lock.into_owned().into_lock_info(raw_key),
         )))
+    }
+
+    pub fn is_pessimistic_txn(&self) -> bool {
+        !self.for_update_ts.is_zero()
     }
 }
 
@@ -477,6 +515,34 @@ mod tests {
                 b"k3k3k3k3k3k3".to_vec(),
                 b"k".to_vec(),
             ]),
+            Lock::new(
+                LockType::Put,
+                b"pk".to_vec(),
+                111.into(),
+                222,
+                Some(b"short_value".to_vec()),
+                333.into(),
+                444,
+                555.into(),
+            )
+            .use_async_commit(vec![
+                b"k1".to_vec(),
+                b"kkkkk2".to_vec(),
+                b"k3k3k3k3k3k3".to_vec(),
+                b"k".to_vec(),
+            ])
+            .with_rollback_ts(vec![12.into(), 24.into(), 13.into()]),
+            Lock::new(
+                LockType::Put,
+                b"pk".to_vec(),
+                111.into(),
+                222,
+                Some(b"short_value".to_vec()),
+                333.into(),
+                444,
+                555.into(),
+            )
+            .with_rollback_ts(vec![12.into(), 24.into(), 13.into()]),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
             let v = lock.to_bytes();
@@ -564,6 +630,16 @@ mod tests {
         lock.lock_type = LockType::Put;
         lock.primary = b"foo".to_vec();
         Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, TimeStamp::max(), &empty).unwrap();
+
+        // Should not ignore the primary lock of an async commit transaction even if setting u64::MAX as ts
+        let async_commit_lock = lock.clone().use_async_commit(vec![]);
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&async_commit_lock),
+            &key,
+            TimeStamp::max(),
+            &empty,
+        )
+        .unwrap_err();
 
         // Should not ignore the secondary lock even though reading the latest version
         lock.primary = b"bar".to_vec();

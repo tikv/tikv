@@ -17,7 +17,7 @@ use encryption::{
 };
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{EncryptionKeyManager, KvEngine};
-use futures_executor::block_on;
+use futures::executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::metapb::Region;
@@ -692,12 +692,10 @@ impl Snap {
             match self.validate(engine, true) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
-                    error!(
+                    error!(?e;
                         "snapshot is corrupted, will rebuild";
                         "region_id" => region.get_id(),
                         "snapshot" => %self.path(),
-                        "err" => ?e,
-                        "error_code" => %e.error_code(),
                     );
                     if !retry_delete_snapshot(&self.mgr, &self.key, self) {
                         error!(
@@ -830,7 +828,7 @@ where
                 let path = cf_file.path.to_str().unwrap();
                 let batch_size = options.write_batch_size;
                 let cb = |kv: &[(Vec<u8>, Vec<u8>)]| {
-                    coprocessor_host.pre_apply_plain_kvs_from_snapshot(&region, cf, kv)
+                    coprocessor_host.post_apply_plain_kvs_from_snapshot(&region, cf, kv)
                 };
                 snap_io::apply_plain_cf_file(
                     path,
@@ -844,8 +842,8 @@ where
             } else {
                 let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
                 let path = cf_file.clone_path.to_str().unwrap();
-                coprocessor_host.pre_apply_sst_from_snapshot(&region, cf, path);
-                snap_io::apply_sst_cf_file(path, &options.db, cf)?
+                snap_io::apply_sst_cf_file(path, &options.db, cf)?;
+                coprocessor_host.post_apply_sst_from_snapshot(&region, cf, path);
             }
         }
         Ok(())
@@ -1525,7 +1523,7 @@ pub mod tests {
     use engine_rocks::raw::{DBOptions, Env, DB};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-    use engine_traits::KvEngines;
+    use engine_traits::Engines;
     use engine_traits::{Iterable, Peekable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
@@ -1597,7 +1595,7 @@ pub mod tests {
         kv_db_opt: Option<DBOptions>,
         kv_cf_opts: Option<Vec<CFOptions<'_>>>,
         regions: &[u64],
-    ) -> Result<KvEngines<RocksEngine, RocksEngine>> {
+    ) -> Result<Engines<RocksEngine, RocksEngine>> {
         let p = path.path();
         let kv = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
         let raft = open_test_db(
@@ -1625,11 +1623,9 @@ pub mod tests {
             kv.c()
                 .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
-        let shared_block_cache = false;
-        Ok(KvEngines {
+        Ok(Engines {
             kv: kv.c().clone(),
             raft: raft.c().clone(),
-            shared_block_cache,
         })
     }
 

@@ -35,10 +35,10 @@ pub use self::peer::{
 };
 pub use self::peer_storage::{
     clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state, write_peer_state,
-    CacheQueryStats, PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
-    RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+    PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX,
+    RAFT_INIT_LOG_TERM,
 };
-pub use self::region_snapshot::{new_temp_engine, RegionIterator, RegionSnapshot};
+pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::replication_mode::{GlobalReplicationState, StoreGroup};
 pub use self::snap::{
     check_abort, copy_snapshot,

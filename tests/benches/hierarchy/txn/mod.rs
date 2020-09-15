@@ -1,16 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use concurrency_manager::ConcurrencyManager;
 use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, WriteData};
-use tikv::storage::{
-    concurrency_manager::ConcurrencyManager,
-    mvcc::{self, MvccTxn},
-};
+use tikv::storage::mvcc::{self, MvccTxn};
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
+use tikv::storage::txn::commit;
 
 fn setup_prewrite<E, F>(
     engine: &E,
@@ -85,7 +84,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
             for key in keys {
                 let snapshot = engine.snapshot(&ctx).unwrap();
                 let mut txn = mvcc::MvccTxn::new(snapshot, 1.into(), true, cm.clone());
-                txn.commit(key, 2.into()).unwrap();
+                commit(&mut txn, key, 2.into()).unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();
             }

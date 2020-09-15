@@ -82,14 +82,17 @@ make_auto_flush_static_metric! {
     }
 
     pub label_enum GcKeysDetail {
-        total,
-        processed,
+        processed_keys,
         get,
         next,
         prev,
         seek,
         seek_for_prev,
         over_seek_bound,
+        next_tombstone,
+        prev_tombstone,
+        seek_tombstone,
+        seek_for_prev_tombstone,
     }
 
     pub struct GcCommandCounterVec: LocalIntCounter {
@@ -332,6 +335,11 @@ lazy_static! {
             exponential_buckets(1f64, 5f64, 10).unwrap()
         )
         .unwrap();
+    pub static ref CPU_CORES_QUOTA_GAUGE: Gauge = register_gauge!(
+        "tikv_server_cpu_cores_quota",
+        "Total CPU cores quota for TiKV server"
+    )
+    .unwrap();
 }
 
 make_auto_flush_static_metric! {

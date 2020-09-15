@@ -120,7 +120,7 @@ impl ErrorCodeExt for Error {
             Error::Locked(_) => error_code::coprocessor::LOCKED,
             Error::DeadlineExceeded => error_code::coprocessor::DEADLINE_EXCEEDED,
             Error::MaxPendingTasksExceeded => error_code::coprocessor::MAX_PENDING_TASKS_EXCEEDED,
-            Error::Other(_) => error_code::coprocessor::UNKNOWN,
+            Error::Other(_) => error_code::UNKNOWN,
         }
     }
 }
