@@ -14,6 +14,9 @@ impl WriteBatchExt for SkiplistEngine {
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
+        let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
+            .with_label_values(&[self.name, "write"])
+            .start_coarse_timer();
         for e in wb.actions.clone() {
             match e {
                 WriteAction::Put((cf, key, value)) => {
@@ -91,6 +94,7 @@ impl WriteBatch<SkiplistEngine> for SkiplistWriteBatch {
 impl Mutable for SkiplistWriteBatch {
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.data_size += key.len() + value.len();
+        self.written_keys += 1;
         self.actions.push(WriteAction::Put((
             CF_DEFAULT.to_owned(),
             key.to_vec(),
