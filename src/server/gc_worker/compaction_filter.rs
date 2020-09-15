@@ -3,6 +3,7 @@
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use super::{GcConfig, GcWorkerConfigManager};
 use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
@@ -128,6 +129,7 @@ struct WriteCompactionFilter {
     // Total versions and deleted versions in the compaction.
     total_versions: usize,
     total_deleted: usize,
+    start_at: Instant,
 }
 
 impl WriteCompactionFilter {
@@ -158,6 +160,7 @@ impl WriteCompactionFilter {
             deleted: 0,
             total_versions: 0,
             total_deleted: 0,
+            start_at: Instant::now(),
         }
     }
 
@@ -226,6 +229,7 @@ impl Drop for WriteCompactionFilter {
             "bottommost_level" => self.bottommost_level,
             "versions" => self.total_versions,
             "deleted" => self.total_deleted,
+            "elapsed" => ?self.start_at.elapsed(),
         );
     }
 }
@@ -334,6 +338,7 @@ pub struct DefaultCompactionFilter {
     // Total versions and deleted versions in the compaction.
     total_versions: usize,
     total_deleted: usize,
+    start_at: Instant,
 }
 
 impl DefaultCompactionFilter {
@@ -356,6 +361,7 @@ impl DefaultCompactionFilter {
             deleted: 0,
             total_versions: 0,
             total_deleted: 0,
+            start_at: Instant::now(),
         }
     }
 
@@ -405,7 +411,7 @@ impl CompactionFilter for DefaultCompactionFilter {
             // Is it possible that the key is still locked? The answer is no
             // because safe points can only be updated after all locks are resolved.
             let mut valid = false;
-            if self.versions > 1 {
+            if self.total_versions > 0 || self.versions > 1 {
                 // `write_iter` must be initialized.
                 let mut next_time = 0;
                 while next_time < NEAR_SEEK_LIMIT && self.write_iter.valid().unwrap() {
@@ -425,13 +431,15 @@ impl CompactionFilter for DefaultCompactionFilter {
                     // All versions in write cf are scaned.
                     break;
                 }
-                match Key::decode_ts_from(key) {
-                    Ok(ts) if ts.into_inner() > self.safe_point => continue,
-                    Err(_) => continue,
-                    _ => {}
+                let parse_value = match Key::decode_ts_from(key) {
+                    Ok(ts) if ts.into_inner() > self.safe_point => false,
+                    Err(_) => false,
+                    _ => true,
+                };
+                if parse_value {
+                    let write = WriteRef::parse(value).unwrap();
+                    self.valid_transactions.push(write.start_ts.into_inner());
                 }
-                let write = WriteRef::parse(value).unwrap();
-                self.valid_transactions.push(write.start_ts.into_inner());
                 valid = self.write_iter.next().unwrap();
             }
             self.valid_transactions.sort();
@@ -453,6 +461,7 @@ impl Drop for DefaultCompactionFilter {
             "DefaultCompactionFilter has filtered all key/value pairs";
             "versions" => self.total_versions,
             "deleted" => self.total_deleted,
+            "elapsed" => ?self.start_at.elapsed(),
         );
     }
 }
