@@ -887,7 +887,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
         guard
     };
 
-    cm.update_max_read_ts(20.into());
+    cm.update_max_ts(20.into());
 
     let guard = lock_key(b"a", 80);
     suite.set_tso(100);
@@ -918,7 +918,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
     };
 
     check_resolved_ts(receive_event(true), |ts| assert_eq!(ts, 80));
-    assert!(cm.max_read_ts() >= 100.into());
+    assert!(cm.max_ts() >= 100.into());
 
     drop(guard);
     for retry in 0.. {
