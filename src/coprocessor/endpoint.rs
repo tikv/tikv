@@ -116,7 +116,7 @@ impl<E: Engine> Endpoint<E> {
         }
 
         let start_ts = req_ctx.txn_start_ts;
-        self.concurrency_manager.update_max_read_ts(start_ts);
+        self.concurrency_manager.update_max_ts(start_ts);
         if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
             for range in key_ranges {
                 let start_key = txn_types::Key::from_raw(range.get_start());
@@ -908,7 +908,7 @@ mod tests {
     fn test_full() {
         use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
         use std::sync::Mutex;
-        use tikv_util::future_pool::Builder;
+        use tikv_util::yatp_pool::{DefaultTicker, YatpPoolBuilder};
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
@@ -918,16 +918,17 @@ mod tests {
                 max_tasks_per_worker_normal: 2,
                 ..CoprReadPoolConfig::default_for_test()
             }
-            .to_future_pool_configs()
+            .to_yatp_pool_configs()
             .into_iter()
             .map(|config| {
                 let engine = Arc::new(Mutex::new(engine.clone()));
-                Builder::from_config(config)
+                YatpPoolBuilder::new(DefaultTicker::default())
+                    .config(config)
                     .name_prefix("coprocessor_endpoint_test_full")
                     .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                     // Safety: we call `set_` and `destroy_` with the same engine type.
                     .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
-                    .build()
+                    .build_future_pool()
             })
             .collect::<Vec<_>>(),
         );
