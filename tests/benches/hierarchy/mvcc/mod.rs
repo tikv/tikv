@@ -6,7 +6,7 @@ use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, WriteData};
 use tikv::storage::mvcc::{self, MvccReader, MvccTxn};
-use tikv::storage::txn::commit;
+use tikv::storage::txn::{commit, prewrite};
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};

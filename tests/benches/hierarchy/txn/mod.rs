@@ -9,7 +9,7 @@ use tikv::storage::mvcc::{self, MvccTxn};
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
-use tikv::storage::txn::commit;
+use tikv::storage::txn::{commit, prewrite};
 
 fn setup_prewrite<E, F>(
     engine: &E,

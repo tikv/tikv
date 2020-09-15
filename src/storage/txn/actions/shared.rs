@@ -50,8 +50,8 @@ pub fn prewrite_key_value<S: Snapshot>(
             });
 
         async_commit_ts = key_guard.with_lock(|l| {
-            let max_read_ts = txn.concurrency_manager.max_read_ts();
-            let min_commit_ts = cmp::max(cmp::max(max_read_ts, txn.start_ts), for_update_ts).next();
+            let max_ts = txn.concurrency_manager.max_ts();
+            let min_commit_ts = cmp::max(cmp::max(max_ts, txn.start_ts), for_update_ts).next();
             lock.min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
             *l = Some(lock.clone());
             lock.min_commit_ts

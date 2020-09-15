@@ -2482,7 +2482,7 @@ mod tests {
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
 
-        // max_read_ts in the concurrency manager is 42, so the min_commit_ts is 43.
+        // max_ts in the concurrency manager is 42, so the min_commit_ts is 43.
         assert_eq!(lock.min_commit_ts, TimeStamp::new(43));
 
         // A duplicate prewrite request should return the min_commit_ts in the primary key
@@ -2535,7 +2535,7 @@ mod tests {
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
 
-        // max_read_ts in the concurrency manager is 42, so the min_commit_ts is 43.
+        // max_ts in the concurrency manager is 42, so the min_commit_ts is 43.
         assert_eq!(lock.min_commit_ts, TimeStamp::new(43));
 
         // A duplicate prewrite request should return the min_commit_ts in the primary key
