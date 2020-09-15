@@ -178,9 +178,6 @@ where
 }
 
 #[cfg(test)]
-use std::sync::mpsc::sync_channel;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use engine_rocks::util::new_engine;
@@ -199,7 +196,7 @@ mod tests {
         let engines = Engines::new(kv_db, raft_db.clone());
 
         let (tx, rx) = mpsc::channel();
-        let (r, _) = sync_channel(1);
+        let (r, _) = mpsc::sync_channel(1);
         let mut runner = Runner {
             gc_entries: Some(tx),
             engines,
