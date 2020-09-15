@@ -45,9 +45,9 @@ use security::SecurityConfig;
 use tikv_util::config::{
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
 };
-use tikv_util::future_pool;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
+use tikv_util::yatp_pool;
 
 use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
@@ -1590,19 +1590,19 @@ macro_rules! readpool_config {
 
         impl $struct_name {
             /// Builds configurations for low, normal and high priority pools.
-            pub fn to_future_pool_configs(&self) -> Vec<future_pool::Config> {
+            pub fn to_yatp_pool_configs(&self) -> Vec<yatp_pool::Config> {
                 vec![
-                    future_pool::Config {
+                    yatp_pool::Config {
                         workers: self.low_concurrency,
                         max_tasks_per_worker: self.max_tasks_per_worker_low,
                         stack_size: self.stack_size.0 as usize,
                     },
-                    future_pool::Config {
+                    yatp_pool::Config {
                         workers: self.normal_concurrency,
                         max_tasks_per_worker: self.max_tasks_per_worker_normal,
                         stack_size: self.stack_size.0 as usize,
                     },
-                    future_pool::Config {
+                    yatp_pool::Config {
                         workers: self.high_concurrency,
                         max_tasks_per_worker: self.max_tasks_per_worker_high,
                         stack_size: self.stack_size.0 as usize,
