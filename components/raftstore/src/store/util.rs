@@ -1056,32 +1056,32 @@ mod tests {
         }
     }
 
+    fn gen_region(
+        voters: &[u64],
+        learners: &[u64],
+        incomming_v: &[u64],
+        demoting_v: &[u64],
+    ) -> metapb::Region {
+        let mut region = metapb::Region::default();
+        macro_rules! push_peer {
+            ($ids: ident, $role: expr) => {
+                for id in $ids {
+                    let mut peer = metapb::Peer::default();
+                    peer.set_id(*id);
+                    peer.set_role($role);
+                    region.mut_peers().push(peer);
+                }
+            };
+        }
+        push_peer!(voters, metapb::PeerRole::Voter);
+        push_peer!(learners, metapb::PeerRole::Learner);
+        push_peer!(incomming_v, metapb::PeerRole::IncomingVoter);
+        push_peer!(demoting_v, metapb::PeerRole::DemotingVoter);
+        region
+    }
+
     #[test]
     fn test_conf_state_from_region() {
-        fn gen_region(
-            voters: &[u64],
-            learners: &[u64],
-            incomming_v: &[u64],
-            demoting_v: &[u64],
-        ) -> metapb::Region {
-            let mut region = metapb::Region::default();
-            macro_rules! push_peer {
-                ($ids: ident, $role: expr) => {
-                    for id in $ids {
-                        let mut peer = metapb::Peer::default();
-                        peer.set_id(*id);
-                        peer.set_role($role);
-                        region.mut_peers().push(peer);
-                    }
-                };
-            }
-            push_peer!(voters, metapb::PeerRole::Voter);
-            push_peer!(learners, metapb::PeerRole::Learner);
-            push_peer!(incomming_v, metapb::PeerRole::IncomingVoter);
-            push_peer!(demoting_v, metapb::PeerRole::DemotingVoter);
-            region
-        }
-
         let cases = vec![
             (vec![1], vec![2], vec![], vec![]),
             (vec![], vec![], vec![1], vec![2]),
@@ -1117,6 +1117,36 @@ mod tests {
                         && cs.get_learners_next().contains(id)));
             }
         }
+    }
+
+    #[test]
+    fn test_changepeer_v2_to_confchange() {
+        let mut req = ChangePeerV2Request::default();
+
+        // Zore change for leave joint
+        assert_eq!(
+            (&req).to_confchange(vec![]).get_transition(),
+            eraftpb::ConfChangeTransition::Auto
+        );
+
+        // One change for simple confchange
+        req.mut_changes().push(ChangePeerRequest::default());
+        assert_eq!(
+            (&req).to_confchange(vec![]).get_transition(),
+            eraftpb::ConfChangeTransition::Auto
+        );
+
+        // More than one change for enter joint
+        req.mut_changes().push(ChangePeerRequest::default());
+        assert_eq!(
+            (&req).to_confchange(vec![]).get_transition(),
+            eraftpb::ConfChangeTransition::Explicit
+        );
+        req.mut_changes().push(ChangePeerRequest::default());
+        assert_eq!(
+            (&req).to_confchange(vec![]).get_transition(),
+            eraftpb::ConfChangeTransition::Explicit
+        );
     }
 
     #[test]

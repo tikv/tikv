@@ -2261,9 +2261,6 @@ where
         }
 
         for (id, pr) in progress.iter() {
-            if !progress.conf().voters().contains(*id) {
-                continue;
-            }
             if pr.state == ProgressState::Snapshot {
                 return Some("pending snapshot");
             }
