@@ -145,6 +145,9 @@ impl Mutable for SkiplistWriteBatch {
     }
     fn clear(&mut self) {
         self.actions.clear();
+        self.data_size = 0;
+        self.written_keys = 0;
+        self.safe_points.clear();
     }
     fn set_save_point(&mut self) {
         self.safe_points.push(self.actions.len());
