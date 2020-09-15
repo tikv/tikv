@@ -1962,7 +1962,6 @@ where
             self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
         let compact_to = state.get_index() + 1;
         let task = RaftlogGcTask::gc(
-            self.fsm.peer.get_store().get_raft_engine(),
             self.fsm.peer.get_store().get_region_id(),
             self.fsm.peer.last_compacted_idx,
             compact_to,

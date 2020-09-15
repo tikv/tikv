@@ -23,7 +23,7 @@ macro_rules! request {
         (stringify!($func), {
             let client = $client.clone();
             Box::new(move || {
-                let _ = futures03::executor::block_on(client.$func($($arg),*));
+                let _ = futures::executor::block_on(client.$func($($arg),*));
             })
         })
     };

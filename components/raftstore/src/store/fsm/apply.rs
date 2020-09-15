@@ -620,6 +620,12 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
 /// Checks if a write is needed to be issued after handling the command.
 fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
+        if cmd.get_admin_request().get_cmd_type() == AdminCmdType::CompactLog {
+            // We do not need to sync WAL before compact log, because this request will send a msg to
+            // raft_gc_log thread to delete the entries before this index instead of deleting them in
+            // apply thread directly.
+            return false;
+        }
         return true;
     }
 

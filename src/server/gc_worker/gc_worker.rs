@@ -10,7 +10,7 @@ use std::time::Instant;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{DeleteStrategy, MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures03::executor::block_on;
+use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
@@ -824,7 +824,7 @@ mod tests {
 
     use engine_rocks::RocksSnapshot;
     use engine_traits::KvEngine;
-    use futures03::executor::block_on;
+    use futures::executor::block_on;
     use kvproto::{kvrpcpb::Op, metapb};
     use raftstore::router::RaftStoreBlackHole;
     use raftstore::store::RegionSnapshot;

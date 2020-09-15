@@ -58,6 +58,15 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
     /// the `current_ts` is literally the timestamp when this function is invoked. It may not be
     /// accurate.
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        let mut new_max_ts = self.lock_ts;
+        if !self.current_ts.is_max() && self.current_ts > new_max_ts {
+            new_max_ts = self.current_ts;
+        }
+        if !self.caller_start_ts.is_max() && self.caller_start_ts > new_max_ts {
+            new_max_ts = self.caller_start_ts;
+        }
+        context.concurrency_manager.update_max_ts(new_max_ts);
+
         let mut txn = MvccTxn::new(
             snapshot,
             self.lock_ts,
@@ -166,6 +175,7 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::{pessimistic_rollback, WriteCommand, WriteContext};
+    use crate::storage::txn::tests::*;
     use crate::storage::{types::TxnStatus, ProcessResult, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;

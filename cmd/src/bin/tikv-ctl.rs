@@ -19,9 +19,7 @@ use std::time::Duration;
 use std::{process, str, u64};
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
-use futures::{
-    compat::Stream01CompatExt, executor::block_on, future, stream, Stream, StreamExt, TryStreamExt,
-};
+use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
@@ -659,7 +657,6 @@ impl DebugExecutor for DebugClient {
         Box::pin(
             self.scan_mvcc(&req)
                 .unwrap()
-                .compat()
                 .map_err(|e| e.to_string())
                 .map_ok(|mut resp| (resp.take_key(), resp.take_info())),
         )

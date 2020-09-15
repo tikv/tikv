@@ -40,7 +40,6 @@ pub mod collections;
 pub mod config;
 pub mod file;
 pub mod future;
-pub mod future_pool;
 #[macro_use]
 pub mod macros;
 pub mod callback;
@@ -56,6 +55,7 @@ pub mod time;
 pub mod timer;
 pub mod trace;
 pub mod worker;
+pub mod yatp_pool;
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
