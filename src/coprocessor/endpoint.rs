@@ -1,13 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::{borrow::Cow, time::Duration};
 
 use async_stream::try_stream;
-use futures::{future, Future, Stream};
-use futures03::channel::mpsc;
-use futures03::prelude::*;
+use futures::channel::mpsc;
+use futures::prelude::*;
 use tokio::sync::Semaphore;
 
 use kvproto::kvrpcpb::IsolationLevel;
@@ -19,7 +19,6 @@ use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest,
 
 use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
-use crate::storage::concurrency_manager::ConcurrencyManager;
 use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
@@ -30,6 +29,7 @@ use crate::coprocessor::interceptors::track;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
+use concurrency_manager::ConcurrencyManager;
 use minitrace::prelude::*;
 use txn_types::Lock;
 
@@ -116,7 +116,7 @@ impl<E: Engine> Endpoint<E> {
         }
 
         let start_ts = req_ctx.txn_start_ts;
-        self.concurrency_manager.update_max_read_ts(start_ts);
+        self.concurrency_manager.update_max_ts(start_ts);
         if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
             for range in key_ranges {
                 let start_key = txn_types::Key::from_raw(range.get_start());
@@ -431,21 +431,22 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Future<Item = coppb::Response, Error = Error> {
+    ) -> impl Future<Output = Result<coppb::Response>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
 
-        self.read_pool
+        let res = self
+            .read_pool
             .spawn_handle(
                 Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
                     .trace_task(tipb::Event::TiKvCoprScheduleTask as u32),
                 priority,
                 task_id,
             )
-            .map_err(|_| Error::MaxPendingTasksExceeded)
-            .flatten()
+            .map_err(|_| Error::MaxPendingTasksExceeded);
+        async move { res.await? }
     }
 
     /// Parses and handles a unary request. Returns a future that will never fail. If there are
@@ -456,7 +457,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Future<Item = coppb::Response, Error = ()> {
+    ) -> impl Future<Output = coppb::Response> {
         let (_guard, collector) = minitrace::trace_may_enable(
             req.is_trace_enabled,
             tipb::Event::TiKvCoprGetRequest as u32,
@@ -465,16 +466,18 @@ impl<E: Engine> Endpoint<E> {
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
-        future::result(result_of_future)
-            .flatten()
-            .or_else(|e| Ok(make_error_response(e)))
-            .map(move |mut resp| {
-                if let Some(collector) = collector {
-                    let span_sets = collector.collect();
-                    resp.set_spans(tikv_util::trace::encode_spans(span_sets).collect())
-                }
-                resp
-            })
+
+        async move {
+            let mut resp = match result_of_future {
+                Err(e) => make_error_response(e),
+                Ok(handle_fut) => handle_fut.await.unwrap_or_else(|e| make_error_response(e)),
+            };
+            if let Some(collector) = collector {
+                let span_sets = collector.collect();
+                resp.set_spans(tikv_util::trace::encode_spans(span_sets).collect())
+            }
+            resp
+        }
     }
 
     /// The real implementation of handling a stream request.
@@ -486,7 +489,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl futures03::stream::Stream<Item = Result<coppb::Response>> {
+    ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
             let _permit = if let Some(semaphore) = semaphore.as_ref() {
                 Some(semaphore.acquire().await)
@@ -553,7 +556,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<impl futures03::stream::Stream<Item = Result<coppb::Response>>> {
+    ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
@@ -562,7 +565,7 @@ impl<E: Engine> Endpoint<E> {
         self.read_pool
             .spawn(
                 Self::handle_stream_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                    .then(futures03::future::ok::<_, mpsc::SendError>)
+                    .then(futures::future::ok::<_, mpsc::SendError>)
                     .forward(tx)
                     .unwrap_or_else(|e| {
                         warn!("coprocessor stream send error"; "error" => %e);
@@ -582,17 +585,17 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Stream<Item = coppb::Response, Error = ()> {
+    ) -> impl futures::stream::Stream<Item = coppb::Response> {
         let result_of_stream = self
             .parse_request_and_check_memory_locks(req, peer, true)
             .and_then(|(handler_builder, req_ctx)| {
                 self.handle_stream_request(req_ctx, handler_builder)
             }); // Result<Stream<Resp, Error>, Error>
 
-        futures03::stream::once(futures03::future::ready(result_of_stream)) // Stream<Stream<Resp, Error>, Error>
+        futures::stream::once(futures::future::ready(result_of_stream)) // Stream<Stream<Resp, Error>, Error>
             .try_flatten() // Stream<Resp, Error>
-            .or_else(|e| futures03::future::ok(make_error_response(e))) // Stream<Resp, ()>
-            .compat()
+            .or_else(|e| futures::future::ok(make_error_response(e))) // Stream<Resp, ()>
+            .map(|item: std::result::Result<_, ()>| item.unwrap())
     }
 }
 
@@ -642,7 +645,7 @@ mod tests {
     use std::thread;
     use std::vec;
 
-    use futures03::executor::{block_on, block_on_stream};
+    use futures::executor::{block_on, block_on_stream};
 
     use tipb::Executor;
     use tipb::Expr;
@@ -653,7 +656,6 @@ mod tests {
     use crate::storage::kv::RocksEngine;
     use crate::storage::TestEngineBuilder;
     use protobuf::Message;
-    use tikv_util::read_pool::DefaultTicker;
     use txn_types::{Key, LockType};
 
     /// A unary `RequestHandler` that always produces a fixture.
@@ -812,10 +814,9 @@ mod tests {
         // a normal request
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
-        let resp = cop
-            .handle_unary_request(ReqContext::default_for_test(), handler_builder)
-            .wait()
-            .unwrap();
+        let resp =
+            block_on(cop.handle_unary_request(ReqContext::default_for_test(), handler_builder))
+                .unwrap();
         assert!(resp.get_other_error().is_empty());
 
         // an outdated request
@@ -831,10 +832,7 @@ mod tests {
             TimeStamp::max(),
             None,
         );
-        assert!(cop
-            .handle_unary_request(outdated_req_ctx, handler_builder)
-            .wait()
-            .is_err());
+        assert!(block_on(cop.handle_unary_request(outdated_req_ctx, handler_builder)).is_err());
     }
 
     #[test]
@@ -867,10 +865,7 @@ mod tests {
             req
         };
 
-        let resp: coppb::Response = cop
-            .parse_and_handle_unary_request(req, None)
-            .wait()
-            .unwrap();
+        let resp: coppb::Response = block_on(cop.parse_and_handle_unary_request(req, None));
         assert!(!resp.get_other_error().is_empty());
     }
 
@@ -887,10 +882,7 @@ mod tests {
         let mut req = coppb::Request::default();
         req.set_tp(9999);
 
-        let resp: coppb::Response = cop
-            .parse_and_handle_unary_request(req, None)
-            .wait()
-            .unwrap();
+        let resp: coppb::Response = block_on(cop.parse_and_handle_unary_request(req, None));
         assert!(!resp.get_other_error().is_empty());
     }
 
@@ -908,10 +900,7 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(vec![1, 2, 3]);
 
-        let resp = cop
-            .parse_and_handle_unary_request(req, None)
-            .wait()
-            .unwrap();
+        let resp = block_on(cop.parse_and_handle_unary_request(req, None));
         assert!(!resp.get_other_error().is_empty());
     }
 
@@ -919,7 +908,7 @@ mod tests {
     fn test_full() {
         use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
         use std::sync::Mutex;
-        use tikv_util::read_pool::ReadPoolBuilder as Builder;
+        use tikv_util::yatp_pool::{DefaultTicker, YatpPoolBuilder};
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
@@ -929,11 +918,11 @@ mod tests {
                 max_tasks_per_worker_normal: 2,
                 ..CoprReadPoolConfig::default_for_test()
             }
-            .to_future_pool_configs()
+            .to_yatp_pool_configs()
             .into_iter()
             .map(|config| {
                 let engine = Arc::new(Mutex::new(engine.clone()));
-                Builder::new(DefaultTicker {})
+                YatpPoolBuilder::new(DefaultTicker::default())
                     .config(config)
                     .name_prefix("coprocessor_endpoint_test_full")
                     .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
@@ -963,7 +952,7 @@ mod tests {
             let future = cop.handle_unary_request(ReqContext::default_for_test(), handler_builder);
             let tx = tx.clone();
             thread::spawn(move || {
-                tx.send(future.wait()).unwrap();
+                tx.send(block_on(future)).unwrap();
             });
             thread::sleep(Duration::from_millis(100));
         }
@@ -991,10 +980,9 @@ mod tests {
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
-        let resp = cop
-            .handle_unary_request(ReqContext::default_for_test(), handler_builder)
-            .wait()
-            .unwrap();
+        let resp =
+            block_on(cop.handle_unary_request(ReqContext::default_for_test(), handler_builder))
+                .unwrap();
         assert_eq!(resp.get_data().len(), 0);
         assert!(!resp.get_other_error().is_empty());
     }
@@ -1254,7 +1242,7 @@ mod tests {
             let resp_future_1 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
+            thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
@@ -1268,7 +1256,7 @@ mod tests {
             let resp_future_2 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![resp_future_2.wait().unwrap()]).unwrap());
+            thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Response 1
@@ -1326,7 +1314,7 @@ mod tests {
             let resp_future_1 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
+            thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
@@ -1341,7 +1329,7 @@ mod tests {
             let resp_future_2 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![resp_future_2.wait().unwrap()]).unwrap());
+            thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Response 1
@@ -1383,7 +1371,7 @@ mod tests {
             let resp_future_1 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
+            thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
@@ -1530,10 +1518,7 @@ mod tests {
         dag.mut_executors().push(Executor::default());
         req.set_data(dag.write_to_bytes().unwrap());
 
-        let resp = cop
-            .parse_and_handle_unary_request(req, None)
-            .wait()
-            .unwrap();
+        let resp = block_on(cop.parse_and_handle_unary_request(req, None));
         assert_eq!(resp.get_locked().get_key(), b"key");
     }
 }
