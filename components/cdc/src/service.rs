@@ -85,10 +85,16 @@ impl fmt::Debug for CdcEvent {
                 let mut d = f.debug_struct("Event");
                 d.field("region_id", &e.region_id);
                 d.field("request_id", &e.request_id);
-                // prost does not generate (has|get)_entries :(
                 #[cfg(not(feature = "prost-codec"))]
                 if e.has_entries() {
                     d.field("entries count", &e.get_entries().get_entries().len());
+                }
+                #[cfg(feature = "prost-codec")]
+                if e.event.is_some() {
+                    use kvproto::cdcpb::event;
+                    if let Some(event::Event::Entries(ref es)) = e.event.as_ref() {
+                        d.field("entries count", &es.entries.len());
+                    }
                 }
                 d.finish()
             }
@@ -129,6 +135,9 @@ impl EventBatcher {
                 let mut change_data_event = ChangeDataEvent::default();
                 change_data_event.set_resolved_ts(r);
                 self.buffer.push(change_data_event);
+
+                // Make sure the next message is not batched with ResolvedTs.
+                self.last_size = CDC_MAX_RESP_SIZE;
             }
         }
     }
@@ -391,12 +400,10 @@ mod tests {
     #[cfg(not(feature = "prost-codec"))]
     use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
 
-    use crate::service::{CdcEvent, EventBatcher, CDC_MAX_RESP_SIZE};
+    use crate::service::{CdcEvent, EventBatcher, CDC_EVENT_MAX_BATCH_SIZE, CDC_MAX_RESP_SIZE};
 
     #[test]
     fn test_event_batcher() {
-        let mut batcher = EventBatcher::with_capacity(1024);
-
         let check_events = |result: Vec<ChangeDataEvent>, expected: Vec<Vec<CdcEvent>>| {
             assert_eq!(result.len(), expected.len());
 
@@ -426,9 +433,33 @@ mod tests {
         event_entries.entries = vec![row_big].into();
         event_big.event = Some(Event_oneof_event::Entries(event_entries));
 
+        let mut resolved_ts = ResolvedTs::default();
+        resolved_ts.set_ts(1);
+
+        // None empty event should not return a zero size.
+        assert_ne!(CdcEvent::ResolvedTs(resolved_ts.clone()).size(), 0);
+        assert_ne!(CdcEvent::Event(event_big.clone()).size(), 0);
+        assert_ne!(CdcEvent::Event(event_small.clone()).size(), 0);
+
+        // An ReslovedTs event follows a small event, they should not be batched
+        // in one message.
+        let mut batcher = EventBatcher::with_capacity(CDC_EVENT_MAX_BATCH_SIZE);
+        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
         batcher.push(CdcEvent::Event(event_small.clone()));
-        batcher.push(CdcEvent::ResolvedTs(ResolvedTs::default()));
-        batcher.push(CdcEvent::ResolvedTs(ResolvedTs::default()));
+
+        check_events(
+            batcher.build(),
+            vec![
+                vec![CdcEvent::ResolvedTs(resolved_ts.clone())],
+                vec![CdcEvent::Event(event_small.clone())],
+            ],
+        );
+
+        // A more complex case.
+        let mut batcher = EventBatcher::with_capacity(1024);
+        batcher.push(CdcEvent::Event(event_small.clone()));
+        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
+        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
         batcher.push(CdcEvent::Event(event_big.clone()));
         batcher.push(CdcEvent::Event(event_small.clone()));
         batcher.push(CdcEvent::Event(event_small.clone()));
@@ -438,8 +469,8 @@ mod tests {
             batcher.build(),
             vec![
                 vec![CdcEvent::Event(event_small.clone())],
-                vec![CdcEvent::ResolvedTs(ResolvedTs::default())],
-                vec![CdcEvent::ResolvedTs(ResolvedTs::default())],
+                vec![CdcEvent::ResolvedTs(resolved_ts.clone())],
+                vec![CdcEvent::ResolvedTs(resolved_ts)],
                 vec![CdcEvent::Event(event_big.clone())],
                 vec![CdcEvent::Event(event_small); 2],
                 vec![CdcEvent::Event(event_big)],
