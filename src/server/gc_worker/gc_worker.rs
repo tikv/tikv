@@ -177,8 +177,8 @@ where
             .engine
             .get_mvcc_properties_cf(CF_WRITE, safe_point, &start_key, &end_key)
         {
-            Ok(c) => c,
-            Err(_) => return true,
+            Some(c) => c,
+            None => return true,
         };
         check_need_gc(safe_point, self.cfg.ratio_threshold, props)
     }

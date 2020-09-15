@@ -728,16 +728,13 @@ mod tests {
 
         let start = keys::data_key(region.get_start_key());
         let end = keys::data_end_key(region.get_end_key());
-        match db
+        let props = db
             .c()
-            .get_mvcc_properties_cf(CF_WRITE, safe_point, &start, &end)
-        {
-            Ok(props) => {
-                assert_eq!(check_need_gc(safe_point, 1.0, props.clone()), need_gc);
-                Some(props)
-            }
-            Err(_) => None,
+            .get_mvcc_properties_cf(CF_WRITE, safe_point, &start, &end);
+        if let Some(props) = props.as_ref() {
+            assert_eq!(check_need_gc(safe_point, 1.0, props.clone()), need_gc);
         }
+        props
     }
 
     #[test]

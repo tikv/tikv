@@ -483,12 +483,11 @@ where
         safe_point: TimeStamp,
         start: &[u8],
         end: &[u8],
-    ) -> kv::Result<MvccProperties> {
+    ) -> Option<MvccProperties> {
         let start = keys::data_key(start);
         let end = keys::data_end_key(end);
         self.engine
             .get_mvcc_properties_cf(cf, safe_point, &start, &end)
-            .map_err(|e| e.into())
     }
 }
 

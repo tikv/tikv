@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::Result;
 use std::cmp;
 use txn_types::TimeStamp;
 
@@ -46,5 +45,5 @@ pub trait MvccPropertiesExt {
         safe_point: TimeStamp,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Result<MvccProperties>;
+    ) -> Option<MvccProperties>;
 }

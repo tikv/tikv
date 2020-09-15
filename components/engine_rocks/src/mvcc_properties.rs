@@ -56,17 +56,23 @@ impl MvccPropertiesExt for RocksEngine {
         safe_point: TimeStamp,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Result<MvccProperties> {
-        let collection = self.get_range_properties_cf(cf, &start_key, &end_key)?;
+    ) -> Option<MvccProperties> {
+        let collection = match self.get_range_properties_cf(cf, &start_key, &end_key) {
+            Ok(c) if !c.is_empty() => c,
+            _ => return None,
+        };
         let mut props = MvccProperties::new();
         for (_, v) in collection.iter() {
-            let mvcc = RocksMvccProperties::decode(&v.user_collected_properties())?;
+            let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties()) {
+                Ok(m) => m,
+                Err(_) => return None,
+            };
             // Filter out properties after safe_point.
             if mvcc.min_ts > safe_point {
                 continue;
             }
             props.add(&mvcc);
         }
-        Ok(props)
+        Some(props)
     }
 }

@@ -169,8 +169,8 @@ pub trait Engine: Send + Clone + 'static {
         _safe_point: TimeStamp,
         _start: &[u8],
         _end: &[u8],
-    ) -> Result<MvccProperties> {
-        Err(box_err!("no mvcc properties"))
+    ) -> Option<MvccProperties> {
+        None
     }
 }
 

@@ -11,7 +11,7 @@ impl MvccPropertiesExt for PanicEngine {
         safe_point: TimeStamp,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Result<MvccProperties> {
+    ) -> Option<MvccProperties> {
         panic!()
     }
 }
