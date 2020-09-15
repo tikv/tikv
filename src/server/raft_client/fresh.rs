@@ -25,7 +25,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, result};
 use tikv_util::collections::{HashMap, HashSet};
-use tikv_util::future_pool::ThreadPool;
+use yatp::ThreadPool;
+use yatp::task::future::TaskCell;
 use tikv_util::lru::LruCache;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
@@ -757,7 +758,7 @@ pub struct RaftClient<S, R> {
     pool: Arc<Mutex<ConnectionPool>>,
     cache: LruCache<(u64, usize), CachedQueue>,
     need_flush: Vec<(u64, usize)>,
-    future_pool: Arc<ThreadPool>,
+    future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
 }
 
