@@ -47,3 +47,4 @@ pub use crate::mvcc_properties::*;
 pub use crate::range_properties::*;
 mod metrics;
 mod mvcc_properties;
+mod raft_engine;
