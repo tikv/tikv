@@ -808,7 +808,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let check_memory_locks_fut = self.storage.check_memory_locks_in_ranges(
             req.take_context(),
             req.get_start_ts().into(),
-            req.take_ranges().into_vec(),
+            req.take_ranges().into(),
         );
 
         let task = async move {
