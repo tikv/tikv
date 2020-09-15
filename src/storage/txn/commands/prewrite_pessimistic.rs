@@ -121,7 +121,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
                 context.pipelined_pessimistic_lock,
             ) {
                 Ok(ts) => {
-                    if secondaries.is_some() && async_commit_ts > ts {
+                    if secondaries.is_some() && async_commit_ts < ts {
                         async_commit_ts = ts;
                     }
                 }
