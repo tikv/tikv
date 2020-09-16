@@ -2100,7 +2100,6 @@ where
         self.proposals.push(p);
     }
 
-    // TODO: check AddLearnerNode on leader
     // TODO: set higher election priority of voter/incoming voter than demoting voter
     /// Validate the `ConfChange` requests and check whether it's safe to
     /// propose these conf change requests.
@@ -2157,11 +2156,15 @@ where
                 ));
             }
 
-            if change_type == ConfChangeType::RemoveNode
+            if peer.get_id() == self.peer_id()
+                && (change_type == ConfChangeType::RemoveNode
+                    || change_type == ConfChangeType::AddLearnerNode)
                 && !ctx.cfg.allow_remove_leader
-                && peer.get_id() == self.peer_id()
             {
-                return Err(box_err!("{} ignore remove leader", self.tag));
+                return Err(box_err!(
+                    "{} ignore remove leader or demote leader",
+                    self.tag
+                ));
             }
 
             if peer.get_role() != PeerRole::Learner {

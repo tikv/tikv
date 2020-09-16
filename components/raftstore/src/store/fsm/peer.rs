@@ -1851,6 +1851,24 @@ where
         }
     }
 
+    // Update some region infos
+    fn update_region(&mut self, mut region: metapb::Region) {
+        {
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.set_region(
+                &self.ctx.coprocessor_host,
+                region.clone(),
+                &mut self.fsm.peer,
+            );
+        }
+        for peer in region.take_peers().into_iter() {
+            if self.fsm.peer.peer_id() == peer.get_id() {
+                self.fsm.peer.peer = peer.clone();
+            }
+            self.fsm.peer.insert_peer_cache(peer);
+        }
+    }
+
     fn on_ready_change_peer(&mut self, cp: ChangePeer) {
         if cp.index == raft::INVALID_INDEX {
             // Apply failed, skip.
@@ -1868,15 +1886,12 @@ where
             // Please take a look at test case test_redundant_conf_change_by_snapshot.
         }
 
-        {
-            let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.set_region(&self.ctx.coprocessor_host, cp.region, &mut self.fsm.peer);
-        }
+        self.update_region(cp.region);
 
         let now = Instant::now();
-        let mut remove_self = false;
-        for change in cp.changes {
-            let (change_type, peer) = (change.get_change_type(), change.get_peer());
+        let (mut remove_self, mut demote_self, mut need_ping) = (false, false, false);
+        for mut change in cp.changes {
+            let (change_type, peer) = (change.get_change_type(), change.take_peer());
             let (store_id, peer_id) = (peer.get_store_id(), peer.get_id());
             match change_type {
                 ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
@@ -1895,18 +1910,17 @@ where
                             .raft
                             .assign_commit_groups(&[(peer_id, group_id.unwrap())]);
                     }
-                    if self.fsm.peer.peer_id() == peer_id {
-                        self.fsm.peer.peer = peer.clone();
-                    }
-                    // Add this peer to cache and heartbeats.
+                    // Add this peer to peer_heartbeats.
                     self.fsm.peer.peer_heartbeats.insert(peer_id, now);
                     if self.fsm.peer.is_leader() {
-                        // Speed up snapshot instead of waiting another heartbeat.
-                        self.fsm.peer.ping();
-                        self.fsm.has_ready = true;
+                        need_ping = true;
                         self.fsm.peer.peers_start_pending_time.push((peer_id, now));
                     }
-                    self.fsm.peer.insert_peer_cache(peer.clone());
+                    if self.fsm.peer.peer_id() == peer_id
+                        && change_type == ConfChangeType::AddLearnerNode
+                    {
+                        demote_self = true;
+                    }
                 }
                 ConfChangeType::RemoveNode => {
                     // Remove this peer from cache.
@@ -1947,6 +1961,34 @@ where
                 "region" => ?self.fsm.peer.region(),
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
+
+            // Remove or demote leader will cause this raft group unavailable
+            // until new leader elected, but we can't revert this operation
+            // because its result is already persisted in apply worker
+            // TODO: should we transfer leader here
+            if remove_self || demote_self {
+                warn!(
+                    "Removing or demoting leader";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "remove" => remove_self,
+                    "demote" => demote_self,
+                );
+                if demote_self {
+                    self.fsm
+                        .peer
+                        .raft_group
+                        .raft
+                        .become_follower(self.fsm.peer.term(), raft::INVALID_ID);
+                }
+                // Don't ping to speed up leader election
+                need_ping = false;
+            }
+        }
+        if need_ping {
+            // Speed up snapshot instead of waiting another heartbeat.
+            self.fsm.peer.ping();
+            self.fsm.has_ready = true;
         }
         if remove_self {
             self.destroy_peer(false);
