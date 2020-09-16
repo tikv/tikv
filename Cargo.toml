@@ -34,6 +34,7 @@ prost-codec = [
   "txn_types/prost-codec",
   "encryption/prost-codec",
   "tikv_util/prost-codec",
+  "log_wrappers/prost-codec"
 ]
 protobuf-codec = [
   "engine_rocks/protobuf-codec",
@@ -49,6 +50,7 @@ protobuf-codec = [
   "txn_types/protobuf-codec",
   "encryption/protobuf-codec",
   "tikv_util/protobuf-codec",
+  "log_wrappers/protobuf-codec"
 ]
 testexport = ["raftstore/testexport"]
 

@@ -103,7 +103,7 @@ macro_rules! impl_fmt {
 /// `impl_fmt` generates redacted Debug trait implementation
 /// for protobuf objects.
 ///
-/// TODO: For PROST codec, `redact_info` will redact all information.
+/// TODO: For PROST codec, `impl_fmt` will redact all information.
 /// This should be fixed.
 #[cfg(not(feature = "protobuf-codec"))]
 macro_rules! impl_fmt {
