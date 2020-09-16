@@ -28,7 +28,7 @@ fn test_txn_failpoints() {
 fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     let engine = TestEngineBuilder::new().build().unwrap();
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine.clone(),
+        engine,
         DummyLockManager {},
     )
     .build()
@@ -75,7 +75,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
 fn test_snapshot_must_be_prior_to_updating_max_ts() {
     let engine = TestEngineBuilder::new().build().unwrap();
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine.clone(),
+        engine,
         DummyLockManager {},
     )
     .build()
@@ -116,7 +116,7 @@ fn test_snapshot_must_be_prior_to_updating_max_ts() {
 fn test_update_max_ts_before_scan_memory_locks() {
     let engine = TestEngineBuilder::new().build().unwrap();
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine.clone(),
+        engine,
         DummyLockManager {},
     )
     .build()
