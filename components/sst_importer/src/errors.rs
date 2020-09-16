@@ -99,7 +99,7 @@ quick_error! {
                 {} has wrong prefix: key {} does not start with {}",
                 what,
                 log_wrappers::Key(&key),
-                log_wrappers::Prefix(&prefix),
+                log_wrappers::Key(&prefix),
             )
         }
         BadFormat(msg: String) {

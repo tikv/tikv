@@ -2063,7 +2063,7 @@ where
             info!(
                 "insert new region";
                 "region_id" => new_region_id,
-                "region" => ?new_region,
+                "region" => log_wrappers::ProtobufValue(&new_region),
             );
             if let Some(r) = meta.regions.get(&new_region_id) {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.

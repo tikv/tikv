@@ -125,12 +125,7 @@ impl<'a> fmt::Display for Key<'a> {
 impl<'a> fmt::Debug for Key<'a> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if REDACT_INFO_LOG.load(Ordering::Relaxed) {
-            // Print placeholder instead of the key itself.
-            write!(f, "<key>")
-        } else {
-            write!(f, "{}", hex::encode_upper(self.0))
-        }
+        fmt::Display::fmt(self, f)
     }
 }
 
@@ -167,54 +162,7 @@ impl<'a> fmt::Display for Value<'a> {
 impl<'a> fmt::Debug for Value<'a> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if REDACT_INFO_LOG.load(Ordering::Relaxed) {
-            // Print placeholder instead of the key itself.
-            write!(f, "<value>")
-        } else {
-            write!(f, "{}", hex::encode_upper(self.0))
-        }
-    }
-}
-
-pub struct Prefix<'a>(pub &'a [u8]);
-
-impl<'a> slog::Value for Prefix<'a> {
-    #[inline]
-    fn serialize(
-        &self,
-        _record: &::slog::Record<'_>,
-        key: slog::Key,
-        serializer: &mut dyn slog::Serializer,
-    ) -> slog::Result {
-        if REDACT_INFO_LOG.load(Ordering::Relaxed) {
-            serializer.emit_arguments(key, &format_args!("<prefix>"))
-        } else {
-            serializer.emit_arguments(key, &format_args!("{}", hex::encode_upper(self.0)))
-        }
-    }
-}
-
-impl<'a> fmt::Display for Prefix<'a> {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if REDACT_INFO_LOG.load(Ordering::Relaxed) {
-            // Print placeholder instead of the key itself.
-            write!(f, "<prefix>")
-        } else {
-            write!(f, "{}", hex::encode_upper(self.0))
-        }
-    }
-}
-
-impl<'a> fmt::Debug for Prefix<'a> {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if REDACT_INFO_LOG.load(Ordering::Relaxed) {
-            // Print placeholder instead of the key itself.
-            write!(f, "<prefix>")
-        } else {
-            write!(f, "{}", hex::encode_upper(self.0))
-        }
+        fmt::Display::fmt(self, f)
     }
 }
 
