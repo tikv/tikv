@@ -30,7 +30,7 @@ use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
 use tikv_util::config::ReadableDuration;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tokio::task::spawn_local;
+use futures::executor::block_on;
 
 struct DelayInner {
     timer: Compat01As03<tokio_timer::Delay>,
@@ -493,7 +493,7 @@ impl WaiterManager {
         if let Some(old) = self.wait_table.borrow_mut().add_waiter(waiter) {
             old.notify();
         };
-        spawn_local(f);
+        block_on(f);
     }
 
     fn handle_wake_up(&mut self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {

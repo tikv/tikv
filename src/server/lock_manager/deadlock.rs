@@ -33,8 +33,8 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
-use tokio::task::spawn_local;
 use txn_types::TimeStamp;
+use futures::executor::block_on;
 
 /// `Locks` is a set of locks belonging to one transaction.
 struct Locks {
@@ -658,9 +658,9 @@ where
                 resp.get_deadlock_key_hash(),
             )
         }));
-        spawn_local(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
+        let _ = block_on(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
         // No need to log it again.
-        spawn_local(recv.map_err(|_| ()));
+        let _ = block_on(recv.map_err(|_| ()));
 
         self.leader_client = Some(leader_client);
         info!("reconnect leader succeeded"; "leader_id" => leader_id);
@@ -751,7 +751,7 @@ where
                 RpcStatusCode::FAILED_PRECONDITION,
                 Some("I'm not the leader of deadlock detector".to_string()),
             );
-            spawn_local(sink.fail(status).map_err(|_| ()));
+            block_on(sink.fail(status).map_err(|_| ()));
             ERROR_COUNTER_METRICS.not_leader.inc();
             return;
         }
@@ -806,7 +806,7 @@ where
             Result::Ok(())
         }
         .map(|_| ());
-        spawn_local(send_task);
+        block_on(send_task);
     }
 
     fn handle_change_role(&mut self, role: Role) {
