@@ -26,7 +26,7 @@ use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::server::gc_worker::sync_gc;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
-use tikv_util::worker::{FutureWorker, Worker};
+use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
@@ -753,7 +753,7 @@ fn test_double_run_node() {
     let router = cluster.sim.rl().get_router(id).unwrap();
     let mut sim = cluster.sim.wl();
     let node = sim.get_node(id).unwrap();
-    let pd_worker = FutureWorker::new("test-pd-worker");
+    let pd_worker = Worker::new("test-pd-worker");
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());

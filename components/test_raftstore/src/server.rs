@@ -54,7 +54,7 @@ use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
-use tikv_util::worker::{FutureWorker, Worker};
+use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
@@ -192,7 +192,7 @@ impl Simulator for ServerCluster {
         }
 
         // Create storage.
-        let pd_worker = FutureWorker::new("test-pd-worker");
+        let pd_worker = Worker::new("test-pd-worker");
         let storage_read_pool = ReadPool::from(storage::build_read_pool_for_test(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
             raft_engine.clone(),

@@ -685,7 +685,7 @@ mod tests {
     /// The safe_point polling interval is set to 100 ms.
     struct GcManagerTestUtil {
         gc_manager: Option<GcManager<MockSafePointProvider, MockRegionInfoProvider>>,
-        worker: eWorker<GcTask>,
+        worker: Worker<GcTask>,
         safe_point_sender: Sender<TimeStamp>,
         gc_task_receiver: Receiver<GcTask>,
     }

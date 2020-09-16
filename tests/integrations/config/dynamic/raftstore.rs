@@ -19,7 +19,7 @@ use engine_traits::{Engines, ALL_CFS};
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{FutureWorker, Worker};
+use tikv_util::worker::Worker;
 
 #[derive(Clone)]
 struct MockTransport;
@@ -91,7 +91,7 @@ fn start_raftstore(
         Module::Raftstore,
         Box::new(RaftstoreConfigManager(cfg_track.clone())),
     );
-    let pd_worker = FutureWorker::new("store-config");
+    let pd_worker = Worker::new("store-config");
 
     system
         .spawn(

@@ -1262,7 +1262,7 @@ mod tests {
     use engine_rocks::RocksEngine;
     use std::sync::Mutex;
     use std::time::Instant;
-    use tikv_util::worker::{Builder, Worker};
+    use tikv_util::worker::Worker;
 
     use super::*;
 
@@ -1330,7 +1330,7 @@ mod tests {
 
     #[test]
     fn test_collect_stats() {
-        let mut pd_worker = Builder::new("test-pd-worker").create();
+        let mut pd_worker = Worker::new("test-pd-worker");
         let store_stat = Arc::new(Mutex::new(StoreStat::default()));
         let runner = RunnerTest::new(1, pd_worker.scheduler(), Arc::clone(&store_stat));
         pd_worker.start(runner).unwrap();
