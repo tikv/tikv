@@ -3,7 +3,7 @@
 use super::client::{self, Client};
 use super::config::Config;
 use super::metrics::*;
-use super::waiter_manager::Scheduler as WaiterMgrScheduler;
+use super::waiter_manager::WaiterMgrScheduler;
 use super::{Error, Result};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Duration, Instant};
-use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
+use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
 use tokio::task::spawn_local;
 use txn_types::TimeStamp;
 
@@ -310,17 +310,17 @@ impl Display for Task {
 /// `Scheduler` is the wrapper of the `FutureScheduler<Task>` to simplify scheduling tasks
 /// to the deadlock detector.
 #[derive(Clone)]
-pub struct Scheduler(FutureScheduler<Task>);
+pub struct DetectorScheduler(Scheduler<Task>);
 
-impl Scheduler {
-    pub fn new(scheduler: FutureScheduler<Task>) -> Self {
+impl DetectorScheduler {
+    pub fn new(scheduler: Scheduler<Task>) -> Self {
         Self(scheduler)
     }
 
     fn notify_scheduler(&self, task: Task) {
         // Only when the deadlock detector is stopped, an error will be returned.
         // So there is no need to handle the error.
-        if let Err(Stopped(task)) = self.0.schedule(task) {
+        if let Err(ScheduleError::Stopped(task)) = self.0.schedule(task) {
             error!("failed to send task to deadlock_detector"; "task" => %task);
         }
     }
@@ -381,7 +381,7 @@ pub(crate) struct RoleChangeNotifier {
     /// The id of the valid leader region.
     // raftstore.coprocessor needs it to be Sync + Send.
     leader_region_id: Arc<Mutex<u64>>,
-    scheduler: Scheduler,
+    scheduler: DetectorScheduler,
 }
 
 impl RoleChangeNotifier {
@@ -395,7 +395,7 @@ impl RoleChangeNotifier {
             && (region.get_end_key().is_empty() || LEADER_KEY < region.get_end_key())
     }
 
-    pub(crate) fn new(scheduler: Scheduler) -> Self {
+    pub(crate) fn new(scheduler: DetectorScheduler) -> Self {
         Self {
             leader_region_id: Arc::new(Mutex::new(INVALID_ID)),
             scheduler,
@@ -821,11 +821,13 @@ where
     }
 }
 
-impl<S, P> FutureRunnable<Task> for Detector<S, P>
+impl<S, P> Runnable for Detector<S, P>
 where
     S: StoreAddrResolver + 'static,
     P: PdClient + 'static,
 {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::Detect { tp, txn_ts, lock } => {
@@ -847,14 +849,14 @@ where
 #[derive(Clone)]
 pub struct Service {
     waiter_mgr_scheduler: WaiterMgrScheduler,
-    detector_scheduler: Scheduler,
+    detector_scheduler: DetectorScheduler,
     security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
     pub fn new(
         waiter_mgr_scheduler: WaiterMgrScheduler,
-        detector_scheduler: Scheduler,
+        detector_scheduler: DetectorScheduler,
         security_mgr: Arc<SecurityManager>,
     ) -> Self {
         Self {
@@ -907,7 +909,8 @@ impl Deadlock for Service {
             return;
         }
         let task = Task::DetectRpc { stream, sink };
-        if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.0.schedule(task)
+        if let Err(ScheduleError::Stopped(Task::DetectRpc { sink, .. })) =
+            self.detector_scheduler.0.schedule(task)
         {
             let status = RpcStatus::new(
                 RpcStatusCode::RESOURCE_EXHAUSTED,
@@ -924,7 +927,7 @@ pub mod tests {
     use crate::server::resolve::Callback;
     use futures::executor::block_on;
     use security::SecurityConfig;
-    use tikv_util::worker::FutureWorker;
+    use tikv_util::worker::Worker;
 
     #[test]
     fn test_detect_table() {
@@ -1082,10 +1085,10 @@ pub mod tests {
 
     fn start_deadlock_detector(
         host: &mut CoprocessorHost<RocksEngine>,
-    ) -> (FutureWorker<Task>, Scheduler) {
-        let waiter_mgr_worker = FutureWorker::new("dummy-waiter-mgr");
+    ) -> (Worker<Task>, DetectorScheduler) {
+        let waiter_mgr_worker = Worker::new("dummy-waiter-mgr");
         let waiter_mgr_scheduler = WaiterMgrScheduler::new(waiter_mgr_worker.scheduler());
-        let mut detector_worker = FutureWorker::new("test-deadlock-detector");
+        let mut detector_worker = Worker::new("test-deadlock-detector");
         let detector_runner = Detector::new(
             1,
             Arc::new(MockPdClient {}),
@@ -1094,7 +1097,7 @@ pub mod tests {
             waiter_mgr_scheduler,
             &Config::default(),
         );
-        let detector_scheduler = Scheduler::new(detector_worker.scheduler());
+        let detector_scheduler = DetectorScheduler::new(detector_worker.scheduler());
         let role_change_notifier = RoleChangeNotifier::new(detector_scheduler.clone());
         role_change_notifier.register(host);
         detector_worker.start(detector_runner).unwrap();

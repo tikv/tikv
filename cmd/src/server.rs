@@ -66,11 +66,8 @@ use tikv::{
 };
 use tikv_util::config::VersionTrack;
 use tikv_util::{
-    check_environment_variables,
-    config::ensure_dir_exist,
-    sys::sys_quota::SysQuota,
-    time::Monitor,
-    worker::{FutureWorker, Worker},
+    check_environment_variables, config::ensure_dir_exist, sys::sys_quota::SysQuota, time::Monitor,
+    worker::Worker,
 };
 use tokio::runtime::Builder;
 
@@ -489,7 +486,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         let engines = self.engines.as_ref().unwrap();
 
-        let pd_worker = FutureWorker::new("pd-worker");
+        let pd_worker = Worker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {

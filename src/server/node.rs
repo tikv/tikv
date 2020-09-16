@@ -26,7 +26,6 @@ use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::FutureWorker;
 use tikv_util::worker::Worker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -138,7 +137,7 @@ where
         engines: Engines<RocksEngine, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        pd_worker: Worker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
@@ -373,7 +372,7 @@ where
         engines: Engines<RocksEngine, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        pd_worker: Worker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,

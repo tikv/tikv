@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::config::Config;
-use super::deadlock::Scheduler as DetectorScheduler;
+use super::deadlock::DetectorScheduler;
 use super::metrics::*;
 use crate::storage::lock_manager::{Lock, WaitTimeout};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp};
@@ -10,7 +10,7 @@ use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, StorageCallback,
 };
 use tikv_util::collections::HashMap;
-use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
+use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
 
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -376,15 +376,15 @@ impl WaitTable {
 }
 
 #[derive(Clone)]
-pub struct Scheduler(FutureScheduler<Task>);
+pub struct WaiterMgrScheduler(Scheduler<Task>);
 
-impl Scheduler {
-    pub fn new(scheduler: FutureScheduler<Task>) -> Self {
+impl WaiterMgrScheduler {
+    pub fn new(scheduler: Scheduler<Task>) -> Self {
         Self(scheduler)
     }
 
     fn notify_scheduler(&self, task: Task) -> bool {
-        if let Err(Stopped(task)) = self.0.schedule(task) {
+        if let Err(ScheduleError::Stopped(task)) = self.0.schedule(task) {
             error!("failed to send task to waiter_manager"; "task" => %task);
             if let Task::WaitFor { cb, pr, .. } = task {
                 cb.execute(pr);
@@ -558,7 +558,8 @@ impl WaiterManager {
     }
 }
 
-impl FutureRunnable<Task> for WaiterManager {
+impl Runnable for WaiterManager {
+    type Task = Task;
     fn run(&mut self, task: Task) {
         match task {
             Task::WaitFor {
@@ -606,7 +607,7 @@ pub mod tests {
     use super::*;
     use crate::storage::PessimisticLockRes;
     use tikv_util::future::paired_future_callback;
-    use tikv_util::worker::FutureWorker;
+    use tikv_util::worker::Worker;
 
     use std::sync::mpsc;
     use std::time::Duration;
@@ -1017,17 +1018,17 @@ pub mod tests {
     fn start_waiter_manager(
         wait_for_lock_timeout: u64,
         wake_up_delay_duration: u64,
-    ) -> (FutureWorker<Task>, Scheduler) {
-        let detect_worker = FutureWorker::new("dummy-deadlock");
+    ) -> (Worker<Task>, WaiterMgrScheduler) {
+        let detect_worker = Worker::new("dummy-deadlock");
         let detector_scheduler = DetectorScheduler::new(detect_worker.scheduler());
 
         let mut cfg = Config::default();
         cfg.wait_for_lock_timeout = ReadableDuration::millis(wait_for_lock_timeout);
         cfg.wake_up_delay_duration = ReadableDuration::millis(wake_up_delay_duration);
-        let mut waiter_mgr_worker = FutureWorker::new("test-waiter-manager");
+        let mut waiter_mgr_worker = Worker::new("test-waiter-manager");
         let waiter_mgr_runner =
             WaiterManager::new(Arc::new(AtomicUsize::new(0)), detector_scheduler, &cfg);
-        let waiter_mgr_scheduler = Scheduler::new(waiter_mgr_worker.scheduler());
+        let waiter_mgr_scheduler = WaiterMgrScheduler::new(waiter_mgr_worker.scheduler());
         waiter_mgr_worker.start(waiter_mgr_runner).unwrap();
         (waiter_mgr_worker, waiter_mgr_scheduler)
     }
@@ -1285,7 +1286,7 @@ pub mod tests {
 
     #[bench]
     fn bench_wake_up_small_table_against_big_hashes(b: &mut test::Bencher) {
-        let detect_worker = FutureWorker::new("dummy-deadlock");
+        let detect_worker = Worker::new("dummy-deadlock");
         let detector_scheduler = DetectorScheduler::new(detect_worker.scheduler());
         let mut waiter_mgr = WaiterManager::new(
             Arc::new(AtomicUsize::new(0)),

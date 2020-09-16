@@ -14,7 +14,6 @@ Briefly speaking, this is a mpsc (multiple-producer-single-consumer) model.
 
 */
 
-mod future;
 mod metrics;
 
 use crossbeam::channel::{RecvTimeoutError, TryRecvError, TrySendError};
@@ -31,11 +30,6 @@ use self::metrics::*;
 use crate::mpsc::{self, Receiver, Sender};
 use crate::time::Instant;
 use crate::timer::Timer;
-
-pub use self::future::dummy_scheduler as dummy_future_scheduler;
-pub use self::future::Runnable as FutureRunnable;
-pub use self::future::Scheduler as FutureScheduler;
-pub use self::future::{Stopped, Worker as FutureWorker};
 
 #[derive(Eq, PartialEq)]
 pub enum ScheduleError<T> {

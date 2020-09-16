@@ -7,8 +7,8 @@ mod metrics;
 pub mod waiter_manager;
 
 pub use self::config::{Config, LockManagerConfigManager};
-pub use self::deadlock::{Scheduler as DetectorScheduler, Service as DeadlockService};
-pub use self::waiter_manager::Scheduler as WaiterMgrScheduler;
+pub use self::deadlock::{DetectorScheduler, Service as DeadlockService};
+pub use self::waiter_manager::WaiterMgrScheduler;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -31,7 +31,7 @@ use parking_lot::Mutex;
 use pd_client::PdClient;
 use security::SecurityManager;
 use tikv_util::collections::HashSet;
-use tikv_util::worker::FutureWorker;
+use tikv_util::worker::Worker;
 use txn_types::TimeStamp;
 
 const DETECTED_SLOTS_NUM: usize = 128;
@@ -47,8 +47,8 @@ fn detected_slot_idx(txn_ts: TimeStamp) -> usize {
 ///   * One is the `WaiterManager` which manages transactions waiting for locks.
 ///   * The other one is the `Detector` which detects deadlocks between transactions.
 pub struct LockManager {
-    waiter_mgr_worker: Option<FutureWorker<waiter_manager::Task>>,
-    detector_worker: Option<FutureWorker<deadlock::Task>>,
+    waiter_mgr_worker: Option<Worker<waiter_manager::Task>>,
+    detector_worker: Option<Worker<deadlock::Task>>,
 
     waiter_mgr_scheduler: WaiterMgrScheduler,
     detector_scheduler: DetectorScheduler,
@@ -74,8 +74,8 @@ impl Clone for LockManager {
 
 impl LockManager {
     pub fn new() -> Self {
-        let waiter_mgr_worker = FutureWorker::new("waiter-manager");
-        let detector_worker = FutureWorker::new("deadlock-detector");
+        let waiter_mgr_worker = Worker::new("waiter-manager");
+        let detector_worker = Worker::new("deadlock-detector");
         let mut detected = Vec::with_capacity(DETECTED_SLOTS_NUM);
         detected.resize_with(DETECTED_SLOTS_NUM, || Mutex::new(HashSet::default()));
 

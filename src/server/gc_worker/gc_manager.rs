@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
-use tikv_util::worker::FutureScheduler;
+use tikv_util::worker::Scheduler;
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
@@ -225,7 +225,7 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
     safe_point_last_check_time: Instant,
 
     /// Used to schedule `GcTask`s.
-    worker_scheduler: FutureScheduler<GcTask>,
+    worker_scheduler: Scheduler<GcTask>,
 
     /// Holds the running status. It will tell us if `GcManager` should stop working and exit.
     gc_manager_ctx: GcManagerContext,
@@ -238,7 +238,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     pub fn new(
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>,
-        worker_scheduler: FutureScheduler<GcTask>,
+        worker_scheduler: Scheduler<GcTask>,
         cfg_tracker: GcWorkerConfigManager,
         cluster_version: ClusterVersion,
     ) -> GcManager<S, R> {
@@ -625,7 +625,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
-    use tikv_util::worker::{FutureRunnable, FutureWorker};
+    use tikv_util::worker::{Runnable, Worker};
 
     fn take_callback(t: &mut GcTask) -> Callback<()> {
         let callback = match t {
@@ -671,7 +671,9 @@ mod tests {
         tx: Sender<GcTask>,
     }
 
-    impl FutureRunnable<GcTask> for MockGcRunner {
+    impl Runnable for MockGcRunner {
+        type Task = GcTask;
+
         fn run(&mut self, mut t: GcTask) {
             let cb = take_callback(&mut t);
             self.tx.send(t).unwrap();
@@ -683,14 +685,14 @@ mod tests {
     /// The safe_point polling interval is set to 100 ms.
     struct GcManagerTestUtil {
         gc_manager: Option<GcManager<MockSafePointProvider, MockRegionInfoProvider>>,
-        worker: FutureWorker<GcTask>,
+        worker: eWorker<GcTask>,
         safe_point_sender: Sender<TimeStamp>,
         gc_task_receiver: Receiver<GcTask>,
     }
 
     impl GcManagerTestUtil {
         pub fn new(regions: BTreeMap<Vec<u8>, RegionInfo>) -> Self {
-            let mut worker = FutureWorker::new("test-gc-worker");
+            let mut worker = Worker::new("test-gc-worker");
             let (gc_task_sender, gc_task_receiver) = channel();
             worker.start(MockGcRunner { tx: gc_task_sender }).unwrap();
 

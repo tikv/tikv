@@ -18,9 +18,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
-use tikv_util::worker::{
-    FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
-};
+use tikv_util::worker::{Runnable, ScheduleError, Scheduler, Worker};
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
@@ -400,11 +398,13 @@ where
     }
 }
 
-impl<E, RR> FutureRunnable<GcTask> for GcRunner<E, RR>
+impl<E, RR> Runnable for GcRunner<E, RR>
 where
     E: Engine,
     RR: RaftStoreRouter<RocksEngine>,
 {
+    type Task = GcTask;
+
     #[inline]
     fn run(&mut self, task: GcTask) {
         let enum_label = task.get_enum_label();
@@ -488,14 +488,14 @@ where
 }
 
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
-fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask>) -> Result<()> {
+fn handle_gc_task_schedule_error(e: ScheduleError<GcTask>) -> Result<()> {
     error!("failed to schedule gc task"; "err" => %e);
     Err(box_err!("failed to schedule gc task: {:?}", e))
 }
 
 /// Schedules a `GcTask` to the `GcRunner`.
 fn schedule_gc(
-    scheduler: &FutureScheduler<GcTask>,
+    scheduler: &Scheduler<GcTask>,
     region_id: u64,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
@@ -515,7 +515,7 @@ fn schedule_gc(
 
 /// Does GC synchronously.
 pub fn sync_gc(
-    scheduler: &FutureScheduler<GcTask>,
+    scheduler: &Scheduler<GcTask>,
     region_id: u64,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
@@ -547,8 +547,8 @@ where
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<AtomicUsize>,
-    worker: Arc<Mutex<FutureWorker<GcTask>>>,
-    worker_scheduler: FutureScheduler<GcTask>,
+    worker: Arc<Mutex<Worker<GcTask>>>,
+    worker_scheduler: Scheduler<GcTask>,
 
     applied_lock_collector: Option<Arc<AppliedLockCollector>>,
 
@@ -611,7 +611,7 @@ where
         cfg: GcConfig,
         cluster_version: ClusterVersion,
     ) -> GcWorker<E, RR> {
-        let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
+        let worker = Arc::new(Mutex::new(Worker::new("gc-worker")));
         let worker_scheduler = worker.lock().unwrap().scheduler();
         GcWorker {
             engine,
@@ -690,7 +690,7 @@ where
         Ok(())
     }
 
-    pub fn scheduler(&self) -> FutureScheduler<GcTask> {
+    pub fn scheduler(&self) -> Scheduler<GcTask> {
         self.worker_scheduler.clone()
     }
 

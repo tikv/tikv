@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::deadlock::Scheduler as DeadlockScheduler;
-use super::waiter_manager::Scheduler as WaiterMgrScheduler;
+use super::deadlock::DetectorScheduler as DeadlockScheduler;
+use super::waiter_manager::WaiterMgrScheduler;
 use configuration::{ConfigChange, ConfigManager, Configuration};
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
 
