@@ -44,6 +44,8 @@ use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
+use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
+use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
@@ -51,9 +53,9 @@ use security::SecurityConfig;
 use tikv_util::config::{
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
 };
-use tikv_util::future_pool;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
+use tikv_util::yatp_pool;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -1238,6 +1240,29 @@ impl RaftDbConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Default)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct RaftEngineConfig {
+    pub enable: bool,
+    #[serde(flatten)]
+    config: RawRaftEngineConfig,
+}
+
+impl RaftEngineConfig {
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.config.validate().map_err(|e| Box::new(e))?;
+        Ok(())
+    }
+
+    pub fn config(&self) -> RawRaftEngineConfig {
+        self.config.clone()
+    }
+
+    pub fn mut_config(&mut self) -> &mut RawRaftEngineConfig {
+        &mut self.config
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum DBType {
     Kv,
@@ -1563,19 +1588,19 @@ macro_rules! readpool_config {
 
         impl $struct_name {
             /// Builds configurations for low, normal and high priority pools.
-            pub fn to_future_pool_configs(&self) -> Vec<future_pool::Config> {
+            pub fn to_yatp_pool_configs(&self) -> Vec<yatp_pool::Config> {
                 vec![
-                    future_pool::Config {
+                    yatp_pool::Config {
                         workers: self.low_concurrency,
                         max_tasks_per_worker: self.max_tasks_per_worker_low,
                         stack_size: self.stack_size.0 as usize,
                     },
-                    future_pool::Config {
+                    yatp_pool::Config {
                         workers: self.normal_concurrency,
                         max_tasks_per_worker: self.max_tasks_per_worker_normal,
                         stack_size: self.stack_size.0 as usize,
                     },
-                    future_pool::Config {
+                    yatp_pool::Config {
                         workers: self.high_concurrency,
                         max_tasks_per_worker: self.max_tasks_per_worker_high,
                         stack_size: self.stack_size.0 as usize,
@@ -2086,6 +2111,9 @@ pub struct TiKvConfig {
     pub raftdb: RaftDbConfig,
 
     #[config(skip)]
+    pub raft_engine: RaftEngineConfig,
+
+    #[config(skip)]
     pub security: SecurityConfig,
 
     #[config(skip)]
@@ -2127,6 +2155,7 @@ impl Default for TiKvConfig {
             pd: PdConfig::default(),
             rocksdb: DbConfig::default(),
             raftdb: RaftDbConfig::default(),
+            raft_engine: RaftEngineConfig::default(),
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
@@ -2155,11 +2184,24 @@ impl TiKvConfig {
                 .to_owned();
         }
 
-        let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
-        if self.raft_store.raftdb_path.is_empty() {
-            self.raft_store.raftdb_path = default_raftdb_path;
-        } else if self.raft_store.raftdb_path != default_raftdb_path {
-            self.raft_store.raftdb_path = config::canonicalize_path(&self.raft_store.raftdb_path)?;
+        if !self.raft_engine.enable {
+            let default_raftdb_path =
+                config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
+            if self.raft_store.raftdb_path.is_empty() {
+                self.raft_store.raftdb_path = default_raftdb_path;
+            } else if self.raft_store.raftdb_path != default_raftdb_path {
+                self.raft_store.raftdb_path =
+                    config::canonicalize_path(&self.raft_store.raftdb_path)?;
+            }
+        } else {
+            let default_er_path =
+                config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
+            if self.raft_engine.config.dir.is_empty() {
+                self.raft_engine.config.dir = default_er_path;
+            } else if self.raft_engine.config.dir != default_er_path {
+                self.raft_engine.config.dir =
+                    config::canonicalize_path(&self.raft_engine.config.dir)?;
+            }
         }
 
         let kv_db_path =
@@ -2168,11 +2210,28 @@ impl TiKvConfig {
         if kv_db_path == self.raft_store.raftdb_path {
             return Err("raft_store.raftdb_path can not same with storage.data_dir/db".into());
         }
-        if RocksEngine::exists(&kv_db_path) && !RocksEngine::exists(&self.raft_store.raftdb_path) {
-            return Err("default rocksdb exist, buf raftdb not exist".into());
-        }
-        if !RocksEngine::exists(&kv_db_path) && RocksEngine::exists(&self.raft_store.raftdb_path) {
-            return Err("default rocksdb not exist, buf raftdb exist".into());
+        if !self.raft_engine.enable {
+            if RocksEngine::exists(&kv_db_path)
+                && !RocksEngine::exists(&self.raft_store.raftdb_path)
+            {
+                return Err("default rocksdb exist, buf raftdb not exist".into());
+            }
+            if !RocksEngine::exists(&kv_db_path)
+                && RocksEngine::exists(&self.raft_store.raftdb_path)
+            {
+                return Err("default rocksdb not exist, buf raftdb exist".into());
+            }
+        } else {
+            if RocksEngine::exists(&kv_db_path)
+                && !RaftLogEngine::exists(&self.raft_engine.config.dir)
+            {
+                return Err("default rocksdb exist, buf raft engine not exist".into());
+            }
+            if !RocksEngine::exists(&kv_db_path)
+                && RaftLogEngine::exists(&self.raft_engine.config.dir)
+            {
+                return Err("default rocksdb not exist, buf raft engine exist".into());
+            }
         }
 
         // Check blob file dir is empty when titan is disabled
@@ -2208,6 +2267,7 @@ impl TiKvConfig {
 
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
+        self.raft_engine.validate()?;
         self.server.validate()?;
         self.raft_store.validate()?;
         self.pd.validate()?;
@@ -2352,6 +2412,19 @@ impl TiKvConfig {
                  current raft dir is '{}', please check if it is expected.",
                 last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
             ));
+        }
+        if last_cfg.raft_engine.enable
+            && self.raft_engine.enable
+            && last_cfg.raft_engine.config.dir != self.raft_engine.config.dir
+        {
+            return Err(format!(
+                "raft engine dir have been changed, former is '{}', \
+                 current is '{}', please check if it is expected.",
+                last_cfg.raft_engine.config.dir, self.raft_engine.config.dir
+            ));
+        }
+        if last_cfg.raft_engine.enable && !self.raft_engine.enable {
+            return Err("raft engine can't be disabled after switched on.".to_owned());
         }
 
         Ok(())
@@ -2623,6 +2696,7 @@ pub enum Module {
     Pd,
     Rocksdb,
     Raftdb,
+    RaftEngine,
     Storage,
     Security,
     Encryption,
@@ -2646,6 +2720,7 @@ impl From<&str> for Module {
             "split" => Module::Split,
             "rocksdb" => Module::Rocksdb,
             "raftdb" => Module::Raftdb,
+            "raft_engine" => Module::RaftEngine,
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,
@@ -2752,6 +2827,7 @@ mod tests {
     use crate::storage::config::StorageConfigManger;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
+    use raft_log_engine::RecoveryMode;
     use slog::Level;
     use std::sync::Arc;
 
@@ -2934,7 +3010,6 @@ mod tests {
         let mut incoming = TiKvConfig::default();
         incoming.coprocessor.region_split_keys = 10000;
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
-        incoming.raft_store.sync_log = false;
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
@@ -2943,7 +3018,6 @@ mod tests {
             "10000".to_owned(),
         );
         change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
-        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
         change.insert(
             "rocksdb.defaultcf.block-cache-size".to_owned(),
             "500MB".to_owned(),
@@ -2993,7 +3067,6 @@ mod tests {
             "10000".to_owned(),
         );
         change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
-        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
         change.insert(
             "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
             "read-only".to_owned(),
@@ -3011,7 +3084,6 @@ mod tests {
             res.get("gc.max-write-bytes-per-sec"),
             Some(&"\"100MB\"".to_owned())
         );
-        assert_eq!(res.get("raftstore.sync-log"), Some(&"false".to_owned()));
         assert_eq!(
             res.get("rocksdb.defaultcf.titan.blob-run-mode"),
             Some(&"\"read-only\"".to_owned())
@@ -3229,6 +3301,40 @@ mod tests {
                 "gcc".to_owned(),
                 "security.encryption.master-keys".to_owned(),
             ],
+        );
+    }
+
+    #[test]
+    fn test_raft_engine() {
+        let content = r#"
+            [raft-engine]
+            enable = true
+            recovery_mode = "tolerate-corrupted-tail-records"
+            bytes-per-sync = "64KB"
+            purge-threshold = "1GB"
+        "#;
+        let cfg: TiKvConfig = toml::from_str(content).unwrap();
+        assert!(cfg.raft_engine.enable);
+        let config = &cfg.raft_engine.config;
+        assert_eq!(
+            config.recovery_mode,
+            RecoveryMode::TolerateCorruptedTailRecords
+        );
+        assert_eq!(config.bytes_per_sync.0, ReadableSize::kb(64).0);
+        assert_eq!(config.purge_threshold.0, ReadableSize::gb(1).0);
+    }
+
+    #[test]
+    fn test_raft_engine_dir() {
+        let content = r#"
+            [raft-engine]
+            enable = true
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(
+            cfg.raft_engine.config.dir,
+            config::canonicalize_sub_path(&cfg.storage.data_dir, "raft-engine").unwrap()
         );
     }
 }

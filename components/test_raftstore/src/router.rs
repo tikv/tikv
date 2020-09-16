@@ -31,8 +31,8 @@ impl MockRaftStoreRouter {
     }
 }
 
-impl StoreRouter for MockRaftStoreRouter {
-    fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+impl StoreRouter<RocksEngine> for MockRaftStoreRouter {
+    fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
         unimplemented!();
     }
 }
@@ -77,4 +77,6 @@ impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
             Err(RaftStoreError::RegionNotFound(region_id))
         }
     }
+
+    fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
 }

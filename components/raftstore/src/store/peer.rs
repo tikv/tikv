@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{Engines, KvEngine, Snapshot, WriteOptions};
+use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteOptions};
 use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
@@ -29,7 +29,6 @@ use raft::{
     self, Changer, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus, StateRole,
     INVALID_INDEX, NO_LIMIT,
 };
-use raft_engine::RaftEngine;
 use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
 use time::Timespec;
@@ -752,20 +751,18 @@ where
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(ctx.cfg.sync_log);
+        write_opts.set_sync(true);
         ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
-        ctx.engines.raft.consume(&mut raft_wb, ctx.cfg.sync_log)?;
+        ctx.engines.raft.consume(&mut raft_wb, true)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
             // will be cleared by a newer snapshot applying or restart.
             if let Err(e) = self.get_store().clear_data() {
-                error!(
+                error!(?e;
                     "failed to schedule clear data task";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -2115,10 +2112,10 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T, C>,
         change_peers: &[ChangePeerRequest],
-        cc: &eraftpb::ConfChangeV2,
+        cc: &impl ConfChangeI,
     ) -> Result<()> {
         // Check whether current joint state can handle this request
-        let mut after_applied_prs = self.check_joint_state(cc)?;
+        let mut after_progress = self.check_joint_state(cc)?;
         let kind = ConfChangeKind::confchange_kind(change_peers.len());
 
         // Leaving joint state, skip check
@@ -2172,11 +2169,19 @@ where
             }
         }
 
-        let current_voter = self.raft_group.raft.prs().conf().voters().ids();
+        let before_progress = {
+            let pr = self.raft_group.status().progress.unwrap().clone();
+            if pr.is_singleton() {
+                // It's always safe if there is only one node in the cluster.
+                return Ok(());
+            }
+            pr
+        };
+
         let change_voter = || {
             let peer_ids: HashSet<_> = change_peers.iter().map(|p| p.get_peer().get_id()).collect();
             peer_ids
-                .intersection(&current_voter.iter().collect())
+                .intersection(&before_progress.conf().voters().ids().iter().collect())
                 .count()
                 != 0
         };
@@ -2189,12 +2194,7 @@ where
             ));
         }
 
-        if current_voter.len() == 1 {
-            // It's always safe if there is only one node in the cluster.
-            return Ok(());
-        }
-
-        let promoted_commit_index = after_applied_prs.maximal_committed_index().0;
+        let promoted_commit_index = after_progress.maximal_committed_index().0;
         if promoted_commit_index >= self.get_store().truncated_index() {
             return Ok(());
         }
@@ -2206,16 +2206,19 @@ where
         // Waking it up to replicate logs to candidate.
         self.should_wake_up = true;
         Err(box_err!(
-            "{} unsafe to perform conf change {:?}, truncated index {}, promoted commit index {}",
+            "{} unsafe to perform conf change {:?}, before: {:?}, after: {:?}, truncated index {}, promoted commit index {}",
             self.tag,
             change_peers,
+            before_progress.conf().to_conf_state(),
+            after_progress.conf().to_conf_state(),
             self.get_store().truncated_index(),
             promoted_commit_index
         ))
     }
 
     /// Check if current joint state can handle this confchange
-    fn check_joint_state(&mut self, cc: &eraftpb::ConfChangeV2) -> Result<ProgressTracker> {
+    fn check_joint_state(&mut self, cc: &impl ConfChangeI) -> Result<ProgressTracker> {
+        let cc = &cc.as_v2();
         let mut prs = self.raft_group.status().progress.unwrap().clone();
         let mut changer = Changer::new(&prs);
         let (cfg, changes) = if cc.leave_joint() {
@@ -2282,9 +2285,6 @@ where
         }
 
         for (id, pr) in progress.iter() {
-            if !progress.conf().voters().contains(*id) {
-                continue;
-            }
             if pr.state == ProgressState::Snapshot {
                 return Some("pending snapshot");
             }
@@ -2854,9 +2854,6 @@ where
         }
 
         let data = req.write_to_bytes()?;
-        // TODO: use local histogram metrics
-        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
-
         let admin = req.get_admin_request();
         let res = if admin.has_change_peer() {
             self.propose_conf_change_internal(ctx, admin.get_change_peer(), data)
@@ -2885,9 +2882,11 @@ where
         let cc = change_peer.to_confchange(data);
         let changes = change_peer.get_change_peers();
 
-        self.check_conf_change(ctx, changes.as_ref(), cc.as_v2().as_ref())?;
+        self.check_conf_change(ctx, changes.as_ref(), &cc)?;
 
         ctx.raft_metrics.propose.conf_change += 1;
+        // TODO: use local histogram metrics
+        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(cc.get_context().len() as f64);
         info!(
             "propose conf change peer";
             "region_id" => self.region_id,
@@ -3150,14 +3149,12 @@ where
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
             if let Err(e) = ctx.trans.send(send_msg) {
-                error!(
+                error!(?e;
                     "failed to send wake up message";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -3185,14 +3182,12 @@ where
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgCheckStalePeer);
             if let Err(e) = ctx.trans.send(send_msg) {
-                error!(
+                error!(?e;
                     "failed to send check stale peer message";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -3237,14 +3232,12 @@ where
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_premerge_commit(premerge_commit);
         if let Err(e) = ctx.trans.send(send_msg) {
-            error!(
+            error!(?e;
                 "failed to send want rollback merge message";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "target_peer_id" => to_peer.get_id(),
                 "target_store_id" => to_peer.get_store_id(),
-                "err" => ?e,
-                "error_code" => %e.error_code(),
             );
         } else {
             ctx.need_flush_trans = true;

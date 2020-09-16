@@ -10,11 +10,9 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, Mutable};
-use error_code::ErrorCodeExt;
+use engine_traits::{Engines, KvEngine, Mutable, RaftEngine};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use raft_engine::RaftEngine;
 
 use crate::coprocessor::CoprocessorHost;
 use crate::store::peer_storage::{
@@ -288,7 +286,7 @@ where
             kv_snap,
             notifier,
         ) {
-            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e, "error_code" => %e.error_code());
+            error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
             return;
         }
 
@@ -396,7 +394,7 @@ where
                 SNAP_COUNTER.apply.abort.inc();
             }
             Err(e) => {
-                error!("failed to apply snap!!!"; "err" => %e, "error_code" => %e.error_code());
+                error!(%e; "failed to apply snap!!!");
 
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.fail.inc();
@@ -420,13 +418,11 @@ where
                 .kv
                 .delete_all_files_in_range(start_key, end_key)
             {
-                error!(
+                error!(%e;
                     "failed to delete files in range";
                     "region_id" => region_id,
                     "start_key" => log_wrappers::Key(start_key),
                     "end_key" => log_wrappers::Key(end_key),
-                    "err" => %e,
-                    "error_code" => %e.error_code(),
                 );
                 return;
             }
@@ -436,13 +432,11 @@ where
                 .kv
                 .delete_all_in_range(start_key, end_key, self.use_delete_range)
         {
-            error!(
+            error!(%e;
                 "failed to delete data in range";
                 "region_id" => region_id,
                 "start_key" => log_wrappers::Key(start_key),
                 "end_key" => log_wrappers::Key(end_key),
-                "err" => %e,
-                "error_code" => %e.error_code(),
             );
         } else {
             info!(

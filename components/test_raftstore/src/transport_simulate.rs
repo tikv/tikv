@@ -14,8 +14,8 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{
-    Callback, CasualMessage, CasualRouter, ProposalRouter, RaftCommand, SignificantMsg, StoreMsg,
-    StoreRouter, Transport,
+    Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand, SignificantMsg,
+    StoreMsg, StoreRouter, Transport,
 };
 use raftstore::Result as RaftStoreResult;
 use raftstore::{DiscardReason, Error, Result};
@@ -191,8 +191,8 @@ impl<C: Transport> Transport for SimulateTransport<C> {
     }
 }
 
-impl<C: RaftStoreRouter<RocksEngine>> StoreRouter for SimulateTransport<C> {
-    fn send(&self, msg: StoreMsg) -> Result<()> {
+impl<C: RaftStoreRouter<RocksEngine>> StoreRouter<RocksEngine> for SimulateTransport<C> {
+    fn send(&self, msg: StoreMsg<RocksEngine>) -> Result<()> {
         StoreRouter::send(&self.ch, msg)
     }
 }
@@ -220,6 +220,8 @@ impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateT
     fn significant_send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> Result<()> {
         self.ch.significant_send(region_id, msg)
     }
+
+    fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
 }
 
 impl<C: LocalReadRouter<RocksEngine>> LocalReadRouter<RocksEngine> for SimulateTransport<C> {

@@ -16,6 +16,7 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use kvproto::tikvpb::TikvClient;
 use tempfile::{Builder, TempDir};
+use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
 use concurrency_manager::ConcurrencyManager;
@@ -63,14 +64,14 @@ type SimulateServerTransport =
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
 struct ServerMeta {
-    node: Node<TestPdClient>,
+    node: Node<TestPdClient, RocksEngine>,
     server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
     worker: Worker<ResolveTask>,
-    gc_worker: GcWorker<RaftKv<SimulateStoreTransport>>,
+    gc_worker: GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -135,7 +136,10 @@ impl ServerCluster {
     }
 
     /// To trigger GC manually.
-    pub fn get_gc_worker(&self, node_id: u64) -> &GcWorker<RaftKv<SimulateStoreTransport>> {
+    pub fn get_gc_worker(
+        &self,
+        node_id: u64,
+    ) -> &GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport> {
         &self.metas.get(&node_id).unwrap().gc_worker
     }
 
@@ -198,7 +202,7 @@ impl Simulator for ServerCluster {
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            Some(router.clone()),
+            sim_router.clone(),
             cfg.gc.clone(),
             Default::default(),
         );
@@ -234,19 +238,6 @@ impl Simulator for ServerCluster {
             Arc::clone(&importer),
             security_mgr.clone(),
         );
-        // Create Debug service.
-        let pool = futures_cpupool::Builder::new()
-            .name_prefix(thd_name!("debugger"))
-            .pool_size(1)
-            .create();
-
-        let debug_service = DebugService::new(
-            engines.clone(),
-            pool,
-            raft_router,
-            ConfigController::default(),
-            security_mgr.clone(),
-        );
 
         // Create deadlock service.
         let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
@@ -268,6 +259,24 @@ impl Simulator for ServerCluster {
             concurrency_manager.clone(),
         );
         let mut server = None;
+        // Create Debug service.
+        let debug_thread_pool = Arc::new(
+            TokioBuilder::new()
+                .threaded_scheduler()
+                .thread_name(thd_name!("debugger"))
+                .core_threads(1)
+                .build()
+                .unwrap(),
+        );
+        let debug_thread_handle = debug_thread_pool.handle().clone();
+        let debug_service = DebugService::new(
+            engines.clone(),
+            debug_thread_handle,
+            raft_router,
+            ConfigController::default(),
+            security_mgr.clone(),
+        );
+
         for _ in 0..100 {
             let mut svr = Server::new(
                 &server_cfg,
@@ -279,6 +288,7 @@ impl Simulator for ServerCluster {
                 snap_mgr.clone(),
                 gc_worker.clone(),
                 None,
+                debug_thread_pool.clone(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));

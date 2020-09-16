@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::*;
 
-use futures03::executor::block_on;
+use futures::executor::block_on;
 
 use kvproto::metapb::{self, PeerRole};
 use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};

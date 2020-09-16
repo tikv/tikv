@@ -45,8 +45,7 @@ use crate::storage::{
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
-use futures::Future;
-use futures03::prelude::*;
+use futures::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
@@ -234,7 +233,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         key: Key,
         start_ts: TimeStamp,
-    ) -> impl Future<Item = Option<Value>, Error = Error> {
+    ) -> impl Future<Output = Result<Option<Value>>> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -259,7 +258,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
 
                 if enable_async_commit {
-                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                    // Update max_ts and check the in-memory lock table before getting the snapshot
                     async_commit_check_keys(
                         &concurrency_manager,
                         iter::once(&key),
@@ -306,9 +305,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             priority,
             thread_rng().next_u64(),
         );
-
-        res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-            .flatten()
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Get values of a set of keys with seperate context from a snapshot, return a list of `Result`s.
@@ -317,7 +317,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn batch_get_command(
         &self,
         requests: Vec<GetRequest>,
-    ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
+    ) -> impl Future<Output = Result<Vec<Result<Option<Vec<u8>>>>>> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
@@ -326,6 +326,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res =
             self.read_pool.spawn_handle(
                 async move {
+                    for get in &requests {
+                        let key = get.key.to_owned();
+                        let region_id = get.get_context().get_region_id();
+                        let peer = get.get_context().get_peer();
+                        tls_collect_qps(region_id, peer, &key, &key, false);
+                    }
                     KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
@@ -345,7 +351,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                         let region_id = ctx.get_region_id();
                         if enable_async_commit {
-                            // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                            // Update max_ts and check the in-memory lock table before getting the snapshot
                             if let Err(e) = async_commit_check_keys(
                                 &concurrency_manager,
                                 iter::once(&key),
@@ -422,8 +428,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 priority,
                 thread_rng().next_u64(),
             );
-        res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-            .flatten()
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Get values of a set of keys in a batch from the snapshot.
@@ -434,7 +442,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         keys: Vec<Key>,
         start_ts: TimeStamp,
-    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
+    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -461,7 +469,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
                 if enable_async_commit {
-                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                    // Update max_ts and check the in-memory lock table before getting the snapshot
                     async_commit_check_keys(
                         &concurrency_manager,
                         &keys,
@@ -522,8 +530,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             thread_rng().next_u64(),
         );
 
-        res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-            .flatten()
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Scan keys in [`start_key`, `end_key`) up to `limit` keys from the snapshot.
@@ -541,7 +551,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         start_ts: TimeStamp,
         key_only: bool,
         reverse_scan: bool,
-    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
+    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -576,8 +586,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
                 if enable_async_commit {
-                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                    concurrency_manager.update_max_read_ts(start_ts);
+                    // Update max_ts and check the in-memory lock table before getting the snapshot
+                    concurrency_manager.update_max_ts(start_ts);
                     if ctx.get_isolation_level() == IsolationLevel::Si {
                         concurrency_manager
                             .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
@@ -641,8 +651,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             thread_rng().next_u64(),
         );
 
-        res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-            .flatten()
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     pub fn sched_txn_command<T: StorageCallbackType>(
@@ -749,7 +761,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         key: Vec<u8>,
-    ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
+    ) -> impl Future<Output = Result<Option<Vec<u8>>>> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -785,21 +797,29 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             thread_rng().next_u64(),
         );
 
-        res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-            .flatten()
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Get the values of a set of raw keys, return a list of `Result`s.
     pub fn raw_batch_get_command(
         &self,
         gets: Vec<RawGetRequest>,
-    ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
+    ) -> impl Future<Output = Result<Vec<Result<Option<Vec<u8>>>>>> {
         const CMD: CommandKind = CommandKind::raw_batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = gets[0].get_context().get_priority();
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
+                for get in &gets {
+                    let key = get.key.to_owned();
+                    let region_id = get.get_context().get_region_id();
+                    let peer = get.get_context().get_peer();
+                    tls_collect_qps(region_id, peer, &key, &key, false);
+                }
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
@@ -846,8 +866,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             priority,
             thread_rng().next_u64(),
         );
-        res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-            .flatten()
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Get the values of some raw keys in a batch.
@@ -856,7 +878,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         keys: Vec<Vec<u8>>,
-    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
+    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -918,8 +940,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             thread_rng().next_u64(),
         );
 
-        res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-            .flatten()
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Write a raw key to the storage.
@@ -1152,7 +1176,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         limit: usize,
         key_only: bool,
         reverse_scan: bool,
-    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
+    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -1231,8 +1255,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             thread_rng().next_u64(),
         );
 
-        res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-            .flatten()
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 
     /// Check the given raw kv CF name. Return the CF name, or `Err` if given CF name is invalid.
@@ -1280,7 +1306,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         each_limit: usize,
         key_only: bool,
         reverse_scan: bool,
-    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
+    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -1365,8 +1391,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             thread_rng().next_u64(),
         );
 
-        res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-            .flatten()
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
     }
 }
 
@@ -1385,7 +1413,7 @@ fn async_commit_check_keys<'a>(
     isolation_level: IsolationLevel,
     bypass_locks: &TsSet,
 ) -> Result<()> {
-    concurrency_manager.update_max_read_ts(ts);
+    concurrency_manager.update_max_ts(ts);
     if isolation_level == IsolationLevel::Si {
         for key in keys {
             concurrency_manager
@@ -1626,7 +1654,7 @@ mod tests {
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
-    use futures03::executor::block_on;
+    use futures::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, LockInfo, Op};
     use std::{
         sync::{
@@ -1646,11 +1674,11 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        expect_none(
-            storage
-                .get(Context::default(), Key::from_raw(b"x"), 100.into())
-                .wait(),
-        );
+        expect_none(block_on(storage.get(
+            Context::default(),
+            Key::from_raw(b"x"),
+            100.into(),
+        )));
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
@@ -1669,9 +1697,7 @@ mod tests {
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
-            storage
-                .get(Context::default(), Key::from_raw(b"x"), 101.into())
-                .wait(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
         );
         storage
             .sched_txn_command(
@@ -1685,16 +1711,14 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(
-            storage
-                .get(Context::default(), Key::from_raw(b"x"), 100.into())
-                .wait(),
-        );
+        expect_none(block_on(storage.get(
+            Context::default(),
+            Key::from_raw(b"x"),
+            100.into(),
+        )));
         expect_value(
             b"100".to_vec(),
-            storage
-                .get(Context::default(), Key::from_raw(b"x"), 101.into())
-                .wait(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
         );
     }
 
@@ -1738,9 +1762,7 @@ mod tests {
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
-            storage
-                .get(Context::default(), Key::from_raw(b"x"), 1.into())
-                .wait(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 1.into())),
         );
         expect_error(
             |e| match e {
@@ -1749,18 +1771,16 @@ mod tests {
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"x"),
-                    None,
-                    1000,
-                    0,
-                    1.into(),
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"x"),
+                None,
+                1000,
+                0,
+                1.into(),
+                false,
+                false,
+            )),
         );
         expect_error(
             |e| match e {
@@ -1769,21 +1789,17 @@ mod tests {
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
-            storage
-                .batch_get(
-                    Context::default(),
-                    vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
-                    1.into(),
-                )
-                .wait(),
+            block_on(storage.batch_get(
+                Context::default(),
+                vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
+                1.into(),
+            )),
         );
-        let x = storage
-            .batch_get_command(vec![
-                create_get_request(b"c", 1),
-                create_get_request(b"d", 1),
-            ])
-            .wait()
-            .unwrap();
+        let x = block_on(storage.batch_get_command(vec![
+            create_get_request(b"c", 1),
+            create_get_request(b"d", 1),
+        ]))
+        .unwrap();
         for v in x {
             expect_error(
                 |e| match e {
@@ -1823,98 +1839,86 @@ mod tests {
         // Forward
         expect_multi_values(
             vec![None, None, None],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    None,
-                    1000,
-                    0,
-                    5.into(),
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                None,
+                1000,
+                0,
+                5.into(),
+                false,
+                false,
+            )),
         );
         // Backward
         expect_multi_values(
             vec![None, None, None],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    None,
-                    1000,
-                    0,
-                    5.into(),
-                    false,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                None,
+                1000,
+                0,
+                5.into(),
+                false,
+                true,
+            )),
         );
         // Forward with bound
         expect_multi_values(
             vec![None, None],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    Some(Key::from_raw(b"c")),
-                    1000,
-                    0,
-                    5.into(),
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                Some(Key::from_raw(b"c")),
+                1000,
+                0,
+                5.into(),
+                false,
+                false,
+            )),
         );
         // Backward with bound
         expect_multi_values(
             vec![None, None],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    Some(Key::from_raw(b"b")),
-                    1000,
-                    0,
-                    5.into(),
-                    false,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                Some(Key::from_raw(b"b")),
+                1000,
+                0,
+                5.into(),
+                false,
+                true,
+            )),
         );
         // Forward with limit
         expect_multi_values(
             vec![None, None],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    None,
-                    2,
-                    0,
-                    5.into(),
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                None,
+                2,
+                0,
+                5.into(),
+                false,
+                false,
+            )),
         );
         // Backward with limit
         expect_multi_values(
             vec![None, None],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    None,
-                    2,
-                    0,
-                    5.into(),
-                    false,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                None,
+                2,
+                0,
+                5.into(),
+                false,
+                true,
+            )),
         );
 
         storage
@@ -1940,18 +1944,16 @@ mod tests {
                 Some((b"b".to_vec(), b"bb".to_vec())),
                 Some((b"c".to_vec(), b"cc".to_vec())),
             ],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    None,
-                    1000,
-                    0,
-                    5.into(),
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                None,
+                1000,
+                0,
+                5.into(),
+                false,
+                false,
+            )),
         );
         // Backward
         expect_multi_values(
@@ -1960,18 +1962,16 @@ mod tests {
                 Some((b"b".to_vec(), b"bb".to_vec())),
                 Some((b"a".to_vec(), b"aa".to_vec())),
             ],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    None,
-                    1000,
-                    0,
-                    5.into(),
-                    false,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                None,
+                1000,
+                0,
+                5.into(),
+                false,
+                true,
+            )),
         );
         // Forward with sample step
         expect_multi_values(
@@ -1979,18 +1979,16 @@ mod tests {
                 Some((b"a".to_vec(), b"aa".to_vec())),
                 Some((b"c".to_vec(), b"cc".to_vec())),
             ],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    None,
-                    1000,
-                    2,
-                    5.into(),
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                None,
+                1000,
+                2,
+                5.into(),
+                false,
+                false,
+            )),
         );
         // Backward with sample step
         expect_multi_values(
@@ -1998,50 +1996,44 @@ mod tests {
                 Some((b"c".to_vec(), b"cc".to_vec())),
                 Some((b"a".to_vec(), b"aa".to_vec())),
             ],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    None,
-                    1000,
-                    2,
-                    5.into(),
-                    false,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                None,
+                1000,
+                2,
+                5.into(),
+                false,
+                true,
+            )),
         );
         // Forward with sample step and limit
         expect_multi_values(
             vec![Some((b"a".to_vec(), b"aa".to_vec()))],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    None,
-                    1,
-                    2,
-                    5.into(),
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                None,
+                1,
+                2,
+                5.into(),
+                false,
+                false,
+            )),
         );
         // Backward with sample step and limit
         expect_multi_values(
             vec![Some((b"c".to_vec(), b"cc".to_vec()))],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    None,
-                    1,
-                    2,
-                    5.into(),
-                    false,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                None,
+                1,
+                2,
+                5.into(),
+                false,
+                true,
+            )),
         );
         // Forward with bound
         expect_multi_values(
@@ -2049,18 +2041,16 @@ mod tests {
                 Some((b"a".to_vec(), b"aa".to_vec())),
                 Some((b"b".to_vec(), b"bb".to_vec())),
             ],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    Some(Key::from_raw(b"c")),
-                    1000,
-                    0,
-                    5.into(),
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                Some(Key::from_raw(b"c")),
+                1000,
+                0,
+                5.into(),
+                false,
+                false,
+            )),
         );
         // Backward with bound
         expect_multi_values(
@@ -2068,18 +2058,16 @@ mod tests {
                 Some((b"c".to_vec(), b"cc".to_vec())),
                 Some((b"b".to_vec(), b"bb".to_vec())),
             ],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    Some(Key::from_raw(b"b")),
-                    1000,
-                    0,
-                    5.into(),
-                    false,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                Some(Key::from_raw(b"b")),
+                1000,
+                0,
+                5.into(),
+                false,
+                true,
+            )),
         );
 
         // Forward with limit
@@ -2088,18 +2076,16 @@ mod tests {
                 Some((b"a".to_vec(), b"aa".to_vec())),
                 Some((b"b".to_vec(), b"bb".to_vec())),
             ],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    None,
-                    2,
-                    0,
-                    5.into(),
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                None,
+                2,
+                0,
+                5.into(),
+                false,
+                false,
+            )),
         );
         // Backward with limit
         expect_multi_values(
@@ -2107,18 +2093,16 @@ mod tests {
                 Some((b"c".to_vec(), b"cc".to_vec())),
                 Some((b"b".to_vec(), b"bb".to_vec())),
             ],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    None,
-                    2,
-                    0,
-                    5.into(),
-                    false,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                None,
+                2,
+                0,
+                5.into(),
+                false,
+                true,
+            )),
         );
     }
 
@@ -2167,98 +2151,86 @@ mod tests {
         // Forward
         expect_multi_values(
             vec![None, None, None],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    None,
-                    1000,
-                    0,
-                    5.into(),
-                    true,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                None,
+                1000,
+                0,
+                5.into(),
+                true,
+                false,
+            )),
         );
         // Backward
         expect_multi_values(
             vec![None, None, None],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    None,
-                    1000,
-                    0,
-                    5.into(),
-                    true,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                None,
+                1000,
+                0,
+                5.into(),
+                true,
+                true,
+            )),
         );
         // Forward with bound
         expect_multi_values(
             vec![None, None],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    Some(Key::from_raw(b"c")),
-                    1000,
-                    0,
-                    5.into(),
-                    true,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                Some(Key::from_raw(b"c")),
+                1000,
+                0,
+                5.into(),
+                true,
+                false,
+            )),
         );
         // Backward with bound
         expect_multi_values(
             vec![None, None],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    Some(Key::from_raw(b"b")),
-                    1000,
-                    0,
-                    5.into(),
-                    true,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                Some(Key::from_raw(b"b")),
+                1000,
+                0,
+                5.into(),
+                true,
+                true,
+            )),
         );
         // Forward with limit
         expect_multi_values(
             vec![None, None],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    None,
-                    2,
-                    0,
-                    5.into(),
-                    true,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                None,
+                2,
+                0,
+                5.into(),
+                true,
+                false,
+            )),
         );
         // Backward with limit
         expect_multi_values(
             vec![None, None],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    None,
-                    2,
-                    0,
-                    5.into(),
-                    true,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                None,
+                2,
+                0,
+                5.into(),
+                true,
+                true,
+            )),
         );
 
         storage
@@ -2284,18 +2256,16 @@ mod tests {
                 Some((b"b".to_vec(), vec![])),
                 Some((b"c".to_vec(), vec![])),
             ],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    None,
-                    1000,
-                    0,
-                    5.into(),
-                    true,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                None,
+                1000,
+                0,
+                5.into(),
+                true,
+                false,
+            )),
         );
         // Backward
         expect_multi_values(
@@ -2304,83 +2274,73 @@ mod tests {
                 Some((b"b".to_vec(), vec![])),
                 Some((b"a".to_vec(), vec![])),
             ],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    None,
-                    1000,
-                    0,
-                    5.into(),
-                    true,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                None,
+                1000,
+                0,
+                5.into(),
+                true,
+                true,
+            )),
         );
         // Forward with bound
         expect_multi_values(
             vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    Some(Key::from_raw(b"c")),
-                    1000,
-                    0,
-                    5.into(),
-                    true,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                Some(Key::from_raw(b"c")),
+                1000,
+                0,
+                5.into(),
+                true,
+                false,
+            )),
         );
         // Backward with bound
         expect_multi_values(
             vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    Some(Key::from_raw(b"b")),
-                    1000,
-                    0,
-                    5.into(),
-                    true,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                Some(Key::from_raw(b"b")),
+                1000,
+                0,
+                5.into(),
+                true,
+                true,
+            )),
         );
 
         // Forward with limit
         expect_multi_values(
             vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\x00"),
-                    None,
-                    2,
-                    0,
-                    5.into(),
-                    true,
-                    false,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\x00"),
+                None,
+                2,
+                0,
+                5.into(),
+                true,
+                false,
+            )),
         );
         // Backward with limit
         expect_multi_values(
             vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
-            storage
-                .scan(
-                    Context::default(),
-                    Key::from_raw(b"\xff"),
-                    None,
-                    2,
-                    0,
-                    5.into(),
-                    true,
-                    true,
-                )
-                .wait(),
+            block_on(storage.scan(
+                Context::default(),
+                Key::from_raw(b"\xff"),
+                None,
+                2,
+                0,
+                5.into(),
+                true,
+                true,
+            )),
         );
     }
 
@@ -2407,13 +2367,11 @@ mod tests {
         rx.recv().unwrap();
         expect_multi_values(
             vec![None],
-            storage
-                .batch_get(
-                    Context::default(),
-                    vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
-                    2.into(),
-                )
-                .wait(),
+            block_on(storage.batch_get(
+                Context::default(),
+                vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
+                2.into(),
+            )),
         );
         storage
             .sched_txn_command(
@@ -2437,18 +2395,16 @@ mod tests {
                 Some((b"a".to_vec(), b"aa".to_vec())),
                 Some((b"b".to_vec(), b"bb".to_vec())),
             ],
-            storage
-                .batch_get(
-                    Context::default(),
-                    vec![
-                        Key::from_raw(b"c"),
-                        Key::from_raw(b"x"),
-                        Key::from_raw(b"a"),
-                        Key::from_raw(b"b"),
-                    ],
-                    5.into(),
-                )
-                .wait(),
+            block_on(storage.batch_get(
+                Context::default(),
+                vec![
+                    Key::from_raw(b"c"),
+                    Key::from_raw(b"x"),
+                    Key::from_raw(b"a"),
+                    Key::from_raw(b"b"),
+                ],
+                5.into(),
+            )),
         );
     }
 
@@ -2480,13 +2436,11 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        let mut x = storage
-            .batch_get_command(vec![
-                create_get_request(b"c", 2),
-                create_get_request(b"d", 2),
-            ])
-            .wait()
-            .unwrap();
+        let mut x = block_on(storage.batch_get_command(vec![
+            create_get_request(b"c", 2),
+            create_get_request(b"d", 2),
+        ]))
+        .unwrap();
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
@@ -2513,18 +2467,16 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        let x: Vec<Option<Vec<u8>>> = storage
-            .batch_get_command(vec![
-                create_get_request(b"c", 5),
-                create_get_request(b"x", 5),
-                create_get_request(b"a", 5),
-                create_get_request(b"b", 5),
-            ])
-            .wait()
-            .unwrap()
-            .into_iter()
-            .map(|x| x.unwrap())
-            .collect();
+        let x: Vec<Option<Vec<u8>>> = block_on(storage.batch_get_command(vec![
+            create_get_request(b"c", 5),
+            create_get_request(b"x", 5),
+            create_get_request(b"a", 5),
+            create_get_request(b"b", 5),
+        ]))
+        .unwrap()
+        .into_iter()
+        .map(|x| x.unwrap())
+        .collect();
         assert_eq!(
             x,
             vec![
@@ -2590,15 +2542,11 @@ mod tests {
         rx.recv().unwrap();
         expect_value(
             b"100".to_vec(),
-            storage
-                .get(Context::default(), Key::from_raw(b"x"), 120.into())
-                .wait(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 120.into())),
         );
         expect_value(
             b"101".to_vec(),
-            storage
-                .get(Context::default(), Key::from_raw(b"y"), 120.into())
-                .wait(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 120.into())),
         );
         storage
             .sched_txn_command(
@@ -2627,11 +2575,11 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        expect_none(
-            storage
-                .get(Context::default(), Key::from_raw(b"x"), 100.into())
-                .wait(),
-        );
+        expect_none(block_on(storage.get(
+            Context::default(),
+            Key::from_raw(b"x"),
+            100.into(),
+        )));
         storage
             .sched_txn_command::<()>(
                 commands::Pause::new(vec![Key::from_raw(b"x")], 1000, Context::default()).into(),
@@ -2668,6 +2616,7 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
+        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -2692,11 +2641,12 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(
-            storage
-                .get(Context::default(), Key::from_raw(b"x"), 105.into())
-                .wait(),
-        );
+        assert_eq!(cm.max_ts(), 100.into());
+        expect_none(block_on(storage.get(
+            Context::default(),
+            Key::from_raw(b"x"),
+            105.into(),
+        )));
     }
 
     #[test]
@@ -2750,11 +2700,11 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(
-            storage
-                .get(Context::default(), Key::from_raw(b"x"), ts(230, 0))
-                .wait(),
-        );
+        expect_none(block_on(storage.get(
+            Context::default(),
+            Key::from_raw(b"x"),
+            ts(230, 0),
+        )));
     }
 
     #[test]
@@ -2765,7 +2715,7 @@ mod tests {
         let (tx, rx) = channel();
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
-        expect_none(storage.get(ctx, Key::from_raw(b"x"), 100.into()).wait());
+        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into())));
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         storage
@@ -2791,12 +2741,12 @@ mod tests {
         rx.recv().unwrap();
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
-        expect_none(storage.get(ctx, Key::from_raw(b"x"), 100.into()).wait());
+        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into())));
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            storage.get(ctx, Key::from_raw(b"x"), 101.into()).wait(),
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into())),
         );
     }
 
@@ -2809,11 +2759,11 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        expect_none(
-            storage
-                .get(Context::default(), Key::from_raw(b"x"), 100.into())
-                .wait(),
-        );
+        expect_none(block_on(storage.get(
+            Context::default(),
+            Key::from_raw(b"x"),
+            100.into(),
+        )));
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
@@ -2848,7 +2798,7 @@ mod tests {
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            storage.get(ctx, Key::from_raw(b"x"), 101.into()).wait(),
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into())),
         );
         // Command Get with high priority not block by command Pause.
         assert_eq!(rx.recv().unwrap(), 3);
@@ -2894,21 +2844,15 @@ mod tests {
         rx.recv().unwrap();
         expect_value(
             b"100".to_vec(),
-            storage
-                .get(Context::default(), Key::from_raw(b"x"), 101.into())
-                .wait(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
         );
         expect_value(
             b"100".to_vec(),
-            storage
-                .get(Context::default(), Key::from_raw(b"y"), 101.into())
-                .wait(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into())),
         );
         expect_value(
             b"100".to_vec(),
-            storage
-                .get(Context::default(), Key::from_raw(b"z"), 101.into())
-                .wait(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into())),
         );
 
         // Delete range [x, z)
@@ -2922,21 +2866,19 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(
-            storage
-                .get(Context::default(), Key::from_raw(b"x"), 101.into())
-                .wait(),
-        );
-        expect_none(
-            storage
-                .get(Context::default(), Key::from_raw(b"y"), 101.into())
-                .wait(),
-        );
+        expect_none(block_on(storage.get(
+            Context::default(),
+            Key::from_raw(b"x"),
+            101.into(),
+        )));
+        expect_none(block_on(storage.get(
+            Context::default(),
+            Key::from_raw(b"y"),
+            101.into(),
+        )));
         expect_value(
             b"100".to_vec(),
-            storage
-                .get(Context::default(), Key::from_raw(b"z"), 101.into())
-                .wait(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into())),
         );
 
         storage
@@ -2949,11 +2891,11 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(
-            storage
-                .get(Context::default(), Key::from_raw(b"z"), 101.into())
-                .wait(),
-        );
+        expect_none(block_on(storage.get(
+            Context::default(),
+            Key::from_raw(b"z"),
+            101.into(),
+        )));
     }
 
     #[test]
@@ -2986,9 +2928,7 @@ mod tests {
 
         expect_value(
             b"004".to_vec(),
-            storage
-                .raw_get(Context::default(), "".to_string(), b"d".to_vec())
-                .wait(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())),
         );
 
         // Delete ["d", "e")
@@ -3006,20 +2946,16 @@ mod tests {
         // Assert key "d" has gone
         expect_value(
             b"003".to_vec(),
-            storage
-                .raw_get(Context::default(), "".to_string(), b"c".to_vec())
-                .wait(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())),
         );
-        expect_none(
-            storage
-                .raw_get(Context::default(), "".to_string(), b"d".to_vec())
-                .wait(),
-        );
+        expect_none(block_on(storage.raw_get(
+            Context::default(),
+            "".to_string(),
+            b"d".to_vec(),
+        )));
         expect_value(
             b"005".to_vec(),
-            storage
-                .raw_get(Context::default(), "".to_string(), b"e".to_vec())
-                .wait(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())),
         );
 
         // Delete ["aa", "ab")
@@ -3037,15 +2973,11 @@ mod tests {
         // Assert nothing happened
         expect_value(
             b"001".to_vec(),
-            storage
-                .raw_get(Context::default(), "".to_string(), b"a".to_vec())
-                .wait(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())),
         );
         expect_value(
             b"002".to_vec(),
-            storage
-                .raw_get(Context::default(), "".to_string(), b"b".to_vec())
-                .wait(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"b".to_vec())),
         );
 
         // Delete all
@@ -3062,11 +2994,11 @@ mod tests {
 
         // Assert now no key remains
         for kv in &test_data {
-            expect_none(
-                storage
-                    .raw_get(Context::default(), "".to_string(), kv.0.to_vec())
-                    .wait(),
-            );
+            expect_none(block_on(storage.raw_get(
+                Context::default(),
+                "".to_string(),
+                kv.0.to_vec(),
+            )));
         }
 
         rx.recv().unwrap();
@@ -3102,9 +3034,7 @@ mod tests {
         for (key, val) in test_data {
             expect_value(
                 val,
-                storage
-                    .raw_get(Context::default(), "".to_string(), key)
-                    .wait(),
+                block_on(storage.raw_get(Context::default(), "".to_string(), key)),
             );
         }
     }
@@ -3143,9 +3073,7 @@ mod tests {
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
-            storage
-                .raw_batch_get(Context::default(), "".to_string(), keys)
-                .wait(),
+            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)),
         );
     }
 
@@ -3188,9 +3116,7 @@ mod tests {
             })
             .collect();
         let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
-        let x: Vec<Option<Vec<u8>>> = storage
-            .raw_batch_get_command(cmds)
-            .wait()
+        let x: Vec<Option<Vec<u8>>> = block_on(storage.raw_batch_get_command(cmds))
             .unwrap()
             .into_iter()
             .map(|x| x.unwrap())
@@ -3232,9 +3158,7 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            storage
-                .raw_batch_get(Context::default(), "".to_string(), keys)
-                .wait(),
+            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)),
         );
 
         // Delete ["b", "d"]
@@ -3251,31 +3175,25 @@ mod tests {
         // Assert "b" and "d" are gone
         expect_value(
             b"aa".to_vec(),
-            storage
-                .raw_get(Context::default(), "".to_string(), b"a".to_vec())
-                .wait(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())),
         );
-        expect_none(
-            storage
-                .raw_get(Context::default(), "".to_string(), b"b".to_vec())
-                .wait(),
-        );
+        expect_none(block_on(storage.raw_get(
+            Context::default(),
+            "".to_string(),
+            b"b".to_vec(),
+        )));
         expect_value(
             b"cc".to_vec(),
-            storage
-                .raw_get(Context::default(), "".to_string(), b"c".to_vec())
-                .wait(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())),
         );
-        expect_none(
-            storage
-                .raw_get(Context::default(), "".to_string(), b"d".to_vec())
-                .wait(),
-        );
+        expect_none(block_on(storage.raw_get(
+            Context::default(),
+            "".to_string(),
+            b"d".to_vec(),
+        )));
         expect_value(
             b"ee".to_vec(),
-            storage
-                .raw_get(Context::default(), "".to_string(), b"e".to_vec())
-                .wait(),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())),
         );
 
         // Delete ["a", "c", "e"]
@@ -3291,11 +3209,11 @@ mod tests {
 
         // Assert no key remains
         for (k, _) in test_data {
-            expect_none(
-                storage
-                    .raw_get(Context::default(), "".to_string(), k)
-                    .wait(),
-            );
+            expect_none(block_on(storage.raw_get(
+                Context::default(),
+                "".to_string(),
+                k,
+            )));
         }
     }
 
@@ -3347,32 +3265,28 @@ mod tests {
             .collect();
         expect_multi_values(
             results.clone(),
-            storage
-                .raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    vec![],
-                    None,
-                    20,
-                    true,
-                    false,
-                )
-                .wait(),
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                vec![],
+                None,
+                20,
+                true,
+                false,
+            )),
         );
         results = results.split_off(10);
         expect_multi_values(
             results,
-            storage
-                .raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"c2".to_vec(),
-                    None,
-                    20,
-                    true,
-                    false,
-                )
-                .wait(),
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"c2".to_vec(),
+                None,
+                20,
+                true,
+                false,
+            )),
         );
         let mut results: Vec<Option<KvPair>> = test_data
             .clone()
@@ -3381,32 +3295,28 @@ mod tests {
             .collect();
         expect_multi_values(
             results.clone(),
-            storage
-                .raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    vec![],
-                    None,
-                    20,
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                vec![],
+                None,
+                20,
+                false,
+                false,
+            )),
         );
         results = results.split_off(10);
         expect_multi_values(
             results,
-            storage
-                .raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"c2".to_vec(),
-                    None,
-                    20,
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"c2".to_vec(),
+                None,
+                20,
+                false,
+                false,
+            )),
         );
         let results: Vec<Option<KvPair>> = test_data
             .clone()
@@ -3416,17 +3326,15 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            storage
-                .raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"z".to_vec(),
-                    None,
-                    20,
-                    false,
-                    true,
-                )
-                .wait(),
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"z".to_vec(),
+                None,
+                20,
+                false,
+                true,
+            )),
         );
         let results: Vec<Option<KvPair>> = test_data
             .clone()
@@ -3437,17 +3345,15 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            storage
-                .raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"z".to_vec(),
-                    None,
-                    5,
-                    false,
-                    true,
-                )
-                .wait(),
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"z".to_vec(),
+                None,
+                5,
+                false,
+                true,
+            )),
         );
 
         // Scan with end_key
@@ -3460,17 +3366,15 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            storage
-                .raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"b2".to_vec(),
-                    Some(b"c2".to_vec()),
-                    20,
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"b2".to_vec(),
+                Some(b"c2".to_vec()),
+                20,
+                false,
+                false,
+            )),
         );
         let results: Vec<Option<KvPair>> = test_data
             .clone()
@@ -3481,17 +3385,15 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            storage
-                .raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"b2".to_vec(),
-                    Some(b"b2\x00".to_vec()),
-                    20,
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"b2".to_vec(),
+                Some(b"b2\x00".to_vec()),
+                20,
+                false,
+                false,
+            )),
         );
 
         // Reverse scan with end_key
@@ -3505,17 +3407,15 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            storage
-                .raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"c2".to_vec(),
-                    Some(b"b2".to_vec()),
-                    20,
-                    false,
-                    true,
-                )
-                .wait(),
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"c2".to_vec(),
+                Some(b"b2".to_vec()),
+                20,
+                false,
+                true,
+            )),
         );
         let results: Vec<Option<KvPair>> = test_data
             .into_iter()
@@ -3525,17 +3425,15 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            storage
-                .raw_scan(
-                    Context::default(),
-                    "".to_string(),
-                    b"b2\x00".to_vec(),
-                    Some(b"b2".to_vec()),
-                    20,
-                    false,
-                    true,
-                )
-                .wait(),
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"b2\x00".to_vec(),
+                Some(b"b2".to_vec()),
+                20,
+                false,
+                true,
+            )),
         );
 
         // End key tests. Confirm that lower/upper bound works correctly.
@@ -3729,9 +3627,7 @@ mod tests {
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
-            storage
-                .raw_batch_get(Context::default(), "".to_string(), keys)
-                .wait(),
+            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)),
         );
 
         let results = vec![
@@ -3759,16 +3655,14 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            storage
-                .raw_batch_scan(
-                    Context::default(),
-                    "".to_string(),
-                    ranges.clone(),
-                    5,
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges.clone(),
+                5,
+                false,
+                false,
+            )),
         );
 
         let results = vec![
@@ -3788,16 +3682,14 @@ mod tests {
         ];
         expect_multi_values(
             results,
-            storage
-                .raw_batch_scan(
-                    Context::default(),
-                    "".to_string(),
-                    ranges.clone(),
-                    5,
-                    true,
-                    false,
-                )
-                .wait(),
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges.clone(),
+                5,
+                true,
+                false,
+            )),
         );
 
         let results = vec![
@@ -3813,16 +3705,14 @@ mod tests {
         ];
         expect_multi_values(
             results,
-            storage
-                .raw_batch_scan(
-                    Context::default(),
-                    "".to_string(),
-                    ranges.clone(),
-                    3,
-                    false,
-                    false,
-                )
-                .wait(),
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges.clone(),
+                3,
+                false,
+                false,
+            )),
         );
 
         let results = vec![
@@ -3838,9 +3728,14 @@ mod tests {
         ];
         expect_multi_values(
             results,
-            storage
-                .raw_batch_scan(Context::default(), "".to_string(), ranges, 3, true, false)
-                .wait(),
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges,
+                3,
+                true,
+                false,
+            )),
         );
 
         let results = vec![
@@ -3869,9 +3764,14 @@ mod tests {
         .collect();
         expect_multi_values(
             results,
-            storage
-                .raw_batch_scan(Context::default(), "".to_string(), ranges, 5, false, true)
-                .wait(),
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges,
+                5,
+                false,
+                true,
+            )),
         );
 
         let results = vec![
@@ -3892,9 +3792,14 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            storage
-                .raw_batch_scan(Context::default(), "".to_string(), ranges, 2, false, true)
-                .wait(),
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges,
+                2,
+                false,
+                true,
+            )),
         );
 
         let results = vec![
@@ -3923,9 +3828,14 @@ mod tests {
         .collect();
         expect_multi_values(
             results,
-            storage
-                .raw_batch_scan(Context::default(), "".to_string(), ranges, 5, true, true)
-                .wait(),
+            block_on(storage.raw_batch_scan(
+                Context::default(),
+                "".to_string(),
+                ranges,
+                5,
+                true,
+                true,
+            )),
         );
     }
 
@@ -4462,6 +4372,7 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
+        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
 
         let k = Key::from_raw(b"k");
@@ -4492,6 +4403,8 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+
+        assert_eq!(cm.max_ts(), ts(9, 1));
 
         // No lock and no commit info. If specified rollback_if_not_exist, the key will be rolled
         // back.
@@ -4652,6 +4565,7 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
+        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
 
         let k1 = Key::from_raw(b"k1");
@@ -4723,6 +4637,8 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
+        assert_eq!(cm.max_ts(), 10.into());
+
         // Some of the locks do not exist
         let k3 = Key::from_raw(b"k3");
         let k4 = Key::from_raw(b"k4");
@@ -4759,6 +4675,7 @@ mod tests {
             .set_pipelined_pessimistic_lock(pipelined_pessimistic_lock)
             .build()
             .unwrap();
+        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
         let (key, val) = (Key::from_raw(b"key"), b"val".to_vec());
         let (key2, val2) = (Key::from_raw(b"key2"), b"val2".to_vec());
@@ -4783,6 +4700,10 @@ mod tests {
                 )
                 .unwrap();
             rx.recv().unwrap();
+
+            if return_values {
+                assert_eq!(cm.max_ts(), 10.into());
+            }
 
             // Duplicated command
             storage
@@ -4830,6 +4751,9 @@ mod tests {
             // The DummyLockManager consumes the Msg::WaitForLock.
             rx.recv_timeout(Duration::from_millis(100)).unwrap_err();
         }
+
+        // Needn't update max_ts when failing to read value
+        assert_eq!(cm.max_ts(), 10.into());
 
         // Put key and key2.
         storage
@@ -4886,6 +4810,9 @@ mod tests {
             rx.recv().unwrap();
         }
 
+        // Needn't update max_ts when failing to read value
+        assert_eq!(cm.max_ts(), 10.into());
+
         // Return multiple values
         for &return_values in &[false, true] {
             let pessimistic_lock_res = if return_values {
@@ -4909,6 +4836,10 @@ mod tests {
                 )
                 .unwrap();
             rx.recv().unwrap();
+
+            if return_values {
+                assert_eq!(cm.max_ts(), 30.into());
+            }
 
             delete_pessimistic_lock(&storage, key.clone(), 30, 30);
         }
@@ -5440,37 +5371,30 @@ mod tests {
 
         // Test get
         let key_error = extract_key_error(
-            &storage
-                .get(ctx.clone(), key.clone(), 100.into())
-                .wait()
-                .unwrap_err(),
+            &block_on(storage.get(ctx.clone(), key.clone(), 100.into())).unwrap_err(),
         );
         assert_eq!(key_error.get_locked().get_key(), b"key");
 
         // Test batch_get
         let key_error = extract_key_error(
-            &storage
-                .batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into())
-                .wait()
+            &block_on(storage.batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into()))
                 .unwrap_err(),
         );
         assert_eq!(key_error.get_locked().get_key(), b"key");
 
         // Test scan
         let key_error = extract_key_error(
-            &storage
-                .scan(
-                    ctx.clone(),
-                    Key::from_raw(b"a"),
-                    None,
-                    10,
-                    0,
-                    100.into(),
-                    false,
-                    false,
-                )
-                .wait()
-                .unwrap_err(),
+            &block_on(storage.scan(
+                ctx.clone(),
+                Key::from_raw(b"a"),
+                None,
+                10,
+                0,
+                100.into(),
+                false,
+                false,
+            ))
+            .unwrap_err(),
         );
         assert_eq!(key_error.get_locked().get_key(), b"key");
 
@@ -5483,9 +5407,87 @@ mod tests {
         req2.set_context(ctx);
         req2.set_key(b"key".to_vec());
         req2.set_version(100);
-        let res = storage.batch_get_command(vec![req1, req2]).wait().unwrap();
+        let res = block_on(storage.batch_get_command(vec![req1, req2])).unwrap();
         assert!(res[0].is_ok());
         let key_error = extract_key_error(&res[1].as_ref().unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
+    }
+
+    #[test]
+    fn test_async_commit_prewrite() {
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .build()
+            .unwrap();
+        let cm = storage.concurrency_manager.clone();
+        cm.update_max_ts(10.into());
+
+        // Optimistic prewrite
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![
+                        Mutation::Put((Key::from_raw(b"a"), b"v".to_vec())),
+                        Mutation::Put((Key::from_raw(b"b"), b"v".to_vec())),
+                        Mutation::Put((Key::from_raw(b"c"), b"v".to_vec())),
+                    ],
+                    b"c".to_vec(),
+                    100.into(),
+                    1000,
+                    false,
+                    3,
+                    TimeStamp::default(),
+                    Some(vec![b"a".to_vec(), b"b".to_vec()]),
+                    Context::default(),
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.min_commit_ts, 101.into());
+
+        // Pessimistic prewrite
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command(
+                    vec![(Key::from_raw(b"d"), false), (Key::from_raw(b"e"), false)],
+                    200,
+                    300,
+                    false,
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        cm.update_max_ts(1000.into());
+
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![
+                        (Mutation::Put((Key::from_raw(b"d"), b"v".to_vec())), true),
+                        (Mutation::Put((Key::from_raw(b"e"), b"v".to_vec())), true),
+                    ],
+                    b"d".to_vec(),
+                    200.into(),
+                    1000,
+                    400.into(),
+                    2,
+                    401.into(),
+                    Some(vec![b"e".to_vec()]),
+                    Context::default(),
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.min_commit_ts, 1001.into());
     }
 }

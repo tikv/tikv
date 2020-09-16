@@ -43,6 +43,10 @@ make_auto_flush_static_metric! {
         seek,
         seek_for_prev,
         over_seek_bound,
+        next_tombstone,
+        prev_tombstone,
+        seek_tombstone,
+        seek_for_prev_tombstone,
     }
 
     pub label_enum WaitType {
@@ -228,6 +232,10 @@ impl Into<ScanKind> for GcKeysDetail {
             GcKeysDetail::seek => ScanKind::seek,
             GcKeysDetail::seek_for_prev => ScanKind::seek_for_prev,
             GcKeysDetail::over_seek_bound => ScanKind::over_seek_bound,
+            GcKeysDetail::next_tombstone => ScanKind::next_tombstone,
+            GcKeysDetail::prev_tombstone => ScanKind::prev_tombstone,
+            GcKeysDetail::seek_tombstone => ScanKind::seek_tombstone,
+            GcKeysDetail::seek_for_prev_tombstone => ScanKind::seek_for_prev_tombstone,
         }
     }
 }

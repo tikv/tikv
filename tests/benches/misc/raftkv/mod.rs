@@ -12,7 +12,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{
-    cmd_resp, util, Callback, CasualMessage, CasualRouter, ProposalRouter, RaftCommand,
+    cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand,
     ReadResponse, RegionSnapshot, SignificantMsg, StoreMsg, StoreRouter, WriteResponse,
 };
 use raftstore::Result;
@@ -79,8 +79,8 @@ impl ProposalRouter<RocksSnapshot> for SyncBenchRouter {
         Ok(())
     }
 }
-impl StoreRouter for SyncBenchRouter {
-    fn send(&self, _: StoreMsg) -> Result<()> {
+impl StoreRouter<RocksEngine> for SyncBenchRouter {
+    fn send(&self, _: StoreMsg<RocksEngine>) -> Result<()> {
         Ok(())
     }
 }
@@ -95,6 +95,8 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
     fn significant_send(&self, _: u64, _: SignificantMsg<RocksSnapshot>) -> Result<()> {
         Ok(())
     }
+
+    fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) -> Result<()> {
         self.invoke(RaftCommand::new(req, cb));
