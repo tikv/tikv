@@ -201,7 +201,7 @@ where
                 f,
                 "ask split region {} with key {}",
                 region.get_id(),
-                hex::encode_upper(&split_key),
+                log_wrappers::Key(&split_key),
             ),
             Task::AutoSplit {
                 ref split_infos,

@@ -162,8 +162,8 @@ where
             }
             _ => panic!(
                 "start_key {} and end_key {} out of order",
-                hex::encode_upper(encoded_start_key),
-                hex::encode_upper(encoded_end_key)
+                log_wrappers::Key(&encoded_start_key),
+                log_wrappers::Key(&encoded_end_key)
             ),
         }
         host.add_checker(Box::new(Checker {

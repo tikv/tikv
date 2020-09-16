@@ -34,6 +34,7 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 txn_types = { path = "../txn_types"}
 lazy_static = "1.4.0"
+log_wrappers = { path = "../log_wrappers" }
 time = "0.1"
 configuration = { path = "../configuration" }
 tempfile = "3.0"

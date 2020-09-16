@@ -41,9 +41,9 @@ impl Display for Task {
                 .field("cf_name", cf_name)
                 .field(
                     "start_key",
-                    &start_key.as_ref().map(|k| hex::encode_upper(k)),
+                    &start_key.as_ref().map(|k| log_wrappers::Key(k)),
                 )
-                .field("end_key", &end_key.as_ref().map(|k| hex::encode_upper(k)))
+                .field("end_key", &end_key.as_ref().map(|k| log_wrappers::Key(k)))
                 .finish(),
             Task::CheckAndCompact {
                 ref cf_names,
@@ -56,8 +56,8 @@ impl Display for Task {
                 .field(
                     "ranges",
                     &(
-                        ranges.first().as_ref().map(|k| hex::encode_upper(k)),
-                        ranges.last().as_ref().map(|k| hex::encode_upper(k)),
+                        ranges.first().as_ref().map(|k| log_wrappers::Key(k)),
+                        ranges.last().as_ref().map(|k| log_wrappers::Key(k)),
                     ),
                 )
                 .field("tombstones_num_threshold", &tombstones_num_threshold)

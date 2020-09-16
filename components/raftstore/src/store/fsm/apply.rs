@@ -1351,7 +1351,7 @@ where
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
-                    hex::encode_upper(&key),
+                    log_wrappers::Key(&key),
                     escape(value),
                     cf,
                     e
@@ -1362,7 +1362,7 @@ where
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
-                    hex::encode_upper(&key),
+                    log_wrappers::Key(&key),
                     escape(value),
                     e
                 );
@@ -1387,7 +1387,7 @@ where
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    hex::encode_upper(&key),
+                    log_wrappers::Key(&key),
                     e
                 )
             });
@@ -1403,7 +1403,7 @@ where
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    hex::encode_upper(&key),
+                    log_wrappers::Key(&key),
                     e
                 )
             });
@@ -1457,8 +1457,8 @@ where
                     panic!(
                         "{} failed to delete files in range [{}, {}): {:?}",
                         self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
+                        log_wrappers::Key(&start_key),
+                        log_wrappers::Key(&end_key),
                         e
                     )
                 });
@@ -1470,8 +1470,8 @@ where
                     panic!(
                         "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
                         self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
+                        log_wrappers::Key(&start_key),
+                        log_wrappers::Key(&end_key),
                         cf,
                         e
                     );
