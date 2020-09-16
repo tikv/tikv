@@ -3118,7 +3118,6 @@ where
                             txn_extra_op: TxnExtraOp::Noop,
                         };
                         cb.invoke_read(resp);
-                        return;
                     }
                     _ => (),
                 },
