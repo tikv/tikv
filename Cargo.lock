@@ -236,6 +236,7 @@ dependencies = [
  "tikv_util",
  "txn_types",
  "uuid",
+ "yatp",
 ]
 
 [[package]]
