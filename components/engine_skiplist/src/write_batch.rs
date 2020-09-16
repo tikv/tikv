@@ -17,7 +17,6 @@ impl WriteBatchExt for SkiplistEngine {
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        let start = Instant::now_coarse();
         let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
             .with_label_values(&[self.name, "write"])
             .start_coarse_timer();
@@ -40,9 +39,6 @@ impl WriteBatchExt for SkiplistEngine {
         SKIPLIST_WRITE_KEYS_HISTOGRAM_VEC
             .with_label_values(&[self.name])
             .observe(wb.written_keys as f64);
-        while start.elapsed() <= Duration::from_millis(3) {
-            atomic::spin_loop_hint();
-        }
         Ok(())
     }
 
