@@ -1121,6 +1121,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "num_cpus",
  "prometheus",
  "prometheus-static-metric",
@@ -1147,6 +1148,7 @@ dependencies = [
  "error_code",
  "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "protobuf",
  "quick-error",
  "raft",
@@ -2107,6 +2109,8 @@ name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
+ "kvproto",
+ "protobuf",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -4110,6 +4114,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "serde",

@@ -37,7 +37,7 @@ use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
-use tikv_util::{escape, Either, MustConsumeVec};
+use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
@@ -1223,7 +1223,7 @@ where
                 "peer_id" => self.id(),
                 "term" => ctx.exec_ctx.as_ref().unwrap().term,
                 "index" => ctx.exec_ctx.as_ref().unwrap().index,
-                "command" => ?request
+                "command" => log_wrappers::ProtobufValue(request)
             );
         }
 
@@ -1291,7 +1291,7 @@ where
                         "skip readonly command";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "command" => ?req
+                        "command" => log_wrappers::ProtobufValue(req)
                     );
                     continue;
                 }
@@ -1352,7 +1352,7 @@ where
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
                     log_wrappers::Key(&key),
-                    escape(value),
+                    log_wrappers::Value(&value),
                     cf,
                     e
                 )
@@ -1363,7 +1363,7 @@ where
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
                     log_wrappers::Key(&key),
-                    escape(value),
+                    log_wrappers::Value(&value),
                     e
                 );
             });
@@ -1511,8 +1511,8 @@ where
                  "ingest fail";
                  "region_id" => self.region_id(),
                  "peer_id" => self.id(),
-                 "sst" => ?sst,
-                 "region" => ?&self.region,
+                 "sst" => log_wrappers::ProtobufValue(&sst),
+                 "region" => log_wrappers::ProtobufValue(&self.region),
             );
             // This file is not valid, we can delete it here.
             let _ = importer.delete(sst);
@@ -1522,7 +1522,12 @@ where
         importer.ingest(sst, engine).unwrap_or_else(|e| {
             // If this failed, it means that the file is corrupted or something
             // is wrong with the engine, but we can do nothing about that.
-            panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
+            panic!(
+                "{} ingest {:?}: {:?}",
+                self.tag,
+                log_wrappers::ProtobufValue(sst),
+                e
+            );
         });
 
         ssts.push(sst.clone());
@@ -1597,7 +1602,7 @@ where
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
                             "peer" => ?peer,
-                            "region" => ?&self.region
+                            "region" => log_wrappers::ProtobufValue(&self.region)
                         );
                         return Err(box_err!(
                             "can't add duplicated peer {:?} to region {:?}",
@@ -1621,7 +1626,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => ?&self.region
+                    "region" => log_wrappers::ProtobufValue(&self.region)
                 );
             }
             ConfChangeType::RemoveNode => {
@@ -1657,7 +1662,7 @@ where
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
-                        "region" => ?&self.region,
+                        "region" => log_wrappers::ProtobufValue(&self.region),
                     );
                     return Err(box_err!(
                         "remove missing peer {:?} from region {:?}",
@@ -1674,7 +1679,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => ?&self.region
+                    "region" => log_wrappers::ProtobufValue(&self.region)
                 );
             }
             ConfChangeType::AddLearnerNode => {
@@ -1688,7 +1693,7 @@ where
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
-                        "region" => ?&self.region
+                        "region" => log_wrappers::ProtobufValue(&self.region)
                     );
                     return Err(box_err!(
                         "can't add duplicated learner {:?} to region {:?}",
@@ -1706,7 +1711,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => ?&self.region,
+                    "region" => log_wrappers::ProtobufValue(&self.region),
                 );
             }
         }
@@ -1806,7 +1811,7 @@ where
             "split region";
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
-            "region" => ?derived,
+            "region" => log_wrappers::ProtobufValue(&derived),
             "keys" => %KeysInfoFormatter(keys.iter()),
         );
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
@@ -1937,7 +1942,12 @@ where
                 });
         }
         write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
-            panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
+            panic!(
+                "{} fails to update region {:?}: {:?}",
+                self.tag,
+                log_wrappers::ProtobufValue(&derived),
+                e
+            )
         });
         let mut resp = AdminResponse::default();
         resp.mut_splits().set_regions(regions.clone().into());
@@ -2003,7 +2013,10 @@ where
         .unwrap_or_else(|e| {
             panic!(
                 "{} failed to save merging state {:?} for region {:?}: {:?}",
-                self.tag, merging_state, region, e
+                self.tag,
+                merging_state,
+                log_wrappers::ProtobufValue(&region),
+                e
             )
         });
         fail_point!("apply_after_prepare_merge");
@@ -2092,7 +2105,7 @@ where
             "entries" => merge.get_entries().len(),
             "term" => ctx.exec_ctx.as_ref().unwrap().term,
             "index" => ctx.exec_ctx.as_ref().unwrap().index,
-            "source_region" => ?source_region
+            "source_region" => log_wrappers::ProtobufValue(source_region)
         );
 
         self.ready_source_region_id = 0;
@@ -2102,7 +2115,9 @@ where
             Ok(Some(s)) => s,
             e => panic!(
                 "{} failed to get regions state of {:?}: {:?}",
-                self.tag, source_region, e
+                self.tag,
+                log_wrappers::ProtobufValue(source_region),
+                e
             ),
         };
         if state.get_state() != PeerState::Merging {
@@ -2115,7 +2130,9 @@ where
         if *source_region != exist_region {
             panic!(
                 "{} source_region {:?} not match exist region {:?}",
-                self.tag, source_region, exist_region
+                self.tag,
+                log_wrappers::ProtobufValue(source_region),
+                log_wrappers::ProtobufValue(&exist_region)
             );
         }
         let mut region = self.region.clone();
@@ -2146,7 +2163,9 @@ where
             .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to save merge region {:?}: {:?}",
-                    self.tag, region, e
+                    self.tag,
+                    log_wrappers::ProtobufValue(&region),
+                    e
                 )
             });
 
@@ -2242,7 +2261,7 @@ where
                 "compact term missing, skip";
                 "region_id" => self.region_id(),
                 "peer_id" => self.id(),
-                "command" => ?req.get_compact_log()
+                "command" => log_wrappers::ProtobufValue(req.get_compact_log())
             );
             // old format compact log command, safe to ignore.
             return Err(box_err!(
@@ -3412,7 +3431,7 @@ where
                     warn!(
                         "region is removed before merged, are we shutting down?";
                         "region_id" => region_id,
-                        "merge" => ?cul.merge,
+                        "merge" => log_wrappers::ProtobufValue(&cul.merge),
                     );
                     return;
                 }
