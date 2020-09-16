@@ -2879,6 +2879,7 @@ where
         change_peer: CP,
         data: Vec<u8>,
     ) -> Result<u64> {
+        let data_size = data.len();
         let cc = change_peer.to_confchange(data);
         let changes = change_peer.get_change_peers();
 
@@ -2886,7 +2887,7 @@ where
 
         ctx.raft_metrics.propose.conf_change += 1;
         // TODO: use local histogram metrics
-        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(cc.get_context().len() as f64);
+        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data_size as f64);
         info!(
             "propose conf change peer";
             "region_id" => self.region_id,
