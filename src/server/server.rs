@@ -6,8 +6,8 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use futures03::compat::Stream01CompatExt;
-use futures03::stream::StreamExt;
+use futures::compat::Stream01CompatExt;
+use futures::stream::StreamExt;
 use grpcio::{
     ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
 };
@@ -329,8 +329,8 @@ mod tests {
         significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
     }
 
-    impl StoreRouter for TestRaftStoreRouter {
-        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+    impl StoreRouter<RocksEngine> for TestRaftStoreRouter {
+        fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
             Ok(())
         }
     }
@@ -369,7 +369,7 @@ mod tests {
             Ok(())
         }
 
-        fn send_store_msg(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        fn send_store_msg(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
