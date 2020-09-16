@@ -166,7 +166,7 @@ where
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct ChangePeer {
     pub index: u64,
     pub conf_change: ConfChange,
@@ -174,11 +174,35 @@ pub struct ChangePeer {
     pub region: Region,
 }
 
-#[derive(Debug)]
+impl Debug for ChangePeer {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{{ index: {:?}, conf_change: {:?}, peer: {:?}, region: {:?} }}",
+            self.index,
+            self.conf_change,
+            self.peer,
+            log_wrappers::ProtobufValue(&self.region)
+        )
+    }
+}
+
 pub struct Range {
     pub cf: String,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
+}
+
+impl Debug for Range {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{{ cf: {:?}, start_key: {:?}, end_key: {:?} }}",
+            self.cf,
+            log_wrappers::Key(&self.start_key),
+            log_wrappers::Key(&self.end_key)
+        )
+    }
 }
 
 impl Range {
