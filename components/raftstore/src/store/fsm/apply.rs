@@ -1511,7 +1511,7 @@ where
                  "ingest fail";
                  "region_id" => self.region_id(),
                  "peer_id" => self.id(),
-                 "sst" => log_wrappers::ProtobufValue(&sst),
+                 "sst" => log_wrappers::ProtobufValue(sst),
                  "region" => log_wrappers::ProtobufValue(&self.region),
             );
             // This file is not valid, we can delete it here.
@@ -2261,7 +2261,7 @@ where
                 "compact term missing, skip";
                 "region_id" => self.region_id(),
                 "peer_id" => self.id(),
-                "command" => log_wrappers::ProtobufValue(req.get_compact_log())
+                "command" => ?req.get_compact_log()
             );
             // old format compact log command, safe to ignore.
             return Err(box_err!(

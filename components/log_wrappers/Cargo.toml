@@ -11,3 +11,4 @@ protobuf = "2.8"
 slog = "2.3"
 slog-term = "2.4"
 tikv_alloc = { path = "../tikv_alloc" }
+paste = "1.0"

@@ -2110,6 +2110,7 @@ version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
  "kvproto",
+ "paste 1.0.1",
  "protobuf",
  "slog",
  "slog-term",
@@ -2659,6 +2660,12 @@ dependencies = [
  "paste-impl",
  "proc-macro-hack",
 ]
+
+[[package]]
+name = "paste"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0520af26d4cf99643dbbe093a61507922b57232d9978d8491fdc8f7b44573c8c"
 
 [[package]]
 name = "paste-impl"
@@ -4922,7 +4929,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b441ce9e5ab1d28f7643e62f0fa445086d8c84075150be840adae054cc05bd9c"
 dependencies = [
  "libc",
- "paste",
+ "paste 0.1.18",
  "tikv-jemalloc-sys",
 ]
 
