@@ -52,7 +52,7 @@ tokio-executor = "0.1"
 tokio-timer = "0.2"
 url = "2"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", rev = "9943d799673dde35fae97c2189f3de4c006af384", features = ["jaeger"] }
+minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", rev = "1d5b4d9a15c3c323c6001ae04685ee77eb585004", features = ["jaeger"] }
 protobuf = "2.8"
 
 [target.'cfg(target_os = "linux")'.dependencies]
