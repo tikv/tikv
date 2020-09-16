@@ -16,7 +16,7 @@ use kvproto::{
 use protobuf::PbPrint;
 use std::{fmt, sync::atomic::Ordering};
 
-pub struct ProtobufValue<'a, T>(pub &'a T);
+pub struct ProtobufValue<'a, T: ?Sized>(pub &'a T);
 
 impl<'a, T> slog::Value for ProtobufValue<'a, T>
 where
@@ -44,6 +44,7 @@ where
     }
 }
 
+#[cfg(feature = "protobuf-codec")]
 macro_rules! impl_print {
     (+, $f:ident, $s:expr, $base:expr, $field:ident) => {
         PbPrint::fmt(&$base.$field, std::stringify!($field), $s);
@@ -81,6 +82,7 @@ macro_rules! impl_print {
 /// ```ignore
 /// impl_fmt! { ProtobufType, +visible_field, -redacted_field, *protobuf_field, %protobuf_list }
 /// ```
+#[cfg(feature = "protobuf-codec")]
 macro_rules! impl_fmt {
     ($ty:ty, $($oper:tt $field:ident),+) => {
         impl<'a> fmt::Debug for ProtobufValue<'a, $ty> {
@@ -90,6 +92,27 @@ macro_rules! impl_fmt {
                     let mut s = String::new();
                     $( impl_print! { $oper, f, &mut s, self.0, $field } )*
                     write!(f, "{}", s)
+                } else {
+                    write!(f, "{:?}", self.0)
+                }
+            }
+        }
+    };
+}
+
+/// `impl_fmt` generates redacted Debug trait implementation
+/// for protobuf objects.
+///
+/// TODO: For PROST codec, `redact_info` will redact all information.
+/// This should be fixed.
+#[cfg(not(feature = "protobuf-codec"))]
+macro_rules! impl_fmt {
+    ($ty:ty, $($oper:tt $field:ident),+) => {
+        impl<'a> fmt::Debug for ProtobufValue<'a, $ty> {
+            #[inline]
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                if REDACT_INFO_LOG.load(Ordering::Relaxed) {
+                    write!(f, "<redacted>")
                 } else {
                     write!(f, "{:?}", self.0)
                 }
