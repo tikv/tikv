@@ -336,6 +336,10 @@ pub struct DataKeyManager {
 }
 
 impl DataKeyManager {
+    pub fn encryption_method(&self) -> engine_traits::EncryptionMethod {
+        crypter::encryption_method_to_db_encryption_method(self.method)
+    }
+
     pub fn from_config(
         config: &EncryptionConfig,
         dict_path: &str,

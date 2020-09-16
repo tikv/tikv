@@ -9,7 +9,7 @@ use crate::config::Config;
 use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
-use crossbeam::channel::{self, SendError};
+use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -228,6 +228,10 @@ pub trait PollHandler<N, C> {
 
     /// This function is called when batch system is going to sleep.
     fn pause(&mut self) {}
+
+    fn batch_retry_recv_timeout(&self) -> Option<Duration> {
+        None
+    }
 }
 
 /// Internal poller that fetches batch and call handler hooks for readiness.
@@ -312,9 +316,19 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             }
             let mut fsm_cnt = batch.normals.len();
             while batch.normals.len() < max_batch_size {
-                if let Ok(fsm) = self.fsm_receiver.try_recv() {
-                    run = batch.push(fsm);
-                }
+                match self.fsm_receiver.try_recv() {
+                    Ok(fsm) => run = batch.push(fsm),
+                    Err(TryRecvError::Empty) => {
+                        if let Some(t) = self.handler.batch_retry_recv_timeout() {
+                            match self.fsm_receiver.recv_timeout(t) {
+                                Ok(fsm) => run = batch.push(fsm),
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                };
+
                 // If we receive a ControlFsm, break this cycle and call `end`. Because ControlFsm
                 // may change state of the handler, we shall deal with it immediately after
                 // calling `begin` of `Handler`.

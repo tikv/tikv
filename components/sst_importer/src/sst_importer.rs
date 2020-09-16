@@ -36,7 +36,7 @@ use crate::metrics::*;
 /// SSTImporter manages SST files that are waiting for ingesting.
 pub struct SSTImporter {
     dir: ImportDir,
-    key_manager: Option<Arc<DataKeyManager>>,
+    pub key_manager: Option<Arc<DataKeyManager>>,
 }
 
 impl SSTImporter {

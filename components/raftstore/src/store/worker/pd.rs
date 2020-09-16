@@ -35,6 +35,7 @@ use crate::store::Callback;
 use crate::store::StoreInfo;
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 
+use crate::tiflash_ffi::get_tiflash_server_helper;
 use concurrency_manager::ConcurrencyManager;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
@@ -646,65 +647,25 @@ where
     }
 
     fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, store_info: StoreInfo<EK>) {
-        let disk_stats = match fs2::statvfs(store_info.engine.path()) {
-            Err(e) => {
-                error!(
-                    "get disk stat for rocksdb failed";
-                    "engine_path" => store_info.engine.path(),
-                    "err" => ?e
-                );
-                return;
-            }
-            Ok(stats) => stats,
-        };
-
-        let disk_cap = disk_stats.total_space();
-        let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
-            disk_cap
-        } else {
-            store_info.capacity
-        };
-        stats.set_capacity(capacity);
-
-        // already include size of snapshot files
-        let used_size =
-            stats.get_used_size() + store_info.engine.get_engine_used_size().expect("cf");
-        stats.set_used_size(used_size);
-
-        let mut available = if capacity > used_size {
-            capacity - used_size
-        } else {
-            warn!("no available space");
-            0
-        };
-
-        // We only care about rocksdb SST file size, so we should check disk available here.
-        if available > disk_stats.free_space() {
-            available = disk_stats.free_space();
+        let fs_stats = get_tiflash_server_helper().handle_compute_fs_stats();
+        if fs_stats.ok == 0 {
+            return;
         }
-
+        let capacity = fs_stats.capacity_size;
+        let available = fs_stats.avail_size;
+        stats.set_used_size(fs_stats.used_size);
+        stats.set_capacity(capacity);
         stats.set_available(available);
-        stats.set_bytes_read(
-            self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,
-        );
-        stats.set_keys_read(
-            self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
-        );
-
         stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
-        stats.set_read_io_rates(self.store_stat.store_read_io_rates.clone().into());
-        stats.set_write_io_rates(self.store_stat.store_write_io_rates.clone().into());
 
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(self.store_stat.last_report_ts.into_inner());
         stats.set_interval(interval);
-        self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
-        self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
         self.store_stat.last_report_ts = UnixSecs::now();
-        self.store_stat.region_bytes_written.flush();
-        self.store_stat.region_keys_written.flush();
-        self.store_stat.region_bytes_read.flush();
-        self.store_stat.region_keys_read.flush();
+        self.store_stat.region_bytes_written.clear();
+        self.store_stat.region_keys_written.clear();
+        self.store_stat.region_bytes_read.clear();
+        self.store_stat.region_keys_read.clear();
 
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["capacity"])

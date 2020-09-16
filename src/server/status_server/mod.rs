@@ -41,6 +41,7 @@ use super::Result;
 use crate::config::ConfigController;
 use configuration::Configuration;
 use pd_client::RpcClient;
+use raftstore::tiflash_ffi::get_tiflash_server_helper;
 use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
@@ -403,9 +404,9 @@ where
 
     pub fn stop(mut self) {
         // unregister the status address to pd
-        self.unregister_addr();
+        // self.unregister_addr();
         let _ = self.tx.send(());
-        self.thread_pool.shutdown_timeout(Duration::from_secs(10));
+        self.thread_pool.shutdown_background();
     }
 
     // Return listening address, this may only be used for outer test
@@ -648,6 +649,50 @@ where
         }
     }
 
+    pub async fn sync_status(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        lazy_static! {
+            static ref TABLE: Regex = Regex::new(r"/tiflash/sync-status/(?P<id>\d+)").unwrap();
+        }
+
+        fn err_resp(
+            status_code: StatusCode,
+            msg: impl Into<Body>,
+        ) -> hyper::Result<Response<Body>> {
+            Ok(StatusServer::err_response(status_code, msg))
+        }
+
+        let vars = match TABLE.captures(req.uri().path()) {
+            Some(vars) => vars,
+            None => {
+                return err_resp(
+                    StatusCode::NOT_FOUND,
+                    format!("path {} not found", req.uri().path()),
+                )
+            }
+        };
+
+        let table_id: u64 = match vars["id"].parse() {
+            Ok(table_id) => table_id,
+            Err(err) => {
+                return err_resp(
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid table id: {}", err),
+                );
+            }
+        };
+
+        let status = get_tiflash_server_helper().handle_get_table_sync_status(table_id);
+        let data = status.view.to_slice().to_vec();
+
+        match Response::builder().body(hyper::Body::from(data)) {
+            Ok(resp) => Ok(resp),
+            Err(err) => Ok(StatusServer::err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to build response: {}", err),
+            )),
+        }
+    }
+
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
     where
         I: Accept<Conn = C, Error = std::io::Error> + Send + 'static,
@@ -720,6 +765,9 @@ where
                             (Method::GET, path) if path.starts_with("/region") => {
                                 Self::dump_region_meta(req, router).await
                             }
+                            (Method::GET, path) if path.starts_with("/tiflash/sync-status") => {
+                                Self::sync_status(req).await
+                            }
                             _ => Ok(StatusServer::err_response(
                                 StatusCode::NOT_FOUND,
                                 "path not found",
@@ -764,7 +812,7 @@ where
             self.start_serve(server);
         }
         // register the advertise status address to pd
-        self.register_addr(advertise_status_addr);
+        // self.register_addr(advertise_status_addr);
         Ok(())
     }
 }

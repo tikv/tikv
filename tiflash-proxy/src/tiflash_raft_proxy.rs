@@ -1,22 +1,47 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(proc_macro_hygiene)]
-
 use std::path::Path;
 use std::process;
 
-use clap::{crate_authors, App, Arg};
-use cmd::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
+use crate::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
+use clap::{App, Arg};
+use libc::{c_char, c_int};
+use raftstore::tiflash_ffi::{
+    get_tiflash_server_helper, TiFlashServerHelper, TIFLASH_SERVER_HELPER_PTR,
+};
+use std::ffi::CStr;
 use tikv::config::TiKvConfig;
 
-fn main() {
-    let version_info = tikv::tikv_version_info();
+#[no_mangle]
+pub unsafe extern "C" fn print_tiflash_proxy_version() {
+    println!("{}", crate::proxy_version_info());
+}
 
-    let matches = App::new("TiKV")
-        .about("A distributed transactional key-value database powered by Rust and Raft")
-        .author(crate_authors!())
-        .version(version_info.as_ref())
-        .long_version(version_info.as_ref())
+#[no_mangle]
+pub unsafe extern "C" fn run_tiflash_proxy_ffi(
+    argc: c_int,
+    argv: *const *const c_char,
+    tiflash_server_helper: *const TiFlashServerHelper,
+) {
+    {
+        let ptr = &TIFLASH_SERVER_HELPER_PTR as *const _ as *mut _;
+        *ptr = tiflash_server_helper;
+    }
+
+    let mut args = vec![];
+
+    for i in 0..argc {
+        let raw = CStr::from_ptr(*argv.offset(i as isize));
+        args.push(raw.to_str().unwrap());
+    }
+
+    get_tiflash_server_helper().check();
+
+    let matches = App::new("TiFlash Proxy")
+        .about("Proxy for TiFLash to connect TiKV cluster")
+        .author("tongzhigao@pingcap.com")
+        .version(crate::proxy_version_info().as_ref())
+        .long_version(crate::proxy_version_info().as_ref())
         .arg(
             Arg::with_name("config")
                 .short("C")
@@ -143,7 +168,21 @@ fn main() {
                      leaves it empty will disable Prometheus push",
                 ),
         )
-        .get_matches();
+        .arg(
+            Arg::with_name("tiflash-version")
+                .long("tiflash-version")
+                .help("Set tiflash version")
+                .required(true)
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("tiflash-git-hash")
+                .long("tiflash-git-hash")
+                .help("Set tiflash git hash")
+                .required(true)
+                .takes_value(true),
+        )
+        .get_matches_from(args);
 
     if matches.is_present("print-sample-config") {
         let config = TiKvConfig::default();
@@ -167,7 +206,7 @@ fn main() {
             )
         });
 
-    cmd::setup::overwrite_config_with_cmd_args(&mut config, &matches);
+    crate::setup::overwrite_config_with_cmd_args(&mut config, &matches);
 
     if is_config_check {
         validate_and_persist_config(&mut config, false);
@@ -176,5 +215,5 @@ fn main() {
         process::exit(0)
     }
 
-    cmd::server::run_tikv(config);
+    crate::server::run_tikv(config);
 }

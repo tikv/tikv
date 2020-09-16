@@ -8,7 +8,7 @@ use super::RaftKv;
 use super::Result;
 use crate::import::SSTImporter;
 use crate::read_pool::ReadPoolHandle;
-use crate::server::lock_manager::LockManager;
+use crate::server::lock_manager::HackedLockManager as LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
@@ -85,16 +85,29 @@ where
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
-            store.set_address(cfg.addr.clone());
+            store.set_peer_address(cfg.addr.clone());
         } else {
-            store.set_address(cfg.advertise_addr.clone())
+            store.set_peer_address(cfg.advertise_addr.clone())
         }
+
+        if !cfg.engine_addr.is_empty() {
+            store.set_address(cfg.engine_addr.clone());
+        } else {
+            panic!("tiflash engine addr is empty");
+        }
+
+        if !cfg.tiflash_version.is_empty() {
+            store.set_version(cfg.tiflash_version.clone());
+        }
+        if !cfg.tiflash_git_hash.is_empty() {
+            store.set_git_hash(cfg.tiflash_git_hash.clone());
+        }
+
         if cfg.advertise_status_addr.is_empty() {
             store.set_status_address(cfg.status_addr.clone());
         } else {
             store.set_status_address(cfg.advertise_status_addr.clone())
         }
-        store.set_version(env!("CARGO_PKG_VERSION").to_string());
 
         if let Ok(path) = std::env::current_exe() {
             if let Some(path) = path.parent() {
@@ -103,11 +116,6 @@ where
         };
 
         store.set_start_timestamp(chrono::Local::now().timestamp());
-        store.set_git_hash(
-            option_env!("TIKV_BUILD_GIT_HASH")
-                .unwrap_or("Unknown git hash")
-                .to_string(),
-        );
 
         let mut labels = Vec::new();
         for (k, v) in &cfg.labels {

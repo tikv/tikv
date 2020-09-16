@@ -42,7 +42,6 @@ ENABLE_FEATURES += mimalloc
 else ifeq ($(SYSTEM_ALLOC),1)
 # no feature needed for system allocator
 else
-ENABLE_FEATURES += jemalloc
 endif
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
@@ -86,12 +85,10 @@ CARGO_TARGET_DIR ?= $(CURDIR)/target
 # Build-time environment, captured for reporting by the application binary
 BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
-export TIKV_ENABLE_FEATURES := ${ENABLE_FEATURES}
-export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
-export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
-export TIKV_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
-export TIKV_BUILD_GIT_TAG ?= $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
-export TIKV_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+export PROXY_BUILD_TIME := $(shell date -u '+%Y-%m-%d %H:%M:%S')
+export PROXY_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+export PROXY_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+export PROXY_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 
 export DOCKER_IMAGE_NAME ?= "pingcap/tikv"
 export DOCKER_IMAGE_TAG ?= "latest"
@@ -119,9 +116,9 @@ all: format build test error-code
 dev: format clippy
 	@env FAIL_POINT=1 make test
 
-build: export TIKV_PROFILE=debug
+build: export PROXY_PROFILE=debug
 build: error-code
-	cargo build --no-default-features --features "${ENABLE_FEATURES}"
+	cargo build --no-default-features --features "${ENABLE_FEATURES}" -p tiflash-proxy
 
 ## Release builds (optimized dev builds)
 ## ----------------------------
@@ -133,9 +130,9 @@ build: error-code
 # with RocksDB compiled with the "portable" option, for -march=x86-64 (an
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
-release: export TIKV_PROFILE=release
+release: export PROXY_PROFILE=release
 release: error-code
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" -p tiflash-proxy
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
@@ -171,7 +168,7 @@ endif
 
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
-build_dist_release: export TIKV_PROFILE=dist_release
+build_dist_release: export PROXY_PROFILE=dist_release
 build_dist_release: error-code
 	make x-build-dist
 ifeq ($(shell uname),Linux) # Macs don't have objcopy
