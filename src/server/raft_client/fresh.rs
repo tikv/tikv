@@ -25,11 +25,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, result};
 use tikv_util::collections::{HashMap, HashSet};
-use yatp::ThreadPool;
-use yatp::task::future::TaskCell;
 use tikv_util::lru::LruCache;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
+use yatp::task::future::TaskCell;
+use yatp::ThreadPool;
 
 // When merge raft messages into a batch message, leave a buffer.
 const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
