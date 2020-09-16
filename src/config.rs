@@ -16,22 +16,21 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
 
-use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
-use engine_rocks::raw::{
-    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionFilterFactory, CompactionPriority,
-    DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode,
-    LRUCacheOptions, TitanDBOptions,
-};
-
 use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
 use crate::server::gc_worker::{DefaultCompactionFilterFactory, WriteCompactionFilterFactory};
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR};
+use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
+use engine_rocks::raw::{
+    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionFilterFactory, CompactionPriority,
+    DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode,
+    LRUCacheOptions, TitanDBOptions,
+};
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::util::{
     FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
@@ -56,6 +55,8 @@ use tikv_util::config::{
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
 use tikv_util::yatp_pool;
+
+pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
