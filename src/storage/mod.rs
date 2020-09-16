@@ -5412,4 +5412,82 @@ mod tests {
         let key_error = extract_key_error(&res[1].as_ref().unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
     }
+
+    #[test]
+    fn test_async_commit_prewrite() {
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .build()
+            .unwrap();
+        let cm = storage.concurrency_manager.clone();
+        cm.update_max_ts(10.into());
+
+        // Optimistic prewrite
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![
+                        Mutation::Put((Key::from_raw(b"a"), b"v".to_vec())),
+                        Mutation::Put((Key::from_raw(b"b"), b"v".to_vec())),
+                        Mutation::Put((Key::from_raw(b"c"), b"v".to_vec())),
+                    ],
+                    b"c".to_vec(),
+                    100.into(),
+                    1000,
+                    false,
+                    3,
+                    TimeStamp::default(),
+                    Some(vec![b"a".to_vec(), b"b".to_vec()]),
+                    Context::default(),
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.min_commit_ts, 101.into());
+
+        // Pessimistic prewrite
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command(
+                    vec![(Key::from_raw(b"d"), false), (Key::from_raw(b"e"), false)],
+                    200,
+                    300,
+                    false,
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        cm.update_max_ts(1000.into());
+
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![
+                        (Mutation::Put((Key::from_raw(b"d"), b"v".to_vec())), true),
+                        (Mutation::Put((Key::from_raw(b"e"), b"v".to_vec())), true),
+                    ],
+                    b"d".to_vec(),
+                    200.into(),
+                    1000,
+                    400.into(),
+                    2,
+                    401.into(),
+                    Some(vec![b"e".to_vec()]),
+                    Context::default(),
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.min_commit_ts, 1001.into());
+    }
 }
