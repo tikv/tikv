@@ -13,11 +13,11 @@ pub use crate::storage::config::Config as StorageConfig;
 pub use raftstore::store::Config as RaftStoreConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
-pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
+pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20106";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 pub const DEFAULT_ENGINE_LABEL_KEY: &str = "engine";
 pub const DEFAULT_ENGINE_LABEL_VALUE: &str = "tiflash";
-const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
+const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20108";
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
