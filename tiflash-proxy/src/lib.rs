@@ -18,7 +18,7 @@ fn proxy_version_info() -> String {
          \nGit Commit Branch: {}\
          \nUTC Build Time:    {}\
          \nRust Version:      {}\
-         \nEngine:            {}\
+         \nStorage Engine:    {}\
          \nPrometheus Prefix: {}\
          \nProfile:           {}",
         option_env!("PROXY_BUILD_GIT_HASH").unwrap_or(fallback),
