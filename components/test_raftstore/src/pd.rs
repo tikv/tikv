@@ -24,7 +24,7 @@ use raft::eraftpb::ConfChangeType;
 use fail::fail_point;
 use keys::{self, data_key, enc_end_key, enc_start_key};
 use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
-use raftstore::store::util::{check_key_in_region, is_learner};
+use raftstore::store::util::{check_key_in_region, find_peer, is_learner};
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::time::UnixSecs;
@@ -122,13 +122,6 @@ fn change_peer(change_type: ConfChangeType, peer: metapb::Peer) -> pdpb::ChangeP
     cp.set_change_type(change_type);
     cp.set_peer(peer);
     cp
-}
-
-fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
-    region
-        .get_peers()
-        .iter()
-        .find(|&p| p.get_store_id() == store_id)
 }
 
 impl Operator {
@@ -275,10 +268,6 @@ impl Operator {
                 ref mut policy,
                 ..
             } => {
-                if !policy.schedule() {
-                    return true;
-                }
-
                 let add = add_peers
                     .iter()
                     .all(|peer| region.get_peers().iter().any(|p| p == peer));
@@ -287,7 +276,7 @@ impl Operator {
                     .iter()
                     .all(|peer| region.get_peers().iter().all(|p| p != peer));
 
-                add && remove
+                add && remove || !policy.schedule()
             }
         }
     }
@@ -846,25 +835,21 @@ impl TestPdClient {
         add_peers: Vec<metapb::Peer>,
         remove_peers: Vec<metapb::Peer>,
     ) {
-        'retry: for _ in 1..500 {
+        for _ in 1..500 {
             sleep_ms(10);
             let region = match block_on(self.get_region_by_id(region_id)).unwrap() {
                 Some(region) => region,
-                None => continue 'retry,
+                None => continue,
             };
-            'next_add: for peer in add_peers.iter() {
-                match find_peer(&region, peer.get_store_id()) {
-                    Some(p) if p == peer => continue 'next_add,
-                    _ => continue 'retry,
-                }
+            let add = add_peers
+                .iter()
+                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(false, |p| p == peer));
+            let remove = remove_peers
+                .iter()
+                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(true, |p| p != peer));
+            if add && remove {
+                return;
             }
-            'next_remove: for peer in remove_peers.iter() {
-                match find_peer(&region, peer.get_store_id()) {
-                    Some(p) if p == peer => continue 'retry,
-                    _ => continue 'next_remove,
-                }
-            }
-            return;
         }
         let region = block_on(self.get_region_by_id(region_id)).unwrap();
         panic!(

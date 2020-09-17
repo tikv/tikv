@@ -2173,11 +2173,6 @@ where
             }
         }
 
-        if current_progress.is_singleton() {
-            // It's always safe if there is only one node in the cluster.
-            return Ok(());
-        }
-
         // Multiple changes that only effect learner will not product `IncommingVoter` or `DemotingVoter`
         // after apply, but raftstore layer and PD rely on these roles to detect joint state
         if kind != ConfChangeKind::Simple && only_learner_change {
@@ -2188,7 +2183,9 @@ where
         }
 
         let promoted_commit_index = after_progress.maximal_committed_index().0;
-        if promoted_commit_index >= self.get_store().truncated_index() {
+        if current_progress.is_singleton() // It's always safe if there is only one node in the cluster.
+            || promoted_commit_index >= self.get_store().truncated_index()
+        {
             return Ok(());
         }
 
