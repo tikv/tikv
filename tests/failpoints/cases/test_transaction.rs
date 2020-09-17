@@ -72,7 +72,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
 }
 
 #[test]
-fn test_snapshot_must_be_prior_to_updating_max_ts() {
+fn test_snapshot_must_be_later_than_updating_max_ts() {
     let engine = TestEngineBuilder::new().build().unwrap();
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
