@@ -24,8 +24,8 @@ use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{PeerRole, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, ChangePeerV2Request, CmdType,
-    CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
+    AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
+    RaftCmdRequest, RaftCmdResponse, Request, Response,
 };
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
@@ -964,30 +964,16 @@ where
             ApplyResult::Yield
         });
         let (index, term) = (entry.get_index(), entry.get_term());
-        let (conf_change, cmd) = match entry.get_entry_type() {
+        let conf_change: ConfChangeV2 = match entry.get_entry_type() {
             EntryType::EntryConfChange => {
                 let conf_change: ConfChange =
                     util::parse_data_at(entry.get_data(), index, &self.tag);
-                let mut cmd: RaftCmdRequest =
-                    util::parse_data_at(conf_change.get_context(), index, &self.tag);
-                {
-                    // Covert ChangePeerRequest to ChangePeerV2Request
-                    let req = cmd.mut_admin_request();
-                    assert!(req.has_change_peer());
-                    let mut cp_v2 = ChangePeerV2Request::default();
-                    cp_v2.set_changes(vec![req.take_change_peer()].into());
-                    req.set_change_peer_v2(cp_v2);
-                }
-                (conf_change.into_v2(), cmd)
+                conf_change.into_v2()
             }
-            EntryType::EntryConfChangeV2 => {
-                let conf_change: ConfChangeV2 =
-                    util::parse_data_at(entry.get_data(), index, &self.tag);
-                let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
-                (conf_change, cmd)
-            }
+            EntryType::EntryConfChangeV2 => util::parse_data_at(entry.get_data(), index, &self.tag),
             _ => unreachable!(),
         };
+        let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
         match self.process_raft_cmd(apply_ctx, index, term, cmd) {
             ApplyResult::None => {
                 // If failed, tell Raft that the `ConfChange` was aborted.
@@ -1599,9 +1585,13 @@ where
             |_| panic!("should not use return")
         );
 
-        // It is okay to ignore ChangePeerRequest here, because we convert
-        // ChangePeerRequest to ChangePeerV2Request at `handle_raft_entry_conf_change`
-        let changes = request.get_change_peer_v2().get_change_peers();
+        let changes = if request.has_change_peer() {
+            request.get_change_peer().get_change_peers()
+        } else if request.has_change_peer_v2() {
+            request.get_change_peer_v2().get_change_peers().to_vec()
+        } else {
+            unreachable!()
+        };
         info!(
             "exec ConfChange";
             "region_id" => self.region_id(),
@@ -1612,7 +1602,7 @@ where
 
         let region = match ConfChangeKind::confchange_kind(changes.len()) {
             ConfChangeKind::LeaveJoint => self.apply_leave_joint()?,
-            kind => self.apply_conf_change(kind, changes)?,
+            kind => self.apply_conf_change(kind, changes.as_slice())?,
         };
 
         let state = if self.pending_remove {
@@ -1632,7 +1622,7 @@ where
             ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
                 index: ctx.exec_ctx.as_ref().unwrap().index,
                 conf_change: Default::default(),
-                changes: changes.to_vec(),
+                changes,
                 region,
             })),
         ))
