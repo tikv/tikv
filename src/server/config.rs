@@ -15,8 +15,6 @@ pub use raftstore::store::Config as RaftStoreConfig;
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20106";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
-pub const DEFAULT_ENGINE_LABEL_KEY: &str = "engine";
-pub const DEFAULT_ENGINE_LABEL_VALUE: &str = "tiflash";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20108";
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
@@ -263,18 +261,19 @@ impl Config {
             ));
         }
 
-        match self.labels.insert(
-            DEFAULT_ENGINE_LABEL_KEY.to_owned(),
-            DEFAULT_ENGINE_LABEL_VALUE.to_owned(),
-        ) {
-            Some(x) => {
-                if x != DEFAULT_ENGINE_LABEL_VALUE {
+        {
+            pub const DEFAULT_ENGINE_LABEL_KEY: &str = "engine";
+            let engine_name = match option_env!("ENGINE_LABEL_VALUE") {
+                None => {
                     return Err(box_err!(
-                        "server.labels should not contain any label with key 'engine'."
-                    ));
+                        "should set engine name with env variable `ENGINE_LABEL_VALUE`"
+                    ))
                 }
-            }
-            _ => {}
+                Some(name) => name.to_owned(),
+            };
+            info!("set label {}:{}", DEFAULT_ENGINE_LABEL_KEY, engine_name);
+            self.labels
+                .insert(DEFAULT_ENGINE_LABEL_KEY.to_owned(), engine_name);
         }
 
         for (k, v) in &self.labels {

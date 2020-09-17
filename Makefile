@@ -90,7 +90,10 @@ export PROXY_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo
 export PROXY_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export PROXY_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export PROMETHEUS_METRIC_NAME_PREFIX ?= tiflash_proxy_
+export ENGINE_LABEL_VALUE ?= tiflash
+
 $(info prometheus metric name prefix is ${PROMETHEUS_METRIC_NAME_PREFIX})
+$(info engine is ${ENGINE_LABEL_VALUE})
 
 export DOCKER_IMAGE_NAME ?= "pingcap/tikv"
 export DOCKER_IMAGE_TAG ?= "latest"
