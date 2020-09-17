@@ -128,7 +128,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 slog_derive = "0.2"
 parking_lot = "0.10"
-prometheus = { version = "0.8", features = ["nightly", "push"] }
+prometheus = { version = "0.8", features = ["nightly", "push", "metric-name-prefix"] }
 sst_importer = { path = "components/sst_importer" }
 sysinfo = "0.14"
 semver = "0.10"
@@ -178,7 +178,7 @@ raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", de
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 fail = { git = "https://github.com/tikv/fail-rs.git", rev = "2cf1175a1a5cc2c70bd20ebd45313afd69b558fc" }
-prometheus = { git = "https://github.com/solotzg/rust-prometheus.git", rev = "12f0985fbf9b4ce35b37a1e0133b7ba49a906c89" }
+prometheus = { git = "https://github.com/solotzg/rust-prometheus.git", rev = "53ad052f007d5209dcebec8185012eb5a61e152e" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
