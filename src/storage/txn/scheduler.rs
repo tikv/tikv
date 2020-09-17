@@ -92,7 +92,6 @@ struct TaskContext {
 
     lock: Lock,
     cb: Option<StorageCallback>,
-    pr: Option<ProcessResult>,
     result_taken_timer: Option<Instant>,
     write_bytes: usize,
     tag: metrics::CommandKind,
@@ -121,7 +120,6 @@ impl TaskContext {
             task: Some(task),
             lock,
             cb: Some(cb),
-            pr: None,
             result_taken_timer: None,
             write_bytes,
             tag,
@@ -221,25 +219,19 @@ impl<L: LockManager> SchedulerInner<L> {
         tctx
     }
 
-    fn store_process_result(&self, cid: u64, pr: ProcessResult) {
-        self.task_contexts[id_index(cid)]
-            .lock()
-            .get_mut(&cid)
-            .unwrap()
-            .pr = Some(pr);
-    }
+    // fn store_process_result(&self, cid: u64, pr: ProcessResult) {
+    //     self.task_contexts[id_index(cid)]
+    //         .lock()
+    //         .get_mut(&cid)
+    //         .unwrap()
+    //         .pr = Some(pr);
+    // }
 
-    fn take_task_cb_and_process_result(
-        &self,
-        cid: u64,
-    ) -> Option<(StorageCallback, ProcessResult)> {
+    fn take_task_cb(&self, cid: u64) -> Option<StorageCallback> {
         self.task_contexts[id_index(cid)]
             .lock()
             .get_mut(&cid)
-            .and_then(|tctx| {
-                tctx.result_taken_timer = Some(Instant::now_coarse());
-                tctx.cb.take().map(|cb| (cb, tctx.pr.take().unwrap()))
-            })
+            .and_then(|tctx| tctx.cb.take())
     }
 
     fn too_busy(&self) -> bool {
@@ -493,17 +485,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         debug!("write command finished"; "cid" => cid, "pipelined" => pipelined);
         drop(lock_guards);
-        let mut tctx = self.inner.dequeue_task_context(cid);
+        let tctx = self.inner.dequeue_task_context(cid);
 
         // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
-        if let Some(timer) = tctx.result_taken_timer.take() {
+        if let Some(timer) = tctx.result_taken_timer {
             SCHED_EARLY_RESP_TIME_DIFF_VEC_STATIC
                 .get(tag)
                 .observe(timer.elapsed_secs());
         }
-        if let Some(cb) = tctx.cb.take() {
+        if let Some(cb) = tctx.cb {
             let pr = match result {
-                Ok(()) => pr.unwrap_or_else(|| tctx.pr.take().unwrap()),
+                Ok(()) => pr.unwrap(),
                 Err(e) => ProcessResult::Failed {
                     err: StorageError::from(e),
                 },
@@ -546,33 +538,31 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.release_lock(&tctx.lock, cid);
     }
 
-    fn store_process_result(&self, cid: u64, pr: ProcessResult) {
-        self.inner.store_process_result(cid, pr);
-    }
+    // fn store_process_result(&self, cid: u64, pr: ProcessResult) {
+    //     self.inner.store_process_result(cid, pr);
+    // }
 
-    fn on_pipelined_write(&self, cid: u64, tag: metrics::CommandKind) {
-        debug!("pipelined write"; "cid" => cid);
-        SCHED_STAGE_COUNTER_VEC.get(tag).pipelined_write.inc();
-        // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
-        // The task ctx has been dequeued.
-        if let Some((cb, pr)) = self.inner.take_task_cb_and_process_result(cid) {
-            cb.execute(pr);
-        }
-        // It won't release locks here until write finished.
-    }
+    // fn on_pipelined_write(cid: u64, cb:  tag: metrics::CommandKind) {
+    //     debug!("pipelined write"; "cid" => cid);
+    //     SCHED_STAGE_COUNTER_VEC.get(tag).pipelined_write.inc();
+    //     // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
+    //     // The task ctx has been dequeued.
+    //     if let Some((cb, pr)) = self.inner.take_task_cb_and_process_result(cid) {
+    //         cb.execute(pr);
+    //     }
+    //     // It won't release locks here until write finished.
+    // }
 
-    fn on_early_response(
-        &self,
+    fn early_response(
         cid: u64,
+        cb: StorageCallback,
+        pr: ProcessResult,
         tag: metrics::CommandKind,
         stage: metrics::CommandStageKind,
     ) {
-        // TODO: This and pipelined write can be merged together
-        if let Some((cb, pr)) = self.inner.take_task_cb_and_process_result(cid) {
-            debug!("early return response"; "cid" => cid);
-            SCHED_STAGE_COUNTER_VEC.get(tag).get(stage).inc();
-            cb.execute(pr);
-        }
+        debug!("early return response"; "cid" => cid);
+        SCHED_STAGE_COUNTER_VEC.get(tag).get(stage).inc();
+        cb.execute(pr);
         // It won't release locks here until write finished.
     }
 
@@ -682,38 +672,36 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         //   2. Msg::WriteFinished: deque context and release latches
                         // The order between these two msgs is uncertain due to thread scheduling
                         // so we clone the result for each msg.
-                        self.store_process_result(cid, pr.take().unwrap());
-
+                        let pr1 = pr.take().unwrap();
                         let sched = scheduler.clone();
-                        let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
                         proposed_cb = Some(Box::new(move || {
-                            sched_pool
-                                .spawn(async move {
-                                    fail_point!("scheduler_pipelined_write_finish");
-                                    // The write task is proposed to the raftstore successfully.
-                                    // Respond to client early.
-                                    sched.on_pipelined_write(cid, tag);
-                                })
-                                .unwrap()
+                            fail_point!("scheduler_pipelined_write_finish");
+                            // The write task is proposed to the raftstore successfully.
+                            // Respond to client early.
+                            let cb = sched.inner.take_task_cb(cid).unwrap();
+                            Self::early_response(
+                                cid,
+                                cb,
+                                pr1,
+                                tag,
+                                metrics::CommandStageKind::pipelined_write,
+                            );
                         }));
                     } else if self.inner.enable_async_commit_async_apply {
                         match response_policy {
                             ResponsePolicy::OnApplied => {}
                             ResponsePolicy::OnCommitted => {
-                                self.store_process_result(cid, pr.take().unwrap());
-
+                                let pr1 = pr.take().unwrap();
                                 let sched = scheduler.clone();
-                                let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
                                 committed_cb = Some(Box::new(move || {
-                                    sched_pool
-                                        .spawn(async move {
-                                            sched.on_early_response(
-                                                cid,
-                                                tag,
-                                                metrics::CommandStageKind::resp_on_commit,
-                                            );
-                                        })
-                                        .unwrap()
+                                    let cb = sched.inner.take_task_cb(cid).unwrap();
+                                    Self::early_response(
+                                        cid,
+                                        cb,
+                                        pr1,
+                                        tag,
+                                        metrics::CommandStageKind::resp_on_commit,
+                                    );
                                 }))
                             }
                         }
