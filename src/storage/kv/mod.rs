@@ -393,6 +393,7 @@ pub fn snapshot<E: Engine>(
         let (_ctx, result) = future
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
             .await?;
+        fail_point!("after-snapshot");
         result
     }
 }

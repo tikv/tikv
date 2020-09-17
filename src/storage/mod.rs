@@ -221,7 +221,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.clone()
     }
 
-    #[cfg(test)]
     pub fn get_concurrency_manager(&self) -> ConcurrencyManager {
         self.concurrency_manager.clone()
     }
@@ -1439,6 +1438,7 @@ fn async_commit_check_keys<'a>(
     bypass_locks: &TsSet,
 ) -> Result<()> {
     concurrency_manager.update_max_ts(ts);
+    fail_point!("before-storage-check-memory-locks");
     if isolation_level == IsolationLevel::Si {
         for key in keys {
             concurrency_manager
