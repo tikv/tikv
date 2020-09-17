@@ -2115,6 +2115,7 @@ where
     ) -> Result<()> {
         // Check whether current joint state can handle this request
         let mut after_progress = self.check_joint_state(cc)?;
+        let current_progress = self.raft_group.status().progress.unwrap().clone();
         let kind = ConfChangeKind::confchange_kind(change_peers.len());
 
         // Leaving joint state, skip check
@@ -2125,9 +2126,9 @@ where
         // Check whether this request is valid
         let mut check_dup = HashSet::default();
         let mut only_learner_change = true;
+        let current_voter = current_progress.conf().voters().ids();
         for cp in change_peers.iter() {
             let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
-
             match (change_type, peer.get_role()) {
                 (ConfChangeType::RemoveNode, PeerRole::Voter) if kind != ConfChangeKind::Simple => {
                     return Err(box_err!(
@@ -2167,30 +2168,19 @@ where
                 ));
             }
 
-            if peer.get_role() != PeerRole::Learner {
+            if current_voter.contains(peer.get_id()) || change_type == ConfChangeType::AddNode {
                 only_learner_change = false;
             }
         }
 
-        let before_progress = {
-            let pr = self.raft_group.status().progress.unwrap().clone();
-            if pr.is_singleton() {
-                // It's always safe if there is only one node in the cluster.
-                return Ok(());
-            }
-            pr
-        };
+        if current_progress.is_singleton() {
+            // It's always safe if there is only one node in the cluster.
+            return Ok(());
+        }
 
-        let change_voter = || {
-            let peer_ids: HashSet<_> = change_peers.iter().map(|p| p.get_peer().get_id()).collect();
-            peer_ids
-                .intersection(&before_progress.conf().voters().ids().iter().collect())
-                .count()
-                != 0
-        };
         // Multiple changes that only effect learner will not product `IncommingVoter` or `DemotingVoter`
         // after apply, but raftstore layer and PD rely on these roles to detect joint state
-        if kind != ConfChangeKind::Simple && only_learner_change && !change_voter() {
+        if kind != ConfChangeKind::Simple && only_learner_change {
             return Err(box_err!(
                 "{} invalid conf change request, multiple changes that only effect learner",
                 self.tag
@@ -2212,7 +2202,7 @@ where
             "{} unsafe to perform conf change {:?}, before: {:?}, after: {:?}, truncated index {}, promoted commit index {}",
             self.tag,
             change_peers,
-            before_progress.conf().to_conf_state(),
+            current_progress.conf().to_conf_state(),
             after_progress.conf().to_conf_state(),
             self.get_store().truncated_index(),
             promoted_commit_index
