@@ -843,9 +843,14 @@ where
                 );
             }
 
+            // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by `unimplemented!()`,
+            // which can break compatibility (i.e. old version tikv running on data written by new version tikv),
+            // but PD will reject old version tikv join the cluster, so this should not happen.
             let res = match entry.get_entry_type() {
                 EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
-                t => self.handle_raft_entry_conf_change(apply_ctx, &entry, t),
+                EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
+                    self.handle_raft_entry_conf_change(apply_ctx, &entry)
+                }
             };
 
             match res {
@@ -952,7 +957,6 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
         entry: &Entry,
-        entry_type: EntryType,
     ) -> ApplyResult<EK::Snapshot> {
         // Although conf change can't yield in normal case, it is convenient to
         // simulate yield before applying a conf change log.
@@ -960,7 +964,7 @@ where
             ApplyResult::Yield
         });
         let (index, term) = (entry.get_index(), entry.get_term());
-        let (conf_change, cmd) = match entry_type {
+        let (conf_change, cmd) = match entry.get_entry_type() {
             EntryType::EntryConfChange => {
                 let conf_change: ConfChange =
                     util::parse_data_at(entry.get_data(), index, &self.tag);
