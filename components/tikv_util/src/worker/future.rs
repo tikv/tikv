@@ -10,6 +10,7 @@ use std::thread::{self, Builder, JoinHandle};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::executor::block_on;
 use futures::stream::StreamExt;
+use tokio::runtime;
 use tokio::task::LocalSet;
 
 use super::metrics::*;
@@ -116,8 +117,9 @@ where
                 }
             }
         };
+        let mut rt = runtime::Builder::new().basic_scheduler().build().unwrap();
         // `UnboundedReceiver` never returns an error.
-        block_on(handle.run_until(task));
+        rt.block_on(handle.run_until(task));
     }
     runner.shutdown();
     tikv_alloc::remove_thread_memory_accessor();
