@@ -271,7 +271,6 @@ impl Config {
                 }
                 Some(name) => name.to_owned(),
             };
-            info!("set label {}:{}", DEFAULT_ENGINE_LABEL_KEY, engine_name);
             self.labels
                 .insert(DEFAULT_ENGINE_LABEL_KEY.to_owned(), engine_name);
         }

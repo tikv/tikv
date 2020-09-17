@@ -18,11 +18,15 @@ fn proxy_version_info() -> String {
          \nGit Commit Branch: {}\
          \nUTC Build Time:    {}\
          \nRust Version:      {}\
+         \nEngine:            {}\
+         \nPrometheus Prefix: {}\
          \nProfile:           {}",
         option_env!("PROXY_BUILD_GIT_HASH").unwrap_or(fallback),
         option_env!("PROXY_BUILD_GIT_BRANCH").unwrap_or(fallback),
         option_env!("PROXY_BUILD_TIME").unwrap_or(fallback),
         option_env!("PROXY_BUILD_RUSTC_VERSION").unwrap_or(fallback),
+        option_env!("ENGINE_LABEL_VALUE").unwrap_or(fallback),
+        option_env!("PROMETHEUS_METRIC_NAME_PREFIX").unwrap_or(fallback),
         option_env!("PROXY_PROFILE").unwrap_or(fallback),
     )
 }
