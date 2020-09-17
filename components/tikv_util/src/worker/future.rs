@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder, JoinHandle};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::executor::block_on;
 use futures::stream::StreamExt;
 use tokio::task::LocalSet;
 
@@ -117,7 +116,11 @@ where
             }
         };
         // `UnboundedReceiver` never returns an error.
-        block_on(handle.run_until(task));
+        tokio::runtime::Builder::new()
+            .basic_scheduler()
+            .build()
+            .unwrap()
+            .block_on(handle.run_until(task));
     }
     runner.shutdown();
     tikv_alloc::remove_thread_memory_accessor();
@@ -248,5 +251,22 @@ mod tests {
         assert!(worker.is_busy());
         // when shutdown, StepRunner should send back a 0.
         assert_eq!(0, rx.recv().unwrap());
+    }
+
+    #[test]
+    fn test_block_on_inside_worker() {
+        struct BlockingRunner;
+
+        impl Runnable<bool> for BlockingRunner {
+            fn run(&mut self, _: bool) {
+                futures::executor::block_on(async {});
+            }
+        }
+
+        let mut worker = Worker::new("test-block-on-worker");
+        worker.start(BlockingRunner).unwrap();
+        worker.schedule(true).unwrap();
+        worker.schedule(false).unwrap();
+        worker.stop().unwrap().join().unwrap();
     }
 }
