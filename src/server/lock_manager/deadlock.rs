@@ -8,6 +8,7 @@ use super::{Error, Result};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
 use engine_rocks::RocksEngine;
+use futures::executor::block_on;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{StreamExt, TryStreamExt};
@@ -33,8 +34,8 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
+use tokio::task::spawn_local;
 use txn_types::TimeStamp;
-use futures::executor::block_on;
 
 /// `Locks` is a set of locks belonging to one transaction.
 struct Locks {
@@ -751,7 +752,7 @@ where
                 RpcStatusCode::FAILED_PRECONDITION,
                 Some("I'm not the leader of deadlock detector".to_string()),
             );
-            block_on(sink.fail(status).map_err(|_| ()));
+            spawn_local(sink.fail(status).map_err(|_| ()));
             ERROR_COUNTER_METRICS.not_leader.inc();
             return;
         }

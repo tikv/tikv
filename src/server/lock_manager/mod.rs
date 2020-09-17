@@ -117,6 +117,7 @@ impl LockManager {
         let waiter_mgr_runner = WaiterManager::new(
             Arc::clone(&self.waiter_count),
             self.detector_scheduler.clone(),
+            self.waiter_mgr_scheduler.clone(),
             cfg,
         );
         self.waiter_mgr_worker

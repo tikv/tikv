@@ -9,33 +9,26 @@ use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, StorageCallback,
 };
-use tikv_util::collections::HashMap;
-use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
-
-use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::pin::Pin;
-use std::rc::Rc;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
 use std::time::{Duration, Instant};
+use tikv_util::collections::HashMap;
+use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
 
 use futures::compat::Compat01As03;
 use futures::compat::Future01CompatExt;
 use futures::future::Future;
+use futures::future::FutureExt;
 use futures::task::{Context, Poll};
 use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
 use tikv_util::config::ReadableDuration;
+use tikv_util::future::poll_future_notify;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use futures::executor::block_on;
-
-struct DelayInner {
-    timer: Compat01As03<tokio_timer::Delay>,
-    cancelled: bool,
-}
 
 /// `Delay` is a wrapper of `tokio_timer::Delay` which has a resolution of one millisecond.
 /// It has some extra features than `tokio_timer::Delay` used by `WaiterManager`.
@@ -43,39 +36,20 @@ struct DelayInner {
 /// `Delay` performs no work and completes with `true` once the specified deadline has been reached.
 /// If it has been cancelled, it will complete with `false` at arbitrary time.
 // FIXME: Use `tokio_timer::DelayQueue` instead if https://github.com/tokio-rs/tokio/issues/1700 is fixed.
-#[derive(Clone)]
 struct Delay {
-    inner: Rc<RefCell<DelayInner>>,
-    deadline: Instant,
+    inner: Compat01As03<tokio_timer::Delay>,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl Delay {
     /// Create a new `Delay` instance that elapses at `deadline`.
-    fn new(deadline: Instant) -> Self {
-        let inner = DelayInner {
-            timer: GLOBAL_TIMER_HANDLE.delay(deadline).compat(),
-            cancelled: false,
-        };
-        Self {
-            inner: Rc::new(RefCell::new(inner)),
-            deadline,
-        }
-    }
-
-    /// Resets the instance to an earlier deadline.
-    fn reset(&self, deadline: Instant) {
-        if deadline < self.deadline {
-            self.inner.borrow_mut().timer.get_mut().reset(deadline);
-        }
-    }
-
-    /// Cancels the instance. It will complete with `false` at arbitrary time.
-    fn cancel(&self) {
-        self.inner.borrow_mut().cancelled = true;
+    fn new(deadline: Instant, cancelled: Arc<AtomicBool>) -> Self {
+        let inner = GLOBAL_TIMER_HANDLE.delay(deadline).compat();
+        Self { inner, cancelled }
     }
 
     fn is_cancelled(&self) -> bool {
-        self.inner.borrow().cancelled
+        self.cancelled.load(Ordering::Acquire)
     }
 }
 
@@ -83,13 +57,11 @@ impl Future for Delay {
     // Whether the instance is triggered normally(true) or cancelled(false).
     type Output = bool;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
         if self.is_cancelled() {
             return Poll::Ready(false);
         }
-        Pin::new(&mut self.inner.borrow_mut().timer)
-            .poll(cx)
-            .map(|_| true)
+        Pin::new(&mut self.inner).poll(cx).map(|_| true)
     }
 }
 
@@ -123,6 +95,10 @@ pub enum Task {
         timeout: Option<ReadableDuration>,
         delay: Option<ReadableDuration>,
     },
+    Timeout {
+        lock: Lock,
+        waiter_ts: TimeStamp,
+    },
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(ReadableDuration, ReadableDuration) + Send>),
 }
@@ -143,6 +119,7 @@ impl Display for Task {
             }
             Task::WakeUp { lock_ts, .. } => write!(f, "waking up txns waiting for {}", lock_ts),
             Task::Dump { .. } => write!(f, "dump"),
+            Task::Timeout { .. } => write!(f, "timeout"),
             Task::Deadlock { start_ts, .. } => write!(f, "txn:{} deadlock", start_ts),
             Task::ChangeConfig { timeout, delay } => write!(
                 f,
@@ -171,7 +148,8 @@ pub(crate) struct Waiter {
     /// it causes deadlock.
     pub(crate) pr: ProcessResult,
     pub(crate) lock: Lock,
-    delay: Delay,
+    deadline: Instant,
+    cancelled: Arc<AtomicBool>,
     _lifetime_timer: HistogramTimer,
 }
 
@@ -188,33 +166,31 @@ impl Waiter {
             cb,
             pr,
             lock,
-            delay: Delay::new(deadline),
+            deadline,
+            cancelled: Arc::new(AtomicBool::new(false)),
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
         }
     }
 
     /// The `F` will be invoked if the `Waiter` times out normally.
-    fn on_timeout<F: FnOnce()>(&self, f: F) -> impl Future<Output = ()> {
-        let timer = self.delay.clone();
-        async move {
-            if timer.await {
-                // Timer times out or error occurs.
-                // It should call timeout handler to prevent starvation.
-                f();
+    fn on_timeout<F: FnOnce() + Send + 'static>(&self, timeout_f: F) {
+        let f = Delay::new(self.deadline, self.cancelled.clone()).map(|not_cancelled| {
+            if not_cancelled {
+                timeout_f();
             }
-            // The timer is cancelled. Don't call timeout handler.
-        }
+        });
+        poll_future_notify(f);
     }
 
-    fn reset_timeout(&self, deadline: Instant) {
-        self.delay.reset(deadline);
+    fn reset_timeout(&mut self, deadline: Instant) {
+        self.deadline = deadline;
     }
 
     /// `Notify` consumes the `Waiter` to notify the corresponding transaction
     /// going on.
     fn notify(self) {
         // Cancel the delay timer to prevent removing the same `Waiter` earlier.
-        self.delay.cancel();
+        self.cancelled.store(true, Ordering::Release);
         self.cb.execute(self.pr);
     }
 
@@ -447,7 +423,7 @@ impl WaiterMgrScheduler {
 
 /// WaiterManager handles waiting and wake-up of pessimistic lock
 pub struct WaiterManager {
-    wait_table: Rc<RefCell<WaitTable>>,
+    wait_table: WaitTable,
     detector_scheduler: DetectorScheduler,
     /// It is the default and maximum timeout of waiter.
     default_wait_for_lock_timeout: ReadableDuration,
@@ -456,6 +432,8 @@ pub struct WaiterManager {
     /// Others will be waked up after `wake_up_delay_duration` to reduce
     /// contention and make the oldest one more likely acquires the lock.
     wake_up_delay_duration: ReadableDuration,
+
+    waiter_mgr_scheduler: WaiterMgrScheduler,
 }
 
 unsafe impl Send for WaiterManager {}
@@ -464,11 +442,13 @@ impl WaiterManager {
     pub fn new(
         waiter_count: Arc<AtomicUsize>,
         detector_scheduler: DetectorScheduler,
+        waiter_mgr_scheduler: WaiterMgrScheduler,
         cfg: &Config,
     ) -> Self {
         Self {
-            wait_table: Rc::new(RefCell::new(WaitTable::new(waiter_count))),
+            wait_table: WaitTable::new(waiter_count),
             detector_scheduler,
+            waiter_mgr_scheduler,
             default_wait_for_lock_timeout: cfg.wait_for_lock_timeout,
             wake_up_delay_duration: cfg.wake_up_delay_duration,
         }
@@ -481,31 +461,25 @@ impl WaiterManager {
 
     fn handle_wait_for(&mut self, waiter: Waiter) {
         let (waiter_ts, lock) = (waiter.start_ts, waiter.lock);
-        let wait_table = self.wait_table.clone();
-        let detector_scheduler = self.detector_scheduler.clone();
         // Remove the waiter from wait table when it times out.
-        let f = waiter.on_timeout(move || {
-            if let Some(waiter) = wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
-                detector_scheduler.clean_up_wait_for(waiter.start_ts, waiter.lock);
-                waiter.notify();
-            }
+        let wait_scheduler = self.waiter_mgr_scheduler.clone();
+        waiter.on_timeout(move || {
+            wait_scheduler.notify_scheduler(Task::Timeout { waiter_ts, lock });
         });
-        if let Some(old) = self.wait_table.borrow_mut().add_waiter(waiter) {
+        if let Some(old) = self.wait_table.add_waiter(waiter) {
             old.notify();
         };
-        block_on(f);
     }
 
     fn handle_wake_up(&mut self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
-        let mut wait_table = self.wait_table.borrow_mut();
-        if wait_table.is_empty() {
+        if self.wait_table.is_empty() {
             return;
         }
         let duration: Duration = self.wake_up_delay_duration.into();
         let new_timeout = Instant::now() + duration;
         for hash in hashes {
             let lock = Lock { ts: lock_ts, hash };
-            if let Some((mut oldest, others)) = wait_table.remove_oldest_waiter(lock) {
+            if let Some((mut oldest, others)) = self.wait_table.remove_oldest_waiter(lock) {
                 // Notify the oldest one immediately.
                 self.detector_scheduler
                     .clean_up_wait_for(oldest.start_ts, oldest.lock);
@@ -517,7 +491,7 @@ impl WaiterManager {
                 // If there is a deadlock between them, it will be detected after timeout.
                 if others.is_empty() {
                     // Remove the empty entry here.
-                    wait_table.remove(lock);
+                    self.wait_table.remove(lock);
                 } else {
                     others.iter_mut().for_each(|waiter| {
                         waiter.conflict_with(lock_ts, commit_ts);
@@ -529,11 +503,11 @@ impl WaiterManager {
     }
 
     fn handle_dump(&self, cb: Callback) {
-        cb(self.wait_table.borrow().to_wait_for_entries());
+        cb(self.wait_table.to_wait_for_entries());
     }
 
     fn handle_deadlock(&mut self, waiter_ts: TimeStamp, lock: Lock, deadlock_key_hash: u64) {
-        if let Some(mut waiter) = self.wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
+        if let Some(mut waiter) = self.wait_table.remove_waiter(lock, waiter_ts) {
             waiter.deadlock_with(deadlock_key_hash);
             waiter.notify();
         }
@@ -593,6 +567,13 @@ impl Runnable for WaiterManager {
                 self.handle_deadlock(start_ts, lock, deadlock_key_hash);
             }
             Task::ChangeConfig { timeout, delay } => self.handle_config_change(timeout, delay),
+            Task::Timeout { waiter_ts, lock } => {
+                if let Some(waiter) = self.wait_table.remove_waiter(lock, waiter_ts) {
+                    self.detector_scheduler
+                        .clean_up_wait_for(waiter.start_ts, waiter.lock);
+                    waiter.notify();
+                }
+            }
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(
                 self.default_wait_for_lock_timeout,
@@ -613,7 +594,6 @@ pub mod tests {
     use std::time::Duration;
 
     use futures::executor::block_on;
-    use futures::future::FutureExt;
     use kvproto::kvrpcpb::LockInfo;
     use rand::prelude::*;
     use tikv_util::config::ReadableDuration;
@@ -624,7 +604,8 @@ pub mod tests {
             cb: StorageCallback::Boolean(Box::new(|_| ())),
             pr: ProcessResult::Res,
             lock: Lock { ts: lock_ts, hash },
-            delay: Delay::new(Instant::now()),
+            deadline: Instant::now(),
+            cancelled: Arc::new(AtomicBool::new(false)),
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
         }
     }
@@ -642,31 +623,11 @@ pub mod tests {
 
     #[test]
     fn test_delay() {
-        let delay = Delay::new(Instant::now() + Duration::from_millis(100));
-        assert_elapsed(
-            || {
-                block_on(delay.map(|not_cancelled| assert!(not_cancelled)));
-            },
-            50,
-            200,
+        let canceled = Arc::new(AtomicBool::new(false));
+        let delay = Delay::new(
+            Instant::now() + Duration::from_millis(100),
+            canceled.clone(),
         );
-
-        // Should reset timeout successfully with cloned delay.
-        let delay = Delay::new(Instant::now() + Duration::from_millis(100));
-        let delay_clone = delay.clone();
-        delay_clone.reset(Instant::now() + Duration::from_millis(50));
-        assert_elapsed(
-            || {
-                block_on(delay.map(|not_cancelled| assert!(not_cancelled)));
-            },
-            20,
-            100,
-        );
-
-        // New deadline can't exceed the initial deadline.
-        let delay = Delay::new(Instant::now() + Duration::from_millis(100));
-        let delay_clone = delay.clone();
-        delay_clone.reset(Instant::now() + Duration::from_millis(300));
         assert_elapsed(
             || {
                 block_on(delay.map(|not_cancelled| assert!(not_cancelled)));
@@ -676,9 +637,12 @@ pub mod tests {
         );
 
         // Cancel timer.
-        let delay = Delay::new(Instant::now() + Duration::from_millis(100));
-        let delay_clone = delay.clone();
-        delay_clone.cancel();
+        let canceled = Arc::new(AtomicBool::new(false));
+        let delay = Delay::new(
+            Instant::now() + Duration::from_millis(100),
+            canceled.clone(),
+        );
+        canceled.store(true, Ordering::Release);
         assert_elapsed(
             || {
                 block_on(delay.map(|not_cancelled| assert!(!not_cancelled)));
@@ -852,21 +816,20 @@ pub mod tests {
     #[test]
     fn test_waiter_on_timeout() {
         // The timeout handler should be invoked after timeout.
-        let (waiter, _, _) = new_test_waiter(10.into(), 20.into(), 20);
+        let (mut waiter, _, _) = new_test_waiter(10.into(), 20.into(), 20);
         waiter.reset_timeout(Instant::now() + Duration::from_millis(100));
         let (tx, rx) = mpsc::sync_channel(1);
-        let f = waiter.on_timeout(move || tx.send(1).unwrap());
-        assert_elapsed(|| block_on(f), 50, 200);
-        rx.try_recv().unwrap();
+        waiter.on_timeout(move || tx.send(1).unwrap());
+        // assert_elapsed(|| block_on(f), 50, 200);
+        rx.recv().unwrap();
 
         // The timeout handler shouldn't be invoked after waiter has been notified.
-        let (waiter, _, _) = new_test_waiter(10.into(), 20.into(), 20);
+        let (mut waiter, _, _) = new_test_waiter(10.into(), 20.into(), 20);
         waiter.reset_timeout(Instant::now() + Duration::from_millis(100));
         let (tx, rx) = mpsc::sync_channel(1);
-        let f = waiter.on_timeout(move || tx.send(1).unwrap());
+        waiter.on_timeout(move || tx.send(1).unwrap());
         waiter.notify();
-        assert_elapsed(|| block_on(f), 0, 200);
-        rx.try_recv().unwrap_err();
+        rx.recv().unwrap_err();
     }
 
     #[test]
@@ -1026,9 +989,13 @@ pub mod tests {
         cfg.wait_for_lock_timeout = ReadableDuration::millis(wait_for_lock_timeout);
         cfg.wake_up_delay_duration = ReadableDuration::millis(wake_up_delay_duration);
         let mut waiter_mgr_worker = Worker::new("test-waiter-manager");
-        let waiter_mgr_runner =
-            WaiterManager::new(Arc::new(AtomicUsize::new(0)), detector_scheduler, &cfg);
         let waiter_mgr_scheduler = WaiterMgrScheduler::new(waiter_mgr_worker.scheduler());
+        let waiter_mgr_runner = WaiterManager::new(
+            Arc::new(AtomicUsize::new(0)),
+            detector_scheduler,
+            waiter_mgr_scheduler.clone(),
+            &cfg,
+        );
         waiter_mgr_worker.start(waiter_mgr_runner).unwrap();
         (waiter_mgr_worker, waiter_mgr_scheduler)
     }
@@ -1287,15 +1254,17 @@ pub mod tests {
     #[bench]
     fn bench_wake_up_small_table_against_big_hashes(b: &mut test::Bencher) {
         let detect_worker = Worker::new("dummy-deadlock");
+        let wait_worker = Worker::new("dummy-wait");
         let detector_scheduler = DetectorScheduler::new(detect_worker.scheduler());
+        let wait_scheduler = WaiterMgrScheduler::new(wait_worker.scheduler());
         let mut waiter_mgr = WaiterManager::new(
             Arc::new(AtomicUsize::new(0)),
             detector_scheduler,
+            wait_scheduler,
             &Config::default(),
         );
         waiter_mgr
             .wait_table
-            .borrow_mut()
             .add_waiter(dummy_waiter(10.into(), 20.into(), 10000));
         let hashes: Vec<u64> = (0..1000).collect();
         b.iter(|| {
