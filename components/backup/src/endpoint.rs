@@ -531,6 +531,9 @@ impl ControlThreadPool {
         let w = workers.clone();
         workers.spawn(move |_: &mut Handle<'_>| {
             func();
+            // Debug service requires jobs in the old thread pool continue to run even after
+            // the pool is recreated. So the pool needs to be ref counted and dropped after
+            // task has finished.
             drop(w);
         });
     }
