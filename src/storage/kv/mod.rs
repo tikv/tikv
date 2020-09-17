@@ -14,7 +14,7 @@ use std::{error, ptr, result};
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{CfName, CF_DEFAULT};
 use engine_traits::{IterOptions, KvEngine as LocalEngine, ReadOptions};
-use futures03::prelude::*;
+use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
 use txn_types::{Key, TxnExtra, Value};
@@ -404,6 +404,7 @@ pub fn snapshot<E: Engine>(
         let (_ctx, result) = future
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
             .await?;
+        fail_point!("after-snapshot");
         result
     }
 }

@@ -17,21 +17,13 @@ use std::sync::{Arc, RwLock};
 use std::usize;
 
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
+use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
+use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionFilterFactory, CompactionPriority,
     DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode,
     LRUCacheOptions, TitanDBOptions,
 };
-
-use crate::import::Config as ImportConfig;
-use crate::server::gc_worker::GcConfig;
-use crate::server::gc_worker::WriteCompactionFilterFactory;
-use crate::server::lock_manager::Config as PessimisticTxnConfig;
-use crate::server::Config as ServerConfig;
-use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
-use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::util::{
     FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
@@ -53,9 +45,19 @@ use security::SecurityConfig;
 use tikv_util::config::{
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
 };
-use tikv_util::future_pool;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
+use tikv_util::yatp_pool;
+
+use crate::import::Config as ImportConfig;
+use crate::server::gc_worker::GcConfig;
+use crate::server::gc_worker::WriteCompactionFilterFactory;
+use crate::server::lock_manager::Config as PessimisticTxnConfig;
+use crate::server::Config as ServerConfig;
+use crate::server::CONFIG_ROCKSDB_GAUGE;
+use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR};
+
+pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -1588,19 +1590,19 @@ macro_rules! readpool_config {
 
         impl $struct_name {
             /// Builds configurations for low, normal and high priority pools.
-            pub fn to_future_pool_configs(&self) -> Vec<future_pool::Config> {
+            pub fn to_yatp_pool_configs(&self) -> Vec<yatp_pool::Config> {
                 vec![
-                    future_pool::Config {
+                    yatp_pool::Config {
                         workers: self.low_concurrency,
                         max_tasks_per_worker: self.max_tasks_per_worker_low,
                         stack_size: self.stack_size.0 as usize,
                     },
-                    future_pool::Config {
+                    yatp_pool::Config {
                         workers: self.normal_concurrency,
                         max_tasks_per_worker: self.max_tasks_per_worker_normal,
                         stack_size: self.stack_size.0 as usize,
                     },
-                    future_pool::Config {
+                    yatp_pool::Config {
                         workers: self.high_concurrency,
                         max_tasks_per_worker: self.max_tasks_per_worker_high,
                         stack_size: self.stack_size.0 as usize,
@@ -3010,7 +3012,6 @@ mod tests {
         let mut incoming = TiKvConfig::default();
         incoming.coprocessor.region_split_keys = 10000;
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
-        incoming.raft_store.sync_log = false;
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
@@ -3019,7 +3020,6 @@ mod tests {
             "10000".to_owned(),
         );
         change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
-        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
         change.insert(
             "rocksdb.defaultcf.block-cache-size".to_owned(),
             "500MB".to_owned(),
@@ -3069,7 +3069,6 @@ mod tests {
             "10000".to_owned(),
         );
         change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
-        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
         change.insert(
             "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
             "read-only".to_owned(),
@@ -3087,7 +3086,6 @@ mod tests {
             res.get("gc.max-write-bytes-per-sec"),
             Some(&"\"100MB\"".to_owned())
         );
-        assert_eq!(res.get("raftstore.sync-log"), Some(&"false".to_owned()));
         assert_eq!(
             res.get("rocksdb.defaultcf.titan.blob-run-mode"),
             Some(&"\"read-only\"".to_owned())

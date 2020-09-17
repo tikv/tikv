@@ -10,7 +10,7 @@ use std::time::Instant;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures03::executor::block_on;
+use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
@@ -250,7 +250,7 @@ where
             let (mut next_gc_key, mut gc_info) = (keys.next(), GcInfo::default());
             while let Some(ref key) = next_gc_key {
                 if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn) {
-                    error!("GC meets failure"; "key" => %key, "err" => ?e);
+                    error!(?e; "GC meets failure"; "key" => %key,);
                     // Switch to the next key if meets failure.
                     gc_info.is_completed = true;
                 }
@@ -489,7 +489,7 @@ where
 
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
 fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask>) -> Result<()> {
-    error!("failed to schedule gc task: {:?}", e);
+    error!("failed to schedule gc task"; "err" => %e);
     Err(box_err!("failed to schedule gc task: {:?}", e))
 }
 
@@ -595,7 +595,7 @@ where
 
         let r = self.stop();
         if let Err(e) = r {
-            error!("Failed to stop gc_worker"; "err" => ?e);
+            error!(?e; "Failed to stop gc_worker");
         }
     }
 }
@@ -819,7 +819,7 @@ mod tests {
 
     use engine_rocks::RocksSnapshot;
     use engine_traits::KvEngine;
-    use futures03::executor::block_on;
+    use futures::executor::block_on;
     use kvproto::{kvrpcpb::Op, metapb};
     use raftstore::router::RaftStoreBlackHole;
     use raftstore::store::RegionSnapshot;

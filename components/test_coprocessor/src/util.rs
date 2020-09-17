@@ -2,8 +2,8 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::Stream;
-use futures03::executor::block_on;
+use futures::executor::block_on;
+use futures::stream::StreamExt;
 use protobuf::Message;
 
 use kvproto::coprocessor::{Request, Response};
@@ -46,17 +46,17 @@ where
     E: Engine,
     F: FnMut(&Response) + Send + 'static,
 {
-    cop.parse_and_handle_stream_request(req, None)
-        .wait()
+    let resps = cop
+        .parse_and_handle_stream_request(req, None)
         .map(|resp| {
-            let resp = resp.unwrap();
             check_range(&resp);
             assert!(!resp.get_data().is_empty());
             let mut stream_resp = StreamResponse::default();
             stream_resp.merge_from_bytes(resp.get_data()).unwrap();
             stream_resp
         })
-        .collect()
+        .collect();
+    block_on(resps)
 }
 
 pub fn offset_for_column(cols: &[ColumnInfo], col_id: i64) -> i64 {

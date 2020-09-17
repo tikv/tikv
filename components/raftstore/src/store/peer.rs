@@ -26,9 +26,10 @@ use kvproto::replication_modepb::{
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
-    self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
-    NO_LIMIT,
+    self, Changer, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus, StateRole,
+    INVALID_INDEX, NO_LIMIT,
 };
+use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
 use time::Timespec;
 use uuid::Uuid;
@@ -751,20 +752,18 @@ where
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(ctx.cfg.sync_log);
+        write_opts.set_sync(true);
         ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
-        ctx.engines.raft.consume(&mut raft_wb, ctx.cfg.sync_log)?;
+        ctx.engines.raft.consume(&mut raft_wb, true)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
             // will be cleared by a newer snapshot applying or restart.
             if let Err(e) = self.get_store().clear_data() {
-                error!(
+                error!(?e;
                     "failed to schedule clear data task";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             }
         }
@@ -2123,6 +2122,7 @@ where
     fn check_conf_change<T, C>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T, C>,
+        cc: &eraftpb::ConfChange,
         cmd: &RaftCmdRequest,
     ) -> Result<()> {
         let change_peer = apply::get_change_peer_cmd(cmd).unwrap();
@@ -2156,33 +2156,23 @@ where
             return Err(box_err!("{} ignore remove leader", self.tag));
         }
 
-        let (total, mut progress) = {
-            let status = self.raft_group.status();
-            let total = status.progress.unwrap().voter_ids().len();
-            if total == 1 {
+        let before_progress = {
+            let pr = self.raft_group.status().progress.unwrap().clone();
+            if pr.is_singleton() {
                 // It's always safe if there is only one node in the cluster.
                 return Ok(());
             }
-            (total, status.progress.unwrap().clone())
+            pr
         };
 
-        match change_type {
-            ConfChangeType::AddNode => {
-                if let Err(raft::Error::NotExists(_, _)) = progress.promote_learner(peer.get_id()) {
-                    let _ = progress.insert_voter(peer.get_id(), Progress::new(0, 0));
-                }
-            }
-            ConfChangeType::RemoveNode => {
-                progress.remove(peer.get_id())?;
-            }
-            ConfChangeType::AddLearnerNode => {
+        let (after_progress, promoted_commit_index) = {
+            let mut pr = self.check_joint_state(cc)?;
+            let idx = pr.maximal_committed_index().0;
+            if idx >= self.get_store().truncated_index() {
                 return Ok(());
             }
-        }
-        let promoted_commit_index = progress.maximal_committed_index().0;
-        if promoted_commit_index >= self.get_store().truncated_index() {
-            return Ok(());
-        }
+            (pr, idx)
+        };
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["conf_change", "reject_unsafe"])
@@ -2193,20 +2183,35 @@ where
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "request" => ?change_peer,
-            "total" => total,
-            "after" => progress.voter_ids().len(),
+            "before" => ?before_progress.conf().to_conf_state(),
+            "after" => ?after_progress.conf().to_conf_state(),
             "truncated_index" => self.get_store().truncated_index(),
             "promoted_commit_index" => promoted_commit_index,
         );
         // Waking it up to replicate logs to candidate.
         self.should_wake_up = true;
         Err(box_err!(
-            "unsafe to perform conf change {:?}, total {}, truncated index {}, promoted commit index {}",
+            "unsafe to perform conf change {:?}, truncated index {}, promoted commit index {}",
             change_peer,
-            total,
             self.get_store().truncated_index(),
             promoted_commit_index
         ))
+    }
+
+    /// Check if current joint state can handle this confchange
+    fn check_joint_state(&mut self, cc: &impl ConfChangeI) -> Result<ProgressTracker> {
+        let cc = &cc.as_v2();
+        let mut prs = self.raft_group.status().progress.unwrap().clone();
+        let mut changer = Changer::new(&prs);
+        let (cfg, changes) = if cc.leave_joint() {
+            changer.leave_joint()?
+        } else if let Some(auto_leave) = cc.enter_joint() {
+            changer.enter_joint(auto_leave, &cc.changes)?
+        } else {
+            changer.simple(&cc.changes)?
+        };
+        prs.apply_conf(cfg, changes, self.raft_group.raft.raft_log.last_index());
+        Ok(prs)
     }
 
     fn transfer_leader(&mut self, peer: &metapb::Peer) {
@@ -2257,12 +2262,12 @@ where
         let status = self.raft_group.status();
         let progress = status.progress.unwrap();
 
-        if !progress.voter_ids().contains(&peer_id) {
+        if !progress.conf().voters().contains(peer_id) {
             return Some("non voter");
         }
 
-        for (id, progress) in progress.voters() {
-            if progress.state == ProgressState::Snapshot {
+        for (id, pr) in progress.iter() {
+            if pr.state == ProgressState::Snapshot {
                 return Some("pending snapshot");
             }
             if *id == peer_id && index == 0 {
@@ -2270,7 +2275,7 @@ where
                 // pre-transfer-leader feature. Set it to matched to make it
                 // possible to transfer leader to an older version. It may be
                 // useful during rolling restart.
-                index = progress.matched;
+                index = pr.matched;
             }
         }
 
@@ -2828,20 +2833,22 @@ where
             return Ok(Either::Right(index));
         }
 
-        self.check_conf_change(ctx, req)?;
+        let cc = {
+            let data = req.write_to_bytes()?;
+            let change_peer = apply::get_change_peer_cmd(req).unwrap();
+            let mut cc = eraftpb::ConfChange::default();
+            cc.set_change_type(change_peer.get_change_type());
+            cc.set_node_id(change_peer.get_peer().get_id());
+            cc.set_context(data);
+            cc
+        };
+
+        self.check_conf_change(ctx, &cc, req)?;
 
         ctx.raft_metrics.propose.conf_change += 1;
 
-        let data = req.write_to_bytes()?;
-
         // TODO: use local histogram metrics
-        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
-
-        let change_peer = apply::get_change_peer_cmd(req).unwrap();
-        let mut cc = eraftpb::ConfChange::default();
-        cc.set_change_type(change_peer.get_change_type());
-        cc.set_node_id(change_peer.get_peer().get_id());
-        cc.set_context(data);
+        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(cc.get_context().len() as f64);
 
         info!(
             "propose conf change peer";
@@ -2963,7 +2970,11 @@ where
                 if Some(true) != res {
                     let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
                     if self.get_store().applied_index_term() >= self.term() {
-                        for (id, p) in self.raft_group.raft.prs().voters() {
+                        let progress = self.raft_group.raft.prs();
+                        for (id, p) in progress.iter() {
+                            if !progress.conf().voters().contains(*id) {
+                                continue;
+                            }
                             buffer.push((*id, p.commit_group_id, p.matched));
                         }
                     };
@@ -3101,14 +3112,12 @@ where
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
             if let Err(e) = ctx.trans.send(send_msg) {
-                error!(
+                error!(?e;
                     "failed to send wake up message";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -3136,14 +3145,12 @@ where
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgCheckStalePeer);
             if let Err(e) = ctx.trans.send(send_msg) {
-                error!(
+                error!(?e;
                     "failed to send check stale peer message";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -3188,14 +3195,12 @@ where
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_premerge_commit(premerge_commit);
         if let Err(e) = ctx.trans.send(send_msg) {
-            error!(
+            error!(?e;
                 "failed to send want rollback merge message";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "target_peer_id" => to_peer.get_id(),
                 "target_store_id" => to_peer.get_store_id(),
-                "err" => ?e,
-                "error_code" => %e.error_code(),
             );
         } else {
             ctx.need_flush_trans = true;

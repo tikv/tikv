@@ -31,7 +31,6 @@ use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
 use tikv::config::*;
-use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::config::*;
 use tikv_util::{escape, HandyRwLock};
 

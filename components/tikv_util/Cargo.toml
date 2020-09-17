@@ -20,11 +20,11 @@ crc32fast = "1.2"
 crossbeam = "0.7.2"
 error_code = { path = "../error_code" }
 derive_more = "0.99.3"
-fail = "0.3"
+fail = "0.4"
 fs2 = "0.4"
 futures = "0.3"
 fxhash = "0.2.1"
-grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.6", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 lazy_static = "1.3"
 libc = "0.2"
@@ -62,7 +62,6 @@ procfs = "0.7"
 git = "https://github.com/tikv/yatp.git"
 
 [dev-dependencies]
-futures-cpupool = "0.1"
 panic_hook = { path = "../panic_hook" }
 protobuf = "2"
 regex = "1.0"

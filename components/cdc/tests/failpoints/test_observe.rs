@@ -1,16 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::{new_event_feed, TestSuite};
-use futures::sink::Sink;
-use futures::Future;
-use futures03::executor::block_on;
+use futures::executor::block_on;
+use futures::sink::SinkExt;
 use grpcio::WriteFlags;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::event::{Event as Event_oneof_event, LogType as EventLogType};
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::{Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataRequest,
-};
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
@@ -28,15 +24,10 @@ fn test_observe_duplicate_cmd() {
     let mut suite = TestSuite::new(3);
 
     let region = suite.cluster.get_region(&[]);
-    let mut req = ChangeDataRequest::default();
-    req.region_id = region.get_id();
-    req.set_region_epoch(region.get_region_epoch().clone());
-    let (req_tx, event_feed_wrap, receive_event) =
+    let req = suite.new_changedata_request(region.get_id());
+    let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
-    let _req_tx = req_tx
-        .send((req.clone(), WriteFlags::default()))
-        .wait()
-        .unwrap();
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -46,7 +37,7 @@ fn test_observe_duplicate_cmd() {
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         Event_oneof_event::Error(e) => panic!("{:?}", e),
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
 
     let (k, v) = ("key1".to_owned(), "value".to_owned());
@@ -69,7 +60,7 @@ fn test_observe_duplicate_cmd() {
             assert_eq!(entries.entries.len(), 1);
             assert_eq!(entries.entries[0].get_type(), EventLogType::Prewrite);
         }
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
     let fp = "before_cdc_flush_apply";
     fail::cfg(fp, "pause").unwrap();
@@ -80,24 +71,21 @@ fn test_observe_duplicate_cmd() {
         suite.async_kv_commit(region.get_id(), vec![k.into_bytes()], start_ts, commit_ts);
     sleep_ms(200);
     // Close previous connection and open a new one twice time
-    let (req_tx, resp_rx) = suite
+    let (mut req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let _req_tx = req_tx
-        .send((req.clone(), WriteFlags::default()))
-        .wait()
-        .unwrap();
-    let (req_tx, resp_rx) = suite
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    let (mut req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     fail::remove(fp);
     // Receive Commit response
-    commit_resp.wait().unwrap();
+    block_on(commit_resp).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -109,7 +97,7 @@ fn test_observe_duplicate_cmd() {
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         Event_oneof_event::Error(e) => panic!("{:?}", e),
-        _ => panic!("unknown event"),
+        other => panic!("unknown event {:?}", other),
     }
 
     // Make sure resolved ts can be advanced normally even with few tso failures.
@@ -161,24 +149,19 @@ fn test_delayed_change_cmd() {
         .cluster
         .add_send_filter(CloneFilterFactory(send_read_index_filter));
 
-    let mut req = ChangeDataRequest::default();
-    req.region_id = region.get_id();
-    req.set_region_epoch(region.get_region_epoch().clone());
-    let (req_tx, event_feed_wrap, receive_event) =
+    let req = suite.new_changedata_request(region.get_id());
+    let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
-    let _req_tx = req_tx
-        .send((req.clone(), WriteFlags::default()))
-        .wait()
-        .unwrap();
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
 
     suite.cluster.must_put(b"k2", b"v2");
 
-    let (req_tx, resp_rx) = suite
+    let (mut req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     sleep_ms(200);
 
     suite
@@ -202,7 +185,7 @@ fn test_delayed_change_cmd() {
                     let e = &es.entries[0];
                     assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
                 }
-                _ => panic!("unknown event"),
+                other => panic!("unknown event {:?}", other),
             }
         }
         if counter > 3 {
