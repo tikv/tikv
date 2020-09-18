@@ -3022,7 +3022,7 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?rev=b67d432c1b74350b38a5d96ddf885ac6c3ff46f5#b67d432c1b74350b38a5d96ddf885ac6c3ff46f5"
+source = "git+https://github.com/skyzh/rust-protobuf?rev=5552eadb6730e335e481e389570e66897005f805#5552eadb6730e335e481e389570e66897005f805"
 dependencies = [
  "heck",
  "hex 0.3.2",

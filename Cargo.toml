@@ -179,7 +179,8 @@ zipf = "6.1.0"
 # TODO: remove this when new raft-rs is published.
 raft = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
 raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
-protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
+# TODO: change back to pingcap
+protobuf = { git = "https://github.com/skyzh/rust-protobuf", rev = "5552eadb6730e335e481e389570e66897005f805" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6" }
 
