@@ -469,7 +469,6 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "fail 0.4.0",
- "failure",
  "futures 0.3.5",
  "grpcio",
  "hex 0.4.2",
@@ -490,6 +489,7 @@ dependencies = [
  "tempfile",
  "test_raftstore",
  "test_util",
+ "thiserror",
  "tikv",
  "tikv_util",
  "tokio",
@@ -4801,6 +4801,7 @@ dependencies = [
 name = "tikv"
 version = "4.1.0-alpha"
 dependencies = [
+ "anyhow",
  "async-stream",
  "async-trait",
  "backtrace",
@@ -4822,7 +4823,6 @@ dependencies = [
  "engine_traits",
  "error_code",
  "fail 0.4.0",
- "failure",
  "fs2",
  "futures 0.3.5",
  "futures-executor",
@@ -4881,6 +4881,7 @@ dependencies = [
  "tempfile",
  "test_sst_importer",
  "test_util",
+ "thiserror",
  "tidb_query_common",
  "tidb_query_datatype",
  "tidb_query_normal_executors",
