@@ -37,7 +37,7 @@ impl StoreAddrResolver for StaticResolver {
 
 pub fn get_raft_client_with_router<R>(router: R, port: u16) -> RaftClient<StaticResolver, R>
 where
-    R: RaftStoreRouter<RocksEngine> + 'static,
+    R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
 {
     let env = Arc::new(Environment::new(2));
     let cfg = Arc::new(Config::default());

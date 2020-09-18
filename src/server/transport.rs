@@ -39,8 +39,8 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static>
 
 impl<T, S> Transport for ServerTransport<T, S>
 where
-    T: RaftStoreRouter<RocksEngine> + 'static,
-    S: StoreAddrResolver + 'static,
+    T: RaftStoreRouter<RocksEngine> + Unpin + 'static,
+    S: StoreAddrResolver + Unpin + 'static,
 {
     fn send(&mut self, msg: RaftMessage) -> RaftStoreResult<()> {
         match self.raft_client.send(msg) {
