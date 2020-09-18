@@ -4681,7 +4681,6 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "codec",
- "failure",
  "indexmap",
  "kvproto",
  "protobuf",

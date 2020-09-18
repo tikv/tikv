@@ -4,8 +4,6 @@
 
 #![feature(test)]
 
-#[macro_use]
-extern crate failure;
 #[macro_use(box_err, box_try)]
 extern crate tikv_util;
 
