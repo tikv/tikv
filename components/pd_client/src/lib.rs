@@ -4,8 +4,6 @@
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
-extern crate quick_error;
-#[macro_use]
 extern crate serde_derive;
 extern crate hex;
 extern crate kvproto;
