@@ -43,11 +43,12 @@ pub enum Error {
     RegionNotInitialized(u64),
     #[error("peer is not leader for region {0}, leader may {1:?}")]
     NotLeader(u64, Option<metapb::Peer>),
-    #[error("key {} is not in region key range [{}, {}) for region {}",
-    hex::encode_upper(.0),
-    hex::encode_upper(.1.get_start_key()),
-    hex::encode_upper(.1.get_end_key()),
-    .1.get_id()
+    #[error(
+        "key {} is not in region key range [{}, {}) for region {}",
+        hex::encode_upper(.0),
+        hex::encode_upper(.1.get_start_key()),
+        hex::encode_upper(.1.get_end_key()),
+        .1.get_id()
     )]
     KeyNotInRegion(Vec<u8>, metapb::Region),
     #[error("{0:?}")]
@@ -64,7 +65,7 @@ pub enum Error {
     #[error("DecodeError {0}")]
     ProstDecode(#[source] DecodeError),
     #[cfg(feature = "prost-codec")]
-    #[error("EncodeError {1}")]
+    #[error("EncodeError {0}")]
     ProstEncode(#[source] EncodeError),
     #[error("Codec {0}")]
     Codec(#[from] codec::Error),
