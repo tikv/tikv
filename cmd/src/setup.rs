@@ -214,7 +214,7 @@ pub fn initial_logger(config: &TiKvConfig) {
     let redact_info_log = if let Some(redact_info_log) = config.security.redact_info_log {
         redact_info_log
     } else {
-        config.security.encryption.data_encryption_method != EncryptionMethod::Plaintext
+        false
     };
     log_wrappers::set_redact_info_log(redact_info_log);
 
