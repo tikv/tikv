@@ -4747,9 +4747,9 @@ dependencies = [
 name = "tidb_query_vec_executors"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "codec",
  "fail 0.4.0",
- "failure",
  "hex 0.3.2",
  "kvproto",
  "match_template",
