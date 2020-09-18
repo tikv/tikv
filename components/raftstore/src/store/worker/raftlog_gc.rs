@@ -7,6 +7,7 @@ use std::sync::mpsc::Sender;
 use crate::store::{CasualMessage, CasualRouter};
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
+use thiserror::Error;
 use tikv_util::time::Duration;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
@@ -50,15 +51,10 @@ impl Display for Task {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    enum Error {
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("raftlog gc failed {:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+enum Error {
+    #[error("raftlog gc failed {0:?}")]
+    Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
 
 pub struct Runner<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> {

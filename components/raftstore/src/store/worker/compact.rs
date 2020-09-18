@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use engine_traits::KvEngine;
 use engine_traits::CF_WRITE;
+use thiserror::Error;
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -70,15 +71,10 @@ impl Display for Task {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("compact failed {:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("compact failed {0:?}")]
+    Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
 
 pub struct Runner<E> {

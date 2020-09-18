@@ -12,6 +12,7 @@ use protobuf::ProtobufError;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
+use thiserror::Error;
 use tikv_util::codec;
 
 use super::coprocessor::Error as CopError;
@@ -30,114 +31,65 @@ pub enum DiscardReason {
     Full,
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        RaftEntryTooLarge(region_id: u64, entry_size: u64) {
-            display("raft entry is too large, region {}, entry size {}", region_id, entry_size)
-        }
-        StoreNotMatch(to_store_id: u64, my_store_id: u64) {
-            display("to store id {}, mine {}", to_store_id, my_store_id)
-        }
-        RegionNotFound(region_id: u64) {
-            display("region {} not found", region_id)
-        }
-        RegionNotInitialized(region_id: u64) {
-            display("region {} not initialized yet", region_id)
-        }
-        NotLeader(region_id: u64, leader: Option<metapb::Peer>) {
-            display("peer is not leader for region {}, leader may {:?}", region_id, leader)
-        }
-        KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
-            display("key {} is not in region key range [{}, {}) for region {}",
-                    hex::encode_upper(key),
-                    hex::encode_upper(region.get_start_key()),
-                    hex::encode_upper(region.get_end_key()),
-                    region.get_id())
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{:?}", err)
-        }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("raft entry is too large, region {0}, entry size {1}")]
+    RaftEntryTooLarge(u64, u64),
+    #[error("to store id {0}, mine {1}")]
+    StoreNotMatch(u64, u64),
+    #[error("region {0} not found")]
+    RegionNotFound(u64),
+    #[error("region {0} not initialized yet")]
+    RegionNotInitialized(u64),
+    #[error("peer is not leader for region {0}, leader may {1:?}")]
+    NotLeader(u64, Option<metapb::Peer>),
+    #[error("key {} is not in region key range [{}, {}) for region {}",
+    hex::encode_upper(.0),
+    hex::encode_upper(.1.get_start_key()),
+    hex::encode_upper(.1.get_end_key()),
+    .1.get_id()
+    )]
+    KeyNotInRegion(Vec<u8>, metapb::Region),
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn error::Error + Sync + Send>),
 
-        // Following is for From other errors.
-        Io(err: io::Error) {
-            from()
-            cause(err)
-            display("Io {}", err)
-        }
-        Engine(err: engine_traits::Error) {
-            from()
-            display("Engine {:?}", err)
-        }
-        Protobuf(err: ProtobufError) {
-            from()
-            cause(err)
-            display("Protobuf {}", err)
-        }
-        #[cfg(feature = "prost-codec")]
-        ProstDecode(err: DecodeError) {
-            cause(err)
-            display("DecodeError {}", err)
-        }
-        #[cfg(feature = "prost-codec")]
-        ProstEncode(err: EncodeError) {
-            cause(err)
-            display("EncodeError {}", err)
-        }
-        Codec(err: codec::Error) {
-            from()
-            cause(err)
-            display("Codec {}", err)
-        }
-        AddrParse(err: net::AddrParseError) {
-            from()
-            cause(err)
-            display("AddrParse {}", err)
-        }
-        Pd(err: pd_client::Error) {
-            from()
-            cause(err)
-            display("Pd {}", err)
-        }
-        Raft(err: raft::Error) {
-            from()
-            cause(err)
-            display("Raft {}", err)
-        }
-        Timeout(msg: String) {
-            display("Timeout {}", msg)
-        }
-        EpochNotMatch(msg: String, new_regions: Vec<metapb::Region>) {
-            display("EpochNotMatch {}", msg)
-        }
-        StaleCommand {
-            display("stale command")
-        }
-        Coprocessor(err: CopError) {
-            from()
-            cause(err)
-            display("Coprocessor {}", err)
-        }
-        Transport(reason: DiscardReason) {
-            display("Discard due to {:?}", reason)
-        }
-        Snapshot(err: SnapError) {
-            from()
-            cause(err)
-            display("Snapshot {}", err)
-        }
-        SstImporter(err: sst_importer::Error) {
-            from()
-            cause(err)
-            display("SstImporter {}", err)
-        }
-        Encryption(err: encryption::Error) {
-            from()
-            display("Encryption {}", err)
-        }
-    }
+    // Following is for From other errors.
+    #[error("Io {0}")]
+    Io(#[from] io::Error),
+    #[error("Engine {0:?}")]
+    Engine(#[from] engine_traits::Error),
+    #[error("Protobuf {0}")]
+    Protobuf(#[from] ProtobufError),
+    #[cfg(feature = "prost-codec")]
+    #[error("DecodeError {0}")]
+    ProstDecode(#[source] DecodeError),
+    #[cfg(feature = "prost-codec")]
+    #[error("EncodeError {1}")]
+    ProstEncode(#[source] EncodeError),
+    #[error("Codec {0}")]
+    Codec(#[from] codec::Error),
+    #[error("AddrParse {0}")]
+    AddrParse(#[from] net::AddrParseError),
+    #[error("Pd {0}")]
+    Pd(#[from] pd_client::Error),
+    #[error("Raft {0}")]
+    Raft(#[from] raft::Error),
+    #[error("Timeout {0}")]
+    Timeout(String),
+    #[error("EpochNotMatch {0}")]
+    EpochNotMatch(String, Vec<metapb::Region>),
+    #[error("stale command")]
+    StaleCommand,
+    #[error("Coprocessor {0}")]
+    Coprocessor(#[from] CopError),
+    #[error("Discard due to {0:?}")]
+    Transport(DiscardReason),
+    #[error("Snapshot {0}")]
+    Snapshot(#[from] SnapError),
+    #[error("SstImporter {0}")]
+    SstImporter(#[from] sst_importer::Error),
+    #[error("Encryption {0}")]
+    Encryption(#[from] encryption::Error),
 }
 
 pub type Result<T> = result::Result<T, Error>;

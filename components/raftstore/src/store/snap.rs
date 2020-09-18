@@ -29,6 +29,7 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use keys::{enc_end_key, enc_start_key};
 use openssl::symm::{Cipher, Crypter, Mode};
+use thiserror::Error;
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{
     calc_crc32, calc_crc32_and_size, delete_file_if_exist, file_exists, get_file_size, sync_dir,
@@ -69,21 +70,14 @@ const META_FILE_SUFFIX: &str = ".meta";
 const DELETE_RETRY_MAX_TIMES: u32 = 6;
 const DELETE_RETRY_TIME_MILLIS: u64 = 500;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Abort {
-            display("abort")
-        }
-        TooManySnapshots {
-            display("too many snapshots")
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("snap failed {:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("abort")]
+    Abort,
+    #[error("too many snapshots")]
+    TooManySnapshots,
+    #[error("snap failed {0:?}")]
+    Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
 
 pub type Result<T> = result::Result<T, Error>;
