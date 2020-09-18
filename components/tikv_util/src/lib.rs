@@ -9,8 +9,6 @@
 extern crate fail;
 #[macro_use]
 extern crate lazy_static;
-#[macro_use]
-extern crate quick_error;
 #[macro_use(slog_o)]
 extern crate slog;
 #[macro_use]
