@@ -4701,7 +4701,6 @@ dependencies = [
  "byteorder",
  "chrono",
  "codec",
- "failure",
  "flate2",
  "hex 0.3.2",
  "match_template",

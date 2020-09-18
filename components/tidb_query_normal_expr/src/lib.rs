@@ -10,8 +10,6 @@
 #![feature(proc_macro_hygiene)]
 #![feature(test)]
 
-#[macro_use]
-extern crate failure;
 #[macro_use(box_err, box_try, try_opt, debug)]
 extern crate tikv_util;
 
