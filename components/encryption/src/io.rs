@@ -3,12 +3,10 @@
 use std::{
     io::{Error as IoError, ErrorKind, Read, Result as IoResult, Write},
     pin::Pin,
-};
-
-use futures_util::{
-    io::AsyncRead,
     task::{Context, Poll},
 };
+
+use futures::io::AsyncRead;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{Cipher as OCipher, Crypter as OCrypter, Mode};
 

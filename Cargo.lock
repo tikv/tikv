@@ -1064,14 +1064,11 @@ name = "encryption"
 version = "0.0.1"
 dependencies = [
  "byteorder",
- "bytes 0.4.12",
  "configuration",
  "crc32fast",
  "engine_traits",
  "error_code",
- "failure",
  "futures 0.3.5",
- "futures-util",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
@@ -1093,6 +1090,7 @@ dependencies = [
  "structopt",
  "tempfile",
  "test_util",
+ "thiserror",
  "tikv_alloc",
  "tikv_util",
  "tokio",
@@ -1263,28 +1261,6 @@ dependencies = [
  "lazy_static",
  "log",
  "rand 0.7.3",
-]
-
-[[package]]
-name = "failure"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8529c2421efa3066a5cbd8063d2244603824daccb6936b079010bb2aa89464b"
-dependencies = [
- "backtrace",
- "failure_derive",
-]
-
-[[package]]
-name = "failure_derive"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "030a733c8287d6213886dd487564ff5c8f6aae10278b3588ed177f9d18f8d231"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
- "synstructure",
 ]
 
 [[package]]
@@ -2228,7 +2204,7 @@ name = "minitrace-attribute"
 version = "0.1.0"
 source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#de69110975b42d898f4ba2d25fb4d334de80edd3"
 dependencies = [
- "proc-macro-error 1.0.2",
+ "proc-macro-error",
  "quote",
  "syn",
 ]
@@ -2808,40 +2784,14 @@ checksum = "e3cbf9f658cdb5000fcf6f362b8ea2ba154b9f146a61c7a20d647034c6b6561b"
 
 [[package]]
 name = "proc-macro-error"
-version = "0.4.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7959c6467d962050d639361f7703b2051c43036d03493c36f01d440fdd3138a"
-dependencies = [
- "proc-macro-error-attr 0.4.11",
- "proc-macro2",
- "quote",
- "syn",
- "version_check 0.9.1",
-]
-
-[[package]]
-name = "proc-macro-error"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98e9e4b82e0ef281812565ea4751049f1bdcdfccda7d3f459f2e138a40c08678"
 dependencies = [
- "proc-macro-error-attr 1.0.2",
+ "proc-macro-error-attr",
  "proc-macro2",
  "quote",
  "syn",
- "version_check 0.9.1",
-]
-
-[[package]]
-name = "proc-macro-error-attr"
-version = "0.4.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4002d9f55991d5e019fb940a90e1a95eb80c24e77cb2462dd4dc869604d543a"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
- "syn-mid",
  "version_check 0.9.1",
 ]
 
@@ -4217,9 +4167,9 @@ checksum = "032c03039aae92b350aad2e3779c352e104d919cb192ba2fabbd7b831ce4f0f6"
 
 [[package]]
 name = "structopt"
-version = "0.3.11"
+version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fe43617218c0805c6eb37160119dc3c548110a67786da7218d1c6555212f073"
+checksum = "6cc388d94ffabf39b5ed5fadddc40147cb21e605f53db6f8f36a625d27489ac5"
 dependencies = [
  "clap",
  "lazy_static",
@@ -4228,12 +4178,12 @@ dependencies = [
 
 [[package]]
 name = "structopt-derive"
-version = "0.4.4"
+version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6e79c80e0f4efd86ca960218d4e056249be189ff1c42824dcd9a7f51a56f0bd"
+checksum = "5e2513111825077552a6751dfad9e11ce0fba07d7276a3943a037d7e93e64c5f"
 dependencies = [
  "heck",
- "proc-macro-error 0.4.11",
+ "proc-macro-error",
  "proc-macro2",
  "quote",
  "syn",
@@ -4265,18 +4215,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "synstructure"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67656ea1dc1b41b1451851562ea232ec2e5a80242139f7e679ceccfb5d61f545"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
- "unicode-xid",
 ]
 
 [[package]]
