@@ -26,11 +26,12 @@ use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
-use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use txn_types::{Key, Lock, TimeStamp};
+use yatp::task::callback::{Handle, TaskCell};
+use yatp::ThreadPool;
 
 use crate::metrics::*;
 use crate::*;
@@ -159,8 +160,8 @@ impl BackupRange {
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
         ctx.set_peer(self.leader.clone());
 
-        // Update max_read_ts and check the in-memory lock table before getting the snapshot
-        concurrency_manager.update_max_read_ts(backup_ts);
+        // Update max_ts and check the in-memory lock table before getting the snapshot
+        concurrency_manager.update_max_ts(backup_ts);
         concurrency_manager
             .read_range_check(
                 self.start_key.as_ref(),
@@ -509,7 +510,7 @@ impl<R: RegionInfoProvider> Progress<R> {
 
 struct ControlThreadPool {
     size: usize,
-    workers: Option<ThreadPool<DefaultContext>>,
+    workers: Option<Arc<ThreadPool<TaskCell>>>,
     last_active: Instant,
 }
 
@@ -526,7 +527,15 @@ impl ControlThreadPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        self.workers.as_ref().unwrap().execute(|_| func());
+        let workers = self.workers.as_ref().unwrap();
+        let w = workers.clone();
+        workers.spawn(move |_: &mut Handle<'_>| {
+            func();
+            // Debug service requires jobs in the old thread pool continue to run even after
+            // the pool is recreated. So the pool needs to be ref counted and dropped after
+            // task has finished.
+            drop(w);
+        });
     }
 
     /// Lazily adjust the thread pool's size
@@ -537,9 +546,11 @@ impl ControlThreadPool {
         if self.size >= new_size && self.size - new_size <= 10 {
             return;
         }
-        let workers = ThreadPoolBuilder::with_default_factory("backup-worker".to_owned())
-            .thread_count(new_size)
-            .build();
+        let workers = Arc::new(
+            yatp::Builder::new(thd_name!("backup-worker"))
+                .max_thread_count(new_size)
+                .build_callback_pool(),
+        );
         let _ = self.workers.replace(workers);
         self.size = new_size;
         BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
@@ -904,6 +915,7 @@ pub mod tests {
     use std::thread;
     use tempfile::TempDir;
     use tikv::storage::mvcc::tests::*;
+    use tikv::storage::txn::tests::must_commit;
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::time::Instant;
     use txn_types::SHORT_VALUE_MAX_LEN;

@@ -6,8 +6,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures03::compat::Stream01CompatExt;
-use futures03::stream::StreamExt;
+use futures::compat::Stream01CompatExt;
+use futures::stream::StreamExt;
 use grpcio::{
     ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
 };
@@ -303,8 +303,8 @@ pub mod test_router {
         }
     }
 
-    impl StoreRouter for TestRaftStoreRouter {
-        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+    impl StoreRouter<RocksEngine> for TestRaftStoreRouter {
+        fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }

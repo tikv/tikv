@@ -5,10 +5,10 @@ use crate::server::snap::Task as SnapTask;
 use crate::server::{self, Config, StoreAddrResolver};
 use crossbeam::queue::{ArrayQueue, PushError};
 use engine_rocks::RocksEngine;
-use futures::task::{self, Task};
-use futures::{Async, AsyncSink, Future, Poll, Sink};
-use futures03::compat::Future01CompatExt;
-use futures03::{Future as Future03, TryFutureExt};
+use futures::channel::oneshot;
+use futures::compat::Future01CompatExt;
+use futures::task::{Context, Poll, Waker};
+use futures::{Future, Sink};
 use grpcio::{ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, WriteFlags};
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
@@ -18,15 +18,18 @@ use raftstore::router::RaftStoreRouter;
 use security::SecurityManager;
 use std::collections::VecDeque;
 use std::ffi::CString;
+use std::marker::Unpin;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, result};
 use tikv_util::collections::{HashMap, HashSet};
-use tikv_util::future_pool::ThreadPool;
 use tikv_util::lru::LruCache;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
+use yatp::task::future::TaskCell;
+use yatp::ThreadPool;
 
 // When merge raft messages into a batch message, leave a buffer.
 const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
@@ -36,14 +39,14 @@ const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
-const _ON_RESOLVE_FP: &str = "";
+const _ON_RESOLVE_FP: &str = "transport_snapshot_on_resolve";
 
 /// A quick queue for sending raft messages.
 struct Queue {
     buf: ArrayQueue<RaftMessage>,
     /// A flag indicates whether the queue can still accept messages.
     connected: AtomicBool,
-    task: Mutex<Option<Task>>,
+    waker: Mutex<Option<Waker>>,
 }
 
 impl Queue {
@@ -52,7 +55,7 @@ impl Queue {
         Queue {
             buf: ArrayQueue::new(cap),
             connected: AtomicBool::new(true),
-            task: Mutex::new(None),
+            waker: Mutex::new(None),
         }
     }
 
@@ -87,9 +90,9 @@ impl Queue {
     /// Wakes up consumer to retrive message.
     fn notify(&self) {
         if !self.buf.is_empty() {
-            let t = self.task.lock().unwrap().take();
+            let t = self.waker.lock().unwrap().take();
             if let Some(t) = t {
-                t.notify();
+                t.wake();
             }
         }
     }
@@ -101,17 +104,22 @@ impl Queue {
     }
 
     /// Gets message from the head of the queue.
+    fn try_pop(&self) -> Option<RaftMessage> {
+        self.buf.pop().ok()
+    }
+
+    /// Same as `try_pop` but register interest on readiness when `None` is returned.
     ///
     /// The method should be called in polling context. If the queue is empty,
     /// it will register current polling task for notifications.
     #[inline]
-    fn pop(&self) -> Option<RaftMessage> {
+    fn pop(&self, ctx: &Context) -> Option<RaftMessage> {
         match self.buf.pop() {
             Ok(msg) => Some(msg),
             Err(_) => {
                 {
-                    let mut task = self.task.lock().unwrap();
-                    *task = Some(task::current());
+                    let mut waker = self.waker.lock().unwrap();
+                    *waker = Some(ctx.waker().clone());
                 }
                 match self.buf.pop() {
                     Ok(msg) => Some(msg),
@@ -135,11 +143,11 @@ trait Buffer {
     fn empty(&self) -> bool;
     /// Flushes the message to grpc.
     ///
-    /// The returned bool indicates whether the flush is successful.
+    /// `sender` should be able to accept messages.
     fn flush(
         &mut self,
         sender: &mut ClientCStreamSender<Self::OutputMessage>,
-    ) -> grpcio::Result<bool>;
+    ) -> grpcio::Result<()>;
     /// Clears all messages and invoke hook before dropping.
     fn clear(&mut self, hook: impl FnMut(&RaftMessage));
 }
@@ -196,27 +204,18 @@ impl Buffer for BatchMessageBuffer {
     }
 
     #[inline]
-    fn flush(
-        &mut self,
-        sender: &mut ClientCStreamSender<BatchRaftMessage>,
-    ) -> grpcio::Result<bool> {
+    fn flush(&mut self, sender: &mut ClientCStreamSender<BatchRaftMessage>) -> grpcio::Result<()> {
         let batch = mem::take(&mut self.batch);
-        match sender.start_send((
+        let res = Pin::new(sender).start_send((
             batch,
             WriteFlags::default().buffer_hint(self.overflowing.is_some()),
-        )) {
-            Ok(AsyncSink::NotReady((msg, _))) => {
-                self.batch = msg;
-                Ok(false)
-            }
-            res => {
-                self.size = 0;
-                if let Some(more) = self.overflowing.take() {
-                    self.push(more);
-                }
-                res.map(|_| true)
-            }
+        ));
+
+        self.size = 0;
+        if let Some(more) = self.overflowing.take() {
+            self.push(more);
         }
+        res
     }
 
     #[inline]
@@ -265,21 +264,14 @@ impl Buffer for MessageBuffer {
     }
 
     #[inline]
-    fn flush(&mut self, sender: &mut ClientCStreamSender<RaftMessage>) -> grpcio::Result<bool> {
+    fn flush(&mut self, sender: &mut ClientCStreamSender<RaftMessage>) -> grpcio::Result<()> {
         if let Some(msg) = self.batch.pop_front() {
-            match sender.start_send((
+            Pin::new(sender).start_send((
                 msg,
                 WriteFlags::default().buffer_hint(!self.batch.is_empty()),
-            )) {
-                Ok(AsyncSink::NotReady((msg, _))) => {
-                    self.batch.push_front(msg);
-                    Ok(false)
-                }
-                Ok(AsyncSink::Ready) => Ok(true),
-                Err(e) => Err(e),
-            }
+            ))
         } else {
-            Ok(true)
+            Ok(())
         }
     }
 
@@ -362,7 +354,7 @@ struct RaftCall<R, M, B> {
     buffer: B,
     router: R,
     snap_scheduler: Scheduler<SnapTask>,
-    lifetime: Option<futures03::channel::oneshot::Sender<()>>,
+    lifetime: Option<oneshot::Sender<()>>,
     store_id: u64,
     addr: String,
 }
@@ -409,9 +401,9 @@ where
         }
     }
 
-    fn fill_msg(&mut self) {
+    fn fill_msg(&mut self, ctx: &Context) {
         while !self.buffer.full() {
-            let msg = match self.queue.pop() {
+            let msg = match self.queue.pop(ctx) {
                 Some(msg) => msg,
                 None => return,
             };
@@ -444,41 +436,51 @@ where
 
 impl<R, M, B> Future for RaftCall<R, M, B>
 where
-    R: RaftStoreRouter<RocksEngine> + 'static,
-    B: Buffer<OutputMessage = M>,
+    R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
+    B: Buffer<OutputMessage = M> + Unpin,
 {
-    type Item = ();
-    type Error = ();
+    type Output = ();
 
-    fn poll(&mut self) -> Poll<(), ()> {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<()> {
+        let s = &mut *self;
         loop {
-            self.fill_msg();
-            if !self.buffer.empty() {
-                match self.buffer.flush(&mut self.sender) {
-                    Ok(false) => return Ok(Async::NotReady),
-                    Ok(true) => continue,
-                    Err(e) => {
-                        let re = self.receiver.poll().err();
-                        self.clean_up(&Some(e), &re);
-                        return Err(());
+            s.fill_msg(ctx);
+            if !s.buffer.empty() {
+                let mut res = Pin::new(&mut s.sender).poll_ready(ctx);
+                if let Poll::Ready(Ok(())) = res {
+                    res = Poll::Ready(s.buffer.flush(&mut s.sender));
+                }
+                match res {
+                    Poll::Ready(Ok(())) => continue,
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Err(e)) => {
+                        let re = match Pin::new(&mut s.receiver).poll(ctx) {
+                            Poll::Ready(Err(e)) => Some(e),
+                            _ => None,
+                        };
+                        s.clean_up(&Some(e), &re);
+                        return Poll::Ready(());
                     }
                 }
             }
 
-            if let Err(e) = self.sender.poll_complete() {
-                let re = self.receiver.poll().err();
-                self.clean_up(&Some(e), &re);
-                return Err(());
+            if let Poll::Ready(Err(e)) = Pin::new(&mut s.sender).poll_flush(ctx) {
+                let re = match Pin::new(&mut s.receiver).poll(ctx) {
+                    Poll::Ready(Err(e)) => Some(e),
+                    _ => None,
+                };
+                s.clean_up(&Some(e), &re);
+                return Poll::Ready(());
             }
-            match self.receiver.poll() {
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-                Ok(Async::Ready(_)) => {
-                    info!("connection close"; "store_id" => self.store_id, "addr" => %self.addr);
-                    return Ok(Async::Ready(()));
+            match Pin::new(&mut s.receiver).poll(ctx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Ok(_)) => {
+                    info!("connection close"; "store_id" => s.store_id, "addr" => %s.addr);
+                    return Poll::Ready(());
                 }
-                Err(e) => {
-                    self.clean_up(&None, &Some(e));
-                    return Err(());
+                Poll::Ready(Err(e)) => {
+                    s.clean_up(&None, &Some(e));
+                    return Poll::Ready(());
                 }
             }
         }
@@ -526,10 +528,10 @@ struct StreamBackEnd<S, R> {
 impl<S, R> StreamBackEnd<S, R>
 where
     S: StoreAddrResolver,
-    R: RaftStoreRouter<RocksEngine> + 'static,
+    R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
 {
-    fn resolve(&self) -> impl Future03<Output = server::Result<String>> {
-        let (tx, rx) = futures03::channel::oneshot::channel();
+    fn resolve(&self) -> impl Future<Output = server::Result<String>> {
+        let (tx, rx) = oneshot::channel();
         let store_id = self.store_id;
         let res = self.builder.resolver.resolve(
             store_id,
@@ -551,19 +553,21 @@ where
                 let _ = tx.send(addr);
             }),
         );
-        futures03::future::ready(res).and_then(move |_| {
-            rx.unwrap_or_else(|_| {
-                Err(server::Error::Other(
+        async move {
+            res?;
+            match rx.await {
+                Ok(a) => a,
+                Err(_) => Err(server::Error::Other(
                     "failed to receive resolve result".into(),
-                ))
-            })
-        })
+                )),
+            }
+        }
     }
 
     fn clear_pending_message(&self) {
         let len = self.queue.len();
         for _ in 0..len {
-            let msg = self.queue.pop().unwrap();
+            let msg = self.queue.try_pop().unwrap();
             report_unreachable(&self.builder.router, &msg)
         }
     }
@@ -586,13 +590,9 @@ where
         TikvClient::new(channel)
     }
 
-    fn batch_call(
-        &self,
-        client: &TikvClient,
-        addr: String,
-    ) -> futures03::channel::oneshot::Receiver<()> {
+    fn batch_call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<()> {
         let (batch_sink, batch_stream) = client.batch_raft().unwrap();
-        let (tx, rx) = futures03::channel::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         let call = RaftCall {
             sender: batch_sink,
             receiver: batch_stream,
@@ -609,9 +609,9 @@ where
         rx
     }
 
-    fn call(&self, client: &TikvClient, addr: String) -> futures03::channel::oneshot::Receiver<()> {
+    fn call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<()> {
         let (sink, stream) = client.raft().unwrap();
-        let (tx, rx) = futures03::channel::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         let call = RaftCall {
             sender: sink,
             receiver: stream,
@@ -662,7 +662,7 @@ async fn start<S, R>(
     pool: Arc<Mutex<ConnectionPool>>,
 ) where
     S: StoreAddrResolver + Send,
-    R: RaftStoreRouter<RocksEngine> + Send + 'static,
+    R: RaftStoreRouter<RocksEngine> + Unpin + Send + 'static,
 {
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
@@ -756,14 +756,14 @@ pub struct RaftClient<S, R> {
     pool: Arc<Mutex<ConnectionPool>>,
     cache: LruCache<(u64, usize), CachedQueue>,
     need_flush: Vec<(u64, usize)>,
-    future_pool: Arc<ThreadPool>,
+    future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
 }
 
 impl<S, R> RaftClient<S, R>
 where
     S: StoreAddrResolver + Send + 'static,
-    R: RaftStoreRouter<RocksEngine> + Send + 'static,
+    R: RaftStoreRouter<RocksEngine> + Unpin + Send + 'static,
 {
     pub fn new(builder: ConnectionBuilder<S, R>) -> RaftClient<S, R> {
         let future_pool = Arc::new(

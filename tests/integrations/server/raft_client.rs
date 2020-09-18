@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::{thread, time};
 
 use engine_rocks::RocksEngine;
-use futures::{Future, Stream};
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use grpcio::{
     ClientStreamingSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, Server,
 };
@@ -82,14 +82,15 @@ impl MockKvService for MockKvForRaft {
         sink: ClientStreamingSink<Done>,
     ) {
         let counter = Arc::clone(&self.msg_count);
-        ctx.spawn(
+        ctx.spawn(async move {
             stream
                 .for_each(move |_| {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
+                    futures::future::ready(())
                 })
-                .map_err(|_| drop(sink)),
-        );
+                .await;
+            drop(sink);
+        });
     }
 
     fn batch_raft(
@@ -100,20 +101,22 @@ impl MockKvService for MockKvForRaft {
     ) {
         if !self.allow_batch {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
-            ctx.spawn(sink.fail(status).map_err(|_| ()));
+            ctx.spawn(sink.fail(status).map(|_| ()));
             return;
         }
         let msg_count = Arc::clone(&self.msg_count);
         let batch_msg_count = Arc::clone(&self.batch_msg_count);
-        ctx.spawn(
+        ctx.spawn(async move {
             stream
-                .for_each(move |msgs| {
+                .try_for_each(move |msgs| {
                     batch_msg_count.fetch_add(1, Ordering::SeqCst);
                     msg_count.fetch_add(msgs.msgs.len(), Ordering::SeqCst);
-                    Ok(())
+                    futures::future::ok(())
                 })
-                .map_err(|_| drop(sink)),
-        );
+                .await
+                .unwrap();
+            drop(sink);
+        });
     }
 }
 
@@ -142,7 +145,7 @@ fn test_raft_client_reconnect() {
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
-    let (mock_server, port) = create_mock_server(service, 60100, 60200).unwrap();
+    let (mut mock_server, port) = create_mock_server(service, 60100, 60200).unwrap();
 
     let (tx, rx) = mpsc::channel();
     let (significant_msg_sender, _significant_msg_receiver) = mpsc::channel();
@@ -154,6 +157,7 @@ fn test_raft_client_reconnect() {
     check_msg_count(500, &msg_count, 50);
 
     // `send` should be pending after the mock server stopped.
+    mock_server.shutdown();
     drop(mock_server);
 
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -170,7 +174,7 @@ fn test_raft_client_reconnect() {
     (0..50).for_each(|_| raft_client.send(RaftMessage::default()).unwrap());
     raft_client.flush();
 
-    check_msg_count(1000, &msg_count, 100);
+    check_msg_count(3000, &msg_count, 100);
 
     drop(mock_server);
 }

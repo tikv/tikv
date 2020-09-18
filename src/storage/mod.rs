@@ -1,13 +1,38 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Interact with persistent storage.
+//! This module contains TiKV's transaction layer. It lowers high-level, transactional
+//! commands to low-level (raw key-value) interactions with persistent storage.
 //!
-//! The [`Storage`](Storage) structure provides raw and transactional APIs on top of
-//! a lower-level [`Engine`](kv::Engine).
+//! This module is further split into layers: [`txn`](txn) lowers transactional commands to
+//! key-value operations on an MVCC abstraction. [`mvcc`](mvcc) is our MVCC implementation.
+//! [`kv`](kv) is an abstraction layer over persistent storage.
 //!
-//! There are multiple [`Engine`](kv::Engine) implementations, [`RaftKv`](crate::server::raftkv::RaftKv)
-//! is used by the [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
-//! [`RocksEngine`](RocksEngine) are used for testing only.
+//! Other responsibilities of this module are managing latches (see [`latch`](txn::latch)), deadlock
+//! and wait handling (see [`lock_manager`](lock_manager)), scheduling command execution (see
+//! [`txn::scheduler`](txn::scheduler)), and handling commands from the raw and versioned APIs (in
+//! the [`Storage`](Storage) struct).
+//!
+//! For more information about TiKV's transactions, see the [sig-txn docs](https://github.com/tikv/sig-transaction/tree/master/doc).
+//!
+//! Some important types are:
+//!
+//! * the [`Engine`](kv::Engine) trait and related traits, which abstracts over underlying storage,
+//! * the [`MvccTxn`](mvcc::txn::MvccTxn) struct, which is the primary object in the MVCC
+//!   implementation,
+//! * the commands in the [`commands`](txn::commands) module, which are how each command is implemented,
+//! * the [`Storage`](Storage) struct, which is the primary entry point for this module.
+//!
+//! Related code:
+//!
+//! * the [`kv`](crate::server::service::kv) module, which is the interface for TiKV's APIs,
+//! * the [`lock_manager](crate::server::lock_manager), which takes part in lock and deadlock
+//!   management,
+//! * [`gc_worker`](crate::server::gc_worker), which drives garbage collection of old values,
+//! * the [`txn_types](::txn_types) crate, some important types for this module's interface,
+//! * the [`kvproto`](::kvproto) crate, which defines TiKV's protobuf API and includes some
+//!   documentation of the commands implemented here,
+//! * the [`test_storage`](::test_storage) crate, integration tests for this module,
+//! * the [`engine_traits`](::engine_traits) crate, more detail of the engine abstraction.
 
 pub mod config;
 pub mod errors;
@@ -45,7 +70,7 @@ use crate::storage::{
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
-use futures03::prelude::*;
+use futures::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
@@ -196,7 +221,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.clone()
     }
 
-    #[cfg(test)]
     pub fn get_concurrency_manager(&self) -> ConcurrencyManager {
         self.concurrency_manager.clone()
     }
@@ -258,7 +282,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
 
                 if enable_async_commit {
-                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                    // Update max_ts and check the in-memory lock table before getting the snapshot
                     async_commit_check_keys(
                         &concurrency_manager,
                         iter::once(&key),
@@ -351,7 +375,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                         let region_id = ctx.get_region_id();
                         if enable_async_commit {
-                            // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                            // Update max_ts and check the in-memory lock table before getting the snapshot
                             if let Err(e) = async_commit_check_keys(
                                 &concurrency_manager,
                                 iter::once(&key),
@@ -469,7 +493,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
                 if enable_async_commit {
-                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                    // Update max_ts and check the in-memory lock table before getting the snapshot
                     async_commit_check_keys(
                         &concurrency_manager,
                         &keys,
@@ -586,8 +610,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
                 if enable_async_commit {
-                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                    concurrency_manager.update_max_read_ts(start_ts);
+                    // Update max_ts and check the in-memory lock table before getting the snapshot
+                    concurrency_manager.update_max_ts(start_ts);
                     if ctx.get_isolation_level() == IsolationLevel::Si {
                         concurrency_manager
                             .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
@@ -1413,7 +1437,8 @@ fn async_commit_check_keys<'a>(
     isolation_level: IsolationLevel,
     bypass_locks: &TsSet,
 ) -> Result<()> {
-    concurrency_manager.update_max_read_ts(ts);
+    concurrency_manager.update_max_ts(ts);
+    fail_point!("before-storage-check-memory-locks");
     if isolation_level == IsolationLevel::Si {
         for key in keys {
             concurrency_manager
@@ -1654,7 +1679,7 @@ mod tests {
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
-    use futures03::executor::block_on;
+    use futures::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, LockInfo, Op};
     use std::{
         sync::{
@@ -2616,6 +2641,7 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
+        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -2640,6 +2666,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+        assert_eq!(cm.max_ts(), 100.into());
         expect_none(block_on(storage.get(
             Context::default(),
             Key::from_raw(b"x"),
@@ -4370,6 +4397,7 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
+        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
 
         let k = Key::from_raw(b"k");
@@ -4400,6 +4428,8 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+
+        assert_eq!(cm.max_ts(), ts(9, 1));
 
         // No lock and no commit info. If specified rollback_if_not_exist, the key will be rolled
         // back.
@@ -4560,6 +4590,7 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
+        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
 
         let k1 = Key::from_raw(b"k1");
@@ -4631,6 +4662,8 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
+        assert_eq!(cm.max_ts(), 10.into());
+
         // Some of the locks do not exist
         let k3 = Key::from_raw(b"k3");
         let k4 = Key::from_raw(b"k4");
@@ -4667,6 +4700,7 @@ mod tests {
             .set_pipelined_pessimistic_lock(pipelined_pessimistic_lock)
             .build()
             .unwrap();
+        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
         let (key, val) = (Key::from_raw(b"key"), b"val".to_vec());
         let (key2, val2) = (Key::from_raw(b"key2"), b"val2".to_vec());
@@ -4691,6 +4725,10 @@ mod tests {
                 )
                 .unwrap();
             rx.recv().unwrap();
+
+            if return_values {
+                assert_eq!(cm.max_ts(), 10.into());
+            }
 
             // Duplicated command
             storage
@@ -4738,6 +4776,9 @@ mod tests {
             // The DummyLockManager consumes the Msg::WaitForLock.
             rx.recv_timeout(Duration::from_millis(100)).unwrap_err();
         }
+
+        // Needn't update max_ts when failing to read value
+        assert_eq!(cm.max_ts(), 10.into());
 
         // Put key and key2.
         storage
@@ -4794,6 +4835,9 @@ mod tests {
             rx.recv().unwrap();
         }
 
+        // Needn't update max_ts when failing to read value
+        assert_eq!(cm.max_ts(), 10.into());
+
         // Return multiple values
         for &return_values in &[false, true] {
             let pessimistic_lock_res = if return_values {
@@ -4817,6 +4861,10 @@ mod tests {
                 )
                 .unwrap();
             rx.recv().unwrap();
+
+            if return_values {
+                assert_eq!(cm.max_ts(), 30.into());
+            }
 
             delete_pessimistic_lock(&storage, key.clone(), 30, 30);
         }
@@ -5388,5 +5436,83 @@ mod tests {
         assert!(res[0].is_ok());
         let key_error = extract_key_error(&res[1].as_ref().unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
+    }
+
+    #[test]
+    fn test_async_commit_prewrite() {
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .build()
+            .unwrap();
+        let cm = storage.concurrency_manager.clone();
+        cm.update_max_ts(10.into());
+
+        // Optimistic prewrite
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![
+                        Mutation::Put((Key::from_raw(b"a"), b"v".to_vec())),
+                        Mutation::Put((Key::from_raw(b"b"), b"v".to_vec())),
+                        Mutation::Put((Key::from_raw(b"c"), b"v".to_vec())),
+                    ],
+                    b"c".to_vec(),
+                    100.into(),
+                    1000,
+                    false,
+                    3,
+                    TimeStamp::default(),
+                    Some(vec![b"a".to_vec(), b"b".to_vec()]),
+                    Context::default(),
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.min_commit_ts, 101.into());
+
+        // Pessimistic prewrite
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command(
+                    vec![(Key::from_raw(b"d"), false), (Key::from_raw(b"e"), false)],
+                    200,
+                    300,
+                    false,
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        cm.update_max_ts(1000.into());
+
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![
+                        (Mutation::Put((Key::from_raw(b"d"), b"v".to_vec())), true),
+                        (Mutation::Put((Key::from_raw(b"e"), b"v".to_vec())), true),
+                    ],
+                    b"d".to_vec(),
+                    200.into(),
+                    1000,
+                    400.into(),
+                    2,
+                    401.into(),
+                    Some(vec![b"e".to_vec()]),
+                    Context::default(),
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.min_commit_ts, 1001.into());
     }
 }
