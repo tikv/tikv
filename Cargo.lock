@@ -1145,10 +1145,10 @@ dependencies = [
  "hex 0.4.2",
  "kvproto",
  "protobuf",
- "quick-error",
  "raft",
  "slog",
  "slog-global",
+ "thiserror",
  "tikv_alloc",
  "tikv_util",
 ]
