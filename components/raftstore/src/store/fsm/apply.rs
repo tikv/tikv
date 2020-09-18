@@ -1533,7 +1533,7 @@ where
                  "region_id" => self.region_id(),
                  "peer_id" => self.id(),
                  "sst" => ?sst,
-                 "region" => ?self.region,
+                 "region" => ?&self.region,
             );
             // This file is not valid, we can delete it here.
             let _ = importer.delete(sst);
@@ -1618,7 +1618,7 @@ where
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
                             "peer" => ?peer,
-                            "region" => ?region
+                            "region" => ?&self.region
                         );
                         return Err(box_err!(
                             "can't add duplicated peer {:?} to region {:?}",
@@ -1642,7 +1642,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => ?region
+                    "region" => ?&self.region
                 );
             }
             ConfChangeType::RemoveNode => {
@@ -1678,7 +1678,7 @@ where
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
-                        "region" => ?region,
+                        "region" => ?&self.region
                     );
                     return Err(box_err!(
                         "remove missing peer {:?} from region {:?}",
@@ -1695,7 +1695,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => ?region
+                    "region" => ?&self.region
                 );
             }
             ConfChangeType::AddLearnerNode => {
@@ -1709,7 +1709,7 @@ where
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
-                        "region" => ?region
+                        "region" => ?&self.region
                     );
                     return Err(box_err!(
                         "can't add duplicated learner {:?} to region {:?}",
@@ -1727,7 +1727,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => ?region,
+                    "region" => ?&self.region
                 );
             }
         }
