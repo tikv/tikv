@@ -54,4 +54,4 @@ txn_types = { path = "../txn_types" }
 encryption = { path = "../encryption" }
 tokio = { version = "0.2", features = ["rt-threaded"]}
 concurrency_manager = { path = "../concurrency_manager" }
-fail = "0.3"
+fail = "0.4"
