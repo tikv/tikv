@@ -166,22 +166,12 @@ where
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ChangePeer {
     pub index: u64,
     pub conf_change: ConfChange,
     pub peer: PeerMeta,
     pub region: Region,
-}
-
-impl Debug for ChangePeer {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{{ index: {:?}, conf_change: {:?}, peer: {:?}, region: {:?} }}",
-            self.index, self.conf_change, self.peer, self.region
-        )
-    }
 }
 
 pub struct Range {
