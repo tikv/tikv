@@ -844,7 +844,9 @@ where
                 self.register_raft_gc_log_tick();
                 self.register_split_region_check_tick();
             }
-            self.handle_raft_ready_apply(&mut r.0, &r.1);
+            if self.ctx.cfg.early_apply {
+                self.handle_raft_ready_apply(&mut r.0, &r.1);
+            }
             self.ctx.ready_res.push(r);
         }
     }
