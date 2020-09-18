@@ -18,76 +18,111 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use std::error;
 use std::fmt;
 use std::io;
+use thiserror::Error;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ErrorInner {
-        Engine(err: crate::storage::kv::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Io(err: io::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Codec(err: tikv_util::codec::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        KeyIsLocked(info: kvproto::kvrpcpb::LockInfo) {
-            display("key is locked (backoff or cleanup) {:?}", info)
-        }
-        BadFormat(err: txn_types::Error ) {
-            cause(err)
-            display("{}", err)
-        }
-        Committed { commit_ts: TimeStamp } {
-            display("txn already committed @{}", commit_ts)
-        }
-        PessimisticLockRolledBack { start_ts: TimeStamp, key: Vec<u8> } {
-            display("pessimistic lock already rollbacked, start_ts:{}, key:{}", start_ts, hex::encode_upper(key))
-        }
-        TxnLockNotFound { start_ts: TimeStamp, commit_ts: TimeStamp, key: Vec<u8> } {
-            display("txn lock not found {}-{} key:{}", start_ts, commit_ts, hex::encode_upper(key))
-        }
-        TxnNotFound { start_ts:  TimeStamp, key: Vec<u8> } {
-            display("txn not found {} key: {}", start_ts, hex::encode_upper(key))
-        }
-        LockTypeNotMatch { start_ts: TimeStamp, key: Vec<u8>, pessimistic: bool } {
-            display("lock type not match, start_ts:{}, key:{}, pessimistic:{}", start_ts, hex::encode_upper(key), pessimistic)
-        }
-        WriteConflict { start_ts: TimeStamp, conflict_start_ts: TimeStamp, conflict_commit_ts: TimeStamp, key: Vec<u8>, primary: Vec<u8> } {
-            display("write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{}, primary:{}",
-                    start_ts, conflict_start_ts, conflict_commit_ts, hex::encode_upper(key), hex::encode_upper(primary))
-        }
-        Deadlock { start_ts: TimeStamp, lock_ts: TimeStamp, lock_key: Vec<u8>, deadlock_key_hash: u64 } {
-            display("deadlock occurs between txn:{} and txn:{}, lock_key:{}, deadlock_key_hash:{}",
-                    start_ts, lock_ts, hex::encode_upper(lock_key), deadlock_key_hash)
-        }
-        AlreadyExist { key: Vec<u8> } {
-            display("key {} already exists", hex::encode_upper(key))
-        }
-        DefaultNotFound { key: Vec<u8> } {
-            display("default not found: key:{}, maybe read truncated/dropped table data?", hex::encode_upper(key))
-        }
-        CommitTsExpired { start_ts: TimeStamp, commit_ts: TimeStamp, key: Vec<u8>, min_commit_ts: TimeStamp } {
-            display("try to commit key {} with commit_ts {} but min_commit_ts is {}", hex::encode_upper(key), commit_ts, min_commit_ts)
-        }
-        KeyVersion { display("bad format key(version)") }
-        PessimisticLockNotFound { start_ts: TimeStamp, key: Vec<u8> } {
-            display("pessimistic lock not found, start_ts:{}, key:{}", start_ts, hex::encode_upper(key))
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ErrorInner {
+    #[error("{0}")]
+    Engine(#[from] crate::storage::kv::Error),
+    #[error("{0}")]
+    Io(#[from] io::Error),
+    #[error("{0}")]
+    Codec(#[from] tikv_util::codec::Error),
+    #[error("key is locked (backoff or cleanup) {0:?}")]
+    KeyIsLocked(kvproto::kvrpcpb::LockInfo),
+    #[error("{0}")]
+    BadFormat(#[source] txn_types::Error),
+    #[error("txn already committed @{commit_ts}")]
+    Committed { commit_ts: TimeStamp },
+    #[error(
+        "pessimistic lock already rollbacked, start_ts: {}, key: {}",
+        start_ts,
+        hex::encode_upper(key)
+    )]
+    PessimisticLockRolledBack { start_ts: TimeStamp, key: Vec<u8> },
+    #[error(
+        "txn lock not found {}-{} key:{}",
+        start_ts,
+        commit_ts,
+        hex::encode_upper(key)
+    )]
+    TxnLockNotFound {
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        key: Vec<u8>,
+    },
+    #[error("txn not found {} key: {}", start_ts, hex::encode_upper(key))]
+    TxnNotFound { start_ts: TimeStamp, key: Vec<u8> },
+    #[error(
+        "lock type not match, start_ts:{}, key:{}, pessimistic:{}",
+        start_ts,
+        hex::encode_upper(key),
+        pessimistic
+    )]
+    LockTypeNotMatch {
+        start_ts: TimeStamp,
+        key: Vec<u8>,
+        pessimistic: bool,
+    },
+    #[error(
+        "write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{}, primary:{}",
+        start_ts,
+        conflict_start_ts,
+        conflict_commit_ts,
+        hex::encode_upper(key),
+        hex::encode_upper(primary)
+    )]
+    WriteConflict {
+        start_ts: TimeStamp,
+        conflict_start_ts: TimeStamp,
+        conflict_commit_ts: TimeStamp,
+        key: Vec<u8>,
+        primary: Vec<u8>,
+    },
+    #[error(
+        "deadlock occurs between txn:{} and txn:{}, lock_key:{}, deadlock_key_hash:{}",
+        start_ts,
+        lock_ts,
+        hex::encode_upper(lock_key),
+        deadlock_key_hash
+    )]
+    Deadlock {
+        start_ts: TimeStamp,
+        lock_ts: TimeStamp,
+        lock_key: Vec<u8>,
+        deadlock_key_hash: u64,
+    },
+    #[error("key {} already exists", hex::encode_upper(key))]
+    AlreadyExist { key: Vec<u8> },
+    #[error(
+        "default not found: key:{}, maybe read truncated/dropped table data?",
+        hex::encode_upper(key)
+    )]
+    DefaultNotFound { key: Vec<u8> },
+    #[error(
+        "try to commit key {} with commit_ts {} but min_commit_ts is {}",
+        hex::encode_upper(key),
+        commit_ts,
+        min_commit_ts
+    )]
+    CommitTsExpired {
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        key: Vec<u8>,
+        min_commit_ts: TimeStamp,
+    },
+    #[error("bad format key(version)")]
+    KeyVersion,
+    #[error(
+        "pessimistic lock not found, start_ts:{}, key:{}",
+        start_ts,
+        hex::encode_upper(key)
+    )]
+    PessimisticLockNotFound { start_ts: TimeStamp, key: Vec<u8> },
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
 
 impl ErrorInner {

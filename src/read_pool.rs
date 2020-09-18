@@ -9,6 +9,7 @@ use kvproto::kvrpcpb::CommandPri;
 use prometheus::IntGauge;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
+use thiserror::Error;
 use tikv_util::yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder};
 use yatp::queue::Extras;
 use yatp::task::future::TaskCell;
@@ -223,23 +224,14 @@ impl From<Vec<FuturePool>> for ReadPool {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ReadPoolError {
-        FuturePoolFull(err: yatp_pool::Full) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        UnifiedReadPoolFull {
-            display("Unified read pool is full")
-        }
-        Canceled(err: oneshot::Canceled) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ReadPoolError {
+    #[error("{0}")]
+    FuturePoolFull(#[from] yatp_pool::Full),
+    #[error("Unified read pool is full")]
+    UnifiedReadPoolFull,
+    #[error("{0}")]
+    Canceled(#[from] oneshot::Canceled),
 }
 
 mod metrics {

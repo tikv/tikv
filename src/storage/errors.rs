@@ -12,52 +12,31 @@ use crate::storage::{
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb};
+use thiserror::Error;
 use txn_types::{KvPair, TimeStamp};
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ErrorInner {
-        Engine(err: kv::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Txn(err: txn::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Mvcc(err: mvcc::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Closed {
-            display("storage is closed.")
-        }
-        Other(err: Box<dyn error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            display("{}", err)
-        }
-        Io(err: IoError) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        SchedTooBusy {
-            display("scheduler is too busy")
-        }
-        GcWorkerTooBusy {
-            display("gc worker is too busy")
-        }
-        KeyTooLarge(size: usize, limit: usize) {
-            display("max key size exceeded, size: {}, limit: {}", size, limit)
-        }
-        InvalidCf (cf_name: String) {
-            display("invalid cf name: {}", cf_name)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ErrorInner {
+    #[error("{0}")]
+    Engine(#[from] kv::Error),
+    #[error("{0}")]
+    Txn(#[from] txn::Error),
+    #[error("{0}")]
+    Mvcc(#[from] mvcc::Error),
+    #[error("storage is closed.")]
+    Closed,
+    #[error("{0}")]
+    Other(#[from] Box<dyn error::Error + Send + Sync>),
+    #[error("{0}")]
+    Io(#[from] IoError),
+    #[error("scheduler is too busy")]
+    SchedTooBusy,
+    #[error("gc worker is too bus")]
+    GcWorkerTooBusy,
+    #[error("max key size exceeded, size: {0}, limit: {1}")]
+    KeyTooLarge(usize, usize),
+    #[error("invalid cf name: {0}")]
+    InvalidCf(String),
 }
 
 pub struct Error(pub Box<ErrorInner>);

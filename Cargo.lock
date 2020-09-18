@@ -4798,7 +4798,6 @@ dependencies = [
  "prometheus-static-metric",
  "prost",
  "protobuf",
- "quick-error",
  "raft",
  "raft_log_engine",
  "raftstore",

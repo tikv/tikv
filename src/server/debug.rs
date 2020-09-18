@@ -31,6 +31,7 @@ use raftstore::coprocessor::get_region_approximate_middle;
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
 use raftstore::store::{write_initial_apply_state, write_initial_raft_state, write_peer_state};
+use thiserror::Error;
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
@@ -40,21 +41,14 @@ use txn_types::Key;
 
 pub type Result<T> = result::Result<T, Error>;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        InvalidArgument(msg: String) {
-            display("Invalid Argument {:?}", msg)
-        }
-        NotFound(msg: String) {
-            display("Not Found {:?}", msg)
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Invalid Argument {0:?}")]
+    InvalidArgument(String),
+    #[error("Not Found {0:?}")]
+    NotFound(String),
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
 
 /// Describes the meta information of a Region.

@@ -15,6 +15,7 @@ use kvproto::raft_cmdpb::{
     RaftRequestHeader, Request, Response,
 };
 use kvproto::{errorpb, metapb};
+use thiserror::Error;
 use txn_types::{Key, TxnExtraScheduler, Value};
 
 use super::metrics::*;
@@ -31,33 +32,26 @@ use raftstore::store::{RegionIterator, RegionSnapshot};
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        RequestFailed(e: errorpb::Error) {
-            from()
-            display("{}", e.get_message())
-        }
-        Io(e: IoError) {
-            from()
-            cause(e)
-            display("{}", e)
-        }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{}", .0.get_message())]
+    RequestFailed(errorpb::Error),
+    #[error("{0}")]
+    Io(#[from] IoError),
 
-        Server(e: RaftServerError) {
-            from()
-            cause(e)
-            display("{}", e)
-        }
-        InvalidResponse(reason: String) {
-            display("{}", reason)
-        }
-        InvalidRequest(reason: String) {
-            display("{}", reason)
-        }
-        Timeout(d: Duration) {
-            display("timeout after {:?}", d)
-        }
+    #[error("{0}")]
+    Server(#[from] RaftServerError),
+    #[error("{0}")]
+    InvalidResponse(String),
+    #[error("{0}")]
+    InvalidRequest(String),
+    #[error("timeout after {0:?}")]
+    Timeout(Duration),
+}
+
+impl From<errorpb::Error> for Error {
+    fn from(err: errorpb::Error) -> Self {
+        Error::RequestFailed(err)
     }
 }
 

@@ -21,6 +21,7 @@ use engine_traits::{IterOptions, KvEngine as LocalEngine, ReadOptions};
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
+use thiserror::Error;
 use txn_types::{Key, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
@@ -234,24 +235,21 @@ pub enum ScanMode {
     Mixed,
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ErrorInner {
-        Request(err: ErrorHeader) {
-            from()
-            display("{:?}", err)
-        }
-        Timeout(d: Duration) {
-            display("timeout after {:?}", d)
-        }
-        EmptyRequest {
-            display("an empty request")
-        }
-        Other(err: Box<dyn error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            display("unknown error {:?}", err)
-        }
+#[derive(Debug, Error)]
+pub enum ErrorInner {
+    #[error("{0:?}")]
+    Request(ErrorHeader),
+    #[error("timeout after {0:?}")]
+    Timeout(Duration),
+    #[error("an empty request")]
+    EmptyRequest,
+    #[error("unknown error {0:?}")]
+    Other(#[from] Box<dyn error::Error + Send + Sync>),
+}
+
+impl From<ErrorHeader> for ErrorInner {
+    fn from(err: ErrorHeader) -> Self {
+        ErrorInner::Request(err)
     }
 }
 
