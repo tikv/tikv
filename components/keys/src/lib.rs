@@ -2,17 +2,15 @@
 
 //! TiKV key building
 
-#[macro_use]
-extern crate derive_more;
-#[macro_use]
-extern crate failure;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+use std::mem;
+
 use byteorder::{BigEndian, ByteOrder};
+use thiserror::Error;
 
 use kvproto::metapb::Region;
-use std::mem;
 
 pub mod rewrite;
 
@@ -271,21 +269,13 @@ pub fn next_key(key: &[u8]) -> Vec<u8> {
     }
 }
 
-#[derive(Debug, Display, Fail)]
+#[derive(Debug, Error)]
 pub enum Error {
-    #[display(fmt = "{} is not a valid raft log key", "hex::encode_upper(_0)")]
+    #[error("{} is not a valid raft log key", hex::encode_upper(.0))]
     InvalidRaftLogKey(Vec<u8>),
-    #[display(
-        fmt = "invalid region {} key length for key {}",
-        "_0",
-        "hex::encode_upper(_1)"
-    )]
+    #[error("invalid region {0} key length for key {}", hex::encode_upper(.1))]
     InvalidRegionKeyLength(String, Vec<u8>),
-    #[display(
-        fmt = "invalid region {} prefix for key {}",
-        "_0",
-        "hex::encode_upper(_1)"
-    )]
+    #[error("invalid region {0} prefix for key {}", hex::encode_upper(.1))]
     InvalidRegionPrefix(String, Vec<u8>),
 }
 
