@@ -7,13 +7,13 @@ publish = false
 [dependencies]
 byteorder = "1.2"
 error_code = { path = "../error_code" }
-failure = "0.1"
 libc = "0.2"
 static_assertions = { version = "1.0", features = ["nightly"] }
 tikv_alloc = { path = "../tikv_alloc" }
+thiserror = "1.0"
 
 [dev-dependencies]
+bytes = "0.5.6"
 panic_hook = { path = "../panic_hook" }
 protobuf = "2"
-bytes = "0.4.10"
 rand = "0.7"

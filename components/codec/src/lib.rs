@@ -1,14 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![cfg_attr(test, feature(test))]
+#![feature(backtrace)]
 #![feature(core_intrinsics)]
 #![feature(ptr_offset_from)]
 #![feature(min_specialization)]
 
 #[macro_use]
 extern crate static_assertions;
-#[macro_use]
-extern crate failure;
 #[cfg(test)]
 extern crate test;
 #[allow(unused_extern_crates)]
