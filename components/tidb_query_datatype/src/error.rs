@@ -1,12 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use failure::Fail;
+use thiserror::Error;
 
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 pub enum DataTypeError {
-    #[fail(display = "Unsupported type: {}", name)]
+    #[error("Unsupported type: {name}")]
     UnsupportedType { name: String },
 
-    #[fail(display = "Unsupported collation code: {}", code)]
+    #[error("Unsupported collation code: {code}")]
     UnsupportedCollation { code: i32 },
 }
+
+const_assert!(32 == std::mem::size_of::<Result<(), DataTypeError>>());

@@ -10,8 +10,6 @@
 #![feature(ptr_offset_from)]
 
 #[macro_use]
-extern crate failure;
-#[macro_use]
 extern crate num_derive;
 #[macro_use]
 extern crate static_assertions;
