@@ -5184,8 +5184,8 @@ dependencies = [
  "farmhash",
  "hex 0.4.2",
  "kvproto",
- "quick-error",
  "slog",
+ "thiserror",
  "tikv_alloc",
  "tikv_util",
 ]
