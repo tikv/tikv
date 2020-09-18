@@ -4625,15 +4625,17 @@ dependencies = [
 name = "tidb_query_common"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "byteorder",
  "derive_more",
  "error_code",
- "failure",
  "hex 0.3.2",
  "kvproto",
  "lazy_static",
  "prometheus",
  "prometheus-static-metric",
+ "static_assertions",
+ "thiserror",
  "tikv_util",
  "time 0.1.42",
  "tipb",

@@ -9,8 +9,8 @@ byteorder = "1.2"
 error_code = { path = "../error_code" }
 libc = "0.2"
 static_assertions = { version = "1.0", features = ["nightly"] }
-tikv_alloc = { path = "../tikv_alloc" }
 thiserror = "1.0"
+tikv_alloc = { path = "../tikv_alloc" }
 
 [dev-dependencies]
 bytes = "0.5.6"
