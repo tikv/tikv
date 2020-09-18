@@ -7,11 +7,11 @@ extern crate slog;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+use protobuf::atomic_flags::set_redact_bytes as proto_set_redact_bytes;
 use std::{
     fmt,
     sync::atomic::{AtomicBool, Ordering},
 };
-use protobuf::atomic_flags::set_redact_bytes as proto_set_redact_bytes;
 
 pub mod test_util;
 
