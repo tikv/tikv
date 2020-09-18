@@ -179,10 +179,7 @@ impl Debug for ChangePeer {
         write!(
             f,
             "{{ index: {:?}, conf_change: {:?}, peer: {:?}, region: {:?} }}",
-            self.index,
-            self.conf_change,
-            self.peer,
-            log_wrappers::ProtobufValue(&self.region)
+            self.index, self.conf_change, self.peer, self.region
         )
     }
 }
@@ -1247,7 +1244,7 @@ where
                 "peer_id" => self.id(),
                 "term" => ctx.exec_ctx.as_ref().unwrap().term,
                 "index" => ctx.exec_ctx.as_ref().unwrap().index,
-                "command" => log_wrappers::ProtobufValue(request)
+                "command" => ?request,
             );
         }
 
@@ -1315,7 +1312,7 @@ where
                         "skip readonly command";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "command" => log_wrappers::ProtobufValue(req)
+                        "command" => ?req,
                     );
                     continue;
                 }
@@ -1535,8 +1532,8 @@ where
                  "ingest fail";
                  "region_id" => self.region_id(),
                  "peer_id" => self.id(),
-                 "sst" => log_wrappers::ProtobufValue(sst),
-                 "region" => log_wrappers::ProtobufValue(&self.region),
+                 "sst" => ?sst,
+                 "region" => ?self.region,
             );
             // This file is not valid, we can delete it here.
             let _ = importer.delete(sst);
@@ -1546,12 +1543,7 @@ where
         importer.ingest(sst, engine).unwrap_or_else(|e| {
             // If this failed, it means that the file is corrupted or something
             // is wrong with the engine, but we can do nothing about that.
-            panic!(
-                "{} ingest {:?}: {:?}",
-                self.tag,
-                log_wrappers::ProtobufValue(sst),
-                e
-            );
+            panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
         });
 
         ssts.push(sst.clone());
@@ -1626,7 +1618,7 @@ where
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
                             "peer" => ?peer,
-                            "region" => log_wrappers::ProtobufValue(&self.region)
+                            "region" => ?region
                         );
                         return Err(box_err!(
                             "can't add duplicated peer {:?} to region {:?}",
@@ -1650,7 +1642,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => log_wrappers::ProtobufValue(&self.region)
+                    "region" => ?region
                 );
             }
             ConfChangeType::RemoveNode => {
@@ -1686,7 +1678,7 @@ where
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
-                        "region" => log_wrappers::ProtobufValue(&self.region),
+                        "region" => ?region,
                     );
                     return Err(box_err!(
                         "remove missing peer {:?} from region {:?}",
@@ -1703,7 +1695,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => log_wrappers::ProtobufValue(&self.region)
+                    "region" => ?region
                 );
             }
             ConfChangeType::AddLearnerNode => {
@@ -1717,7 +1709,7 @@ where
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
-                        "region" => log_wrappers::ProtobufValue(&self.region)
+                        "region" => ?region
                     );
                     return Err(box_err!(
                         "can't add duplicated learner {:?} to region {:?}",
@@ -1735,7 +1727,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => log_wrappers::ProtobufValue(&self.region),
+                    "region" => ?region,
                 );
             }
         }
@@ -1835,7 +1827,7 @@ where
             "split region";
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
-            "region" => log_wrappers::ProtobufValue(&derived),
+            "region" => ?derived,
             "keys" => %KeysInfoFormatter(keys.iter()),
         );
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
@@ -1966,12 +1958,7 @@ where
                 });
         }
         write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
-            panic!(
-                "{} fails to update region {:?}: {:?}",
-                self.tag,
-                log_wrappers::ProtobufValue(&derived),
-                e
-            )
+            panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
         });
         let mut resp = AdminResponse::default();
         resp.mut_splits().set_regions(regions.clone().into());
@@ -2037,10 +2024,7 @@ where
         .unwrap_or_else(|e| {
             panic!(
                 "{} failed to save merging state {:?} for region {:?}: {:?}",
-                self.tag,
-                merging_state,
-                log_wrappers::ProtobufValue(&region),
-                e
+                self.tag, merging_state, region, e
             )
         });
         fail_point!("apply_after_prepare_merge");
@@ -2129,7 +2113,7 @@ where
             "entries" => merge.get_entries().len(),
             "term" => ctx.exec_ctx.as_ref().unwrap().term,
             "index" => ctx.exec_ctx.as_ref().unwrap().index,
-            "source_region" => log_wrappers::ProtobufValue(source_region)
+            "source_region" => ?source_region
         );
 
         self.ready_source_region_id = 0;
@@ -2139,9 +2123,7 @@ where
             Ok(Some(s)) => s,
             e => panic!(
                 "{} failed to get regions state of {:?}: {:?}",
-                self.tag,
-                log_wrappers::ProtobufValue(source_region),
-                e
+                self.tag, source_region, e
             ),
         };
         if state.get_state() != PeerState::Merging {
@@ -2154,9 +2136,7 @@ where
         if *source_region != exist_region {
             panic!(
                 "{} source_region {:?} not match exist region {:?}",
-                self.tag,
-                log_wrappers::ProtobufValue(source_region),
-                log_wrappers::ProtobufValue(&exist_region)
+                self.tag, source_region, exist_region
             );
         }
         let mut region = self.region.clone();
@@ -2187,9 +2167,7 @@ where
             .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to save merge region {:?}: {:?}",
-                    self.tag,
-                    log_wrappers::ProtobufValue(&region),
-                    e
+                    self.tag, region, e
                 )
             });
 
@@ -3455,7 +3433,7 @@ where
                     warn!(
                         "region is removed before merged, are we shutting down?";
                         "region_id" => region_id,
-                        "merge" => log_wrappers::ProtobufValue(&cul.merge),
+                        "merge" => ?cul.merge,
                     );
                     return;
                 }

@@ -12,9 +12,6 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-mod proto;
-pub use proto::*;
-
 pub mod test_util;
 
 /// Wraps any `Display` type, use `Display` as `slog::Value`.

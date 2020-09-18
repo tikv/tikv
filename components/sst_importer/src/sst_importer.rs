@@ -62,7 +62,7 @@ impl SSTImporter {
                 Ok(f)
             }
             Err(e) => {
-                error!(%e; "create failed"; "meta" => log_wrappers::ProtobufValue(meta),);
+                error!(%e; "create failed"; "meta" => ?meta,);
                 Err(e)
             }
         }
@@ -75,7 +75,7 @@ impl SSTImporter {
                 Ok(())
             }
             Err(e) => {
-                error!(%e; "delete failed"; "meta" => log_wrappers::ProtobufValue(meta),);
+                error!(%e; "delete failed"; "meta" => ?meta,);
                 Err(e)
             }
         }
@@ -84,11 +84,11 @@ impl SSTImporter {
     pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
         match self.dir.ingest(meta, engine, self.key_manager.as_ref()) {
             Ok(_) => {
-                info!("ingest"; "meta" => log_wrappers::ProtobufValue(meta));
+                info!("ingest"; "meta" => ?meta);
                 Ok(())
             }
             Err(e) => {
-                error!(%e; "ingest failed"; "meta" => log_wrappers::ProtobufValue(meta),);
+                error!(%e; "ingest failed"; "meta" => ?meta, );
                 Err(e)
             }
         }
@@ -120,19 +120,19 @@ impl SSTImporter {
         sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
         debug!("download start";
-            "meta" => log_wrappers::ProtobufValue(meta),
+            "meta" => ?meta,
             "url" => ?backend,
             "name" => name,
-            "rewrite_rule" => log_wrappers::ProtobufValue(rewrite_rule),
+            "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
         match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, sst_writer) {
             Ok(r) => {
-                info!("download"; "meta" => log_wrappers::ProtobufValue(meta), "name" => name, "range" => r.as_ref().map(log_wrappers::ProtobufValue));
+                info!("download"; "meta" => ?meta, "name" => name, "range" => ?r);
                 Ok(r)
             }
             Err(e) => {
-                error!(%e; "download failed"; "meta" => log_wrappers::ProtobufValue(meta), "name" => name,);
+                error!(%e; "download failed"; "meta" => ?meta, "name" => name,);
                 Err(e)
             }
         }
@@ -244,7 +244,7 @@ impl SSTImporter {
         sst_reader.verify_checksum()?;
 
         debug!("downloaded file and verified";
-            "meta" => log_wrappers::ProtobufValue(meta),
+            "meta" => ?meta,
             "url" => %url,
             "name" => name,
             "path" => path_str,
