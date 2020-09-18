@@ -1,12 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, i32, isize};
+use std::{cmp, i32};
 
 use super::Result;
 use grpcio::CompressionAlgorithms;
 
 use tikv_util::collections::HashMap;
-use tikv_util::config::{self, ReadableDuration, ReadableSize};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, MB};
 use tikv_util::sys::sys_quota::SysQuota;
 
 pub use crate::storage::config::Config as StorageConfig;
@@ -19,7 +19,7 @@ const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
-const DEFAULT_GRPC_MEMORY_POOL_QUOTA: u64 = isize::MAX as u64;
+const DEFAULT_GRPC_MEMORY_POOL_QUOTA_RATIO: f64 = 0.1;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 
 // Number of rows in each chunk.
@@ -38,6 +38,12 @@ const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
 const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
 
 const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
+
+fn memory_mb_for_grpc() -> usize {
+    let total_mem = SysQuota::new().memory_limit_in_bytes();
+    let size = (total_mem as f64 * DEFAULT_GRPC_MEMORY_POOL_QUOTA_RATIO) as usize;
+    size / MB as usize
+}
 
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -141,7 +147,7 @@ impl Default for Config {
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
-            grpc_memory_pool_quota: ReadableSize(DEFAULT_GRPC_MEMORY_POOL_QUOTA),
+            grpc_memory_pool_quota: ReadableSize::mb(memory_mb_for_grpc() as u64),
             // There will be a heartbeat every secs, it's weird a connection will be idle for more
             // than 10 senconds.
             grpc_keepalive_time: ReadableDuration::secs(10),
