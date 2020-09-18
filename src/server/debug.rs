@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
 use std::iter::FromIterator;
 use std::path::Path;
 use std::sync::Arc;
@@ -17,7 +16,6 @@ use engine_traits::{
 };
 use engine_traits::{Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
-use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
 use protobuf::Message;
@@ -37,6 +35,8 @@ use tikv_util::config::ReadableSize;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
 use txn_types::Key;
+
+pub use crate::storage::mvcc::MvccInfoIterator;
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -250,16 +250,25 @@ impl<ER: RaftEngine> Debugger<ER> {
     }
 
     /// Scan MVCC Infos for given range `[start, end)`.
-    pub fn scan_mvcc(&self, start: &[u8], end: &[u8], limit: u64) -> Result<MvccInfoIterator> {
-        if !start.starts_with(b"z") || (!end.is_empty() && !end.starts_with(b"z")) {
-            return Err(Error::InvalidArgument(
-                "start and end should start with \"z\"".to_owned(),
-            ));
-        }
+    pub fn scan_mvcc(
+        &self,
+        start: &[u8],
+        end: &[u8],
+        limit: u64,
+    ) -> Result<MvccInfoIterator<RocksEngineIterator>> {
         if end.is_empty() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
-        MvccInfoIterator::new(self.engines.kv.as_inner(), start, end, limit)
+        MvccInfoIterator::new(
+            |cf, opts| {
+                let kv = &self.engines.kv;
+                kv.iterator_cf_opt(cf, opts).map_err(|e| box_err!(e))
+            },
+            if start.is_empty() { None } else { Some(start) },
+            if end.is_empty() { None } else { Some(end) },
+            limit as usize,
+        )
+        .map_err(|e| box_err!(e))
     }
 
     /// Scan raw keys for given range `[start, end)` in given cf.
@@ -1132,188 +1141,6 @@ fn region_overlap(r1: &Region, r2: &Region) -> bool {
         && (start_key_2 < end_key_1 || end_key_1.is_empty())
 }
 
-pub struct MvccInfoIterator {
-    limit: u64,
-    count: u64,
-    lock_iter: RocksEngineIterator,
-    default_iter: RocksEngineIterator,
-    write_iter: RocksEngineIterator,
-}
-
-pub type Kv = (Vec<u8>, Vec<u8>);
-
-impl MvccInfoIterator {
-    fn new(db: &Arc<DB>, from: &[u8], to: &[u8], limit: u64) -> Result<Self> {
-        if !keys::validate_data_key(from) {
-            return Err(Error::InvalidArgument(format!(
-                "from non-mvcc area {:?}",
-                from
-            )));
-        }
-
-        let gen_iter = |cf: &str| -> Result<_> {
-            let to = if to.is_empty() {
-                None
-            } else {
-                Some(KeyBuilder::from_vec(to.to_vec(), 0, 0))
-            };
-            let readopts = IterOptions::new(None, to, false);
-            let mut iter = box_try!(db.c().iterator_cf_opt(cf, readopts));
-            iter.seek(SeekKey::from(from)).unwrap();
-            Ok(iter)
-        };
-        Ok(MvccInfoIterator {
-            limit,
-            count: 0,
-            lock_iter: gen_iter(CF_LOCK)?,
-            default_iter: gen_iter(CF_DEFAULT)?,
-            write_iter: gen_iter(CF_WRITE)?,
-        })
-    }
-
-    fn next_lock(&mut self) -> Result<Option<(Vec<u8>, MvccLock)>> {
-        let iter = &mut self.lock_iter;
-        if box_try!(iter.valid()) {
-            let (key, value) = (iter.key().to_owned(), iter.value());
-            let lock = box_try!(Lock::parse(&value));
-            let mut lock_info = MvccLock::default();
-            match lock.lock_type {
-                LockType::Put => lock_info.set_type(Op::Put),
-                LockType::Delete => lock_info.set_type(Op::Del),
-                LockType::Lock => lock_info.set_type(Op::Lock),
-                LockType::Pessimistic => lock_info.set_type(Op::PessimisticLock),
-            }
-            lock_info.set_start_ts(lock.ts.into_inner());
-            lock_info.set_primary(lock.primary);
-            lock_info.set_short_value(lock.short_value.unwrap_or_default());
-            box_try!(iter.next());
-            return Ok(Some((key, lock_info)));
-        };
-        Ok(None)
-    }
-
-    fn next_default(&mut self) -> Result<Option<(Vec<u8>, Vec<MvccValue>)>> {
-        if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.default_iter) {
-            let mut values = Vec::with_capacity(vec_kv.len());
-            for (key, value) in vec_kv {
-                let mut value_info = MvccValue::default();
-                let start_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
-                value_info.set_start_ts(start_ts.into_inner());
-                value_info.set_value(value);
-                values.push(value_info);
-            }
-            return Ok(Some((prefix, values)));
-        }
-        Ok(None)
-    }
-
-    fn next_write(&mut self) -> Result<Option<(Vec<u8>, Vec<MvccWrite>)>> {
-        if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.write_iter) {
-            let mut writes = Vec::with_capacity(vec_kv.len());
-            for (key, value) in vec_kv {
-                let write = box_try!(WriteRef::parse(&value)).to_owned();
-                let mut write_info = MvccWrite::default();
-                match write.write_type {
-                    WriteType::Put => write_info.set_type(Op::Put),
-                    WriteType::Delete => write_info.set_type(Op::Del),
-                    WriteType::Lock => write_info.set_type(Op::Lock),
-                    WriteType::Rollback => write_info.set_type(Op::Rollback),
-                }
-                write_info.set_start_ts(write.start_ts.into_inner());
-                let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
-                write_info.set_commit_ts(commit_ts.into_inner());
-                write_info.set_short_value(write.short_value.unwrap_or_default());
-                writes.push(write_info);
-            }
-            return Ok(Some((prefix, writes)));
-        }
-        Ok(None)
-    }
-
-    fn next_grouped(iter: &mut RocksEngineIterator) -> Option<(Vec<u8>, Vec<Kv>)> {
-        if iter.valid().unwrap() {
-            let prefix = Key::truncate_ts_for(iter.key()).unwrap().to_vec();
-            let mut kvs = vec![(iter.key().to_vec(), iter.value().to_vec())];
-            while iter.next().unwrap() && iter.key().starts_with(&prefix) {
-                kvs.push((iter.key().to_vec(), iter.value().to_vec()));
-            }
-            return Some((prefix, kvs));
-        }
-        None
-    }
-
-    fn next_item(&mut self) -> Result<Option<(Vec<u8>, MvccInfo)>> {
-        if self.limit != 0 && self.count >= self.limit {
-            return Ok(None);
-        }
-
-        let mut mvcc_info = MvccInfo::default();
-        let mut min_prefix = Vec::new();
-
-        let (lock_ok, writes_ok) = match (
-            self.lock_iter.valid().unwrap(),
-            self.write_iter.valid().unwrap(),
-        ) {
-            (false, false) => return Ok(None),
-            (true, true) => {
-                let prefix1 = self.lock_iter.key();
-                let prefix2 = box_try!(Key::truncate_ts_for(self.write_iter.key()));
-                match prefix1.cmp(prefix2) {
-                    Ordering::Less => (true, false),
-                    Ordering::Equal => (true, true),
-                    _ => (false, true),
-                }
-            }
-            valid_pair => valid_pair,
-        };
-
-        if lock_ok {
-            if let Some((prefix, lock)) = self.next_lock()? {
-                mvcc_info.set_lock(lock);
-                min_prefix = prefix;
-            }
-        }
-        if writes_ok {
-            if let Some((prefix, writes)) = self.next_write()? {
-                mvcc_info.set_writes(writes.into());
-                min_prefix = prefix;
-            }
-        }
-        if self.default_iter.valid().unwrap() {
-            match box_try!(Key::truncate_ts_for(self.default_iter.key())).cmp(&min_prefix) {
-                Ordering::Equal => {
-                    if let Some((_, values)) = self.next_default()? {
-                        mvcc_info.set_values(values.into());
-                    }
-                }
-                Ordering::Greater => {}
-                _ => {
-                    let err_msg = format!(
-                        "scan_mvcc CF_DEFAULT corrupt: want {}, got {}",
-                        hex::encode_upper(&min_prefix),
-                        hex::encode_upper(box_try!(Key::truncate_ts_for(self.default_iter.key())))
-                    );
-                    return Err(box_err!(err_msg));
-                }
-            }
-        }
-        self.count += 1;
-        Ok(Some((min_prefix, mvcc_info)))
-    }
-}
-
-impl Iterator for MvccInfoIterator {
-    type Item = Result<(Vec<u8>, MvccInfo)>;
-
-    fn next(&mut self) -> Option<Result<(Vec<u8>, MvccInfo)>> {
-        match self.next_item() {
-            Ok(Some(item)) => Some(Ok(item)),
-            Ok(None) => None,
-            Err(e) => Some(Err(e)),
-        }
-    }
-}
-
 fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     match (db, cf) {
         (DBType::Kv, CF_DEFAULT)
@@ -1732,7 +1559,7 @@ mod tests {
         }
 
         let mut count = 0;
-        for key_and_mvcc in debugger.scan_mvcc(b"z", &[], 10).unwrap() {
+        for key_and_mvcc in debugger.scan_mvcc(b"z", &[], 30).unwrap() {
             assert!(key_and_mvcc.is_ok());
             count += 1;
         }

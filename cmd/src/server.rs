@@ -62,7 +62,7 @@ use tikv::{
         status_server::StatusServer,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
     },
-    storage::{self, config::StorageConfigManger},
+    storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver},
 };
 use tikv_util::config::VersionTrack;
 use tikv_util::{
@@ -186,29 +186,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
-        match config.coprocessor.consistency_check_method {
-            ConsistencyCheckMethod::Mvcc => {
-                // TODO: use mvcc consistency checker.
-                coprocessor_host
-                    .as_mut()
-                    .unwrap()
-                    .registry
-                    .register_consistency_check_observer(
-                        100,
-                        BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
-                    );
-            }
-            ConsistencyCheckMethod::Raw => {
-                coprocessor_host
-                    .as_mut()
-                    .unwrap()
-                    .registry
-                    .register_consistency_check_observer(
-                        100,
-                        BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
-                    );
-            }
-        }
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();
 
@@ -658,9 +635,24 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.region_info_accessor.clone(),
             node.id(),
         );
-        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config) {
-            fatal!("failed to start auto_gc on storage, error: {}", e);
-        }
+
+        let safe_point = match gc_worker.start_auto_gc(auto_gc_config) {
+            Err(e) => fatal!("failed to start auto_gc on storage, error: {}", e),
+            Ok(safe_point) => safe_point,
+        };
+        let observer = match self.config.coprocessor.consistency_check_method {
+            ConsistencyCheckMethod::Mvcc => {
+                BoxConsistencyCheckObserver::new(MvccConsistencyCheckObserver::new(safe_point))
+            }
+            ConsistencyCheckMethod::Raw => {
+                BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default())
+            }
+        };
+        self.coprocessor_host
+            .as_mut()
+            .unwrap()
+            .registry
+            .register_consistency_check_observer(100, observer);
 
         // Start CDC.
         let cdc_endpoint = cdc::Endpoint::new(
