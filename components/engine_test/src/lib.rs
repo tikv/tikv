@@ -1,17 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! An engine for use in the test suite
+//! Engines for use in the test suite, implementing both the KvEngine
+//! and RaftEngine traits.
 //!
-//! This storage engine links to all other engines, providing a single storage
-//! engine to run tests against.
+//! These engines link to all other engines, providing concrete single storage
+//! engine type to run tests against.
 //!
 //! This provides a simple way to integrate non-RocksDB engines into the
 //! existing test suite without too much disruption.
 //!
-//! The engine is chosen at compile time with feature flags (TODO document me).
+//! Engines presently supported by this crate are
 //!
-//! We'll probably revisit the engine-testing strategy in the future,
-//! e.g. by using engine-parameterized tests instead.
+//! - RocksEngine from engine_rocks
+//! - PanicEngine from engine_panic
 //!
 //! TiKV uses two different storage engine instances,
 //! the "raft" engine, for storing consensus data,
@@ -20,11 +21,37 @@
 //! The types and constructors for these two engines are located in the `raft`
 //! and `kv` modules respectively.
 //!
+//! The engine for each module is chosen at compile time with feature flags:
+//!
+//! - `--features test-engine-kv-rocksdb`
+//! - `--features test-engine-raft-rocksdb`
+//! - `--features test-engine-kv-panic`
+//! - `--features test-engine-raft-panic`
+//!
+//! By default, the `tikv` crate turns on `test-engine-kv-rocksdb`,
+//! and `test-engine-raft-rocksdb`. This behavior can be disabled
+//! with `--disable-default-features`.
+//!
+//! The `tikv` crate additionally provides two feature flags that
+//! contral both the `kv` and `raft` engines at the same time:
+//!
+//! - `--features test-engines-rocksdb`
+//! - `--features test-engines-panic`
+//!
+//! So, e.g., to run the test suite with the panic engine:
+//!
+//! ```
+//! cargo test --all --disable-default-features --features=protobuf_codec,test-engines-panic
+//! ```
+//!
+//! We'll probably revisit the engine-testing strategy in the future,
+//! e.g. by using engine-parameterized tests instead.
+//!
 //! This create also contains a `ctor` module that contains constructor methods
 //! appropriate for constructing storage engines of any type. It is intended
 //! that this module is _the only_ module within TiKV that knows about concrete
 //! storage engines, and that it be extracted into its own crate for use in
-//! TiKV.
+//! TiKV, once the full requirements are better understood.
 
 /// Types and constructors for the "raft" engine
 pub mod raft {
