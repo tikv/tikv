@@ -202,6 +202,7 @@ pub mod ctor {
     pub struct ColumnFamilyOptions {
         disable_auto_compactions: bool,
         level_zero_file_num_compaction_trigger: Option<i32>,
+        level_zero_slowdown_writes_trigger: Option<i32>,
         /// On RocksDB, turns off the range properties collector. Only used in
         /// tests. Unclear how other engines should deal with this.
         no_range_properties: bool,
@@ -212,6 +213,7 @@ pub mod ctor {
             ColumnFamilyOptions {
                 disable_auto_compactions: false,
                 level_zero_file_num_compaction_trigger: None,
+                level_zero_slowdown_writes_trigger: None,
                 no_range_properties: false,
             }
         }
@@ -230,6 +232,14 @@ pub mod ctor {
 
         pub fn get_level_zero_file_num_compaction_trigger(&self) -> Option<i32> {
             self.level_zero_file_num_compaction_trigger
+        }
+
+        pub fn set_level_zero_slowdown_writes_trigger(&mut self, n: i32) {
+            self.level_zero_slowdown_writes_trigger = Some(n);
+        }
+
+        pub fn get_level_zero_slowdown_writes_trigger(&self) -> Option<i32> {
+            self.level_zero_slowdown_writes_trigger
         }
 
         pub fn set_no_range_properties(&mut self, v: bool) {
@@ -329,6 +339,9 @@ pub mod ctor {
         fn set_cf_opts(rocks_cf_opts: &mut RocksColumnFamilyOptions, cf_opts: &ColumnFamilyOptions) {
             if let Some(trigger) = cf_opts.get_level_zero_file_num_compaction_trigger() {
                 rocks_cf_opts.set_level_zero_file_num_compaction_trigger(trigger);
+            }
+            if let Some(trigger) = cf_opts.get_level_zero_slowdown_writes_trigger() {
+                rocks_cf_opts.as_raw_mut().set_level_zero_slowdown_writes_trigger(trigger);
             }
             if cf_opts.get_disable_auto_compactions() {
                 rocks_cf_opts.set_disable_auto_compactions(true);
