@@ -143,11 +143,24 @@ pub mod ctor {
         fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self>;
     }
 
-    pub struct DBOptions;
+    pub enum CryptoOpts {
+        None,
+        DefaultCtrEncryptedEnv(Vec<u8>),
+    }
+
+    pub struct DBOptions {
+        encryption: CryptoOpts,
+    }
 
     impl DBOptions {
         pub fn new() -> DBOptions {
-            DBOptions
+            DBOptions {
+                encryption: CryptoOpts::None,
+            }
+        }
+
+        pub fn with_default_ctr_encrypted_env(&mut self, ciphertext: Vec<u8>) {
+            self.encryption = CryptoOpts::DefaultCtrEncryptedEnv(ciphertext);
         }
     }
 
@@ -244,9 +257,9 @@ pub mod ctor {
     }
 
     mod rocks {
-        use super::{EngineConstructorExt, ColumnFamilyOptions, DBOptions, CFOptions};
+        use super::{EngineConstructorExt, ColumnFamilyOptions, DBOptions, CFOptions, CryptoOpts};
 
-        use engine_traits::{Result, DBOptions as DBOptionsTrait, ColumnFamilyOptions as ColumnFamilyOptionsTrait};
+        use engine_traits::{Result, ColumnFamilyOptions as ColumnFamilyOptionsTrait};
 
         use engine_rocks::{RocksColumnFamilyOptions, RocksDBOptions};
         use engine_rocks::util::{new_engine_opt as rocks_new_engine_opt, new_engine as rocks_new_engine, RocksCFOptions};
@@ -254,13 +267,15 @@ pub mod ctor {
         use engine_rocks::properties::{
             MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
         };
+        use engine_rocks::raw::{DBOptions as RawRocksDBOptions, Env};
+        use std::sync::Arc;
 
         impl EngineConstructorExt for engine_rocks::RocksEngine {
             // FIXME this is duplicating behavior from engine_rocks::raw_util in order to
             // call set_standard_cf_opts.
             fn new_engine(path: &str, db_opt: Option<DBOptions>, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<Self> {
                 let rocks_db_opts = match db_opt {
-                    Some(_opt) => panic!(), // todo
+                    Some(db_opt) => Some(get_rocks_db_opts(db_opt)?),
                     None => None,
                 };
                 let cfs_opts = match opts {
@@ -285,8 +300,8 @@ pub mod ctor {
                 rocks_new_engine(path, rocks_db_opts, &[], Some(rocks_cfs_opts))
             }
 
-            fn new_engine_opt(path: &str, _db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self> {
-                let rocks_db_opts = RocksDBOptions::new();
+            fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self> {
+                let rocks_db_opts = get_rocks_db_opts(db_opt)?;
                 let rocks_cfs_opts = cfs_opts
                     .iter()
                     .map(|cf_opts| {
@@ -316,6 +331,19 @@ pub mod ctor {
             if cf_opts.get_disable_auto_compactions() {
                 rocks_cf_opts.set_disable_auto_compactions(true);
             }
+        }
+
+        fn get_rocks_db_opts(db_opts: DBOptions) -> Result<RocksDBOptions> {
+            let mut rocks_db_opts = RawRocksDBOptions::new();
+            match db_opts.encryption {
+                CryptoOpts::None => (),
+                CryptoOpts::DefaultCtrEncryptedEnv(ciphertext) => {
+                    let env = Arc::new(Env::new_default_ctr_encrypted_env(&ciphertext)?);
+                    rocks_db_opts.set_env(env);
+                }
+            }
+            let rocks_db_opts = RocksDBOptions::from_raw(rocks_db_opts);
+            Ok(rocks_db_opts)
         }
     }
 }
