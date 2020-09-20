@@ -143,11 +143,13 @@ pub mod ctor {
         fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self>;
     }
 
+    #[derive(Clone)]
     pub enum CryptoOpts {
         None,
         DefaultCtrEncryptedEnv(Vec<u8>),
     }
 
+    #[derive(Clone)]
     pub struct DBOptions {
         encryption: CryptoOpts,
     }
