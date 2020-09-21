@@ -29,5 +29,5 @@ pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::server::Server;
 pub use self::transport::ServerTransport;
 
-#[cfg(feature = "testexport")]
+#[cfg(any(test, feature = "testexport"))]
 pub use self::server::test_router::TestRaftStoreRouter;
