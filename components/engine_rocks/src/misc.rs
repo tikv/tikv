@@ -207,7 +207,14 @@ impl MiscExt for RocksEngine {
         Ok(crate::properties::get_range_entries_and_versions(
             self, handle, start, end
         ))
-    }    
+    }
+
+    fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> Result<Option<u64>> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(crate::util::get_cf_num_files_at_level(
+            self.as_inner(), &handle, level
+        ))
+    }
 }
 
 #[cfg(test)]
