@@ -435,14 +435,29 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                 "start_key" => log_wrappers::Key(start_key),
                 "end_key" => log_wrappers::Key(end_key),
             );
-        } else {
-            info!(
-                "succeed in deleting data in range";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Key(start_key),
-                "end_key" => log_wrappers::Key(end_key),
-            );
         }
+        if use_delete_files {
+            if let Err(e) = self
+                .engines
+                .kv
+                .c()
+                .delete_blob_files_in_range(start_key, end_key)
+            {
+                error!(%e;
+                    "failed to delete blob files in range";
+                    "region_id" => region_id,
+                    "start_key" => log_wrappers::Key(start_key),
+                    "end_key" => log_wrappers::Key(end_key),
+                );
+                return;
+            }
+        }
+        info!(
+            "succeed in deleting data in range";
+            "region_id" => region_id,
+            "start_key" => log_wrappers::Key(start_key),
+            "end_key" => log_wrappers::Key(end_key),
+        );
     }
 
     /// Gets the overlapping ranges and cleans them up.
