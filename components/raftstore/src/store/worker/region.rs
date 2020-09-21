@@ -317,7 +317,7 @@ where
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key)?;
-        self.delete_all_in_range(vec![Range::new(&start_key, &end_key)])?;
+        self.delete_all_in_range(&[Range::new(&start_key, &end_key)])?;
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
@@ -401,12 +401,12 @@ where
     }
 
     /// Cleans up the data within the range.
-    fn cleanup_range(&self, ranges: Vec<Range>) -> Result<()> {
+    fn cleanup_range(&self, ranges: &[Range]) -> Result<()> {
         for cf in self.engines.kv.cf_names() {
             if let Err(e) =
                 self.engines
                     .kv
-                    .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, ranges.clone())
+                    .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &ranges)
             {
                 error!("failed to delete files in range"; "err" => %e);
             }
@@ -434,8 +434,7 @@ where
             if *stale_sequence < oldest_sequence {
                 if let Err(e) = self.engines.kv.delete_all_in_range(
                     DeleteStrategy::DeleteFiles,
-                    start_key,
-                    end_key,
+                    &[Range::new(start_key, end_key)],
                 ) {
                     error!("failed to delete files in range";
                         "region_id" => region_id,
@@ -453,7 +452,7 @@ where
                   "end_key" => log_wrappers::Key(end_key));
             ranges.push(Range::new(start_key, end_key));
         }
-        self.delete_all_in_range(ranges)
+        self.delete_all_in_range(&ranges)
     }
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
@@ -505,7 +504,7 @@ where
                 Range::new(start, end)
             })
             .collect();
-        if let Err(e) = self.cleanup_range(ranges) {
+        if let Err(e) = self.cleanup_range(&ranges) {
             error!("failed to cleanup stale range"; "err" => %e);
             return;
         }
@@ -538,7 +537,7 @@ where
         false
     }
 
-    fn delete_all_in_range(&self, ranges: Vec<Range>) -> Result<()> {
+    fn delete_all_in_range(&self, ranges: &[Range]) -> Result<()> {
         for cf in self.engines.kv.cf_names() {
             let strategy = if cf == CF_LOCK {
                 DeleteStrategy::DeleteByKey
@@ -549,10 +548,7 @@ where
                     sst_path: self.mgr.get_temp_path_for_ingest(),
                 }
             };
-            box_try!(self
-                .engines
-                .kv
-                .delete_ranges_cf(cf, strategy, ranges.clone()));
+            box_try!(self.engines.kv.delete_ranges_cf(cf, strategy, ranges));
         }
 
         Ok(())

@@ -1454,17 +1454,19 @@ where
         // is a way to reclaim disk space quickly after drop a table/index.
         if !notify_only {
             let range = vec![EngineRange::new(&start_key, &end_key)];
+            let fail_f = |e: engine_traits::Error, strategy: DeleteStrategy| {
+                panic!(
+                    "{} failed to delete {:?} in ranges [{}, {}): {:?}",
+                    self.tag,
+                    strategy,
+                    hex::encode_upper(&start_key),
+                    hex::encode_upper(&end_key),
+                    e
+                )
+            };
             engine
-                .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, range.clone())
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete files in range [{}, {}): {:?}",
-                        self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
-                        e
-                    )
-                });
+                .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
+                .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
 
             let strategy = if use_delete_range {
                 DeleteStrategy::DeleteByRange
@@ -1473,30 +1475,12 @@ where
             };
             // Delete all remaining keys.
             engine
-                .delete_ranges_cf(cf, strategy, range.clone())
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                        self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
-                        cf,
-                        e
-                    );
-                });
+                .delete_ranges_cf(cf, strategy.clone(), &range)
+                .unwrap_or_else(move |e| fail_f(e, strategy));
+
             engine
-                .delete_blob_files_in_range_cf(
-                    cf, &start_key, &end_key, /* include_end */ false,
-                )
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete blob files in range [{}, {}): {:?}",
-                        self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
-                        e
-                    )
-                });
+                .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
+                .unwrap_or_else(move |e| fail_f(e, DeleteStrategy::DeleteBlobs));
         }
 
         // TODO: Should this be executed when `notify_only` is set?

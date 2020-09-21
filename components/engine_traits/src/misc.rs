@@ -9,9 +9,10 @@ use crate::cf_names::CFNamesExt;
 use crate::errors::Result;
 use crate::range::Range;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum DeleteStrategy {
     DeleteFiles,
+    DeleteBlobs,
     DeleteByKey,
     DeleteByRange,
     DeleteByWriter { sst_path: String },
@@ -22,18 +23,9 @@ pub trait MiscExt: CFNamesExt {
 
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()>;
 
-    fn delete_all_in_range(
-        &self,
-        strategy: DeleteStrategy,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) -> Result<()> {
-        if start_key >= end_key {
-            return Ok(());
-        }
-
+    fn delete_all_in_range(&self, strategy: DeleteStrategy, ranges: &[Range]) -> Result<()> {
         for cf in self.cf_names() {
-            self.delete_ranges_cf(cf, strategy.clone(), vec![Range::new(start_key, end_key)])?;
+            self.delete_ranges_cf(cf, strategy.clone(), ranges)?;
         }
         Ok(())
     }
@@ -42,16 +34,8 @@ pub trait MiscExt: CFNamesExt {
         &self,
         cf: &str,
         strategy: DeleteStrategy,
-        ranges: Vec<Range>,
+        ranges: &[Range],
     ) -> Result<usize>;
-
-    fn delete_all_in_range_cf(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        use_delete_range: bool,
-    ) -> Result<()>;
 
     /// Return the approximate number of records and size in the range of memtables of the cf.
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)>;

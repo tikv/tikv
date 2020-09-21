@@ -312,7 +312,7 @@ where
                 .delete_ranges_cf(
                     cf,
                     DeleteStrategy::DeleteFiles,
-                    vec![Range::new(&start_data_key, &end_data_key)],
+                    &[Range::new(&start_data_key, &end_data_key)],
                 )
                 .map_err(|e| {
                     let e: Error = box_err!(e);
@@ -335,11 +335,22 @@ where
                 .delete_ranges_cf(
                     cf,
                     DeleteStrategy::DeleteByKey,
-                    vec![Range::new(&start_data_key, &end_data_key)],
+                    &[Range::new(&start_data_key, &end_data_key)],
                 )
                 .map_err(|e| {
                     let e: Error = box_err!(e);
                     warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);
+                    e
+                })?;
+            local_storage
+                .delete_ranges_cf(
+                    cf,
+                    DeleteStrategy::DeleteBlobs,
+                    &[Range::new(&start_data_key, &end_data_key)],
+                )
+                .map_err(|e| {
+                    let e: Error = box_err!(e);
+                    warn!("unsafe destroy range failed at delete_blob_files_in_range"; "err" => ?e);
                     e
                 })?;
         }
@@ -348,14 +359,6 @@ where
             "unsafe destroy range finished cleaning up all";
             "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.elapsed(),
         );
-
-        local_storage
-            .delete_blob_files_in_range(&start_data_key, &end_data_key)
-            .map_err(|e| {
-                let e: Error = box_err!(e);
-                warn!("unsafe destroy range failed at delete_blob_files_in_range"; "err" => ?e);
-                e
-            })?;
 
         self.raft_store_router
             .send_store_msg(StoreMsg::ClearRegionSizeInRange {

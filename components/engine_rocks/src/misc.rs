@@ -12,7 +12,6 @@ use engine_traits::{
 use rocksdb::Range as RocksRange;
 use tikv_util::keybuilder::KeyBuilder;
 
-
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
 
 impl RocksEngine {
@@ -26,8 +25,9 @@ impl RocksEngine {
         &self,
         cf: &str,
         sst_path: String,
-        mut ranges: Vec<Range>,
+        ranges: &[Range],
     ) -> Result<usize> {
+        let mut ranges = ranges.to_owned();
         ranges.sort_by(|a, b| a.start_key.cmp(b.end_key));
         let mut opts = IterOptions::new(None, None, false);
         if self.is_titan() {
@@ -129,7 +129,6 @@ impl RocksEngine {
     }
 }
 
-
 impl MiscExt for RocksEngine {
     fn flush(&self, sync: bool) -> Result<()> {
         Ok(self.as_inner().flush(sync)?)
@@ -144,18 +143,38 @@ impl MiscExt for RocksEngine {
         &self,
         cf: &str,
         strategy: DeleteStrategy,
-        ranges: Vec<Range>,
+        ranges: &[Range],
     ) -> Result<usize> {
         match strategy {
             DeleteStrategy::DeleteFiles => {
                 let handle = util::get_cf_handle(self.as_inner(), cf)?;
                 for r in ranges {
+                    if r.start_key >= r.end_key {
+                        continue;
+                    }
                     self.as_inner().delete_files_in_range_cf(
                         handle,
                         r.start_key,
                         r.end_key,
                         false,
                     )?;
+                }
+                Ok(0)
+            }
+            DeleteStrategy::DeleteBlobs => {
+                let handle = util::get_cf_handle(self.as_inner(), cf)?;
+                if self.is_titan() {
+                    for r in ranges {
+                        if r.start_key >= r.end_key {
+                            continue;
+                        }
+                        self.as_inner().delete_blob_files_in_range_cf(
+                            handle,
+                            r.start_key,
+                            r.end_key,
+                            false,
+                        )?;
+                    }
                 }
                 Ok(0)
             }
@@ -178,62 +197,6 @@ impl MiscExt for RocksEngine {
                 self.delete_all_in_range_cf_by_ingest(cf, sst_path, ranges)
             }
         }
-    }
-
-    fn delete_blob_files_in_range_cf(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        include_end: bool,
-    ) -> Result<()> {
-        if self.as_inner().is_titan() {
-            let handle = util::get_cf_handle(self.as_inner(), cf)?;
-            self.as_inner().delete_blob_files_in_range_cf(
-                handle,
-                start_key,
-                end_key,
-                include_end,
-            )?;
-        }
-
-        Ok(())
-    }
-
-    fn delete_all_in_range_cf(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        use_delete_range: bool,
-    ) -> Result<()> {
-        let mut wb = self.write_batch();
-        if use_delete_range && cf != CF_LOCK {
-            wb.delete_range_cf(cf, start_key, end_key)?;
-        } else {
-            let start = KeyBuilder::from_slice(start_key, 0, 0);
-            let end = KeyBuilder::from_slice(end_key, 0, 0);
-            let mut opts = IterOptions::new(Some(start), Some(end), false);
-            if self.as_inner().is_titan() {
-                // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
-                // to avoid referring to missing blob files.
-                opts.set_key_only(true);
-            }
-            let mut it = self.iterator_cf_opt(cf, opts)?;
-            let mut it_valid = it.seek(start_key.into())?;
-            while it_valid {
-                wb.delete_cf(cf, it.key())?;
-                if wb.count() >= MAX_DELETE_BATCH_COUNT {
-                    self.write(&wb)?;
-                    wb.clear();
-                }
-                it_valid = it.next()?;
-            }
-        }
-        if wb.count() > 0 {
-            self.write(&wb)?;
-        }
-        Ok(())
     }
 
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)> {
