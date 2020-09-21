@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{MiscExt, CF_WRITE};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, PdClient};
@@ -303,19 +303,15 @@ where
         let start_data_key = keys::data_key(start_key.as_encoded());
         let end_data_key = keys::data_end_key(end_key.as_encoded());
 
-        let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
-
         // First, call delete_files_in_range to free as much disk space as possible
         let delete_files_start_time = Instant::now();
-        for cf in cfs {
-            local_storage
-                .delete_files_in_range_cf(cf, &start_data_key, &end_data_key, false)
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!("unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e);
-                    e
-                })?;
-        }
+        local_storage
+            .delete_all_files_in_range(&start_data_key, &end_data_key)
+            .map_err(|e| {
+                let e: Error = box_err!(e);
+                warn!("unsafe destroy range failed at delete_files_in_range"; "err" => ?e);
+                e
+            })?;
 
         info!(
             "unsafe destroy range finished deleting files in range";
@@ -325,18 +321,27 @@ where
 
         // Then, delete all remaining keys in the range.
         let cleanup_all_start_time = Instant::now();
-        for cf in cfs {
-            // TODO: set use_delete_range with config here.
-            local_storage
-                .delete_all_in_range_cf(cf, &start_data_key, &end_data_key, false)
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);
-                    e
-                })?;
-        }
+        // TODO: set use_delete_range with config here.
+        local_storage
+            .delete_all_in_range(&start_data_key, &end_data_key, false)
+            .map_err(|e| {
+                let e: Error = box_err!(e);
+                warn!("unsafe destroy range failed at delete_all_in_range"; "err" => ?e);
+                e
+            })?;
 
-        let cleanup_all_time_cost = cleanup_all_start_time.elapsed();
+        info!(
+            "unsafe destroy range finished cleaning up all";
+            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.elapsed(),
+        );
+
+        local_storage
+            .delete_blob_files_in_range(&start_data_key, &end_data_key)
+            .map_err(|e| {
+                let e: Error = box_err!(e);
+                warn!("unsafe destroy range failed at delete_blob_files_in_range"; "err" => ?e);
+                e
+            })?;
 
         self.raft_store_router
             .send_store_msg(StoreMsg::ClearRegionSizeInRange {
@@ -348,10 +353,6 @@ where
                 warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
             });
 
-        info!(
-            "unsafe destroy range finished cleaning up all";
-            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_time_cost,
-        );
         Ok(())
     }
 
