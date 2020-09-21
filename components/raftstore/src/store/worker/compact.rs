@@ -268,8 +268,6 @@ mod tests {
 
     use super::*;
 
-    const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
-
     #[test]
     fn test_compact_range() {
         let path = Builder::new()
@@ -304,9 +302,9 @@ mod tests {
         db.flush_cf(handle, true).unwrap();
 
         // Get the total SST files size.
-        let old_sst_files_size = db
-            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
-            .unwrap();
+        let old_sst_files_size = db.c()
+            .get_total_sst_files_size_cf(CF_DEFAULT)
+            .unwrap().unwrap();
 
         // Schedule compact range task.
         runner.run(Task::Compact {
@@ -317,9 +315,9 @@ mod tests {
         sleep(Duration::from_secs(5));
 
         // Get the total SST files size after compact range.
-        let new_sst_files_size = db
-            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
-            .unwrap();
+        let new_sst_files_size = db.c()
+            .get_total_sst_files_size_cf(CF_DEFAULT)
+            .unwrap().unwrap();
         assert!(old_sst_files_size > new_sst_files_size);
     }
 
