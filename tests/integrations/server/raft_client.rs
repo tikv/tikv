@@ -139,7 +139,7 @@ fn test_raft_client_reconnect() {
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
-    let (mock_server, port) = create_mock_server(service, 60100, 60200).unwrap();
+    let (mut mock_server, port) = create_mock_server(service, 60100, 60200).unwrap();
 
     // `send` should success.
     let addr = format!("localhost:{}", port);
@@ -149,6 +149,7 @@ fn test_raft_client_reconnect() {
     check_msg_count(500, &msg_count, 50);
 
     // `send` should fail after the mock server stopped.
+    mock_server.shutdown();
     drop(mock_server);
 
     let send = |_| {

@@ -298,6 +298,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
             async_commit_ts = key_guard.with_lock(|l| {
                 let max_ts = self.concurrency_manager.max_ts();
+                fail_point!("before-set-lock-in-memory");
                 let min_commit_ts = cmp::max(cmp::max(max_ts, self.start_ts), for_update_ts).next();
                 lock.min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
                 *l = Some(lock.clone());
