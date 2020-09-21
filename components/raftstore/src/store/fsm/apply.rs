@@ -1829,7 +1829,7 @@ where
                 add_node_fp();
             }
             confchange_cmd_metric::inc_all(change_type);
-            if let Some(exist_peer) = util::find_peer(&mut region, store_id) {
+            if let Some(exist_peer) = util::find_peer(&region, store_id) {
                 let r = exist_peer.get_role();
                 if r == PeerRole::IncomingVoter || r == PeerRole::DemotingVoter {
                     panic!(
