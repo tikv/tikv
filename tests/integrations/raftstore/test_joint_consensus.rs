@@ -1,16 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::metapb::{self, Region};
+use kvproto::metapb::{self, PeerRole, Region};
 use kvproto::raft_cmdpb::{ChangePeerRequest, RaftCmdRequest, RaftCmdResponse};
+use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
+use raftstore::store::util::find_peer;
 use raftstore::Result;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::*;
 use test_raftstore::*;
 
-/// test_joint_consensus_conf_change testing multiple confchange commands
-/// can be done by one request
+/// Tests multiple confchange commands can be done by one request
 #[test]
 fn test_joint_consensus_conf_change() {
     let mut cluster = new_node_cluster(0, 4);
@@ -44,6 +45,10 @@ fn test_joint_consensus_conf_change() {
         ],
     );
     pd_client.must_leave_joint(region_id);
+    assert_eq!(
+        find_peer(&pd_client.get_region(b"").unwrap(), 3).unwrap(),
+        &new_learner_peer(3, 3)
+    );
     must_get_none(&cluster.get_engine(4), b"k1");
 
     // replace node
@@ -59,9 +64,8 @@ fn test_joint_consensus_conf_change() {
     must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
 }
 
-/// test_joint_state testing simple confchange will not enter joint state and
-/// when in joint state any confchange request besides leave joint request
-/// should be rejected
+/// Tests simple confchange will not enter joint state and when in joint
+/// state any confchange request besides leave joint request should be rejected
 #[test]
 fn test_enter_joint_state() {
     let mut cluster = new_node_cluster(0, 4);
@@ -127,7 +131,7 @@ fn test_enter_joint_state() {
     pd_client.must_leave_joint(region_id);
 }
 
-/// test_joint_state testing when in joint state, normal request can be handled as usual
+/// Tests when in joint state, normal request can be handled as usual
 #[test]
 fn test_request_in_joint_state() {
     let mut cluster = new_node_cluster(0, 3);
@@ -190,12 +194,13 @@ fn test_request_in_joint_state() {
     must_get_equal(&cluster.get_engine(3), b"k5", b"v5");
 }
 
-/// test_replace_peer_joint_state testing that when replace peer, request can
-/// be handled as usual, even two nodes crashed and leader can be replaced by
-/// in joint state
+/// Tests when replace peer, request can be handled as usual even two nodes
+/// crashed, and the leader can be replaced when in joint state
 #[test]
 fn test_joint_replace_peers() {
-    let mut cluster = new_node_cluster(0, 4);
+    let mut cluster = new_node_cluster(0, 5);
+    cluster.cfg.raft_store.allow_remove_leader = false;
+
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
@@ -236,18 +241,26 @@ fn test_joint_replace_peers() {
     must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
 
     // Replace leader
-    // Enter joint, now we have C_old(1, 2, 4) and C_new(2, 3, 4)
+    // Enter joint, now we have C_old(1, 2, 4) and C_new(2, 4, 5)
     pd_client.must_joint_confchange(
         region_id,
         vec![
             (ConfChangeType::AddLearnerNode, new_learner_peer(1, 1)),
-            (ConfChangeType::AddNode, new_peer(3, 3)),
+            (ConfChangeType::AddNode, new_peer(5, 5)),
         ],
     );
-    cluster.must_transfer_leader(region_id, new_peer(3, 3));
+    {
+        // The leader now is DemotingVoter
+        let mut peer = new_peer(1, 1);
+        peer.set_role(PeerRole::DemotingVoter);
+        pd_client.region_leader_must_be(region_id, peer);
+    }
+    must_get_equal(&cluster.get_engine(5), b"k2", b"v2");
+
+    cluster.must_transfer_leader(region_id, new_peer(5, 5));
 
     cluster.must_put(b"k3", b"v3");
-    for id in 1..=4 {
+    for id in 1..=5 {
         must_get_equal(&cluster.get_engine(id), b"k3", b"v3");
     }
 
@@ -255,10 +268,12 @@ fn test_joint_replace_peers() {
     pd_client.must_leave_joint(region_id);
 }
 
-/// test_valid_confchange_request testing that invalid confchange request should be rejected
+/// Tests invalid confchange request should be rejected
 #[test]
 fn test_invalid_confchange_request() {
     let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.allow_remove_leader = false;
+
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
@@ -307,13 +322,34 @@ fn test_invalid_confchange_request() {
     .unwrap();
     must_contains_error(&resp, "multiple changes that only effect learner");
 
+    // Can not demote leader with simple confchange
+    let resp = call_conf_change_v2(
+        &mut cluster,
+        region_id,
+        vec![change_peer(
+            ConfChangeType::AddLearnerNode,
+            new_learner_peer(1, 1),
+        )],
+    )
+    .unwrap();
+    must_contains_error(&resp, "ignore remove leader or demote leader");
+
+    let resp = call_conf_change(
+        &mut cluster,
+        region_id,
+        ConfChangeType::AddLearnerNode,
+        new_learner_peer(1, 1),
+    )
+    .unwrap();
+    must_contains_error(&resp, "ignore remove leader or demote leader");
+
     // Can not leave a non-joint config
     let resp = leave_joint(&mut cluster, region_id).unwrap();
     must_contains_error(&resp, "leave a non-joint config");
 }
 
-/// test_restart_in_joint_state testing that when leader restart in joint state, joint state should
-/// be the same as before
+/// Tests when leader restart in joint state, joint state should be the same
+/// as before
 #[test]
 fn test_restart_in_joint_state() {
     let mut cluster = new_node_cluster(0, 3);
@@ -360,8 +396,8 @@ fn test_restart_in_joint_state() {
     must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
 }
 
-/// test_leader_down_in_joint_state testing that when leader down in joint state, both
-/// peers in new configuration and old configuration can become the new leader
+/// Tests when leader down in joint state, both peers in new configuration and
+/// old configuration can become the new leader
 #[test]
 fn test_leader_down_in_joint_state() {
     let mut cluster = new_node_cluster(0, 5);

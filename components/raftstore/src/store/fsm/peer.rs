@@ -1895,7 +1895,7 @@ where
         self.update_region(cp.region);
 
         let now = Instant::now();
-        let (mut remove_self, mut demote_self, mut need_ping) = (false, false, false);
+        let (mut remove_self, mut need_ping) = (false, false);
         for mut change in cp.changes {
             let (change_type, peer) = (change.get_change_type(), change.take_peer());
             let (store_id, peer_id) = (peer.get_store_id(), peer.get_id());
@@ -1921,11 +1921,6 @@ where
                     if self.fsm.peer.is_leader() {
                         need_ping = true;
                         self.fsm.peer.peers_start_pending_time.push((peer_id, now));
-                    }
-                    if self.fsm.peer.peer_id() == peer_id
-                        && change_type == ConfChangeType::AddLearnerNode
-                    {
-                        demote_self = true;
                     }
                 }
                 ConfChangeType::RemoveNode => {
@@ -1971,7 +1966,8 @@ where
             // Remove or demote leader will cause this raft group unavailable
             // until new leader elected, but we can't revert this operation
             // because its result is already persisted in apply worker
-            // TODO: should we transfer leader here
+            // TODO: should we transfer leader here?
+            let demote_self = is_learner(&self.fsm.peer.peer);
             if remove_self || demote_self {
                 warn!(
                     "Removing or demoting leader";
