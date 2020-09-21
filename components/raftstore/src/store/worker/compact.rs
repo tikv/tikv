@@ -251,13 +251,12 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
-    use engine_rocks::raw::Writable;
-    use engine_rocks::raw::DB;
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::{new_engine, new_engine_opt, CFOptions};
     use engine_rocks::util::get_cf_handle;
     use engine_rocks::Compat;
-    use engine_traits::{CFHandleExt, Mutable, WriteBatchExt};
+    use engine_rocks::RocksEngine;
+    use engine_traits::{CFHandleExt, Mutable, WriteBatchExt, MiscExt, SyncMutable};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempfile::Builder;
 
@@ -324,21 +323,19 @@ mod tests {
         assert!(old_sst_files_size > new_sst_files_size);
     }
 
-    fn mvcc_put(db: &DB, k: &[u8], v: &[u8], start_ts: TimeStamp, commit_ts: TimeStamp) {
-        let cf = get_cf_handle(db, CF_WRITE).unwrap();
+    fn mvcc_put(db: &RocksEngine, k: &[u8], v: &[u8], start_ts: TimeStamp, commit_ts: TimeStamp) {
         let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
         let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
-        db.put_cf(cf, k.as_encoded(), &w.as_ref().to_bytes())
+        db.put_cf(CF_WRITE, k.as_encoded(), &w.as_ref().to_bytes())
             .unwrap();
     }
 
-    fn delete(db: &DB, k: &[u8], commit_ts: TimeStamp) {
-        let cf = get_cf_handle(db, CF_WRITE).unwrap();
+    fn delete(db: &RocksEngine, k: &[u8], commit_ts: TimeStamp) {
         let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
-        db.delete_cf(cf, k.as_encoded()).unwrap();
+        db.delete_cf(CF_WRITE, k.as_encoded()).unwrap();
     }
 
-    fn open_db(path: &str) -> Arc<DB> {
+    fn open_db(path: &str) -> RocksEngine {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(8);
@@ -350,33 +347,32 @@ mod tests {
             CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
-        Arc::new(new_engine_opt(path, db_opts, cfs_opts).unwrap())
+        RocksEngine::from_db(Arc::new(new_engine_opt(path, db_opts, cfs_opts).unwrap()))
     }
 
     #[test]
     fn test_check_space_redundancy() {
         let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
         let engine = open_db(tmp_dir.path().to_str().unwrap());
-        let cf = get_cf_handle(&engine, CF_WRITE).unwrap();
-        let cf2 = engine.c().cf_handle(CF_WRITE).unwrap();
+        let cf2 = engine.cf_handle(CF_WRITE).unwrap();
 
         // mvcc_put 0..5
         for i in 0..5 {
             let (k, v) = (format!("k{}", i), format!("value{}", i));
             mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
         }
-        engine.flush_cf(cf, true).unwrap();
+        engine.flush_cf(CF_WRITE, true).unwrap();
 
         // gc 0..5
         for i in 0..5 {
             let k = format!("k{}", i);
             delete(&engine, k.as_bytes(), 2.into());
         }
-        engine.flush_cf(cf, true).unwrap();
+        engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (start, end) = (data_key(b"k0"), data_key(b"k5"));
         let (entries, version) =
-            get_range_entries_and_versions(engine.c(), cf2, &start, &end).unwrap();
+            get_range_entries_and_versions(&engine, cf2, &start, &end).unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
 
@@ -385,15 +381,15 @@ mod tests {
             let (k, v) = (format!("k{}", i), format!("value{}", i));
             mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
         }
-        engine.flush_cf(cf, true).unwrap();
+        engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = get_range_entries_and_versions(engine.c(), cf2, &s, &e).unwrap();
+        let (entries, version) = get_range_entries_and_versions(&engine, cf2, &s, &e).unwrap();
         assert_eq!(entries, 5);
         assert_eq!(version, 5);
 
         let ranges_need_to_compact = collect_ranges_need_compact(
-            engine.c(),
+            &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
@@ -409,15 +405,15 @@ mod tests {
             let k = format!("k{}", i);
             delete(&engine, k.as_bytes(), 2.into());
         }
-        engine.flush_cf(cf, true).unwrap();
+        engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = get_range_entries_and_versions(engine.c(), cf2, &s, &e).unwrap();
+        let (entries, version) = get_range_entries_and_versions(&engine, cf2, &s, &e).unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
 
         let ranges_need_to_compact = collect_ranges_need_compact(
-            engine.c(),
+            &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
