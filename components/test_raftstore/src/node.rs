@@ -194,6 +194,7 @@ impl Simulator for NodeCluster {
             system,
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
+            cfg.coprocessor.clone(),
             Arc::clone(&self.pd_client),
             Arc::default(),
         );

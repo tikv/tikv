@@ -2872,8 +2872,17 @@ where
         read_index: Option<u64>,
     ) -> ReadResponse<EK::Snapshot> {
         let region = self.region().clone();
+        let map_epoch_err = |mut e| {
+            if let Error::EpochNotMatch(_, ref mut new_regions) = e {
+                let sibling_regions =
+                    util::find_sibling_regions(&ctx.store_meta, &ctx.cfg, &ctx.cop_cfg, &region);
+                new_regions.extend(sibling_regions);
+            }
+            e
+        };
+
         if check_epoch {
-            if let Err(e) = check_region_epoch(&req, &region, true) {
+            if let Err(e) = check_region_epoch(&req, &region, true).map_err(map_epoch_err) {
                 debug!("epoch not match"; "region_id" => region.get_id(), "err" => ?e);
                 let mut response = cmd_resp::new_error(e);
                 cmd_resp::bind_term(&mut response, self.term());

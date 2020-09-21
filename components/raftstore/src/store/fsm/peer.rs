@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::time::Instant;
 use std::{cmp, u64};
@@ -3021,10 +3021,13 @@ where
                 // matter if the region is not split from the current region. If the region meta
                 // received by the TiKV driver is newer than the meta cached in the driver, the meta is
                 // updated.
-                let sibling_region = self.find_sibling_region();
-                if let Some(sibling_region) = sibling_region {
-                    new_regions.push(sibling_region);
-                }
+                let sibling_regions = util::find_sibling_regions(
+                    &self.ctx.store_meta,
+                    &self.ctx.cfg,
+                    &self.ctx.cop_cfg,
+                    self.fsm.peer.region(),
+                );
+                new_regions.extend(sibling_regions);
                 self.ctx.raft_metrics.invalid_proposal.epoch_not_match += 1;
                 Err(Error::EpochNotMatch(msg, new_regions))
             }
@@ -3091,19 +3094,6 @@ where
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
-    }
-
-    fn find_sibling_region(&self) -> Option<Region> {
-        let start = if self.ctx.cfg.right_derive_when_split {
-            Included(enc_start_key(self.fsm.peer.region()))
-        } else {
-            Excluded(enc_end_key(self.fsm.peer.region()))
-        };
-        let meta = self.ctx.store_meta.read().unwrap();
-        meta.region_ranges
-            .range((start, Unbounded::<Vec<u8>>))
-            .next()
-            .map(|(_, region_id)| meta.regions[region_id].to_owned())
     }
 
     fn register_raft_gc_log_tick(&mut self) {

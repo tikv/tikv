@@ -62,6 +62,7 @@ fn test_node_bootstrap_with_prepared_data() {
         system,
         &cfg.server,
         Arc::new(VersionTrack::new(cfg.raft_store.clone())),
+        cfg.coprocessor.clone(),
         Arc::clone(&pd_client),
         Arc::default(),
     );
