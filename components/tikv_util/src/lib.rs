@@ -50,7 +50,6 @@ pub mod lru;
 pub mod metrics;
 pub mod mpsc;
 pub mod sys;
-pub mod threadpool;
 pub mod time;
 pub mod timer;
 pub mod trace;
