@@ -45,6 +45,14 @@ pub trait MiscExt: CFNamesExt {
         ranges: Vec<Range>,
     ) -> Result<usize>;
 
+    fn delete_all_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        use_delete_range: bool,
+    ) -> Result<()>;
+
     /// Return the approximate number of records and size in the range of memtables of the cf.
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)>;
 

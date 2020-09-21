@@ -2393,17 +2393,13 @@ where
                 self.fsm
                     .peer
                     .add_want_rollback_merge_peer(self.fsm.peer_id());
-                if self.fsm.peer.want_rollback_merge_peers.len()
-                    >= raft::majority(
-                        self.fsm
-                            .peer
-                            .raft_group
-                            .status()
-                            .progress
-                            .unwrap()
-                            .voter_ids()
-                            .len(),
-                    )
+                if self
+                    .fsm
+                    .peer
+                    .raft_group
+                    .raft
+                    .prs()
+                    .has_quorum(&self.fsm.peer.want_rollback_merge_peers)
                 {
                     info!(
                         "failed to schedule merge, rollback";
