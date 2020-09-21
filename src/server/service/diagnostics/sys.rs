@@ -613,8 +613,8 @@ mod tests {
         #[cfg(target_os = "linux")]
         {
             let item = collector
-                .filter(|x| x.get_tp() == "system" && x.get_name() == "sysctl")
-                .unwrap();
+                .iter()
+                .filter(|x| x.get_tp() == "system" && x.get_name() == "sysctl");
             assert_ne!(item.count(), 0);
         }
     }
