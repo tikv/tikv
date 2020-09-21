@@ -253,8 +253,6 @@ mod tests {
 
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::{new_engine, new_engine_opt, CFOptions};
-    use engine_rocks::util::get_cf_handle;
-    use engine_rocks::Compat;
     use engine_rocks::RocksEngine;
     use engine_traits::{CFHandleExt, Mutable, WriteBatchExt, MiscExt, SyncMutable};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -275,34 +273,32 @@ mod tests {
             .tempdir()
             .unwrap();
         let db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
-        let db = Arc::new(db);
+        let db = RocksEngine::from_db(Arc::new(db));
 
-        let mut runner = Runner::new(db.c().clone());
-
-        let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
+        let mut runner = Runner::new(db.clone());
 
         // Generate the first SST file.
-        let mut wb = db.c().write_batch();
+        let mut wb = db.write_batch();
         for i in 0..1000 {
             let k = format!("key_{}", i);
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.c().write(&wb).unwrap();
-        db.flush_cf(handle, true).unwrap();
+        db.write(&wb).unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
 
         // Generate another SST file has the same content with first SST file.
-        let mut wb = db.c().write_batch();
+        let mut wb = db.write_batch();
         for i in 0..1000 {
             let k = format!("key_{}", i);
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.c().write(&wb).unwrap();
-        db.flush_cf(handle, true).unwrap();
+        db.write(&wb).unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
 
         // Get the total SST files size.
-        let old_sst_files_size = db.c()
+        let old_sst_files_size = db
             .get_total_sst_files_size_cf(CF_DEFAULT)
             .unwrap().unwrap();
 
@@ -315,7 +311,7 @@ mod tests {
         sleep(Duration::from_secs(5));
 
         // Get the total SST files size after compact range.
-        let new_sst_files_size = db.c()
+        let new_sst_files_size = db
             .get_total_sst_files_size_cf(CF_DEFAULT)
             .unwrap().unwrap();
         assert!(old_sst_files_size > new_sst_files_size);
