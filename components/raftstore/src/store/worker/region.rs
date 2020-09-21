@@ -750,13 +750,14 @@ mod tests {
     use crate::store::snap::tests::get_test_db_for_regions;
     use crate::store::worker::RegionRunner;
     use crate::store::{CasualMessage, SnapKey, SnapManager};
-    use engine_rocks::raw::ColumnFamilyOptions;
-    use engine_rocks::RocksEngine;
+    use engine_test::ctor::ColumnFamilyOptions;
     use engine_traits::{
         CFHandleExt, CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
     };
     use engine_traits::{Engines, KvEngine};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
+    use engine_test::kv::KvTestEngine;
+    use engine_test::ctor::CFOptions;
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
     use tempfile::Builder;
@@ -863,7 +864,7 @@ mod tests {
             mgr,
             0,
             true,
-            CoprocessorHost::<RocksEngine>::default(),
+            CoprocessorHost::<KvTestEngine>::default(),
             router,
         );
         let mut timer = Timer::new(1);
@@ -898,12 +899,12 @@ mod tests {
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let kv_cfs_opts = vec![
-            engine_rocks::raw_util::CFOptions::new("default", cf_opts.clone()),
-            engine_rocks::raw_util::CFOptions::new("write", cf_opts.clone()),
-            engine_rocks::raw_util::CFOptions::new("lock", cf_opts.clone()),
-            engine_rocks::raw_util::CFOptions::new("raft", cf_opts.clone()),
+            CFOptions::new("default", cf_opts.clone()),
+            CFOptions::new("write", cf_opts.clone()),
+            CFOptions::new("lock", cf_opts.clone()),
+            CFOptions::new("raft", cf_opts.clone()),
         ];
-        let raft_cfs_opt = engine_rocks::raw_util::CFOptions::new(CF_DEFAULT, cf_opts);
+        let raft_cfs_opt = CFOptions::new(CF_DEFAULT, cf_opts);
         let engine = get_test_db_for_regions(
             &temp_dir,
             None,
@@ -944,7 +945,7 @@ mod tests {
             mgr,
             0,
             true,
-            CoprocessorHost::<RocksEngine>::default(),
+            CoprocessorHost::<KvTestEngine>::default(),
             router,
         );
         let mut timer = Timer::new(1);
