@@ -1,3 +1,4 @@
+mod fresh;
 mod legacy;
 
 use grpcio::{RpcStatus, RpcStatusCode};
