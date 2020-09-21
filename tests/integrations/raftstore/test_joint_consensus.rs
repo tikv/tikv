@@ -73,7 +73,6 @@ fn test_enter_joint_state() {
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 
-    cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
 
     // normal confchange request will not enter joint state
@@ -138,7 +137,6 @@ fn test_request_in_joint_state() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
-    cluster.must_transfer_leader(1, new_peer(1, 1));
 
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(region_id, new_peer(2, 2));
@@ -204,7 +202,6 @@ fn test_joint_replace_peers() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
-    cluster.must_transfer_leader(region_id, new_peer(1, 1));
 
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(region_id, new_peer(2, 2));
@@ -255,13 +252,14 @@ fn test_joint_replace_peers() {
         peer.set_role(PeerRole::DemotingVoter);
         pd_client.region_leader_must_be(region_id, peer);
     }
-    must_get_equal(&cluster.get_engine(5), b"k2", b"v2");
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(5), b"k3", b"v3");
 
     cluster.must_transfer_leader(region_id, new_peer(5, 5));
 
-    cluster.must_put(b"k3", b"v3");
+    cluster.must_put(b"k4", b"v4");
     for id in 1..=5 {
-        must_get_equal(&cluster.get_engine(id), b"k3", b"v3");
+        must_get_equal(&cluster.get_engine(id), b"k4", b"v4");
     }
 
     // Leave joint
@@ -278,9 +276,7 @@ fn test_invalid_confchange_request() {
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 
-    cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
-
     pd_client.must_add_peer(region_id, new_peer(2, 2));
     pd_client.must_add_peer(region_id, new_learner_peer(3, 3));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
@@ -357,7 +353,6 @@ fn test_restart_in_joint_state() {
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 
-    cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
 
     pd_client.must_add_peer(region_id, new_peer(2, 2));
@@ -404,7 +399,6 @@ fn test_leader_down_in_joint_state() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
-    cluster.must_transfer_leader(region_id, new_peer(1, 1));
 
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(region_id, new_peer(2, 2));
