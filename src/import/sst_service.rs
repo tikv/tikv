@@ -3,7 +3,7 @@
 use std::f64::INFINITY;
 use std::sync::Arc;
 
-use engine_traits::{name_to_cf, CF_DEFAULT, CF_WRITE, KvEngine};
+use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT, CF_WRITE};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::{TryFutureExt, TryStreamExt};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
@@ -37,7 +37,10 @@ use sst_importer::{error_inc, Config, Error, SSTImporter};
 /// It saves the SST sent from client to a file and then sends a command to
 /// raftstore to trigger the ingest process.
 #[derive(Clone)]
-pub struct ImportSSTService<E, Router> where E: KvEngine {
+pub struct ImportSSTService<E, Router>
+where
+    E: KvEngine,
+{
     cfg: Config,
     router: Router,
     engine: E,
@@ -48,7 +51,11 @@ pub struct ImportSSTService<E, Router> where E: KvEngine {
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<E, Router> ImportSSTService<E, Router> where E: KvEngine, Router: RaftStoreRouter<E> {
+impl<E, Router> ImportSSTService<E, Router>
+where
+    E: KvEngine,
+    Router: RaftStoreRouter<E>,
+{
     pub fn new(
         cfg: Config,
         router: Router,
@@ -77,7 +84,11 @@ impl<E, Router> ImportSSTService<E, Router> where E: KvEngine, Router: RaftStore
     }
 }
 
-impl<E, Router> ImportSst for ImportSSTService<E, Router> where E: KvEngine, Router: RaftStoreRouter<E> {
+impl<E, Router> ImportSst for ImportSSTService<E, Router>
+where
+    E: KvEngine,
+    Router: RaftStoreRouter<E>,
+{
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,

@@ -716,10 +716,10 @@ mod tests {
         must_get_err(&mut getter, b"foo2");
         must_get_none(&mut getter, b"foo3");
 
-        fn new_omit_value_single_point_getter<S>(
-            snapshot: S,
-            ts: TimeStamp,
-        ) -> PointGetter<S> where S: Snapshot {
+        fn new_omit_value_single_point_getter<S>(snapshot: S, ts: TimeStamp) -> PointGetter<S>
+        where
+            S: Snapshot,
+        {
             PointGetterBuilder::new(snapshot, ts)
                 .isolation_level(IsolationLevel::Si)
                 .omit_value(true)
