@@ -28,6 +28,7 @@ chrono = "0.4"
 chrono-tz = "0.5.1"
 codec = { path = "../codec" }
 derive_more = "0.99.3"
+error_code = { path = "../error_code" }
 failure = "0.1"
 flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 hex = "0.4"

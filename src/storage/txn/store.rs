@@ -124,8 +124,16 @@ pub trait TxnEntryScanner: Send {
 /// A transaction entry in underlying storage.
 #[derive(PartialEq, Debug)]
 pub enum TxnEntry {
-    Prewrite { default: KvPair, lock: KvPair },
-    Commit { default: KvPair, write: KvPair },
+    Prewrite {
+        default: KvPair,
+        lock: KvPair,
+        old_value: Option<Value>,
+    },
+    Commit {
+        default: KvPair,
+        write: KvPair,
+        old_value: Option<Value>,
+    },
     // TOOD: Add more entry if needed.
 }
 
@@ -135,7 +143,7 @@ impl TxnEntry {
     /// reture by ```StoreScanner::next```
     pub fn into_kvpair(self) -> Result<(Vec<u8>, Vec<u8>)> {
         match self {
-            TxnEntry::Commit { default, write } => {
+            TxnEntry::Commit { default, write, .. } => {
                 if !default.0.is_empty() {
                     let k = Key::from_encoded(default.0).truncate_ts()?;
                     let k = k.into_raw()?;
@@ -325,6 +333,13 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
     ) -> Result<EntryScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
+        let (min_ts, max_ts) = if after_ts == TimeStamp::new(0) {
+            // Do not set min_ts and max_ts as it wants to read all versions.
+            (None, None)
+        } else {
+            // Scan ts in (after_ts, start_ts].
+            (Some(after_ts.next()), Some(self.start_ts))
+        };
         let scanner =
             ScannerBuilder::new(self.snapshot.clone(), self.start_ts, false /* desc */)
                 .range(lower_bound, upper_bound)
@@ -332,8 +347,8 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
                 .fill_cache(self.fill_cache)
                 .isolation_level(self.isolation_level)
                 .bypass_locks(self.bypass_locks.clone())
-                .hint_min_ts(Some(after_ts.next()))
-                .hint_max_ts(Some(self.start_ts))
+                .hint_min_ts(min_ts)
+                .hint_max_ts(max_ts)
                 .build_entry_scanner(after_ts, output_delete)?;
 
         Ok(scanner)
@@ -564,11 +579,12 @@ mod tests {
     use super::*;
     use crate::storage::kv::{
         Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
-        TestEngineBuilder,
+        TestEngineBuilder, WriteData,
     };
     use crate::storage::mvcc::{Mutation, MvccTxn};
     use engine::IterOption;
     use engine_traits::CfName;
+    use engine_traits::ReadOptions;
     use kvproto::kvrpcpb::Context;
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -620,7 +636,8 @@ mod tests {
                     )
                     .unwrap();
                 }
-                self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
+                let write_data = WriteData::from_modifies(txn.into_modifies());
+                self.engine.write(&self.ctx, write_data).unwrap();
             }
             self.refresh_snapshot();
             // do commit
@@ -630,7 +647,8 @@ mod tests {
                     let key = key.as_bytes();
                     txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();
                 }
-                self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
+                let write_data = WriteData::from_modifies(txn.into_modifies());
+                self.engine.write(&self.ctx, write_data).unwrap();
             }
             self.refresh_snapshot();
         }
@@ -708,6 +726,9 @@ mod tests {
             Ok(None)
         }
         fn get_cf(&self, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
+            Ok(None)
+        }
+        fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
         fn iter(&self, _: IterOption, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {

@@ -10,6 +10,8 @@ use batch_system::Config as BatchSystemConfig;
 use configuration::{
     rollback_or, ConfigChange, ConfigManager, ConfigValue, Configuration, RollbackCollector,
 };
+use engine_rocks::config as rocks_config;
+use engine_rocks::PerfLevel;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
 lazy_static! {
@@ -159,8 +161,12 @@ pub struct Config {
     pub future_poll_size: usize,
     #[config(hidden)]
     pub hibernate_regions: bool,
+    pub hibernate_timeout: ReadableDuration,
     #[config(hidden)]
     pub early_apply: bool,
+    #[doc(hidden)]
+    #[config(hidden)]
+    pub dev_assert: bool,
     #[config(hidden)]
     pub apply_yield_duration: ReadableDuration,
 
@@ -174,6 +180,9 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[config(skip)]
     pub region_split_size: ReadableSize,
+    #[serde(with = "rocks_config::perf_level_serde")]
+    #[config(skip)]
+    pub perf_level: PerfLevel,
 }
 
 impl Default for Config {
@@ -236,12 +245,15 @@ impl Default for Config {
             store_batch_system: BatchSystemConfig::default(),
             future_poll_size: 1,
             hibernate_regions: false,
+            hibernate_timeout: ReadableDuration::minutes(10),
             early_apply: true,
+            dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
+            perf_level: PerfLevel::Disable,
         }
     }
 }

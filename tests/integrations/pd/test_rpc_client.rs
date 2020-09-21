@@ -11,29 +11,13 @@ use grpcio::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
-use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
+use pd_client::{validate_endpoints, Error as PdError, PdClient, RegionStat, RpcClient};
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
+use tikv_util::config::ReadableDuration;
 use txn_types::TimeStamp;
 
-use super::mock::mocker::*;
-use super::mock::Server as MockServer;
-
-fn new_config(eps: Vec<(String, u16)>) -> Config {
-    let mut cfg = Config::default();
-    cfg.endpoints = eps
-        .into_iter()
-        .map(|addr| format!("{}:{}", addr.0, addr.1))
-        .collect();
-    cfg
-}
-
-fn new_client(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> RpcClient {
-    let cfg = new_config(eps);
-    let mgr =
-        mgr.unwrap_or_else(|| Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()));
-    RpcClient::new(&cfg, mgr).unwrap()
-}
+use test_pd::{mocker::*, util::*, Server as MockServer};
 
 #[test]
 fn test_retry_rpc_client() {
@@ -236,7 +220,7 @@ fn test_validate_endpoints() {
     let eps = server.bind_addrs();
 
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    assert!(validate_endpoints(env, &new_config(eps), &mgr).is_err());
+    assert!(validate_endpoints(env, &new_config(eps), mgr.clone()).is_err());
 }
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {
@@ -458,4 +442,30 @@ fn test_region_heartbeat_on_leader_change() {
 
     // Change PD leader twice without update the heartbeat sender, then heartbeat PD.
     heartbeat_on_leader_change(2);
+}
+
+#[test]
+fn test_periodical_update() {
+    let eps_count = 3;
+    let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
+    let eps = server.bind_addrs();
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let client = new_client_with_update_interval(eps, None, ReadableDuration::secs(3));
+    let counter1 = Arc::clone(&counter);
+    client.handle_reconnect(move || {
+        counter1.fetch_add(1, Ordering::SeqCst);
+    });
+    let leader = client.get_leader();
+
+    for _ in 0..5 {
+        let new = client.get_leader();
+        if new != leader {
+            assert!(counter.load(Ordering::SeqCst) >= 1);
+            return;
+        }
+        thread::sleep(LeaderChange::get_leader_interval());
+    }
+
+    panic!("failed, leader should changed");
 }

@@ -7,6 +7,7 @@ use engine::DB;
 use engine_rocks::{
     Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, RocksWriteBatchVec,
 };
+use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{
     CompactionJobInfo, Iterable, KvEngine, Mutable, Peekable, WriteBatch, WriteBatchExt,
     WriteBatchVecExt, WriteOptions,
@@ -29,10 +30,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
 use time::{self, Timespec};
-use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
+use crate::observe_perf_context_type;
+use crate::report_perf_context;
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
@@ -48,17 +50,19 @@ use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::store::transport::Transport;
-use crate::store::util::is_initial_msg;
+use crate::store::util::{is_initial_msg, PerfContextStatistics};
 use crate::store::worker::{
     AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
     RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
+use crate::store::PeerTicks;
 use crate::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager, StoreMsg,
     StoreTick,
 };
+
 use crate::Result;
 use engine::Engines;
 use engine_rocks::{CompactedEvent, CompactionListener};
@@ -67,6 +71,7 @@ use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
@@ -201,6 +206,21 @@ impl<E: KvEngine> RaftRouter<E> {
     }
 }
 
+#[derive(Default)]
+pub struct PeerTickBatch {
+    pub ticks: Vec<Box<dyn FnOnce() + Send>>,
+    pub wait_duration: Duration,
+}
+
+impl Clone for PeerTickBatch {
+    fn clone(&self) -> PeerTickBatch {
+        PeerTickBatch {
+            ticks: vec![],
+            wait_duration: self.wait_duration,
+        }
+    }
+}
+
 pub struct PollContext<T, C: 'static> {
     pub cfg: Config,
     pub store: metapb::Store,
@@ -215,7 +235,6 @@ pub struct PollContext<T, C: 'static> {
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
-    pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager,
     pub applying_snap_count: Arc<AtomicUsize>,
@@ -235,6 +254,9 @@ pub struct PollContext<T, C: 'static> {
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
+    pub perf_context_statistics: PerfContextStatistics,
+    pub tick_batch: Vec<PeerTickBatch>,
+    pub node_start_time: Option<TiInstant>,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -268,6 +290,35 @@ impl<T, C> PollContext<T, C> {
     pub fn store_id(&self) -> u64 {
         self.store.get_id()
     }
+
+    /// Timeout is calculated from TiKV start, the node should not become
+    /// hibernated if it still within the hibernate timeout, see
+    /// https://github.com/tikv/tikv/issues/7747
+    pub fn is_hibernate_timeout(&mut self) -> bool {
+        let timeout = match self.node_start_time {
+            Some(t) => t.elapsed() >= self.cfg.hibernate_timeout.0,
+            None => return true,
+        };
+        if timeout {
+            self.node_start_time = None;
+        }
+        timeout
+    }
+
+    pub fn update_ticks_timeout(&mut self) {
+        self.tick_batch[PeerTicks::RAFT.bits() as usize].wait_duration =
+            self.cfg.raft_base_tick_interval.0;
+        self.tick_batch[PeerTicks::RAFT_LOG_GC.bits() as usize].wait_duration =
+            self.cfg.raft_log_gc_tick_interval.0;
+        self.tick_batch[PeerTicks::PD_HEARTBEAT.bits() as usize].wait_duration =
+            self.cfg.pd_heartbeat_tick_interval.0;
+        self.tick_batch[PeerTicks::SPLIT_REGION_CHECK.bits() as usize].wait_duration =
+            self.cfg.split_region_check_tick_interval.0;
+        self.tick_batch[PeerTicks::CHECK_PEER_STALE_STATE.bits() as usize].wait_duration =
+            self.cfg.peer_stale_state_check_interval.0;
+        self.tick_batch[PeerTicks::CHECK_MERGE.bits() as usize].wait_duration =
+            self.cfg.merge_check_tick_interval.0;
+    }
 }
 
 impl<T: Transport, C> PollContext<T, C> {
@@ -275,7 +326,7 @@ impl<T: Transport, C> PollContext<T, C> {
     fn schedule_store_tick(&self, tick: StoreTick, timeout: Duration) {
         if !is_zero_duration(&timeout) {
             let mb = self.router.control_mailbox();
-            let f = self
+            let delay = self
                 .timer
                 .delay(timeout)
                 .map(move |_| {
@@ -290,7 +341,7 @@ impl<T: Transport, C> PollContext<T, C> {
                 .map_err(move |e| {
                     panic!("tick {:?} is lost due to timeout error: {:?}", tick, e);
                 });
-            self.future_poller.spawn(f).unwrap();
+            poll_future_notify(delay);
         }
     }
 
@@ -335,10 +386,9 @@ impl<T: Transport, C> PollContext<T, C> {
             gc_msg.set_is_tombstone(true);
         }
         if let Err(e) = self.trans.send(gc_msg) {
-            error!(
+            error!(?e;
                 "send gc message failed";
                 "region_id" => region_id,
-                "err" => ?e
             );
         }
         self.need_flush_trans = true;
@@ -421,10 +471,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(
+                        error!(?e;
                             "handle raft message failed";
                             "store_id" => self.fsm.store.id,
-                            "err" => ?e
                         );
                     }
                 }
@@ -435,7 +484,6 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 StoreMsg::ClearRegionSizeInRange { start_key, end_key } => {
                     self.clear_region_size_in_range(&start_key, &end_key)
                 }
-                StoreMsg::SnapshotStats => self.store_heartbeat_pd(),
                 StoreMsg::StoreUnreachable { store_id } => {
                     self.on_store_unreachable(store_id);
                 }
@@ -560,6 +608,11 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 self.poll_ctx.raft_wb.clear();
             }
         }
+
+        report_perf_context!(
+            self.poll_ctx.perf_context_statistics,
+            STORE_PERF_CONTEXT_TIME_HISTOGRAM
+        );
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
             let mut batch_pos = 0;
@@ -604,6 +657,29 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.ready.snapshot
         );
     }
+
+    fn flush_ticks(&mut self) {
+        for t in PeerTicks::get_all_ticks() {
+            let idx = t.bits() as usize;
+            if self.poll_ctx.tick_batch[idx].ticks.is_empty() {
+                continue;
+            }
+            let peer_ticks = std::mem::replace(&mut self.poll_ctx.tick_batch[idx].ticks, vec![]);
+            let f = self
+                .poll_ctx
+                .timer
+                .delay(self.poll_ctx.tick_batch[idx].wait_duration)
+                .map(move |_| {
+                    for tick in peer_ticks {
+                        tick();
+                    }
+                })
+                .map_err(move |e| {
+                    panic!("tick is lost due to timeout error: {:?}", e);
+                });
+            poll_future_notify(f);
+        }
+    }
 }
 
 impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for RaftPoller<T, C> {
@@ -617,6 +693,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
         }
         self.timer = TiInstant::now_coarse();
         // update config
+        self.poll_ctx.perf_context_statistics.start();
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(
                 &incoming.messages_per_tick,
@@ -635,6 +712,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
                 _ => {}
             }
             self.poll_ctx.cfg = incoming.clone();
+            self.poll_ctx.update_ticks_timeout();
         }
     }
 
@@ -706,6 +784,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
     }
 
     fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
+        self.flush_ticks();
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -745,7 +824,6 @@ pub struct RaftPollerBuilder<T, C> {
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    future_poller: ThreadPoolSender,
     snap_mgr: SnapManager,
     pub coprocessor_host: CoprocessorHost,
     trans: T,
@@ -930,7 +1008,7 @@ where
     type Handler = RaftPoller<T, C>;
 
     fn build(&mut self) -> RaftPoller<T, C> {
-        let ctx = PollContext {
+        let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
@@ -943,7 +1021,6 @@ where
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
-            future_poller: self.future_poller.clone(),
             raft_metrics: RaftMetrics::default(),
             snap_mgr: self.snap_mgr.clone(),
             applying_snap_count: self.applying_snap_count.clone(),
@@ -963,7 +1040,11 @@ where
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
             current_time: None,
+            perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
+            tick_batch: vec![PeerTickBatch::default(); 256],
+            node_start_time: Some(TiInstant::now_coarse()),
         };
+        ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
             tag: tag.clone(),
@@ -988,7 +1069,6 @@ struct Workers {
     raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
     region_worker: Worker<RegionTask>,
     coprocessor_host: CoprocessorHost,
-    future_poller: ThreadPool,
 }
 
 pub struct RaftBatchSystem {
@@ -1040,10 +1120,6 @@ impl RaftBatchSystem {
             cleanup_worker: Worker::new("cleanup-worker"),
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
             coprocessor_host,
-            future_poller: tokio_threadpool::Builder::new()
-                .name_prefix("future-poller")
-                .pool_size(cfg.value().future_poll_size)
-                .build(),
         };
         let mut builder = RaftPollerBuilder {
             cfg,
@@ -1065,7 +1141,6 @@ impl RaftBatchSystem {
             global_stat: GlobalStoreStat::default(),
             store_meta,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
-            future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
         let engine = RocksEngine::from_db(builder.engines.kv.clone());
@@ -1224,7 +1299,6 @@ impl RaftBatchSystem {
             }
         }
         workers.coprocessor_host.shutdown();
-        workers.future_poller.shutdown_now().wait().unwrap();
     }
 }
 
@@ -1253,6 +1327,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let from_epoch = msg.get_region_epoch();
         let msg_type = msg.get_message().get_msg_type();
         let from_store_id = msg.get_from_peer().get_store_id();
+        let to_peer_id = msg.get_to_peer().get_id();
 
         // Check if the target peer is tombstone.
         let state_key = keys::region_state_key(region_id);
@@ -1318,6 +1393,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         }
         // The region in this peer is already destroyed
         if util::is_epoch_stale(from_epoch, region_epoch) {
+            self.ctx.raft_metrics.message_dropped.region_tombstone_peer += 1;
             info!(
                 "tombstone peer receives a stale message";
                 "region_id" => region_id,
@@ -1328,27 +1404,55 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
             let mut need_gc_msg = util::is_vote_msg(msg.get_message());
             if msg.has_extra_msg() {
-                // A learner can't vote so it sends the wake-up msg to others to find out whether
+                // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
                 // it is removed due to conf change or merge.
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+                need_gc_msg |=
+                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
+                // For backward compatibility
+                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
             }
             let not_exist = util::find_peer(region, from_store_id).is_none();
             self.ctx
                 .handle_stale_msg(msg, region_epoch.clone(), need_gc_msg && not_exist, None);
 
+            if need_gc_msg && !not_exist {
+                let mut send_msg = RaftMessage::default();
+                send_msg.set_region_id(region_id);
+                send_msg.set_from_peer(msg.get_to_peer().clone());
+                send_msg.set_to_peer(msg.get_from_peer().clone());
+                send_msg.set_region_epoch(region_epoch.clone());
+                let extra_msg = send_msg.mut_extra_msg();
+                extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
+                extra_msg.set_check_peers(region.get_peers().into());
+                if let Err(e) = self.ctx.trans.send(send_msg) {
+                    error!(?e;
+                        "send check stale peer response message failed";
+                        "region_id" => region_id,
+                    );
+                }
+                self.ctx.need_flush_trans = true;
+            }
+
             return Ok(true);
         }
-
-        if from_epoch.get_conf_ver() == region_epoch.get_conf_ver() {
-            self.ctx.raft_metrics.message_dropped.region_tombstone_peer += 1;
-            return Err(box_err!(
-                "tombstone peer [epoch: {:?}] receive an invalid \
-                 message {:?}, ignore it",
-                region_epoch,
-                msg_type
-            ));
+        // A tombstone peer may not apply the conf change log which removes itself.
+        // In this case, the local epoch is stale and the local peer can be found from region.
+        // We can compare the local peer id with to_peer_id to verify whether it is correct to create a new peer.
+        if let Some(local_peer_id) =
+            util::find_peer(region, self.ctx.store_id()).map(|r| r.get_id())
+        {
+            if to_peer_id <= local_peer_id {
+                self.ctx.raft_metrics.message_dropped.region_tombstone_peer += 1;
+                info!(
+                    "tombstone peer receives a stale message, local_peer_id >= to_peer_id in msg";
+                    "region_id" => region_id,
+                    "local_peer_id" => local_peer_id,
+                    "to_peer_id" => to_peer_id,
+                    "msg_type" => ?msg_type
+                );
+                return Ok(true);
+            }
         }
-
         Ok(false)
     }
 
@@ -1356,6 +1460,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let region_id = msg.get_region_id();
         match self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg)) {
             Ok(()) | Err(TrySendError::Full(_)) => return Ok(()),
+            Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shutdown() => return Ok(()),
             Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m))) => msg = m,
             e => panic!(
                 "[store {}] [region {}] unexpected redirect error: {:?}",
@@ -1712,6 +1817,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
+        fail_point!("peer_2_handle_snap_mgr_gc", self.fsm.store.id == 2, |_| Ok(
+            ()
+        ));
         let snap_keys = self.ctx.snap_mgr.list_idle_snap()?;
         if snap_keys.is_empty() {
             return Ok(());
@@ -1726,6 +1834,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
             match self.ctx.router.send(region_id, gc_snap) {
                 Ok(()) => Ok(()),
+                Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shutdown() => Ok(()),
                 Err(TrySendError::Disconnected(PeerMsg::CasualMessage(
                     CasualMessage::GcSnap { snaps },
                 ))) => {
@@ -1775,10 +1884,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
     fn on_snap_mgr_gc(&mut self) {
         if let Err(e) = self.handle_snap_mgr_gc() {
-            error!(
+            error!(?e;
                 "handle gc snap failed";
                 "store_id" => self.fsm.store.id,
-                "err" => ?e
             );
         }
         self.register_snap_mgr_gc_tick();
@@ -1992,10 +2100,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
     fn on_cleanup_import_sst_tick(&mut self) {
         if let Err(e) = self.on_cleanup_import_sst() {
-            error!(
+            error!(?e;
                 "cleanup import sst failed";
                 "store_id" => self.fsm.store.id,
-                "err" => ?e,
             );
         }
         self.register_cleanup_import_sst_tick();

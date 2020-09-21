@@ -59,7 +59,7 @@ use tikv::{
         status_server::StatusServer,
         Node, RaftKv, Server, DEFAULT_CLUSTER_ID,
     },
-    storage,
+    storage::{self, config::StorageConfigManger},
 };
 use tikv_util::config::VersionTrack;
 use tikv_util::{
@@ -100,8 +100,8 @@ pub fn run_tikv(config: TiKvConfig) {
     let server_config = tikv.init_servers(&gc_worker);
     tikv.register_services();
     tikv.init_metrics_flusher();
-
     tikv.run_server(server_config);
+    tikv.run_status_server();
 
     signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
 
@@ -371,12 +371,27 @@ impl TiKVServer {
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
+            tikv::config::Module::Storage,
+            Box::new(StorageConfigManger::new(
+                engines.kv.clone(),
+                self.config.storage.block_cache.shared,
+            )),
+        );
+        cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(engines.kv.clone(), DBType::Kv)),
+            Box::new(DBConfigManger::new(
+                engines.kv.clone(),
+                DBType::Kv,
+                self.config.storage.block_cache.shared,
+            )),
         );
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
+            Box::new(DBConfigManger::new(
+                engines.raft.clone(),
+                DBType::Raft,
+                self.config.storage.block_cache.shared,
+            )),
         );
 
         let engine = RaftKv::new(raft_router.clone());
@@ -590,10 +605,12 @@ impl TiKVServer {
         // Start CDC.
         let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
         let cdc_endpoint = cdc::Endpoint::new(
+            &self.config.cdc,
             self.pd_client.clone(),
             cdc_worker.scheduler(),
             raft_router,
             cdc_ob,
+            engines.store_meta.clone(),
         );
         let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker
@@ -709,6 +726,11 @@ impl TiKVServer {
             engines.engine.clone(),
             self.region_info_accessor.clone(),
             engines.engines.kv.clone(),
+            self.config.backup.clone(),
+        );
+        self.cfg_controller.as_mut().unwrap().register(
+            tikv::config::Module::Backup,
+            Box::new(backup_endpoint.get_config_manager()),
         );
         let backup_timer = backup_endpoint.new_timer();
         backup_worker
@@ -740,10 +762,7 @@ impl TiKVServer {
 
         // Start metrics flusher
         if let Err(e) = metrics_flusher.start() {
-            error!(
-                "failed to start metrics flusher";
-                "err" => %e
-            );
+            error!(%e; "failed to start metrics flusher");
         }
 
         self.to_stop.push(metrics_flusher);
@@ -759,25 +778,32 @@ impl TiKVServer {
             .server
             .start(server_config, self.security_mgr.clone())
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
+    }
 
+    fn run_status_server(&mut self) {
         // Create a status server.
         let status_enabled =
             self.config.metric.address.is_empty() && !self.config.server.status_addr.is_empty();
         if status_enabled {
-            let mut status_server = Box::new(StatusServer::new(
+            let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
                 Some(self.pd_client.clone()),
                 self.cfg_controller.take().unwrap(),
-            ));
+                Arc::new(self.config.security.clone()),
+                self.router.clone(),
+            ) {
+                Ok(status_server) => Box::new(status_server),
+                Err(e) => {
+                    error!(%e; "failed to start runtime for status service");
+                    return;
+                }
+            };
             // Start the status server.
             if let Err(e) = status_server.start(
                 self.config.server.status_addr.clone(),
-                &self.config.security,
+                self.config.server.advertise_status_addr.clone(),
             ) {
-                error!(
-                    "failed to bind addr for status service";
-                    "err" => %e
-                );
+                error!(%e; "failed to bind addr for status service");
             } else {
                 self.to_stop.push(status_server);
             }
@@ -897,7 +923,11 @@ trait Stop {
     fn stop(self: Box<Self>);
 }
 
-impl Stop for StatusServer {
+impl<E, R> Stop for StatusServer<E, R>
+where
+    E: 'static,
+    R: 'static + Send,
+{
     fn stop(self: Box<Self>) {
         (*self).stop()
     }

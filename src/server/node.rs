@@ -78,8 +78,12 @@ where
         } else {
             store.set_address(cfg.advertise_addr.clone())
         }
+        if cfg.advertise_status_addr.is_empty() {
+            store.set_status_address(cfg.status_addr.clone());
+        } else {
+            store.set_status_address(cfg.advertise_status_addr.clone())
+        }
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
-        store.set_status_address(cfg.status_addr.clone());
 
         if let Ok(path) = std::env::current_exe() {
             if let Some(path) = path.parent() {
@@ -283,7 +287,7 @@ where
                 Ok(_) => {
                     info!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
-                        "injected error: node_after_prepare_bootstrap_cluster"
+                        "injected error: node_after_bootstrap_cluster"
                     )));
                     store::clear_prepare_bootstrap_key(engines)?;
                     return Ok(());
@@ -304,9 +308,7 @@ where
                     }
                 },
                 // TODO: should we clean region for other errors too?
-                Err(e) => {
-                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e)
-                }
+                Err(e) => error!(?e; "bootstrap cluster"; "cluster_id" => self.cluster_id,),
             }
             retry += 1;
             thread::sleep(Duration::from_secs(

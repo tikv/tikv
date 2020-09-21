@@ -9,8 +9,6 @@ extern crate test;
 
 extern crate encryption;
 #[macro_use]
-extern crate slog_global;
-#[macro_use]
 extern crate tikv_util;
 extern crate pd_client;
 
@@ -20,4 +18,5 @@ mod import;
 mod pd;
 mod raftstore;
 mod server;
+mod server_encryption;
 mod storage;

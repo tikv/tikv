@@ -4,8 +4,10 @@ use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::{BasicMailbox, Mailbox};
 use crossbeam::channel::{SendError, TrySendError};
 use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tikv_util::collections::HashMap;
+use tikv_util::lru::LruCache;
 use tikv_util::Either;
 
 enum CheckDoResult<T> {
@@ -27,13 +29,16 @@ enum CheckDoResult<T> {
 /// different scheduler, but this is not required.
 pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     normals: Arc<Mutex<HashMap<u64, BasicMailbox<N>>>>,
-    caches: Cell<HashMap<u64, BasicMailbox<N>>>,
+    caches: Cell<LruCache<u64, BasicMailbox<N>>>,
     pub(super) control_box: BasicMailbox<C>,
     // TODO: These two schedulers should be unified as single one. However
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
     // for now.
     pub(crate) normal_scheduler: Ns,
     control_scheduler: Cs,
+
+    // Indicates the router is shutdown down or not.
+    shutdown: Arc<AtomicBool>,
 }
 
 impl<N, C, Ns, Cs> Router<N, C, Ns, Cs>
@@ -50,11 +55,17 @@ where
     ) -> Router<N, C, Ns, Cs> {
         Router {
             normals: Arc::default(),
-            caches: Cell::default(),
+            caches: Cell::new(LruCache::with_capacity_and_sample(1024, 7)),
             control_box,
             normal_scheduler,
             control_scheduler,
+            shutdown: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// The `Router` has been already shutdown or not.
+    pub fn is_shutdown(&self) -> bool {
+        self.shutdown.load(Ordering::SeqCst)
     }
 
     /// A helper function that tries to unify a common access pattern to
@@ -83,9 +94,10 @@ where
             }
         }
 
-        let mailbox = {
+        let (cnt, mailbox) = {
             let mut boxes = self.normals.lock().unwrap();
-            match boxes.get_mut(&addr) {
+            let cnt = boxes.len();
+            let b = match boxes.get_mut(&addr) {
                 Some(mailbox) => mailbox.clone(),
                 None => {
                     drop(boxes);
@@ -94,8 +106,12 @@ where
                     }
                     return CheckDoResult::NotExist;
                 }
-            }
+            };
+            (cnt, b)
         };
+        if cnt > caches.capacity() || cnt < caches.capacity() / 2 {
+            caches.resize(cnt);
+        }
 
         let res = f(&mailbox);
         match res {
@@ -199,7 +215,10 @@ where
             Ok(()) => Ok(()),
             Err(TrySendError::Full(m)) => {
                 let caches = unsafe { &mut *self.caches.as_ptr() };
-                caches[&addr].force_send(m, &self.normal_scheduler)
+                caches
+                    .get(&addr)
+                    .unwrap()
+                    .force_send(m, &self.normal_scheduler)
             }
             Err(TrySendError::Disconnected(m)) => Err(SendError(m)),
         }
@@ -229,6 +248,7 @@ where
     /// Try to notify all fsm that the cluster is being shutdown.
     pub fn broadcast_shutdown(&self) {
         info!("broadcasting shutdown");
+        self.shutdown.store(true, Ordering::SeqCst);
         unsafe { &mut *self.caches.as_ptr() }.clear();
         let mut mailboxes = self.normals.lock().unwrap();
         for (addr, mailbox) in mailboxes.drain() {
@@ -255,13 +275,14 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
     fn clone(&self) -> Router<N, C, Ns, Cs> {
         Router {
             normals: self.normals.clone(),
-            caches: Cell::default(),
+            caches: Cell::new(LruCache::with_capacity_and_sample(1024, 7)),
             control_box: self.control_box.clone(),
             // These two schedulers should be unified as single one. However
             // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
             // for now.
             normal_scheduler: self.normal_scheduler.clone(),
             control_scheduler: self.control_scheduler.clone(),
+            shutdown: self.shutdown.clone(),
         }
     }
 }

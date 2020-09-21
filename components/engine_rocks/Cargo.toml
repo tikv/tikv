@@ -22,6 +22,10 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 lazy_static = "1.4.0"
 time = "0.1"
+configuration = { path = "../configuration" }
+serde = "1.0"
+serde_derive = "1.0"
+coarsetime = "0.1"
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
@@ -33,3 +37,4 @@ branch = "tikv-4.x"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
 tempfile = "3.0"
 rand = "0.7"
+toml = "0.4"

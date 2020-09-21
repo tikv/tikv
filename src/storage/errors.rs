@@ -10,6 +10,7 @@ use crate::storage::{
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb};
 use txn_types::{KvPair, TimeStamp};
 
@@ -100,6 +101,24 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     default fn from(err: T) -> Self {
         let err = err.into();
         err.into()
+    }
+}
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Engine(e) => e.error_code(),
+            ErrorInner::Txn(e) => e.error_code(),
+            ErrorInner::Mvcc(e) => e.error_code(),
+            ErrorInner::Closed => error_code::storage::CLOSED,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
+            ErrorInner::Io(_) => error_code::storage::IO,
+            ErrorInner::SchedTooBusy => error_code::storage::SCHED_TOO_BUSY,
+            ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,
+            ErrorInner::KeyTooLarge(_, _) => error_code::storage::KEY_TOO_LARGE,
+            ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
+            ErrorInner::PessimisticTxnNotEnabled => error_code::storage::PESSIMISTIC_TXN_NOT_ENABLE,
+        }
     }
 }
 
@@ -294,7 +313,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_commit_ts_expired(commit_ts_expired);
         }
         _ => {
-            error!("txn aborts"; "err" => ?err);
+            error!(?err; "txn aborts");
             key_error.set_abort(format!("{:?}", err));
         }
     }

@@ -27,6 +27,7 @@
 #![feature(shrink_to)]
 #![feature(drain_filter)]
 #![feature(str_strip)]
+#![feature(clamp)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -38,8 +39,6 @@ extern crate quick_error;
 extern crate serde_derive;
 #[macro_use]
 extern crate slog_derive;
-#[macro_use]
-extern crate slog_global;
 #[macro_use]
 extern crate derive_more;
 #[macro_use]

@@ -23,8 +23,8 @@ mod types;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
-        CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator, RocksEngine,
-        ScanMode, Snapshot, Statistics, TestEngineBuilder,
+        CbContext, CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
+        RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
@@ -34,7 +34,7 @@ pub use self::{
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::{
     config::Config,
-    kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
+    kv::{with_tls_engine, Modify, WriteData},
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
     txn::{
@@ -184,19 +184,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.clone()
     }
 
-    /// Get a snapshot of `engine`.
     fn snapshot(engine: &E, ctx: &Context) -> impl std::future::Future<Output = Result<E::Snap>> {
-        let (callback, future) = tikv_util::future::paired_std_future_callback();
-        let val = engine.async_snapshot(ctx, callback);
-        // make engine not cross yield point
-        async move {
-            val?; // propagate error
-            let (_ctx, result) = future
-                .map_err(|cancel| EngineError::from(EngineErrorInner::Other(box_err!(cancel))))
-                .await?;
-            // map storage::kv::Error -> storage::txn::Error -> storage::Error
-            result.map_err(txn::Error::from).map_err(Error::from)
-        }
+        kv::snapshot(engine, ctx)
+            .map_err(txn::Error::from)
+            .map_err(Error::from)
     }
 
     #[inline]
@@ -326,6 +317,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 .map_err(Error::from),
                         );
                     }
+                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     results
                 });
                 metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
@@ -573,7 +566,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         self.engine.async_write(
             &ctx,
-            modifies,
+            WriteData::from_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
@@ -658,10 +651,24 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let cf = Self::rawkv_cf(&cf)?;
                     let mut results = vec![];
+                    // no scan_count for this kind of op.
+                    let mut stats = Statistics::default();
                     // TODO: optimize using seek.
                     for get in gets {
-                        results.push(snapshot.get_cf(cf, &get.key).map_err(Error::from));
+                        let key = &get.key;
+                        let res = snapshot
+                            .get_cf(cf, key)
+                            .map(|v| {
+                                stats.data.flow_stats.read_keys += 1;
+                                stats.data.flow_stats.read_bytes += key.as_encoded().len()
+                                    + v.as_ref().map(|v| v.len()).unwrap_or(0);
+                                v
+                            })
+                            .map_err(Error::from);
+                        results.push(res);
                     }
+                    metrics::tls_collect_read_flow(ctx.get_region_id(), &stats);
+
                     Ok(results)
                 });
                 metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
@@ -748,11 +755,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         self.engine.async_write(
             &ctx,
-            vec![Modify::Put(
+            WriteData::from_modifies(vec![Modify::Put(
                 Self::rawkv_cf(&cf)?,
                 Key::from_encoded(key),
                 value,
-            )],
+            )]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
@@ -775,13 +782,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             callback
         );
 
-        let requests = pairs
+        let modifies = pairs
             .into_iter()
             .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
             .collect();
         self.engine.async_write(
             &ctx,
-            requests,
+            WriteData::from_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
@@ -800,7 +807,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         self.engine.async_write(
             &ctx,
-            vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
+            WriteData::from_modifies(vec![Modify::Delete(
+                Self::rawkv_cf(&cf)?,
+                Key::from_encoded(key),
+            )]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
@@ -830,7 +840,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         self.engine.async_write(
             &ctx,
-            vec![Modify::DeleteRange(cf, start_key, end_key, false)],
+            WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
@@ -848,13 +858,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let cf = Self::rawkv_cf(&cf)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
 
-        let requests = keys
+        let modifies = keys
             .into_iter()
             .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
             .collect();
         self.engine.async_write(
             &ctx,
-            requests,
+            WriteData::from_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
@@ -1276,7 +1286,10 @@ impl<E: Engine> TestStorageBuilder<E> {
 mod tests {
     use super::*;
 
-    use crate::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
+    use crate::storage::{
+        kv::{Error as EngineError, ErrorInner as EngineErrorInner},
+        txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
+    };
     use futures03::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, LockInfo};
     use std::{

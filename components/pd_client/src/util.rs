@@ -10,6 +10,8 @@ use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
 use futures::task::Task;
 use futures::{task, Async, Future, Poll, Stream};
+use futures03::compat::Future01CompatExt;
+use futures03::executor::block_on;
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
@@ -92,7 +94,10 @@ impl LeaderClient {
         client_stub: PdClientStub,
         members: GetMembersResponse,
     ) -> LeaderClient {
-        let (tx, rx) = client_stub.region_heartbeat().unwrap();
+        let (tx, rx) = client_stub
+            .region_heartbeat()
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
+
         LeaderClient {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: Arc::new(RwLock::new(Inner {
@@ -153,9 +158,9 @@ impl LeaderClient {
         self.inner.rl().members.get_leader().clone()
     }
 
-    /// Re-establishes connection with PD leader in synchronized fashion.
-    pub fn reconnect(&self) -> Result<()> {
-        let ((client, members), start) = {
+    /// Re-establishes connection with PD leader in asynchronized fashion.
+    pub async fn reconnect(&self) -> Result<()> {
+        let (future, start) = {
             let inner = self.inner.rl();
             if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
                 // Avoid unnecessary updating.
@@ -163,15 +168,25 @@ impl LeaderClient {
             }
 
             let start = Instant::now();
+
             (
-                try_connect_leader(Arc::clone(&inner.env), &inner.security_mgr, &inner.members)?,
+                try_connect_leader(
+                    Arc::clone(&inner.env),
+                    Arc::clone(&inner.security_mgr),
+                    inner.members.clone(),
+                ),
                 start,
             )
         };
 
+        let (client, members) = future.await?;
+        fail_point!("leader_client_reconnect");
+
         {
             let mut inner = self.inner.wl();
-            let (tx, rx) = client.region_heartbeat().unwrap();
+            let (tx, rx) = client.region_heartbeat().unwrap_or_else(|e| {
+                panic!("fail to request PD {} err {:?}", "region_heartbeat", e)
+            });
             info!("heartbeat sender and receiver are stale, refreshing ...");
 
             // Try to cancel an unused heartbeat sender.
@@ -230,7 +245,7 @@ where
 
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
-        match self.client.reconnect() {
+        match block_on(self.client.reconnect()) {
             Ok(_) => {
                 self.request_sent = 0;
                 Box::new(ok(self))
@@ -283,7 +298,7 @@ where
             // Error::Incompatible is returned by response header from PD, no need to retry
             Err(Error::Incompatible) => true,
             Err(err) => {
-                error!("request failed, retry"; "err" => ?err);
+                error!(?err; "request failed, retry");
                 false
             }
         }
@@ -317,16 +332,21 @@ where
 {
     let mut err = None;
     for _ in 0..retry {
-        // DO NOT put any lock operation in match statement, or it will cause dead lock!
-        let ret = { func(&client.inner.rl().client_stub).map_err(Error::Grpc) };
+        let ret = {
+            // Drop the read lock immediately to prevent the deadlock between the caller thread
+            // which may hold the read lock and wait for PD client thread completing the request
+            // and the PD client thread which may block on acquiring the write lock.
+            let client_stub = client.inner.rl().client_stub.clone();
+            func(&client_stub).map_err(Error::Grpc)
+        };
         match ret {
             Ok(r) => {
                 return Ok(r);
             }
             Err(e) => {
-                error!("request failed"; "err" => ?e);
-                if let Err(e) = client.reconnect() {
-                    error!("reconnect failed"; "err" => ?e);
+                error!(?e; "request failed");
+                if let Err(e) = block_on(client.reconnect()) {
+                    error!(?e; "reconnect failed");
                 }
                 err.replace(e);
             }
@@ -339,7 +359,7 @@ where
 pub fn validate_endpoints(
     env: Arc<Environment>,
     cfg: &Config,
-    security_mgr: &SecurityManager,
+    security_mgr: Arc<SecurityManager>,
 ) -> Result<(PdClientStub, GetMembersResponse)> {
     let len = cfg.endpoints.len();
     let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
@@ -351,7 +371,7 @@ pub fn validate_endpoints(
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let (_, resp) = match connect(Arc::clone(&env), security_mgr, ep) {
+        let (_, resp) = match block_on(connect(Arc::clone(&env), &security_mgr, ep)) {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -382,7 +402,8 @@ pub fn validate_endpoints(
 
     match members {
         Some(members) => {
-            let (client, members) = try_connect_leader(Arc::clone(&env), security_mgr, &members)?;
+            let (client, members) =
+                block_on(try_connect_leader(Arc::clone(&env), security_mgr, members))?;
             info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
             Ok((client, members))
         }
@@ -390,7 +411,7 @@ pub fn validate_endpoints(
     }
 }
 
-fn connect(
+async fn connect(
     env: Arc<Environment>,
     security_mgr: &SecurityManager,
     addr: &str,
@@ -399,23 +420,29 @@ fn connect(
     let addr = addr
         .trim_start_matches("http://")
         .trim_start_matches("https://");
-    let cb = ChannelBuilder::new(env)
-        .keepalive_time(Duration::from_secs(10))
-        .keepalive_timeout(Duration::from_secs(3));
-
-    let channel = security_mgr.connect(cb, addr);
+    let channel = {
+        let cb = ChannelBuilder::new(env)
+            .keepalive_time(Duration::from_secs(10))
+            .keepalive_timeout(Duration::from_secs(3));
+        security_mgr.connect(cb, addr)
+    };
     let client = PdClientStub::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-    match client.get_members_opt(&GetMembersRequest::default(), option) {
+    let response = client
+        .get_members_async_opt(&GetMembersRequest::default(), option)
+        .unwrap()
+        .compat()
+        .await;
+    match response {
         Ok(resp) => Ok((client, resp)),
         Err(e) => Err(Error::Grpc(e)),
     }
 }
 
-pub fn try_connect_leader(
+pub async fn try_connect_leader(
     env: Arc<Environment>,
-    security_mgr: &SecurityManager,
-    previous: &GetMembersResponse,
+    security_mgr: Arc<SecurityManager>,
+    previous: GetMembersResponse,
 ) -> Result<(PdClientStub, GetMembersResponse)> {
     let previous_leader = previous.get_leader();
     let members = previous.get_members();
@@ -428,7 +455,7 @@ pub fn try_connect_leader(
         .chain(&[previous_leader.clone()])
     {
         for ep in m.get_client_urls() {
-            match connect(Arc::clone(&env), security_mgr, ep.as_str()) {
+            match connect(Arc::clone(&env), &security_mgr, ep.as_str()).await {
                 Ok((_, r)) => {
                     let new_cluster_id = r.get_header().get_cluster_id();
                     if new_cluster_id == cluster_id {
@@ -442,7 +469,7 @@ pub fn try_connect_leader(
                     }
                 }
                 Err(e) => {
-                    error!("connect failed"; "endpoints" => ep, "err" => ?e);
+                    error!(?e; "connect failed"; "endpoints" => ep,);
                     continue;
                 }
             }
@@ -453,7 +480,7 @@ pub fn try_connect_leader(
     if let Some(resp) = resp {
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
-            if let Ok((client, _)) = connect(Arc::clone(&env), security_mgr, ep.as_str()) {
+            if let Ok((client, _)) = connect(Arc::clone(&env), &security_mgr, ep.as_str()).await {
                 info!("connected to PD leader"; "endpoints" => ep);
                 return Ok((client, resp));
             }

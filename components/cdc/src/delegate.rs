@@ -1,9 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
 use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use crossbeam::atomic::AtomicCell;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
     error::DuplicateRequest as ErrorDuplicateRequest,
@@ -19,7 +22,7 @@ use kvproto::cdcpb::{
     EventRowOpType, Event_oneof_event,
 };
 use kvproto::errorpb;
-
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
@@ -32,7 +35,9 @@ use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
+use crate::endpoint::OldValueCallback;
 use crate::metrics::*;
+use crate::service::ConnID;
 use crate::{Error, Result};
 
 const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
@@ -48,46 +53,16 @@ impl DownstreamID {
     }
 }
 
-#[derive(Clone)]
-pub struct DownstreamState(Arc<AtomicU8>);
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DownstreamState {
+    Uninitialized,
+    Normal,
+    Stopped,
+}
 
-impl DownstreamState {
-    const UNINITIALIZED: u8 = 0;
-    const NORMAL: u8 = 1;
-    const STOPPED: u8 = 2;
-
-    pub fn new() -> Self {
-        DownstreamState(Arc::new(AtomicU8::new(Self::UNINITIALIZED)))
-    }
-
-    pub fn is_normal(&self) -> bool {
-        self.0.load(Ordering::SeqCst) == Self::NORMAL
-    }
-
-    pub fn is_stopped(&self) -> bool {
-        self.0.load(Ordering::SeqCst) == Self::STOPPED
-    }
-
-    pub fn is_uninitialized(&self) -> bool {
-        self.0.load(Ordering::SeqCst) == Self::UNINITIALIZED
-    }
-
-    pub fn set_normal(&self) {
-        self.0.store(Self::NORMAL, Ordering::SeqCst);
-    }
-
-    pub fn set_stopped(&self) {
-        self.0.store(Self::STOPPED, Ordering::SeqCst);
-    }
-
-    pub fn set_uninitialized(&self) {
-        self.0.store(Self::UNINITIALIZED, Ordering::SeqCst);
-    }
-
-    pub fn uninitialized_to_normal(&self) -> bool {
-        self.0
-            .compare_and_swap(Self::UNINITIALIZED, Self::NORMAL, Ordering::SeqCst)
-            == Self::UNINITIALIZED
+impl Default for DownstreamState {
+    fn default() -> Self {
+        Self::Uninitialized
     }
 }
 
@@ -98,11 +73,12 @@ pub struct Downstream {
     id: DownstreamID,
     // The reqeust ID set by CDC to identify events corresponding different requests.
     req_id: u64,
+    conn_id: ConnID,
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
     sink: Option<BatchSender<(usize, Event)>>,
-    state: DownstreamState,
+    state: Arc<AtomicCell<DownstreamState>>,
 }
 
 impl Downstream {
@@ -110,14 +86,20 @@ impl Downstream {
     ///
     /// peer is the address of the downstream.
     /// sink sends data to the downstream.
-    pub fn new(peer: String, region_epoch: RegionEpoch, req_id: u64) -> Downstream {
+    pub fn new(
+        peer: String,
+        region_epoch: RegionEpoch,
+        req_id: u64,
+        conn_id: ConnID,
+    ) -> Downstream {
         Downstream {
             id: DownstreamID::new(),
             req_id,
+            conn_id,
             peer,
             region_epoch,
             sink: None,
-            state: DownstreamState::new(),
+            state: Arc::new(AtomicCell::new(DownstreamState::default())),
         }
     }
 
@@ -144,8 +126,12 @@ impl Downstream {
         self.id
     }
 
-    pub fn get_state(&self) -> DownstreamState {
+    pub fn get_state(&self) -> Arc<AtomicCell<DownstreamState>> {
         self.state.clone()
+    }
+
+    pub fn get_conn_id(&self) -> ConnID {
+        self.conn_id
     }
 
     pub fn sink_duplicate_error(&self, region_id: u64) {
@@ -208,6 +194,7 @@ pub struct Delegate {
     pending: Option<Pending>,
     enabled: Arc<AtomicBool>,
     failed: bool,
+    pub txn_extra_op: TxnExtraOp,
 }
 
 impl Delegate {
@@ -222,6 +209,7 @@ impl Delegate {
             pending: Some(Pending::default()),
             enabled: Arc::new(AtomicBool::new(true)),
             failed: false,
+            txn_extra_op: TxnExtraOp::default(),
         }
     }
 
@@ -242,6 +230,12 @@ impl Delegate {
                 true,  /* check_ver */
                 true,  /* include_region */
             ) {
+                info!("fail to subscribe downstream";
+                    "region_id" => region.get_id(),
+                    "downstream_id" => ?downstream.get_id(),
+                    "conn_id" => ?downstream.get_conn_id(),
+                    "req_id" => downstream.req_id,
+                    "err" => ?e);
                 let err = Error::Request(e.into());
                 let change_data_error = self.error_event(err);
                 downstream.sink_event(change_data_error, 0);
@@ -278,7 +272,7 @@ impl Delegate {
                 if let Some(change_data_error) = change_data_error.clone() {
                     d.sink_event(change_data_error, 0);
                 }
-                d.state.set_stopped();
+                d.state.store(DownstreamState::Stopped);
             }
             d.id != id
         });
@@ -330,8 +324,8 @@ impl Delegate {
         info!("region met error";
             "region_id" => self.region_id, "error" => ?err);
         let change_data_err = self.error_event(err);
-        for downstream in &self.downstreams {
-            downstream.state.set_stopped();
+        for d in &self.downstreams {
+            d.state.store(DownstreamState::Stopped);
         }
         self.broadcast(change_data_err, 0, false);
     }
@@ -345,7 +339,7 @@ impl Delegate {
             change_data_event,
         );
         for i in 0..downstreams.len() - 1 {
-            if normal_only && !downstreams[i].state.is_normal() {
+            if normal_only && downstreams[i].state.load() != DownstreamState::Normal {
                 continue;
             }
             downstreams[i].sink_event(change_data_event.clone(), size);
@@ -356,8 +350,8 @@ impl Delegate {
             .sink_event(change_data_event, size);
     }
 
-    /// Install a resolver and notify downstreams this region if ready to serve.
-    pub fn on_region_ready(&mut self, mut resolver: Resolver, region: Region) -> Result<()> {
+    /// Install a resolver and return pending downstreams.
+    pub fn on_region_ready(&mut self, mut resolver: Resolver, region: Region) -> Vec<Downstream> {
         assert!(
             self.resolver.is_none(),
             "region {} resolver should not be ready",
@@ -365,26 +359,20 @@ impl Delegate {
         );
         // Mark the delegate as initialized.
         self.region = Some(region);
-        if let Some(mut pending) = self.pending.take() {
-            // Re-subscribe pending downstreams.
-            for downstream in pending.take_downstreams() {
-                self.subscribe(downstream);
-            }
-
-            for lock in pending.take_locks() {
-                match lock {
-                    PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key),
-                    PendingLock::Untrack {
-                        key,
-                        start_ts,
-                        commit_ts,
-                    } => resolver.untrack_lock(start_ts, commit_ts, key),
-                }
+        let mut pending = self.pending.take().unwrap();
+        for lock in pending.take_locks() {
+            match lock {
+                PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key),
+                PendingLock::Untrack {
+                    key,
+                    start_ts,
+                    commit_ts,
+                } => resolver.untrack_lock(start_ts, commit_ts, key),
             }
         }
         self.resolver = Some(resolver);
         info!("region is ready"; "region_id" => self.region_id);
-        Ok(())
+        pending.take_downstreams()
     }
 
     /// Try advance and broadcast resolved ts.
@@ -411,7 +399,11 @@ impl Delegate {
         Some(resolved_ts)
     }
 
-    pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {
+    pub fn on_batch(
+        &mut self,
+        batch: CmdBatch,
+        old_value_cb: Rc<RefCell<OldValueCallback>>,
+    ) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
         if batch.observe_id != self.id {
             return Ok(());
@@ -424,7 +416,7 @@ impl Delegate {
             } = cmd;
             if !response.get_header().has_error() {
                 if !request.has_admin_request() {
-                    self.sink_data(index, request.requests.into());
+                    self.sink_data(index, request.requests.into(), old_value_cb.clone())?;
                 } else {
                     self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
                 }
@@ -455,7 +447,11 @@ impl Delegate {
         let mut current_rows_size: usize = 0;
         for entry in entries {
             match entry {
-                Some(TxnEntry::Prewrite { default, lock }) => {
+                Some(TxnEntry::Prewrite {
+                    default,
+                    lock,
+                    old_value,
+                }) => {
                     let mut row = EventRow::default();
                     let skip = decode_lock(lock.0, &lock.1, &mut row);
                     if skip {
@@ -469,9 +465,14 @@ impl Delegate {
                         current_rows_size = 0;
                     }
                     current_rows_size += row_size;
+                    row.old_value = old_value.unwrap_or_default();
                     rows.last_mut().unwrap().1.push(row);
                 }
-                Some(TxnEntry::Commit { default, write }) => {
+                Some(TxnEntry::Commit {
+                    default,
+                    write,
+                    old_value,
+                }) => {
                     let mut row = EventRow::default();
                     let skip = decode_write(write.0, &write.1, &mut row);
                     if skip {
@@ -491,6 +492,7 @@ impl Delegate {
                         continue;
                     }
                     set_event_row_type(&mut row, EventLogType::Committed);
+                    row.old_value = old_value.unwrap_or_default();
                     let row_size = row.key.len() + row.value.len();
                     if current_rows_size + row_size >= EVENT_MAX_SIZE {
                         rows.last_mut().unwrap().0 = current_rows_size;
@@ -522,7 +524,12 @@ impl Delegate {
         }
     }
 
-    fn sink_data(&mut self, index: u64, requests: Vec<Request>) {
+    fn sink_data(
+        &mut self,
+        index: u64,
+        requests: Vec<Request>,
+        old_value_cb: Rc<RefCell<OldValueCallback>>,
+    ) -> Result<()> {
         let mut rows = HashMap::default();
         let mut total_size = 0;
         for mut req in requests {
@@ -584,6 +591,11 @@ impl Delegate {
                         continue;
                     }
 
+                    if self.txn_extra_op == TxnExtraOp::ReadOldValue {
+                        let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
+                        row.old_value = old_value_cb.borrow_mut().as_mut()(key).unwrap_or_default();
+                    }
+
                     let occupied = rows.entry(row.key.clone()).or_default();
                     if !occupied.value.is_empty() {
                         assert!(row.value.is_empty());
@@ -614,7 +626,7 @@ impl Delegate {
                 }
                 "" | "default" => {
                     let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
-                    let row = rows.entry(key.to_raw().unwrap()).or_default();
+                    let row = rows.entry(key.into_raw().unwrap()).or_default();
                     decode_default(put.take_value(), row);
                     total_size += row.value.len();
                 }
@@ -634,6 +646,7 @@ impl Delegate {
         change_data_event.index = index;
         change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
         self.broadcast(change_data_event, total_size, true);
+        Ok(())
     }
 
     fn sink_admin(&mut self, request: AdminRequest, mut response: AdminResponse) -> Result<()> {
@@ -691,7 +704,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     };
     row.start_ts = write.start_ts.into_inner();
     row.commit_ts = commit_ts;
-    row.key = key.truncate_ts().unwrap().to_raw().unwrap();
+    row.key = key.truncate_ts().unwrap().into_raw().unwrap();
     row.op_type = op_type.into();
     set_event_row_type(row, r_type);
     if let Some(value) = write.short_value {
@@ -717,7 +730,7 @@ fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     };
     let key = Key::from_encoded(key);
     row.start_ts = lock.ts.into_inner();
-    row.key = key.to_raw().unwrap();
+    row.key = key.into_raw().unwrap();
     row.op_type = op_type.into();
     set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {
@@ -756,7 +769,8 @@ mod tests {
         let (sink, rx) = batch::unbounded(1);
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
         let request_id = 123;
-        let mut downstream = Downstream::new(String::new(), region_epoch, request_id);
+        let mut downstream =
+            Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
         delegate.subscribe(downstream);
@@ -764,7 +778,9 @@ mod tests {
         assert!(enabled.load(Ordering::SeqCst));
         let mut resolver = Resolver::new(region_id);
         resolver.init();
-        delegate.on_region_ready(resolver, region).unwrap();
+        for downstream in delegate.on_region_ready(resolver, region) {
+            delegate.subscribe(downstream);
+        }
 
         let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
@@ -879,7 +895,8 @@ mod tests {
         let (sink, rx) = batch::unbounded(1);
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
         let request_id = 123;
-        let mut downstream = Downstream::new(String::new(), region_epoch, request_id);
+        let mut downstream =
+            Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
         let downstream_id = downstream.get_id();
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
@@ -914,37 +931,34 @@ mod tests {
         // Stashed in pending before region ready.
         let entries = vec![
             Some(
-                EntryBuilder {
-                    key: b"a".to_vec(),
-                    value: b"b".to_vec(),
-                    start_ts: 1.into(),
-                    commit_ts: 0.into(),
-                    primary: vec![],
-                    for_update_ts: 0.into(),
-                }
-                .build_prewrite(LockType::Put, false),
+                EntryBuilder::default()
+                    .key(b"a")
+                    .value(b"b")
+                    .start_ts(1.into())
+                    .commit_ts(0.into())
+                    .primary(&[])
+                    .for_update_ts(0.into())
+                    .build_prewrite(LockType::Put, false),
             ),
             Some(
-                EntryBuilder {
-                    key: b"a".to_vec(),
-                    value: b"b".to_vec(),
-                    start_ts: 1.into(),
-                    commit_ts: 2.into(),
-                    primary: vec![],
-                    for_update_ts: 0.into(),
-                }
-                .build_commit(WriteType::Put, false),
+                EntryBuilder::default()
+                    .key(b"a")
+                    .value(b"b")
+                    .start_ts(1.into())
+                    .commit_ts(2.into())
+                    .primary(&[])
+                    .for_update_ts(0.into())
+                    .build_commit(WriteType::Put, false),
             ),
             Some(
-                EntryBuilder {
-                    key: b"a".to_vec(),
-                    value: b"b".to_vec(),
-                    start_ts: 3.into(),
-                    commit_ts: 0.into(),
-                    primary: vec![],
-                    for_update_ts: 0.into(),
-                }
-                .build_rollback(),
+                EntryBuilder::default()
+                    .key(b"a")
+                    .value(b"b")
+                    .start_ts(3.into())
+                    .commit_ts(0.into())
+                    .primary(&[])
+                    .for_update_ts(0.into())
+                    .build_rollback(),
             ),
             None,
         ];
@@ -970,6 +984,6 @@ mod tests {
 
         let mut resolver = Resolver::new(region_id);
         resolver.init();
-        delegate.on_region_ready(resolver, region).unwrap();
+        delegate.on_region_ready(resolver, region);
     }
 }

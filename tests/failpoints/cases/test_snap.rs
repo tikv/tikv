@@ -1,12 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs;
-use std::io;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::*;
+use std::{fs, io, thread};
 
 use fail;
 use raft::eraftpb::MessageType;
@@ -280,11 +277,11 @@ fn test_node_request_snapshot_on_split() {
 // A peer on store 3 is isolated and is applying snapshot. (add failpoint so it's always pending)
 // Then two conf change happens, this peer is removed and a new peer is added on store 3.
 // Then isolation clear, this peer will be destroyed because of a bigger peer id in msg.
-// Peerfsm can be destroyed synchronously because snapshot state is pending and can be canceled.
-// I.e. async_remove is false.
+// In previous implementation, peer fsm can be destroyed synchronously because snapshot state is
+// pending and can be canceled, but panic may happen if the applyfsm runs very slow.
 #[test]
 fn test_destroy_peer_on_pending_snapshot() {
-    let mut cluster = new_server_cluster(0, 4);
+    let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -313,22 +310,70 @@ fn test_destroy_peer_on_pending_snapshot() {
     sleep_ms(100);
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
+    // Don't send check stale msg to PD
+    let peer_check_stale_state_fp = "peer_check_stale_state";
+    fail::cfg(peer_check_stale_state_fp, "return()").unwrap();
 
     pd_client.must_remove_peer(r1, new_peer(3, 3));
-    pd_client.must_add_peer(r1, new_peer(4, 4));
+    pd_client.must_add_peer(r1, new_peer(3, 4));
 
-    pd_client.must_remove_peer(r1, new_peer(4, 4));
-    pd_client.must_add_peer(r1, new_peer(3, 5));
+    let before_handle_normal_3_fp = "before_handle_normal_3";
+    fail::cfg(before_handle_normal_3_fp, "pause").unwrap();
 
-    let destroy_peer_fp = "destroy_peer";
-    fail::cfg(destroy_peer_fp, "pause").unwrap();
     cluster.clear_send_filters();
     // Wait for leader send msg to peer 3.
-    // Then destroy peer 3 and create peer 5.
+    // Then destroy peer 3 and create peer 4.
     sleep_ms(100);
-    fail::remove(destroy_peer_fp);
 
     fail::remove(apply_snapshot_fp);
-    // After peer 5 has applied snapshot, data should be got.
-    must_get_equal(&cluster.get_engine(3), b"k119", b"v1");
+
+    fail::remove(before_handle_normal_3_fp);
+
+    cluster.must_put(b"k120", b"v1");
+    // After peer 4 has applied snapshot, data should be got.
+    must_get_equal(&cluster.get_engine(3), b"k120", b"v1");
+}
+
+#[test]
+fn test_shutdown_when_snap_gc() {
+    let mut cluster = new_node_cluster(0, 2);
+    // So that batch system can handle a snap_gc event before shutting down.
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(20);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+
+    // Only save a snapshot on peer 2, but do not apply it really.
+    fail::cfg("skip_schedule_applying_snapshot", "return").unwrap();
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+
+    // Snapshot directory on store 2 shouldn't be empty.
+    let snap_dir = cluster.get_snap_dir(2);
+    for i in 0..=100 {
+        if i == 100 {
+            panic!("store 2 snap dir must not be empty");
+        }
+        let dir = fs::read_dir(&snap_dir).unwrap();
+        if dir.count() > 0 {
+            break;
+        }
+        sleep_ms(10);
+    }
+
+    fail::cfg("peer_2_handle_snap_mgr_gc", "pause").unwrap();
+    std::thread::spawn(|| {
+        // Sleep a while to wait snap_gc event to reach batch system.
+        sleep_ms(500);
+        fail::cfg("peer_2_handle_snap_mgr_gc", "off").unwrap();
+    });
+
+    sleep_ms(100);
+    cluster.stop_node(2);
+
+    let snap_dir = cluster.get_snap_dir(2);
+    let dir = fs::read_dir(&snap_dir).unwrap();
+    if dir.count() == 0 {
+        panic!("store 2 snap dir must not be empty");
+    }
 }

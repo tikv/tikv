@@ -33,12 +33,13 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
+
 use engine::rocks::util::{
     db_exist, get_cf_handle, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
 use engine::DB;
+use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine_rocks::{
     RangePropertiesCollectorFactory, RocksEventListener, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
     DEFAULT_PROP_SIZE_INDEX_DISTANCE,
@@ -51,7 +52,9 @@ use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
 use security::SecurityConfig;
-use tikv_util::config::{self, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
+use tikv_util::config::{
+    self, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
+};
 use tikv_util::future_pool;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
@@ -164,7 +167,7 @@ fn get_background_job_limit(
     // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
     // the rest shared by flush and compaction.
     let max_background_jobs: i32 =
-        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1) as i32));
+        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1.0) as i32));
     // Cap max_sub_compactions to allow at least two compactions.
     let max_compactions = max_background_jobs - max_background_jobs / 4;
     let max_sub_compactions: u32 = cmp::max(
@@ -1177,11 +1180,16 @@ pub enum DBType {
 pub struct DBConfigManger {
     db: Arc<DB>,
     db_type: DBType,
+    shared_block_cache: bool,
 }
 
 impl DBConfigManger {
-    pub fn new(db: Arc<DB>, db_type: DBType) -> Self {
-        DBConfigManger { db, db_type }
+    pub fn new(db: Arc<DB>, db_type: DBType, shared_block_cache: bool) -> Self {
+        DBConfigManger {
+            db,
+            db_type,
+            shared_block_cache,
+        }
     }
 }
 
@@ -1213,6 +1221,11 @@ impl DBConfigManger {
 
     fn set_block_cache_size(&self, cf: &str, size: ReadableSize) -> Result<(), Box<dyn Error>> {
         self.validate_cf(cf)?;
+        if self.shared_block_cache {
+            return Err("shared block cache is enabled, change cache size through \
+                 block-cache.capacity in storage module instead"
+                .into());
+        }
         let handle = get_cf_handle(&self.db, cf)?;
         let opt = self.db.get_options_cf(handle);
         opt.set_block_cache_capacity(size.0)?;
@@ -1285,20 +1298,24 @@ fn config_to_slice(config_change: &[(String, String)]) -> Vec<(&str, &str)> {
 fn config_value_to_string(config_change: Vec<(String, ConfigValue)>) -> Vec<(String, String)> {
     config_change
         .into_iter()
-        .map(|(name, value)| {
+        .filter_map(|(name, value)| {
             let v = match value {
                 d @ ConfigValue::Duration(_) => {
                     let d: ReadableDuration = d.into();
-                    d.as_secs().to_string()
+                    Some(d.as_secs().to_string())
                 }
                 s @ ConfigValue::Size(_) => {
                     let s: ReadableSize = s.into();
-                    s.0.to_string()
+                    Some(s.0.to_string())
+                }
+                s @ ConfigValue::OptionSize(_) => {
+                    let s: OptionReadableSize = s.into();
+                    s.0.map(|v| v.0.to_string())
                 }
                 ConfigValue::Module(_) => unreachable!(),
-                v => format!("{}", v),
+                v => Some(format!("{}", v)),
             };
-            (name, v)
+            v.map(|v| (name, v))
         })
         .collect()
 }
@@ -1393,7 +1410,7 @@ const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 impl Default for UnifiedReadPoolConfig {
     fn default() -> UnifiedReadPoolConfig {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.8) as usize;
+        let mut concurrency = (cpu_num * 0.8) as usize;
         concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             min_thread_count: 1,
@@ -1629,7 +1646,7 @@ readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 impl Default for StorageReadPoolConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.5) as usize;
+        let mut concurrency = (cpu_num * 0.5) as usize;
         concurrency = cmp::max(DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY, concurrency);
         concurrency = cmp::min(DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY, concurrency);
         Self {
@@ -1650,6 +1667,14 @@ impl StorageReadPoolConfig {
         // The storage module does not use the unified pool by default.
         self.use_unified_pool.unwrap_or(false)
     }
+
+    pub fn adjust_use_unified_pool(&mut self) {
+        if self.use_unified_pool.is_none() {
+            // The storage module does not use the unified pool by default.
+            info!("readpool.storage.use-unified-pool is not set, set to false by default");
+            self.use_unified_pool = Some(false);
+        }
+    }
 }
 
 const DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY: usize = 2;
@@ -1663,7 +1688,7 @@ readpool_config!(
 impl Default for CoprReadPoolConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.8) as usize;
+        let mut concurrency = (cpu_num * 0.8) as usize;
         concurrency = cmp::max(DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             use_unified_pool: None,
@@ -1684,6 +1709,19 @@ impl CoprReadPoolConfig {
         self.use_unified_pool
             .unwrap_or_else(|| *self == Default::default())
     }
+
+    pub fn adjust_use_unified_pool(&mut self) {
+        if self.use_unified_pool.is_none() {
+            // The coprocessor module uses the unified pool unless it has customized configurations.
+            if *self == Default::default() {
+                info!("readpool.coprocessor.use-unified-pool is not set, set to true by default");
+                self.use_unified_pool = Some(true);
+            } else {
+                info!("readpool.coprocessor.use-unified-pool is not set, set to false because there are other customized configurations");
+                self.use_unified_pool = Some(false);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
@@ -1698,6 +1736,11 @@ pub struct ReadPoolConfig {
 impl ReadPoolConfig {
     pub fn is_unified_pool_enabled(&self) -> bool {
         self.storage.use_unified_pool() || self.coprocessor.use_unified_pool()
+    }
+
+    pub fn adjust_use_unified_pool(&mut self) {
+        self.storage.adjust_use_unified_pool();
+        self.coprocessor.adjust_use_unified_pool();
     }
 
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
@@ -1780,11 +1823,12 @@ mod readpool_tests {
         assert!(storage.validate().is_ok());
         let coprocessor = CoprReadPoolConfig::default();
         assert!(coprocessor.validate().is_ok());
-        let cfg = ReadPoolConfig {
+        let mut cfg = ReadPoolConfig {
             unified,
             storage,
             coprocessor,
         };
+        cfg.adjust_use_unified_pool();
         assert!(cfg.is_unified_pool_enabled());
         assert!(cfg.validate().is_err());
     }
@@ -1856,7 +1900,50 @@ mod readpool_tests {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct BackupConfig {
+    pub num_threads: usize,
+}
+
+impl BackupConfig {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.num_threads == 0 {
+            return Err("backup.num_threads cannot be 0".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        let cpu_num = SysQuota::new().cpu_cores_quota();
+        Self {
+            // use at most 75% of vCPU by default
+            num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct CdcConfig {
+    pub min_ts_interval: ReadableDuration,
+}
+
+impl Default for CdcConfig {
+    fn default() -> Self {
+        Self {
+            min_ts_interval: ReadableDuration::secs(1),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[config(hidden)]
     pub cfg_path: String,
 
@@ -1888,7 +1975,7 @@ pub struct TiKvConfig {
     #[config(skip)]
     pub server: ServerConfig,
 
-    #[config(skip)]
+    #[config(submodule)]
     pub storage: StorageConfig,
 
     #[config(skip)]
@@ -1917,6 +2004,9 @@ pub struct TiKvConfig {
     pub import: ImportConfig,
 
     #[config(submodule)]
+    pub backup: BackupConfig,
+
+    #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
 
     #[config(submodule)]
@@ -1924,6 +2014,9 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub split: SplitConfig,
+
+    #[config(submodule)]
+    pub cdc: CdcConfig,
 }
 
 impl Default for TiKvConfig {
@@ -1948,9 +2041,11 @@ impl Default for TiKvConfig {
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
+            backup: BackupConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
             split: SplitConfig::default(),
+            cdc: CdcConfig::default(),
         }
     }
 }
@@ -2076,6 +2171,7 @@ impl TiKvConfig {
         self.pd.validate()?;
         self.security.validate()?;
         self.import.validate()?;
+        self.backup.validate()?;
         Ok(())
     }
 
@@ -2154,14 +2250,16 @@ impl TiKvConfig {
         // block cache sizes. Otherwise use the sum of block cache size of all column families
         // as the shared cache size.
         let cache_cfg = &mut self.storage.block_cache;
-        if cache_cfg.shared && cache_cfg.capacity.is_none() {
-            cache_cfg.capacity = Some(ReadableSize {
+        if cache_cfg.shared && cache_cfg.capacity.0.is_none() {
+            cache_cfg.capacity.0 = Some(ReadableSize {
                 0: self.rocksdb.defaultcf.block_cache_size.0
                     + self.rocksdb.writecf.block_cache_size.0
                     + self.rocksdb.lockcf.block_cache_size.0
                     + self.raftdb.defaultcf.block_cache_size.0,
             });
         }
+
+        self.readpool.adjust_use_unified_pool();
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
@@ -2392,6 +2490,9 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
     let res = match typed {
         ConfigValue::Duration(_) => ConfigValue::from(v.parse::<ReadableDuration>()?),
         ConfigValue::Size(_) => ConfigValue::from(v.parse::<ReadableSize>()?),
+        ConfigValue::OptionSize(_) => {
+            ConfigValue::from(OptionReadableSize(Some(v.parse::<ReadableSize>()?)))
+        }
         ConfigValue::U64(_) => ConfigValue::from(v.parse::<u64>()?),
         ConfigValue::F64(_) => ConfigValue::from(v.parse::<f64>()?),
         ConfigValue::U32(_) => ConfigValue::from(v.parse::<u32>()?),
@@ -2425,6 +2526,7 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                     match c {
                         ConfigValue::Duration(_)
                         | ConfigValue::Size(_)
+                        | ConfigValue::OptionSize(_)
                         | ConfigValue::String(_)
                         | ConfigValue::BlobRunMode(_) => Ok(true),
                         _ => Ok(false),
@@ -2440,9 +2542,9 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
         let fields: Vec<_> = name.as_str().split('.').collect();
         let fields: Vec<_> = fields.into_iter().map(|s| s.to_owned()).rev().collect();
         if helper(fields, &TIKVCONFIG_TYPED)? {
-            dst.insert(name, format!("\"{}\"", value));
+            dst.insert(name.replace("_", "-"), format!("\"{}\"", value));
         } else {
-            dst.insert(name, value);
+            dst.insert(name.replace("_", "-"), value);
         }
     }
     Ok(dst)
@@ -2462,6 +2564,7 @@ pub enum Module {
     Security,
     Encryption,
     Import,
+    Backup,
     PessimisticTxn,
     Gc,
     Split,
@@ -2483,6 +2586,7 @@ impl From<&str> for Module {
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,
+            "backup" => Module::Backup,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
             n => Module::Unknown(n.to_owned()),
@@ -2527,7 +2631,7 @@ impl ConfigController {
             match change {
                 ConfigValue::Module(change) => {
                     // update a submodule's config only if changes had been sucessfully
-                    // dispatched to corresponding config manager, to avoid double dispatch change
+                    // dispatched to corresponding config manager, to avoid dispatch change twice
                     if let Some(mgr) = inner.config_mgrs.get_mut(&Module::from(name.as_str())) {
                         if let Err(e) = mgr.dispatch(change.clone()) {
                             inner.current.update(to_update);
@@ -2582,6 +2686,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+    use crate::storage::config::StorageConfigManger;
     use engine::rocks::util::new_engine_opt;
     use slog::Level;
     use std::sync::Arc;
@@ -2831,21 +2936,21 @@ mod tests {
         let engine = Arc::new(
             new_engine_opt(
                 &cfg.storage.data_dir,
-                DBOptions::new(),
-                vec![
-                    CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
-                ],
+                cfg.rocksdb.build_opt(),
+                cfg.rocksdb
+                    .build_cf_opts(&cfg.storage.block_cache.build_shared_cache()),
             )
             .unwrap(),
         );
 
-        let cfg_controller = ConfigController::new(cfg);
+        let (shared, cfg_controller) = (cfg.storage.block_cache.shared, ConfigController::new(cfg));
         cfg_controller.register(
             Module::Rocksdb,
-            Box::new(DBConfigManger::new(engine.clone(), DBType::Kv)),
+            Box::new(DBConfigManger::new(engine.clone(), DBType::Kv, shared)),
+        );
+        cfg_controller.register(
+            Module::Storage,
+            Box::new(StorageConfigManger::new(engine.clone(), shared)),
         );
         (engine, cfg_controller)
     }
@@ -2857,6 +2962,7 @@ mod tests {
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
+        cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
 
@@ -2895,6 +3001,36 @@ mod tests {
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);
         assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(32).0);
         assert_eq!(cf_opts.get_block_cache_capacity(), ReadableSize::mb(256).0);
+
+        // Can not update block cache through storage module
+        // when shared block cache is disabled
+        assert!(cfg_controller
+            .update_config("storage.block-cache.capacity", "512MB")
+            .is_err());
+    }
+
+    #[test]
+    fn test_change_shared_block_cache() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.storage.block_cache.shared = true;
+        cfg.validate().unwrap();
+        let (db, cfg_controller) = new_engines(cfg);
+
+        // Can not update shared block cache through rocksdb module
+        assert!(cfg_controller
+            .update_config("rocksdb.defaultcf.block-cache-size", "256MB")
+            .is_err());
+
+        cfg_controller
+            .update_config("storage.block-cache.capacity", "256MB")
+            .unwrap();
+
+        let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
+        let defaultcf_opts = db.get_options_cf(defaultcf);
+        assert_eq!(
+            defaultcf_opts.get_block_cache_capacity(),
+            ReadableSize::mb(256).0
+        );
     }
 
     #[test]
@@ -2931,5 +3067,28 @@ mod tests {
             cfg.validate().unwrap();
             assert_eq!(c, cfg);
         }
+    }
+
+    #[test]
+    fn test_readpool_compatible_adjust_config() {
+        let content = r#"
+        [readpool.storage]
+        [readpool.coprocessor]
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.compatible_adjust();
+        assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
+        assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(true));
+
+        let content = r#"
+        [readpool.storage]
+        stack-size = "10MB"
+        [readpool.coprocessor]
+        normal-concurrency = 1
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.compatible_adjust();
+        assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
+        assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(false));
     }
 }

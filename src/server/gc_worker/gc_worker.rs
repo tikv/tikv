@@ -19,7 +19,7 @@ use tokio_core::reactor::Handle;
 
 use crate::server::metrics::*;
 use crate::storage::kv::{
-    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics,
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics, WriteData,
 };
 use crate::storage::mvcc::{check_need_gc, Error as MvccError, MvccReader, MvccTxn};
 use pd_client::PdClient;
@@ -356,7 +356,7 @@ impl<E: Engine> GcRunner<E> {
         if !modifies.is_empty() {
             self.refresh_cfg();
             self.limiter.blocking_consume(write_size);
-            self.engine.write(ctx, modifies)?;
+            self.engine.write(ctx, WriteData::from_modifies(modifies))?;
         }
         Ok(next_scan_key)
     }
@@ -621,7 +621,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
 
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
 fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask>) -> Result<()> {
-    error!("failed to schedule gc task: {:?}", e);
+    error!("failed to schedule gc task"; "err" => %e);
     Err(box_err!("failed to schedule gc task: {:?}", e))
 }
 
@@ -713,7 +713,7 @@ impl<E: Engine> Drop for GcWorker<E> {
 
         let r = self.stop();
         if let Err(e) = r {
-            error!("Failed to stop gc_worker"; "err" => ?e);
+            error!(?e; "Failed to stop gc_worker");
         }
     }
 }
@@ -947,10 +947,10 @@ mod tests {
         fn async_write(
             &self,
             ctx: &Context,
-            mut batch: Vec<Modify>,
+            mut batch: WriteData,
             callback: EngineCallback<()>,
         ) -> EngineResult<()> {
-            batch.iter_mut().for_each(|modify| match modify {
+            batch.modifies.iter_mut().for_each(|modify| match modify {
                 Modify::Delete(_, ref mut key) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }

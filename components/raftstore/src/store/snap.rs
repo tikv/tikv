@@ -18,7 +18,7 @@ use encryption::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{EncryptionKeyManager, KvEngine, Snapshot as EngineSnapshot};
+use engine_traits::{EncryptionKeyManager, KvEngine, Snapshot as SnapshotTrait};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -29,8 +29,9 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use crate::errors::Error as RaftStoreError;
-use crate::store::{RaftRouter, StoreMsg};
+use crate::store::RaftRouter;
 use crate::Result as RaftStoreResult;
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{
@@ -88,6 +89,16 @@ quick_error! {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::Abort => error_code::raftstore::SNAP_ABORT,
+            Error::TooManySnapshots => error_code::raftstore::SNAP_TOO_MANY,
+            Error::Other(_) => error_code::raftstore::SNAP_UNKNOWN,
+        }
+    }
+}
 
 // CF_LOCK is relatively small, so we use plain file for performance issue.
 #[inline]
@@ -407,6 +418,7 @@ impl Snap {
                     "failed to load existent snapshot meta when try to build snapshot";
                     "snapshot" => %s.path(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
                 if !retry_delete_snapshot(mgr, key, &s) {
                     warn!(
@@ -680,11 +692,10 @@ impl Snap {
             match self.validate(kv_snap.get_db(), true) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
-                    error!(
+                    error!(?e;
                         "snapshot is corrupted, will rebuild";
                         "region_id" => region.get_id(),
                         "snapshot" => %self.path(),
-                        "err" => ?e,
                     );
                     if !retry_delete_snapshot(&self.mgr, &self.key, self) {
                         error!(
@@ -815,7 +826,7 @@ where
                 let path = cf_file.path.to_str().unwrap();
                 let batch_size = options.write_batch_size;
                 let cb = |kv: &[(Vec<u8>, Vec<u8>)]| {
-                    coprocessor_host.pre_apply_plain_kvs_from_snapshot(&region, cf, kv)
+                    coprocessor_host.post_apply_plain_kvs_from_snapshot(&region, cf, kv)
                 };
                 snap_io::apply_plain_cf_file(
                     path,
@@ -829,8 +840,8 @@ where
             } else {
                 let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
                 let path = cf_file.clone_path.to_str().unwrap();
-                coprocessor_host.pre_apply_sst_from_snapshot(&region, cf, path);
-                snap_io::apply_sst_cf_file(path, &options.db, cf)?
+                snap_io::apply_sst_cf_file(path, &options.db, cf)?;
+                coprocessor_host.post_apply_sst_from_snapshot(&region, cf, path);
             }
         }
         Ok(())
@@ -1014,7 +1025,7 @@ impl Write for Snap {
 
             let file = AllowStdIo::new(&mut file_for_recving.file);
             let mut file = self.mgr.limiter.clone().limit(file);
-            if plain_file_used(cf_file.cf) || file_for_recving.encrypter.is_none() {
+            if file_for_recving.encrypter.is_none() {
                 block_on(file.write_all(&next_buf[0..write_len]))?;
             } else {
                 let (cipher, crypter) = file_for_recving.encrypter.as_mut().unwrap();
@@ -1092,17 +1103,6 @@ struct SnapManagerCore {
     encryption_key_manager: Option<Arc<DataKeyManager>>,
 }
 
-fn notify_stats(ch: Option<&RaftRouter<RocksEngine>>) {
-    if let Some(ch) = ch {
-        if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
-            error!(
-                "failed to notify snapshot stats";
-                "err" => ?e,
-            )
-        }
-    }
-}
-
 /// `SnapManagerCore` trace all current processing snapshots.
 #[derive(Clone)]
 pub struct SnapManager {
@@ -1117,6 +1117,12 @@ impl SnapManager {
     }
 
     pub fn init(&self) -> io::Result<()> {
+        let enc_enabled = self.core.encryption_key_manager.is_some();
+        info!(
+            "Initializing SnapManager, encryption is enabled: {}",
+            enc_enabled
+        );
+
         // Use write lock so only one thread initialize the directory at a time.
         let _lock = self.core.registry.wl();
         let path = Path::new(&self.core.base);
@@ -1338,8 +1344,6 @@ impl SnapManager {
                 e.insert(vec![entry]);
             }
         }
-
-        notify_stats(self.router.as_ref());
     }
 
     pub fn deregister(&self, key: &SnapKey, entry: &SnapEntry) {
@@ -1361,7 +1365,6 @@ impl SnapManager {
             registry.remove(key);
         }
         if handled {
-            notify_stats(self.router.as_ref());
             return;
         }
         warn!(
