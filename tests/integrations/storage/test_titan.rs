@@ -316,6 +316,14 @@ fn test_delete_files_in_range_for_titan() {
             false,
         )
         .unwrap();
+    engines
+        .kv
+        .c()
+        .delete_blob_files_in_range(
+            &data_key(Key::from_raw(b"a").as_encoded()),
+            &data_key(Key::from_raw(b"b").as_encoded()),
+        )
+        .unwrap();
 
     // Now the LSM structure of default cf is:
     // memtable: [put(b_7, blob4)] (because of Titan GC)
