@@ -306,7 +306,7 @@ mod tests {
                     .unwrap();
                 }
 
-                assert_eq_db(&db, &db1);
+                assert_eq_db(db.c(), db1.c());
 
                 // Scan keys from db
                 let mut keys_in_db: HashMap<_, Vec<_>> = HashMap::new();
@@ -367,7 +367,7 @@ mod tests {
                     .unwrap();
                 let db1 = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
                 apply_sst_cf_file(&sst_file_path.to_str().unwrap(), db1.c(), CF_DEFAULT).unwrap();
-                assert_eq_db(&db, &db1);
+                assert_eq_db(db.c(), db1.c());
             }
         }
     }

@@ -1524,8 +1524,9 @@ pub mod tests {
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use engine_traits::Engines;
-    use engine_traits::{Iterable, Peekable, SyncMutable};
+    use engine_traits::{Iterable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::KvEngine;
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
@@ -1661,12 +1662,12 @@ pub mod tests {
         region
     }
 
-    pub fn assert_eq_db(expected_db: &Arc<DB>, db: &Arc<DB>) {
+    pub fn assert_eq_db(expected_db: &impl KvEngine, db: &impl KvEngine) {
         let key = keys::data_key(TEST_KEY);
         for cf in SNAPSHOT_CFS {
-            let p1: Option<Peer> = expected_db.c().get_msg_cf(cf, &key[..]).unwrap();
+            let p1: Option<Peer> = expected_db.get_msg_cf(cf, &key[..]).unwrap();
             if let Some(p1) = p1 {
-                let p2: Option<Peer> = db.c().get_msg_cf(cf, &key[..]).unwrap();
+                let p2: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
                 if let Some(p2) = p2 {
                     if p2 != p1 {
                         panic!(
@@ -1874,7 +1875,7 @@ pub mod tests {
         assert_eq!(mgr_core.snap_size.load(Ordering::SeqCst), 0);
 
         // Verify the data is correct after applying snapshot.
-        assert_eq_db(&db, &dst_db);
+        assert_eq_db(db.c(), dst_db.c());
     }
 
     #[test]
