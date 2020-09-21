@@ -1521,7 +1521,7 @@ pub mod tests {
     use std::sync::{Arc, RwLock};
 
     use engine_test::ctor::{EngineConstructorExt, DBOptions, CFOptions, ColumnFamilyOptions};
-    use engine_test::kv::{KvTestEngine, KvTestSnapshot};
+    use engine_test::kv::{KvTestEngine};
     use engine_test::raft::{RaftTestEngine};
     use engine_traits::Engines;
     use engine_traits::{SyncMutable};
@@ -2403,7 +2403,7 @@ pub mod tests {
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(max_total_size)
             .build::<_>(snapfiles_path.path().to_str().unwrap());
-        let snapshot = KvTestSnapshot::new(engine.kv.as_inner().clone());
+        let snapshot = engine.kv.snapshot();
 
         // Add an oldest snapshot for receiving.
         let recv_key = SnapKey::new(100, 100, 100);
