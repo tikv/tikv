@@ -236,12 +236,11 @@ pub fn get_decrypter_reader(
 mod tests {
     use std::collections::HashMap;
     use std::f64::INFINITY;
-    use std::sync::Arc;
 
     use super::*;
     use crate::store::snap::tests::*;
     use crate::store::snap::SNAPSHOT_CFS;
-    use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+    use engine_rocks::{RocksEngine};
     use engine_traits::CF_DEFAULT;
     use tempfile::Builder;
     use tikv_util::time::Limiter;
@@ -268,7 +267,7 @@ mod tests {
                     .unwrap();
                 let db1 = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
 
-                let snap = RocksSnapshot::new(Arc::clone(&db));
+                let snap = db.snapshot();
                 for cf in SNAPSHOT_CFS {
                     let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                     let plain_file_path = snap_cf_dir.path().join("plain");
@@ -294,7 +293,7 @@ mod tests {
                         &plain_file_path.to_str().unwrap(),
                         None,
                         &detector,
-                        db1.c(),
+                        &db1,
                         cf,
                         16,
                         |v| {
@@ -303,10 +302,10 @@ mod tests {
                                 .for_each(|pair| applied_keys.entry(cf).or_default().push(pair))
                         },
                     )
-                    .unwrap();
-                }
+                    .unwrap(); 
+               }
 
-                assert_eq_db(db.c(), db1.c());
+                assert_eq_db(&db, &db1);
 
                 // Scan keys from db
                 let mut keys_in_db: HashMap<_, Vec<_>> = HashMap::new();
@@ -342,11 +341,10 @@ mod tests {
 
                 let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                 let sst_file_path = snap_cf_dir.path().join("sst");
-                let engine = db.c();
                 let stats = build_sst_cf_file::<RocksEngine>(
                     &sst_file_path.to_str().unwrap(),
-                    engine,
-                    &engine.snapshot(),
+                    &db,
+                    &db.snapshot(),
                     CF_DEFAULT,
                     b"a",
                     b"z",
@@ -366,8 +364,8 @@ mod tests {
                     .tempdir()
                     .unwrap();
                 let db1 = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
-                apply_sst_cf_file(&sst_file_path.to_str().unwrap(), db1.c(), CF_DEFAULT).unwrap();
-                assert_eq_db(db.c(), db1.c());
+                apply_sst_cf_file(&sst_file_path.to_str().unwrap(), &db1, CF_DEFAULT).unwrap();
+                assert_eq_db(&db, &db1);
             }
         }
     }

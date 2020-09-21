@@ -1520,11 +1520,11 @@ pub mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock};
 
-    use engine_rocks::raw::{DBOptions, Env, DB};
+    use engine_rocks::raw::{DBOptions, Env};
     use engine_rocks::raw_util::CFOptions;
-    use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::Engines;
-    use engine_traits::{Iterable, SyncMutable};
+    use engine_traits::{Iterable, SyncMutable, CFNamesExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use engine_traits::KvEngine;
     use kvproto::metapb::{Peer, Region};
@@ -1558,33 +1558,33 @@ pub mod tests {
         p: &Path,
         db_opt: Option<DBOptions>,
         cf_opts: Option<Vec<CFOptions<'_>>>,
-    ) -> Result<Arc<DB>>;
+    ) -> Result<RocksEngine>;
 
     pub fn open_test_empty_db(
         path: &Path,
         db_opt: Option<DBOptions>,
         cf_opts: Option<Vec<CFOptions<'_>>>,
-    ) -> Result<Arc<DB>> {
+    ) -> Result<RocksEngine> {
         let p = path.to_str().unwrap();
         let db = engine_rocks::raw_util::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
-        Ok(Arc::new(db))
+        Ok(RocksEngine::from_db(Arc::new(db)))
     }
 
     pub fn open_test_db(
         path: &Path,
         db_opt: Option<DBOptions>,
         cf_opts: Option<Vec<CFOptions<'_>>>,
-    ) -> Result<Arc<DB>> {
+    ) -> Result<RocksEngine> {
         let p = path.to_str().unwrap();
         let db = engine_rocks::raw_util::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
-        let db = Arc::new(db);
+        let db = RocksEngine::from_db(Arc::new(db));
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
         for (i, cf) in db.cf_names().into_iter().enumerate() {
             let mut p = Peer::default();
             p.set_store_id(TEST_STORE_ID);
             p.set_id((i + 1) as u64);
-            db.c().put_msg_cf(cf, &key[..], &p)?;
+            db.put_msg_cf(cf, &key[..], &p)?;
         }
         Ok(db)
     }
@@ -1612,21 +1612,21 @@ pub mod tests {
             apply_entry.set_index(10);
             apply_entry.set_term(0);
             apply_state.mut_truncated_state().set_index(10);
-            kv.c()
+            kv
                 .put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
-            raft.c()
+            raft
                 .put_msg(&keys::raft_log_key(region_id, 10), &apply_entry)?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
             let mut region_state = RegionLocalState::default();
             region_state.set_region(region);
-            kv.c()
+            kv
                 .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
         Ok(Engines {
-            kv: kv.c().clone(),
-            raft: raft.c().clone(),
+            kv: kv,
+            raft: raft,
         })
     }
 
@@ -1772,7 +1772,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = get_db(&src_db_dir.path(), db_opt.clone(), None).unwrap();
-        let snapshot = RocksSnapshot::new(Arc::clone(&db));
+        let snapshot = db.snapshot();
 
         let src_dir = Builder::new()
             .prefix("test-snap-file-db-src")
@@ -1794,7 +1794,7 @@ pub mod tests {
         let mut stat = SnapshotStatistics::new();
         Snapshot::<RocksEngine>::build(
             &mut s1,
-            db.c(),
+            &db,
             &snapshot,
             &region,
             &mut snap_data,
@@ -1855,11 +1855,11 @@ pub mod tests {
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
-        let dst_db = Arc::new(
+        let dst_db = RocksEngine::from_db(Arc::new(
             engine_rocks::raw_util::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap(),
-        );
+        ));
         let options = ApplyOptions {
-            db: dst_db.c().clone(),
+            db: dst_db.clone(),
             region,
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
@@ -1875,7 +1875,7 @@ pub mod tests {
         assert_eq!(mgr_core.snap_size.load(Ordering::SeqCst), 0);
 
         // Verify the data is correct after applying snapshot.
-        assert_eq_db(db.c(), dst_db.c());
+        assert_eq_db(&db, &dst_db);
     }
 
     #[test]
@@ -1896,7 +1896,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = get_db(&db_dir.path(), None, None).unwrap();
-        let snapshot = RocksSnapshot::new(Arc::clone(&db));
+        let snapshot = db.snapshot();
 
         let dir = Builder::new()
             .prefix("test-snap-validation")
@@ -1913,7 +1913,7 @@ pub mod tests {
         let mut stat = SnapshotStatistics::new();
         Snapshot::<RocksEngine>::build(
             &mut s1,
-            db.c(),
+            &db,
             &snapshot,
             &region,
             &mut snap_data,
@@ -1927,7 +1927,7 @@ pub mod tests {
 
         Snapshot::<RocksEngine>::build(
             &mut s2,
-            db.c(),
+            &db,
             &snapshot,
             &region,
             &mut snap_data,
@@ -2063,7 +2063,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = open_test_db(&db_dir.path(), None, None).unwrap();
-        let snapshot = RocksSnapshot::new(db.clone());
+        let snapshot = db.snapshot();
 
         let dir = Builder::new()
             .prefix("test-snap-corruption")
@@ -2079,7 +2079,7 @@ pub mod tests {
         let mut stat = SnapshotStatistics::new();
         Snapshot::<RocksEngine>::build(
             &mut s1,
-            db.c(),
+            &db,
             &snapshot,
             &region,
             &mut snap_data,
@@ -2096,7 +2096,7 @@ pub mod tests {
         assert!(!s2.exists());
         Snapshot::<RocksEngine>::build(
             &mut s2,
-            db.c(),
+            &db,
             &snapshot,
             &region,
             &mut snap_data,
@@ -2130,7 +2130,7 @@ pub mod tests {
             .unwrap();
         let dst_db = open_test_empty_db(&dst_db_dir.path(), None, None).unwrap();
         let options = ApplyOptions {
-            db: dst_db.c().clone(),
+            db: dst_db,
             region,
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
@@ -2152,7 +2152,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = open_test_db(&db_dir.path(), None, None).unwrap();
-        let snapshot = RocksSnapshot::new(db.clone());
+        let snapshot = db.snapshot();
 
         let dir = Builder::new()
             .prefix("test-snap-corruption-meta")
@@ -2168,7 +2168,7 @@ pub mod tests {
         let mut stat = SnapshotStatistics::new();
         Snapshot::<RocksEngine>::build(
             &mut s1,
-            db.c(),
+            &db,
             &snapshot,
             &region,
             &mut snap_data,
@@ -2185,7 +2185,7 @@ pub mod tests {
         assert!(!s2.exists());
         Snapshot::<RocksEngine>::build(
             &mut s2,
-            db.c(),
+            &db,
             &snapshot,
             &region,
             &mut snap_data,
@@ -2250,7 +2250,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = open_test_db(&db_dir.path(), None, None).unwrap();
-        let snapshot = RocksSnapshot::new(db.clone());
+        let snapshot = db.snapshot();
         let key1 = SnapKey::new(1, 1, 1);
         let mgr_core = create_manager_core(&path);
         let mut s1 = Snap::new_for_building(&path, &key1, &mgr_core).unwrap();
@@ -2260,7 +2260,7 @@ pub mod tests {
         let mut stat = SnapshotStatistics::new();
         Snapshot::<RocksEngine>::build(
             &mut s1,
-            db.c(),
+            &db,
             &snapshot,
             &region,
             &mut snap_data,
@@ -2328,7 +2328,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = open_test_db(&src_db_dir.path(), None, None).unwrap();
-        let snapshot = RocksSnapshot::new(db.clone());
+        let snapshot = db.snapshot();
 
         let key = SnapKey::new(1, 1, 1);
         let region = gen_test_region(1, 1, 1);
@@ -2339,7 +2339,7 @@ pub mod tests {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        s1.build(db.c(), &snapshot, &region, &mut snap_data, &mut stat)
+        s1.build(&db, &snapshot, &region, &mut snap_data, &mut stat)
             .unwrap();
         let v = snap_data.write_to_bytes().unwrap();
 
