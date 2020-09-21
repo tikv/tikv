@@ -251,16 +251,14 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
-    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
-    use engine_rocks::raw_util::{new_engine, new_engine_opt, CFOptions};
-    use engine_rocks::RocksEngine;
+    use engine_test::ctor::{ColumnFamilyOptions, DBOptions, CFOptions};
+    use engine_test::kv::{new_engine, new_engine_opt};
+    use engine_test::kv::KvTestEngine;
     use engine_traits::{Mutable, WriteBatchExt, MiscExt, SyncMutable};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempfile::Builder;
 
-    use engine_rocks::MvccPropertiesCollectorFactory;
     use keys::data_key;
-    use std::sync::Arc;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::*;
@@ -272,7 +270,6 @@ mod tests {
             .tempdir()
             .unwrap();
         let db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
-        let db = RocksEngine::from_db(Arc::new(db));
 
         let mut runner = Runner::new(db.clone());
 
@@ -316,31 +313,29 @@ mod tests {
         assert!(old_sst_files_size > new_sst_files_size);
     }
 
-    fn mvcc_put(db: &RocksEngine, k: &[u8], v: &[u8], start_ts: TimeStamp, commit_ts: TimeStamp) {
+    fn mvcc_put(db: &KvTestEngine, k: &[u8], v: &[u8], start_ts: TimeStamp, commit_ts: TimeStamp) {
         let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
         let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
         db.put_cf(CF_WRITE, k.as_encoded(), &w.as_ref().to_bytes())
             .unwrap();
     }
 
-    fn delete(db: &RocksEngine, k: &[u8], commit_ts: TimeStamp) {
+    fn delete(db: &KvTestEngine, k: &[u8], commit_ts: TimeStamp) {
         let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
         db.delete_cf(CF_WRITE, k.as_encoded()).unwrap();
     }
 
-    fn open_db(path: &str) -> RocksEngine {
+    fn open_db(path: &str) -> KvTestEngine {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(8);
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         let cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
             CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
             CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
-        RocksEngine::from_db(Arc::new(new_engine_opt(path, db_opts, cfs_opts).unwrap()))
+        new_engine_opt(path, db_opts, cfs_opts).unwrap()
     }
 
     #[test]
