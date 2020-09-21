@@ -86,7 +86,7 @@ fn test_serde_custom_tikv_config() {
         end_point_stream_batch_row_limit: 4096,
         end_point_enable_batch_if_possible: true,
         end_point_request_max_handle_duration: ReadableDuration::secs(12),
-        end_point_check_memory_locks: true,
+        end_point_check_memory_locks: false,
         end_point_max_concurrency: 10,
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
@@ -137,7 +137,6 @@ fn test_serde_custom_tikv_config() {
     store_batch_system.pool_size = 3;
     store_batch_system.reschedule_duration = ReadableDuration::secs(2);
     value.raft_store = RaftstoreConfig {
-        sync_log: false,
         prevote: false,
         raftdb_path: "/var".to_owned(),
         capacity: ReadableSize(123),
@@ -153,6 +152,8 @@ fn test_serde_custom_tikv_config() {
         raft_log_gc_threshold: 12,
         raft_log_gc_count_limit: 12,
         raft_log_gc_size_limit: ReadableSize::kb(1),
+        raft_log_reserve_max_ticks: 100,
+        raft_engine_purge_interval: ReadableDuration::minutes(20),
         raft_entry_cache_life_time: ReadableDuration::secs(12),
         raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
         split_region_check_tick_interval: ReadableDuration::secs(12),
@@ -192,7 +193,7 @@ fn test_serde_custom_tikv_config() {
         store_batch_system,
         future_poll_size: 2,
         hibernate_regions: false,
-        hibernate_timeout: ReadableDuration::minutes(10),
+        hibernate_timeout: ReadableDuration::hours(1),
         early_apply: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
@@ -605,6 +606,8 @@ fn test_serde_custom_tikv_config() {
         },
         titan: titan_db_config,
     };
+    value.raft_engine.enable = true;
+    value.raft_engine.mut_config().dir = "test-dir".to_owned();
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
         gc_ratio_threshold: 1.2,
@@ -613,7 +616,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(2),
-        enable_async_commit: true,
+        enable_async_commit: false,
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
@@ -672,6 +675,7 @@ fn test_serde_custom_tikv_config() {
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
+        old_value_cache_size: 512,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

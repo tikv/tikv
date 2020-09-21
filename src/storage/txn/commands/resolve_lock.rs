@@ -7,7 +7,7 @@ use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, ResolveLockReadPhase, TypedCommand, WriteCommand,
     WriteContext, WriteResult,
 };
-use crate::storage::txn::{Error, ErrorInner, Result};
+use crate::storage::txn::{commit, Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot};
 use tikv_util::collections::HashMap;
 use txn_types::{Key, Lock, TimeStamp};
@@ -64,6 +64,7 @@ impl CommandExt for ResolveLock {
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
+
         let mut txn = MvccTxn::new(
             snapshot,
             TimeStamp::zero(),
@@ -84,7 +85,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
             let released = if commit_ts.is_zero() {
                 txn.rollback(current_key.clone())?
             } else if commit_ts > current_lock.ts {
-                txn.commit(current_key.clone(), commit_ts)?
+                commit(&mut txn, current_key.clone(), commit_ts)?
             } else {
                 return Err(Error::from(ErrorInner::InvalidTxnTso {
                     start_ts: current_lock.ts,

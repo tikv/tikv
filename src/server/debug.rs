@@ -11,9 +11,9 @@ use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine_rocks::util::get_cf_handle;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
-    Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable,
+    Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
     RangePropertiesExt, SeekKey, TableProperties, TablePropertiesCollection, TablePropertiesExt,
-    WriteBatch, WriteOptions,
+    WriteOptions,
 };
 use engine_traits::{Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
@@ -120,23 +120,23 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 }
 
 #[derive(Clone)]
-pub struct Debugger {
-    engines: Engines<RocksEngine, RocksEngine>,
+pub struct Debugger<ER: RaftEngine> {
+    engines: Engines<RocksEngine, ER>,
     cfg_controller: ConfigController,
 }
 
-impl Debugger {
+impl<ER: RaftEngine> Debugger<ER> {
     pub fn new(
-        engines: Engines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, ER>,
         cfg_controller: ConfigController,
-    ) -> Debugger {
+    ) -> Debugger<ER> {
         Debugger {
             engines,
             cfg_controller,
         }
     }
 
-    pub fn get_engine(&self) -> &Engines<RocksEngine, RocksEngine> {
+    pub fn get_engine(&self) -> &Engines<RocksEngine, ER> {
         &self.engines
     }
 
@@ -161,7 +161,7 @@ impl Debugger {
     fn get_db_from_type(&self, db: DBType) -> Result<&Arc<DB>> {
         match db {
             DBType::Kv => Ok(self.engines.kv.as_inner()),
-            DBType::Raft => Ok(self.engines.raft.as_inner()),
+            DBType::Raft => Err(box_err!("Get raft db is not allowed")),
             _ => Err(box_err!("invalid DBType type")),
         }
     }
@@ -180,20 +180,17 @@ impl Debugger {
     }
 
     pub fn raft_log(&self, region_id: u64, log_index: u64) -> Result<Entry> {
-        let key = keys::raft_log_key(region_id, log_index);
-        match self.engines.raft.get_msg(&key) {
-            Ok(Some(entry)) => Ok(entry),
-            Ok(None) => Err(Error::NotFound(format!(
-                "raft log for region {} at index {}",
-                region_id, log_index
-            ))),
-            Err(e) => Err(box_err!(e)),
+        if let Some(e) = box_try!(self.engines.raft.get_entry(region_id, log_index)) {
+            return Ok(e);
         }
+        Err(Error::NotFound(format!(
+            "raft log for region {} at index {}",
+            region_id, log_index
+        )))
     }
 
     pub fn region_info(&self, region_id: u64) -> Result<RegionInfo> {
-        let raft_state_key = keys::raft_state_key(region_id);
-        let raft_state = box_try!(self.engines.raft.get_msg::<RaftLocalState>(&raft_state_key));
+        let raft_state = box_try!(self.engines.raft.get_raft_state(region_id));
 
         let apply_state_key = keys::apply_state_key(region_id);
         let apply_state = box_try!(self
@@ -501,7 +498,7 @@ impl Debugger {
                 })?;
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
-            let peer_storage = box_try!(PeerStorage::<RocksEngine, RocksEngine>::new(
+            let peer_storage = box_try!(PeerStorage::<RocksEngine, ER>::new(
                 self.engines.clone(),
                 region,
                 fake_snap_worker.scheduler(),
@@ -621,7 +618,7 @@ impl Debugger {
         let raft = &self.engines.raft;
 
         let mut kv_wb = self.engines.kv.write_batch();
-        let mut raft_wb = self.engines.raft.write_batch();
+        let mut raft_wb = self.engines.raft.log_batch(0);
 
         if region.get_start_key() >= region.get_end_key() && !region.get_end_key().is_empty() {
             return Err(box_err!("Bad region: {:?}", region));
@@ -679,8 +676,7 @@ impl Debugger {
         box_try!(write_initial_apply_state(&mut kv_wb, region_id));
 
         // RaftLocalState.
-        let key = keys::raft_state_key(region_id);
-        if box_try!(raft.get_msg::<RaftLocalState>(&key)).is_some() {
+        if box_try!(raft.get_raft_state(region_id)).is_some() {
             return Err(Error::Other("Store already has the RaftLocalState".into()));
         }
         box_try!(write_initial_raft_state(&mut raft_wb, region_id));
@@ -688,7 +684,7 @@ impl Debugger {
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         box_try!(self.engines.kv.write_opt(&kv_wb, &write_opts));
-        box_try!(self.engines.kv.write_opt(&raft_wb, &write_opts));
+        box_try!(self.engines.raft.consume(&mut raft_wb, true));
         Ok(())
     }
 
@@ -1501,7 +1497,7 @@ mod tests {
         }
     }
 
-    fn new_debugger() -> Debugger {
+    fn new_debugger() -> Debugger<RocksEngine> {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
@@ -1518,16 +1514,14 @@ mod tests {
             .unwrap(),
         );
 
-        let shared_block_cache = false;
         let engines = Engines::new(
             RocksEngine::from_db(Arc::clone(&engine)),
             RocksEngine::from_db(engine),
-            shared_block_cache,
         );
         Debugger::new(engines, ConfigController::default())
     }
 
-    impl Debugger {
+    impl Debugger<RocksEngine> {
         fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
             db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)

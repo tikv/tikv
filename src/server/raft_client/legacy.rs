@@ -2,19 +2,21 @@
 
 use std::ffi::CString;
 use std::i64;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use super::load_statistics::ThreadLoad;
-use super::metrics::*;
-use super::{Config, Result};
+use super::super::load_statistics::ThreadLoad;
+use super::super::metrics::*;
+use super::super::{Config, Result};
 use crossbeam::channel::SendError;
 use engine_rocks::RocksEngine;
-use futures::{future, stream, Future, Poll, Sink, Stream};
-use grpcio::{
-    ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
-};
+use futures::compat::Future01CompatExt;
+use futures::stream::{self, Stream, StreamExt};
+use futures::task::{Context, Poll};
+use futures::{FutureExt, SinkExt, TryFutureExt};
+use grpcio::{ChannelBuilder, Environment, Error as GrpcError, Result as GrpcResult, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
 use raftstore::router::RaftStoreRouter;
@@ -76,56 +78,62 @@ impl Conn {
         let rx2 = Arc::clone(&rx1);
         let (addr1, addr2) = (addr.to_owned(), addr.to_owned());
 
-        let (batch_sink, batch_receiver) = client1.batch_raft().unwrap();
-        let batch_send_or_fallback = batch_sink
-            .send_all(Reusable(rx1).map(move |v| {
+        let (mut batch_sink, batch_receiver) = client1.batch_raft().unwrap();
+
+        let batch_send_or_fallback = async move {
+            let mut s = Reusable(rx1).map(move |v| {
                 let mut batch_msgs = BatchRaftMessage::default();
                 batch_msgs.set_msgs(v.into());
-                (batch_msgs, WriteFlags::default().buffer_hint(false))
-            }))
-            .then(move |sink_r| {
-                batch_receiver.then(move |recv_r| {
-                    check_rpc_result("batch_raft", &addr1, sink_r.err(), recv_r.err())
-                })
-            })
-            .or_else(move |fallback| {
-                if !fallback {
-                    return Box::new(future::err(false))
-                        as Box<dyn Future<Item = _, Error = bool> + Send>;
-                }
-                // Fallback to raft RPC.
-                warn!("batch_raft is unimplemented, fallback to raft");
-                let (sink, receiver) = client2.raft().unwrap();
-                let msgs = Reusable(rx2)
-                    .map(|msgs| {
-                        let len = msgs.len();
-                        let grpc_msgs = msgs.into_iter().enumerate().map(move |(i, v)| {
-                            if i < len - 1 {
-                                (v, WriteFlags::default().buffer_hint(true))
-                            } else {
-                                (v, WriteFlags::default())
-                            }
-                        });
-                        stream::iter_ok::<_, GrpcError>(grpc_msgs)
-                    })
-                    .flatten();
-                Box::new(sink.send_all(msgs).then(move |sink_r| {
-                    receiver.then(move |recv_r| {
-                        check_rpc_result("raft", &addr2, sink_r.err(), recv_r.err())
-                    })
-                }))
+                GrpcResult::Ok((batch_msgs, WriteFlags::default().buffer_hint(false)))
             });
-
-        client1.spawn(
-            batch_send_or_fallback
-                .map_err(move |_| {
-                    REPORT_FAILURE_MSG_COUNTER
-                        .with_label_values(&["unreachable", &*store_id.to_string()])
-                        .inc();
-                    router.broadcast_unreachable(store_id);
+            let send_res = async move {
+                batch_sink.send_all(&mut s).await?;
+                batch_sink.close().await?;
+                Ok(())
+            }
+            .await;
+            let recv_res = batch_receiver.await;
+            let res = check_rpc_result("batch_raft", &addr1, send_res.err(), recv_res.err());
+            if res.is_ok() {
+                return Ok(());
+            }
+            // Don't need to fallback
+            if !res.unwrap_err() {
+                return Err(false);
+            }
+            // Fallback to raft RPC.
+            warn!("batch_raft is unimplemented, fallback to raft");
+            let (mut sink, receiver) = client2.raft().unwrap();
+            let mut msgs = Reusable(rx2)
+                .map(|msgs| {
+                    let len = msgs.len();
+                    let grpc_msgs = msgs.into_iter().enumerate().map(move |(i, v)| {
+                        if i < len - 1 {
+                            (v, WriteFlags::default().buffer_hint(true))
+                        } else {
+                            (v, WriteFlags::default())
+                        }
+                    });
+                    stream::iter(grpc_msgs)
                 })
-                .map(|_| ()),
-        );
+                .flatten()
+                .map(|msg| Ok(msg));
+            let send_res = async move {
+                sink.send_all(&mut msgs).await?;
+                sink.close().await?;
+                Ok(())
+            }
+            .await;
+            let recv_res = receiver.await;
+            check_rpc_result("raft", &addr2, send_res.err(), recv_res.err())
+        };
+
+        client1.spawn(batch_send_or_fallback.unwrap_or_else(move |_| {
+            REPORT_FAILURE_MSG_COUNTER
+                .with_label_values(&["unreachable", &*store_id.to_string()])
+                .inc();
+            router.broadcast_unreachable(store_id);
+        }));
 
         Conn {
             stream: tx,
@@ -147,7 +155,7 @@ pub struct RaftClient<T: 'static> {
     grpc_thread_load: Arc<ThreadLoad>,
     // When message senders want to delay the notification to the gRPC client,
     // it can put a tokio_timer::Delay to the runtime.
-    stats_pool: Option<tokio_threadpool::Sender>,
+    stats_pool: Option<tokio::runtime::Handle>,
     timer: Handle,
 }
 
@@ -158,7 +166,7 @@ impl<T: RaftStoreRouter<RocksEngine>> RaftClient<T> {
         security_mgr: Arc<SecurityManager>,
         router: T,
         grpc_thread_load: Arc<ThreadLoad>,
-        stats_pool: Option<tokio_threadpool::Sender>,
+        stats_pool: Option<tokio::runtime::Handle>,
     ) -> RaftClient<T> {
         RaftClient {
             env,
@@ -224,9 +232,10 @@ impl<T: RaftStoreRouter<RocksEngine>> RaftClient<T> {
                     continue;
                 }
                 let wait = self.cfg.heavy_load_wait_duration.0;
-                let _ = self.stats_pool.as_ref().unwrap().spawn(
+                self.stats_pool.as_ref().unwrap().spawn(
                     self.timer
                         .delay(Instant::now() + wait)
+                        .compat()
                         .map_err(|_| warn!("RaftClient delay flush error"))
                         .inspect(move |_| notifier.notify()),
                 );
@@ -268,21 +277,12 @@ impl BatchCollector<Vec<RaftMessage>, RaftMessage> for RaftMsgCollector {
 
 // Reusable is for fallback batch_raft call to raft call.
 struct Reusable<T>(Arc<Mutex<T>>);
-impl<T: Stream> Stream for Reusable<T> {
+impl<T: Stream + Unpin> Stream for Reusable<T> {
     type Item = T::Item;
-    type Error = GrpcError;
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut t = self.0.lock().unwrap();
-        t.poll().map_err(|_| GrpcError::RpcFinished(None))
+        Pin::new(&mut *t).poll_next(cx)
     }
-}
-
-fn grpc_error_is_unimplemented(e: &GrpcError) -> bool {
-    if let GrpcError::RpcFailure(RpcStatus { ref status, .. }) = e {
-        let x = *status == RpcStatusCode::UNIMPLEMENTED;
-        return x;
-    }
-    false
 }
 
 fn check_rpc_result(
@@ -295,5 +295,5 @@ fn check_rpc_result(
         return Ok(());
     }
     warn!( "RPC {} fail", rpc; "to_addr" => addr, "sink_err" => ?sink_e, "err" => ?recv_e);
-    recv_e.map_or(Ok(()), |e| Err(grpc_error_is_unimplemented(&e)))
+    recv_e.map_or(Ok(()), |e| Err(super::grpc_error_is_unimplemented(&e)))
 }

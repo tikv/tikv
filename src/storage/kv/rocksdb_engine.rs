@@ -51,7 +51,9 @@ impl Display for Task {
 
 struct Runner(Engines<BaseRocksEngine, BaseRocksEngine>);
 
-impl Runnable<Task> for Runner {
+impl Runnable for Runner {
+    type Task = Task;
+
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => {
@@ -111,11 +113,11 @@ impl RocksEngine {
         )?);
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let engines = Engines::new(
-            BaseRocksEngine::from_db(db.clone()),
-            BaseRocksEngine::from_db(db),
-            shared_block_cache,
-        );
+        let mut kv_engine = BaseRocksEngine::from_db(db.clone());
+        let mut raft_engine = BaseRocksEngine::from_db(db);
+        kv_engine.set_shared_block_cache(shared_block_cache);
+        raft_engine.set_shared_block_cache(shared_block_cache);
+        let engines = Engines::new(kv_engine, raft_engine);
         box_try!(worker.start(Runner(engines.clone())));
         Ok(RocksEngine {
             sched: worker.scheduler(),

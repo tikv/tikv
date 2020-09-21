@@ -1,5 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! There are multiple [`Engine`](kv::Engine) implementations, [`RaftKv`](crate::server::raftkv::RaftKv)
+//! is used by the [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
+//! [`RocksEngine`](RocksEngine) are used for testing only.
+
 mod btree_engine;
 mod cursor;
 mod perf_context;
@@ -14,7 +18,7 @@ use std::{error, ptr, result};
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{CfName, CF_DEFAULT};
 use engine_traits::{IterOptions, KvEngine as LocalEngine, ReadOptions};
-use futures03::prelude::*;
+use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
 use txn_types::{Key, TxnExtra, Value};
@@ -196,6 +200,12 @@ pub trait Snapshot: Sync + Send + Clone {
     fn get_data_version(&self) -> Option<u64> {
         None
     }
+
+    fn is_max_ts_synced(&self) -> bool {
+        // If the snapshot does not come from a multi-raft engine, max ts
+        // needn't be updated.
+        true
+    }
 }
 
 pub trait Iterator: Send {
@@ -375,7 +385,7 @@ pub fn snapshot<E: Engine>(
     ctx: &Context,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let (callback, future) =
-        tikv_util::future::paired_must_called_std_future_callback(drop_snapshot_callback::<E>);
+        tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
     let val = engine.async_snapshot(ctx, read_id, callback);
     // make engine not cross yield point
     async move {
@@ -383,6 +393,7 @@ pub fn snapshot<E: Engine>(
         let (_ctx, result) = future
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
             .await?;
+        fail_point!("after-snapshot");
         result
     }
 }

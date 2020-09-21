@@ -114,13 +114,13 @@ clean:
 ## Development builds
 ## ------------------
 
-all: format build test
+all: format build test error-code
 
 dev: format clippy
 	@env FAIL_POINT=1 make test
 
 build: export TIKV_PROFILE=debug
-build:
+build: error-code
 	cargo build --no-default-features --features "${ENABLE_FEATURES}"
 
 ## Release builds (optimized dev builds)
@@ -134,7 +134,7 @@ build:
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
 release: export TIKV_PROFILE=release
-release:
+release: error-code
 	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
@@ -172,7 +172,7 @@ endif
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
 build_dist_release: export TIKV_PROFILE=dist_release
-build_dist_release:
+build_dist_release: error-code
 	make x-build-dist
 ifeq ($(shell uname),Linux) # Macs don't have objcopy
 	# Reduce binary size by compressing binaries.
@@ -237,15 +237,14 @@ run-test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --workspace \
+	cargo -Zpackage-features test --workspace \
 		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
 		--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored && \
-		cargo test --workspace \
+		cargo -Zpackage-features test --workspace \
 			--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-			--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv --lib -- --nocapture --ignored; \
+			--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv -p tikv_alloc --lib -- --nocapture --ignored; \
 	fi
 
 .PHONY: test
@@ -269,7 +268,7 @@ format: pre-format
 	@cargo fmt --all -- --check >/dev/null || \
 	cargo fmt --all
 
-doc: 
+doc:
 	@cargo doc --workspace --document-private-items \
 		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
 		--no-default-features --features "${ENABLE_FEATURES}"
@@ -342,6 +341,9 @@ ctl:
 	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
+
+error-code:
+	cargo run --manifest-path components/error_code/Cargo.toml --features protobuf-codec
 
 # A special target for building TiKV docker image.
 .PHONY: docker
