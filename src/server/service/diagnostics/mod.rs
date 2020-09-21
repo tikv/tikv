@@ -18,7 +18,7 @@ use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget
 use kvproto::diagnosticspb::SearchLogRequestTarget;
 
 use sysinfo::SystemExt;
-use tikv_util::security::{check_common_name, SecurityManager};
+use security::{check_common_name, SecurityManager};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 mod ioload;
