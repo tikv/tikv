@@ -287,7 +287,7 @@ where
                 Ok(_) => {
                     info!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
-                        "injected error: node_after_prepare_bootstrap_cluster"
+                        "injected error: node_after_bootstrap_cluster"
                     )));
                     store::clear_prepare_bootstrap_key(engines)?;
                     return Ok(());
