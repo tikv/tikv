@@ -5,24 +5,14 @@
 //!
 //! FIXME: Things here need to be moved elsewhere.
 
-use crate::cf_defs::CF_LOCK;
 use crate::cf_names::CFNamesExt;
 use crate::errors::Result;
-use crate::iterable::{Iterable, Iterator};
-use crate::options::IterOptions;
 use crate::range::Range;
-use crate::write_batch::{Mutable, WriteBatchExt};
-
-use tikv_util::keybuilder::KeyBuilder;
 
 // FIXME: Find somewhere else to put this?
 pub const MAX_DELETE_BATCH_COUNT: usize = 512;
 
-pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
-    fn is_titan(&self) -> bool {
-        false
-    }
-
+pub trait MiscExt: CFNamesExt {
     fn flush(&self, sync: bool) -> Result<()>;
 
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()>;
@@ -58,39 +48,7 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
         start_key: &[u8],
         end_key: &[u8],
         use_delete_range: bool,
-    ) -> Result<()> {
-        let mut wb = self.write_batch();
-        if use_delete_range && cf != CF_LOCK {
-            wb.delete_range_cf(cf, start_key, end_key)?;
-        } else {
-            let start = KeyBuilder::from_slice(start_key, 0, 0);
-            let end = KeyBuilder::from_slice(end_key, 0, 0);
-            let mut iter_opt = IterOptions::new(Some(start), Some(end), false);
-            if self.is_titan() {
-                // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
-                // to avoid referring to missing blob files.
-                iter_opt.set_key_only(true);
-            }
-            let mut it = self.iterator_cf_opt(cf, iter_opt)?;
-            let mut it_valid = it.seek(start_key.into())?;
-            while it_valid {
-                wb.delete_cf(cf, it.key())?;
-                if wb.count() >= MAX_DELETE_BATCH_COUNT {
-                    // Can't use write_without_wal here.
-                    // Otherwise it may cause dirty data when applying snapshot.
-                    self.write(&wb)?;
-                    wb.clear();
-                }
-                it_valid = it.next()?;
-            }
-        }
-
-        if wb.count() > 0 {
-            self.write(&wb)?;
-        }
-
-        Ok(())
-    }
+    ) -> Result<()>;
 
     fn delete_all_files_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
         if start_key >= end_key {
