@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -139,7 +139,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<SkiplistEngine>>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<RwLock<StoreMeta>>,
         coprocessor_host: CoprocessorHost<SkiplistEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
@@ -158,7 +158,7 @@ where
         }
         self.store.set_id(store_id);
         {
-            let mut meta = store_meta.lock().unwrap();
+            let mut meta = store_meta.write().unwrap();
             meta.store_id = Some(store_id);
         }
         if let Some(first_region) = self.check_or_prepare_bootstrap_cluster(&engines, store_id)? {
@@ -374,7 +374,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<SkiplistEngine>>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<RwLock<StoreMeta>>,
         coprocessor_host: CoprocessorHost<SkiplistEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,

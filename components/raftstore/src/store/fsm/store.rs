@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
 
@@ -301,7 +301,7 @@ where
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
-    pub store_meta: Arc<Mutex<StoreMeta>>,
+    pub store_meta: Arc<RwLock<StoreMeta>>,
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
     /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
@@ -901,7 +901,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T, C> {
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
-    pub store_meta: Arc<Mutex<StoreMeta>>,
+    pub store_meta: Arc<RwLock<StoreMeta>>,
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     snap_mgr: SnapManager,
     pub coprocessor_host: CoprocessorHost<EK>,
@@ -933,7 +933,7 @@ impl<EK: KvEngine, ER: RaftEngine, T, C> RaftPollerBuilder<EK, ER, T, C> {
         let mut raft_wb = self.engines.raft.log_batch(4 * 1024);
         let mut applying_regions = vec![];
         let mut merging_count = 0;
-        let mut meta = self.store_meta.lock().unwrap();
+        let mut meta = self.store_meta.write().unwrap();
         let mut replication_state = self.global_replication_state.lock().unwrap();
         kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
             let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
@@ -1177,7 +1177,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         pd_client: Arc<C>,
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<EK>>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<RwLock<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
@@ -1276,7 +1276,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .schedule_all(region_peers.iter().map(|pair| pair.1.get_peer()));
 
         {
-            let mut meta = builder.store_meta.lock().unwrap();
+            let mut meta = builder.store_meta.write().unwrap();
             for (_, peer_fsm) in &region_peers {
                 let peer = peer_fsm.get_peer();
                 meta.readers
@@ -1619,7 +1619,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         if is_first_request_vote {
             // To void losing request vote messages, either put it to
             // pending_votes or force send.
-            let mut store_meta = self.ctx.store_meta.lock().unwrap();
+            let mut store_meta = self.ctx.store_meta.write().unwrap();
             if !store_meta.regions.contains_key(&region_id) {
                 store_meta.pending_votes.push(msg);
                 return Ok(());
@@ -1701,7 +1701,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
 
         let target = msg.get_to_peer();
 
-        let mut meta = self.ctx.store_meta.lock().unwrap();
+        let mut meta = self.ctx.store_meta.write().unwrap();
         if meta.regions.contains_key(&region_id) {
             return Ok(true);
         }
@@ -1835,7 +1835,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
 
         // self.cfg.region_split_check_diff.0 / 16 is an experienced value.
         let mut region_declined_bytes = {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.read().unwrap();
             event.calc_ranges_declined_bytes(
                 &meta.region_ranges,
                 self.ctx.cfg.region_split_check_diff.0 / 16,
@@ -1893,7 +1893,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         ranges_need_check.push(self.fsm.store.last_compact_checked_key.clone());
 
         let largest_key = {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.read().unwrap();
             if meta.region_ranges.is_empty() {
                 debug!(
                     "there is no range need to check";
@@ -1954,7 +1954,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         stats.set_used_size(used_size);
         stats.set_store_id(self.ctx.store_id());
         {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.read().unwrap();
             stats.set_region_count(meta.regions.len() as u32);
         }
 
@@ -2162,7 +2162,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         // destroyed. We need to make sure that no stale peer exists.
         let mut delete_ssts = Vec::new();
         {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.read().unwrap();
             for sst in ssts {
                 if !meta.regions.contains_key(&sst.get_region_id()) {
                     delete_ssts.push(sst);
@@ -2196,7 +2196,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
             return Ok(());
         }
         {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.read().unwrap();
             for sst in ssts {
                 if let Some(r) = meta.regions.get(&sst.get_region_id()) {
                     let region_epoch = r.get_region_epoch();
@@ -2260,7 +2260,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         }
         let (mut target_region_id, mut oldest) = (0, Instant::now());
         let target_peer = {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.read().unwrap();
             for region_id in meta.regions.keys() {
                 match self.fsm.store.consistency_check_time.get(region_id) {
                     Some(time) => {
@@ -2329,7 +2329,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
 
         let mut regions = vec![];
         {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.read().unwrap();
             for (_, region_id) in meta
                 .region_ranges
                 .range((Excluded(start_key), Included(end_key)))
