@@ -22,6 +22,16 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn delete_blob_files_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        include_end: bool,
+    ) -> Result<()> {
+        panic!()
+    }
+
     fn delete_all_in_range_cf(
         &self,
         cf: &str,

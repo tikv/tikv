@@ -32,6 +32,26 @@ impl MiscExt for RocksEngine {
             .delete_files_in_range_cf(handle, start_key, end_key, include_end)?)
     }
 
+    fn delete_blob_files_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        include_end: bool,
+    ) -> Result<()> {
+        if self.as_inner().is_titan() {
+            let handle = util::get_cf_handle(self.as_inner(), cf)?;
+            self.as_inner().delete_blob_files_in_range_cf(
+                handle,
+                start_key,
+                end_key,
+                include_end,
+            )?;
+        }
+
+        Ok(())
+    }
+
     fn delete_all_in_range_cf(
         &self,
         cf: &str,
@@ -65,13 +85,6 @@ impl MiscExt for RocksEngine {
         if wb.count() > 0 {
             self.write(&wb)?;
         }
-
-        if self.as_inner().is_titan() {
-            let handle = util::get_cf_handle(self.as_inner(), cf)?;
-            self.as_inner()
-                .delete_blob_files_in_range_cf(handle, start_key, end_key, false)?;
-        }
-
         Ok(())
     }
 
@@ -308,6 +321,7 @@ mod tests {
         check_data(&db, ALL_CFS, kvs.as_slice());
 
         db.delete_all_files_in_range(b"k2", b"k4").unwrap();
+        db.delete_blob_files_in_range(b"k2", b"k4").unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
