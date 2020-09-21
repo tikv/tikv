@@ -2159,7 +2159,9 @@ where
 
             if peer.get_id() == self.peer_id()
                 && (change_type == ConfChangeType::RemoveNode
-                    || change_type == ConfChangeType::AddLearnerNode)
+                    // In Joint confchange, the leader is allowed to be DemotingVoter
+                    || (kind == ConfChangeKind::Simple
+                        && change_type == ConfChangeType::AddLearnerNode))
                 && !ctx.cfg.allow_remove_leader
             {
                 return Err(box_err!(
