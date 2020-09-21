@@ -1816,19 +1816,9 @@ where
         for cp in changes.iter() {
             let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
             let store_id = peer.get_store_id();
-            {
-                let add_node_fp = || {
-                    fail_point!(
-                        "apply_on_add_node_1_2",
-                        change_type == ConfChangeType::AddNode
-                            && self.id == 2
-                            && self.region_id() == 1,
-                        |_| {}
-                    )
-                };
-                add_node_fp();
-            }
+
             confchange_cmd_metric::inc_all(change_type);
+
             if let Some(exist_peer) = util::find_peer(&region, store_id) {
                 let r = exist_peer.get_role();
                 if r == PeerRole::IncomingVoter || r == PeerRole::DemotingVoter {
@@ -1976,12 +1966,12 @@ where
         let mut region = self.region.clone();
         let mut change_num = 0;
         for peer in region.mut_peers().iter_mut() {
-            change_num += 1;
             match peer.get_role() {
                 PeerRole::IncomingVoter => peer.set_role(PeerRole::Voter),
                 PeerRole::DemotingVoter => peer.set_role(PeerRole::Learner),
-                _ => change_num -= 1,
+                _ => continue,
             }
+            change_num += 1;
         }
         if change_num == 0 {
             panic!(
