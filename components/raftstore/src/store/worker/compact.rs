@@ -254,11 +254,10 @@ mod tests {
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::{new_engine, new_engine_opt, CFOptions};
     use engine_rocks::RocksEngine;
-    use engine_traits::{CFHandleExt, Mutable, WriteBatchExt, MiscExt, SyncMutable};
+    use engine_traits::{Mutable, WriteBatchExt, MiscExt, SyncMutable};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempfile::Builder;
 
-    use engine_rocks::get_range_entries_and_versions;
     use engine_rocks::MvccPropertiesCollectorFactory;
     use keys::data_key;
     use std::sync::Arc;
@@ -348,7 +347,6 @@ mod tests {
     fn test_check_space_redundancy() {
         let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
         let engine = open_db(tmp_dir.path().to_str().unwrap());
-        let cf2 = engine.cf_handle(CF_WRITE).unwrap();
 
         // mvcc_put 0..5
         for i in 0..5 {
@@ -366,7 +364,7 @@ mod tests {
 
         let (start, end) = (data_key(b"k0"), data_key(b"k5"));
         let (entries, version) =
-            get_range_entries_and_versions(&engine, cf2, &start, &end).unwrap();
+            engine.get_range_entries_and_versions(CF_WRITE, &start, &end).unwrap().unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
 
@@ -378,7 +376,7 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = get_range_entries_and_versions(&engine, cf2, &s, &e).unwrap();
+        let (entries, version) = engine.get_range_entries_and_versions(CF_WRITE, &s, &e).unwrap().unwrap();
         assert_eq!(entries, 5);
         assert_eq!(version, 5);
 
@@ -402,7 +400,7 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = get_range_entries_and_versions(&engine, cf2, &s, &e).unwrap();
+        let (entries, version) = engine.get_range_entries_and_versions(CF_WRITE, &s, &e).unwrap().unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
 
