@@ -6,7 +6,7 @@ use super::Result;
 use grpcio::CompressionAlgorithms;
 
 use tikv_util::collections::HashMap;
-use tikv_util::config::{self, ReadableDuration, ReadableSize, MB};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, MB};
 use tikv_util::sys::sys_quota::SysQuota;
 
 pub use crate::storage::config::Config as StorageConfig;
@@ -42,7 +42,8 @@ const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 fn memory_mb_for_grpc() -> usize {
     let total_mem = SysQuota::new().memory_limit_in_bytes();
     let size = (total_mem as f64 * DEFAULT_GRPC_MEMORY_POOL_QUOTA_RATIO) as usize;
-    size / MB as usize
+    let ret_size = cmp::max(size, 2 * GB as usize);
+    ret_size / MB as usize
 }
 
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
