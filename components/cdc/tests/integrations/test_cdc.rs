@@ -373,23 +373,23 @@ fn test_cdc_scan() {
 
     let (k, v) = (b"key1".to_vec(), b"value".to_vec());
     // Prewrite
-    let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    let start_ts1 = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.key = k.clone();
     mutation.value = v.clone();
-    suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts);
+    suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts1);
     // Commit
-    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_commit(1, vec![k.clone()], start_ts, commit_ts);
+    let commit_ts1 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(1, vec![k.clone()], start_ts1, commit_ts1);
 
     // Prewrite again
-    let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    let start_ts2 = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.key = k.clone();
     mutation.value = v.clone();
-    suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts);
+    suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts2);
 
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
@@ -407,14 +407,14 @@ fn test_cdc_scan() {
             assert!(es.entries.len() == 2, "{:?}", es);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
-            assert_eq!(e.start_ts, 4, "{:?}", es);
+            assert_eq!(e.start_ts, start_ts2.into_inner(), "{:?}", es);
             assert_eq!(e.commit_ts, 0, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert_eq!(e.value, v, "{:?}", es);
             let e = &es.entries[1];
             assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
-            assert_eq!(e.start_ts, 2, "{:?}", es);
-            assert_eq!(e.commit_ts, 3, "{:?}", es);
+            assert_eq!(e.start_ts, start_ts1.into_inner(), "{:?}", es);
+            assert_eq!(e.commit_ts, commit_ts1.into_inner(), "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert_eq!(e.value, v, "{:?}", es);
         }
@@ -437,15 +437,14 @@ fn test_cdc_scan() {
     // checkpoint_ts = 5;
     let checkpoint_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     // Commit = 6;
-    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_commit(1, vec![k.clone()], start_ts, commit_ts);
+    let commit_ts2 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(1, vec![k.clone()], start_ts2, commit_ts2);
     // Prewrite delete
-    // Start = 7;
-    let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    let start_ts3 = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Del);
     mutation.key = k.clone();
-    suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts);
+    suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts3);
 
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
@@ -466,15 +465,15 @@ fn test_cdc_scan() {
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
             assert_eq!(e.get_op_type(), EventRowOpType::Delete, "{:?}", es);
-            assert_eq!(e.start_ts, 7, "{:?}", es);
+            assert_eq!(e.start_ts, start_ts3.into_inner(), "{:?}", es);
             assert_eq!(e.commit_ts, 0, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert!(e.value.is_empty(), "{:?}", es);
             let e = &es.entries[1];
             assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
             assert_eq!(e.get_op_type(), EventRowOpType::Put, "{:?}", es);
-            assert_eq!(e.start_ts, 4, "{:?}", es);
-            assert_eq!(e.commit_ts, 6, "{:?}", es);
+            assert_eq!(e.start_ts, start_ts2.into_inner(), "{:?}", es);
+            assert_eq!(e.commit_ts, commit_ts2.into_inner(), "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert_eq!(e.value, v, "{:?}", es);
         }
@@ -548,10 +547,10 @@ fn test_cdc_tso_failure() {
 
 #[test]
 fn test_region_split() {
-    let mut cluster = new_server_cluster(1, 3);
+    let mut cluster = new_server_cluster(1, 1);
     configure_for_lease_read(&mut cluster, Some(100), None);
     cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuite::with_cluster(3, cluster);
+    let mut suite = TestSuite::with_cluster(1, cluster);
 
     let region = suite.cluster.get_region(&[]);
     let mut req = ChangeDataRequest::default();
@@ -605,7 +604,7 @@ fn test_region_split() {
         _ => panic!("unknown event"),
     }
 
-    // Try to subscribe region again.
+    // Subscribe tne new region.
     let region1 = suite.cluster.get_region(&[]);
     req.region_id = region1.get_id();
     req.set_region_epoch(region1.get_region_epoch().clone());
@@ -618,7 +617,9 @@ fn test_region_split() {
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
-        _ => panic!("unknown event"),
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
+        Event_oneof_event::Admin(e) => panic!("{:?}", e),
     }
 
     // Make sure resolved ts can be advanced normally.

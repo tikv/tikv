@@ -205,6 +205,7 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "external_storage",
  "failure",
  "futures 0.1.29",
@@ -585,6 +586,7 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "fs2",
  "futures 0.1.29",
  "futures-cpupool",
@@ -1144,9 +1146,13 @@ dependencies = [
 name = "error_code"
 version = "0.0.1"
 dependencies = [
+ "grpcio",
  "kvproto",
+ "lazy_static",
  "raft",
+ "serde",
  "tikv_alloc",
+ "toml",
 ]
 
 [[package]]
@@ -1158,7 +1164,7 @@ dependencies = [
  "futures-executor",
  "futures-io",
  "futures-util",
- "http 0.2.0",
+ "http",
  "hyper",
  "hyper-tls",
  "kvproto",
@@ -1575,7 +1581,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "futures-util",
- "http 0.2.0",
+ "http",
  "indexmap",
  "log",
  "slab",
@@ -1636,17 +1642,6 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "0.1.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6ccf5ede3a895d8856620237b2f02972c1bbc78d2965ad7fe8838d4a0ed41f0"
-dependencies = [
- "bytes 0.4.12",
- "fnv",
- "itoa",
-]
-
-[[package]]
-name = "http"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b708cc7f06493459026f53b9a61a7a121a5d1ec6238dee58ea4941132b30156b"
@@ -1663,7 +1658,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13d5ff830006f7646652e057693569bfe0d51760c0085a071769d142a205111b"
 dependencies = [
  "bytes 0.5.3",
- "http 0.2.0",
+ "http",
 ]
 
 [[package]]
@@ -1692,7 +1687,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "h2",
- "http 0.2.0",
+ "http",
  "http-body",
  "httparse",
  "itoa",
@@ -1713,7 +1708,7 @@ checksum = "ed123fc8c1833f305468df3c3a6a837c34a7ae616567d40a5e3c2bf3cac2e31d"
 dependencies = [
  "antidote",
  "bytes 0.5.3",
- "http 0.2.0",
+ "http",
  "hyper",
  "linked_hash_set",
  "once_cell",
@@ -1829,37 +1824,6 @@ name = "itoa"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "501266b7edd0174f8530248f87f99c88fbe60ca4ef3dd486835b8d8d53136f7f"
-
-[[package]]
-name = "jemalloc-ctl"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e93b0f37e7d735c6b610176d5b1bde8e1621ff3f6f7ac23cdfa4e7f7d0111b5"
-dependencies = [
- "jemalloc-sys",
- "libc",
-]
-
-[[package]]
-name = "jemalloc-sys"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfc62c8e50e381768ce8ee0428ee53741929f7ebd73e4d83f669bcf7693e00ae"
-dependencies = [
- "cc",
- "fs_extra",
- "libc",
-]
-
-[[package]]
-name = "jemallocator"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f0cd42ac65f758063fea55126b0148b1ce0a6354ff78e07a4d6806bc65c4ab3"
-dependencies = [
- "jemalloc-sys",
- "libc",
-]
 
 [[package]]
 name = "jobserver"
@@ -1982,26 +1946,26 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#d472363caaed9e611dc9db70e61441e4bb8860f8"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#41afbae4d6c34cf96b989b0a1e1701979cf5634f"
 dependencies = [
  "bindgen",
  "bzip2-sys",
  "cc",
  "cmake",
- "jemalloc-sys",
  "libc",
  "libtitan_sys",
  "libz-sys",
  "lz4-sys",
  "openssl-sys",
  "snappy-sys",
+ "tikv-jemalloc-sys",
  "zstd-sys",
 ]
 
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#d472363caaed9e611dc9db70e61441e4bb8860f8"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#41afbae4d6c34cf96b989b0a1e1701979cf5634f"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2578,10 +2542,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "paste"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45ca20c77d80be666aef2b45486da86238fabe33e38306bd3118fe4af33fa880"
+dependencies = [
+ "paste-impl",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "paste-impl"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d95a7db200b97ef370c8e6de0088252f7e0dfff7d047a28528e47456c0fc98b6"
+dependencies = [
+ "proc-macro-hack",
+]
+
+[[package]]
 name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "error_code",
+ "fail",
  "futures 0.1.29",
  "futures 0.3.4",
  "grpcio",
@@ -3326,7 +3310,7 @@ dependencies = [
  "encoding_rs",
  "futures-core",
  "futures-util",
- "http 0.2.0",
+ "http",
  "http-body",
  "hyper",
  "hyper-tls",
@@ -3397,7 +3381,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#d472363caaed9e611dc9db70e61441e4bb8860f8"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#41afbae4d6c34cf96b989b0a1e1701979cf5634f"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3414,7 +3398,7 @@ dependencies = [
  "bytes 0.5.3",
  "futures 0.3.4",
  "hmac",
- "http 0.2.0",
+ "http",
  "hyper",
  "hyper-tls",
  "lazy_static",
@@ -3475,7 +3459,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures 0.3.4",
- "http 0.2.0",
+ "http",
  "rusoto_core",
  "serde",
  "serde_json",
@@ -3505,7 +3489,7 @@ dependencies = [
  "futures 0.3.4",
  "hex 0.4.2",
  "hmac",
- "http 0.2.0",
+ "http",
  "hyper",
  "log",
  "md5",
@@ -4144,7 +4128,7 @@ dependencies = [
  "bytes 0.5.3",
  "chrono",
  "futures-util",
- "http 0.2.0",
+ "http",
  "percent-encoding",
  "pin-utils",
  "serde",
@@ -4162,7 +4146,7 @@ checksum = "2327f2b8d44e6645be079bf770ed1d7629f0a2b8993c79aa8f1d7e29a8345621"
 dependencies = [
  "base64 0.11.0",
  "chrono",
- "http 0.2.0",
+ "http",
  "lock_api",
  "parking_lot 0.10.0",
  "ring",
@@ -4233,6 +4217,21 @@ dependencies = [
  "tikv_util",
  "tipb",
  "txn_types",
+]
+
+[[package]]
+name = "test_pd"
+version = "0.0.1"
+dependencies = [
+ "fail",
+ "futures 0.1.29",
+ "grpcio",
+ "kvproto",
+ "pd_client",
+ "security",
+ "slog",
+ "slog-global",
+ "tikv_util",
 ]
 
 [[package]]
@@ -4351,6 +4350,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "test_coprocessor",
+ "test_pd",
  "test_raftstore",
  "test_sst_importer",
  "test_storage",
@@ -4486,7 +4486,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.0.5"
+version = "4.0.6"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4517,7 +4517,7 @@ dependencies = [
  "futures-util",
  "grpcio",
  "hex 0.4.2",
- "http 0.1.21",
+ "http",
  "hyper",
  "hyper-openssl",
  "hyper-tls",
@@ -4529,6 +4529,7 @@ dependencies = [
  "libc",
  "log",
  "log_wrappers",
+ "match_template",
  "mime",
  "more-asserts",
  "murmur3",
@@ -4564,6 +4565,7 @@ dependencies = [
  "test_sst_importer",
  "test_util",
  "tidb_query",
+ "tidb_query_datatype",
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
@@ -4587,17 +4589,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "tikv-jemalloc-ctl"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b441ce9e5ab1d28f7643e62f0fa445086d8c84075150be840adae054cc05bd9c"
+dependencies = [
+ "libc",
+ "paste",
+ "tikv-jemalloc-sys",
+]
+
+[[package]]
+name = "tikv-jemalloc-sys"
+version = "0.4.0+5.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f5230e450d11f3a5ba46e94073e6d4d2afcc26ecd47b80533420eed648b3084"
+dependencies = [
+ "cc",
+ "fs_extra",
+ "libc",
+]
+
+[[package]]
+name = "tikv-jemallocator"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a90c7c5e31d05b8a79b7d4dd50d0ea4a57db4ed2bf694c66763d79cdb84045cc"
+dependencies = [
+ "libc",
+ "tikv-jemalloc-sys",
+]
+
+[[package]]
 name = "tikv_alloc"
 version = "0.1.0"
 dependencies = [
- "jemalloc-ctl",
- "jemalloc-sys",
- "jemallocator",
  "libc",
  "log",
  "mimallocator",
  "tcmalloc",
  "tempfile",
+ "tikv-jemalloc-ctl",
+ "tikv-jemalloc-sys",
+ "tikv-jemallocator",
 ]
 
 [[package]]

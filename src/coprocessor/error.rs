@@ -99,6 +99,18 @@ impl From<tikv_util::deadline::DeadlineError> for Error {
     }
 }
 
+impl From<tidb_query_datatype::DataTypeError> for Error {
+    fn from(err: tidb_query_datatype::DataTypeError) -> Self {
+        Error::Other(err.to_string())
+    }
+}
+
+impl From<tidb_query::codec::Error> for Error {
+    fn from(err: tidb_query::codec::Error) -> Self {
+        Error::Other(err.to_string())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl ErrorCodeExt for Error {
@@ -108,7 +120,7 @@ impl ErrorCodeExt for Error {
             Error::Locked(_) => error_code::coprocessor::LOCKED,
             Error::DeadlineExceeded => error_code::coprocessor::DEADLINE_EXCEEDED,
             Error::MaxPendingTasksExceeded => error_code::coprocessor::MAX_PENDING_TASKS_EXCEEDED,
-            Error::Other(_) => error_code::coprocessor::UNKNOWN,
+            Error::Other(_) => error_code::UNKNOWN,
         }
     }
 }
