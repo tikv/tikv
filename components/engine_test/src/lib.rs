@@ -206,6 +206,9 @@ pub mod ctor {
         /// On RocksDB, turns off the range properties collector. Only used in
         /// tests. Unclear how other engines should deal with this.
         no_range_properties: bool,
+        /// On RocksDB, turns off the table properties collector. Only used in
+        /// tests. Unclear how other engines should deal with this.
+        no_table_properties: bool,
     }
 
     impl ColumnFamilyOptions {
@@ -215,6 +218,7 @@ pub mod ctor {
                 level_zero_file_num_compaction_trigger: None,
                 level_zero_slowdown_writes_trigger: None,
                 no_range_properties: false,
+                no_table_properties: false,
             }
         }
 
@@ -250,6 +254,13 @@ pub mod ctor {
             self.no_range_properties
         }
         
+        pub fn set_no_table_properties(&mut self, v: bool) {
+            self.no_table_properties = v;
+        }
+
+        pub fn get_no_table_properties(&self) -> bool {
+            self.no_table_properties
+        }
     }
 
     mod panic {
@@ -332,8 +343,10 @@ pub mod ctor {
                 let f = Box::new(RangePropertiesCollectorFactory::default());
                 rocks_cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
             }
-            let f = Box::new(MvccPropertiesCollectorFactory::default());
-            rocks_cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+            if !cf_opts.get_no_table_properties() {
+                let f = Box::new(MvccPropertiesCollectorFactory::default());
+                rocks_cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+            }
         }
 
         fn set_cf_opts(rocks_cf_opts: &mut RocksColumnFamilyOptions, cf_opts: &ColumnFamilyOptions) {
