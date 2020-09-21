@@ -67,7 +67,8 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
     ) {
         if context.is_empty() {
             // For backward compatibility.
-            context.push(ConsistencyCheckMethod::Raw as u8);
+            warn!("skip compute hash without context"; "region_id" => region.get_id());
+            return;
         }
 
         info!("computing hash"; "region_id" => region.get_id(), "index" => index);
