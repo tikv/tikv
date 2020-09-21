@@ -13,7 +13,6 @@ use crate::range::Range;
 pub const MAX_DELETE_BATCH_COUNT: usize = 512;
 
 pub trait MiscExt: CFNamesExt {
-
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()>;
 
     fn delete_all_files_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {

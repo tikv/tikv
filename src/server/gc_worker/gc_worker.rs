@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use engine::rocks::DB;
 use engine_rocks::{Compat, RocksEngine};
+use engine_traits::CF_WRITE;
 use engine_traits::{MiscExt, TablePropertiesExt};
-use engine_traits::{CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use kvproto::metapb;
