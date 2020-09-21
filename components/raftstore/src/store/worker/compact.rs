@@ -10,7 +10,6 @@ use engine_traits::CF_WRITE;
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
-use engine_rocks::properties::get_range_entries_and_versions;
 
 type Key = Vec<u8>;
 
@@ -200,13 +199,12 @@ fn collect_ranges_need_compact(
     // contains too many RocksDB tombstones. TiKV will merge multiple neighboring ranges
     // that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
-    let cf = box_try!(engine.cf_handle(CF_WRITE));
     let mut compact_start = None;
     let mut compact_end = None;
     for range in ranges.windows(2) {
         // Get total entries and total versions in this range and checks if it needs to be compacted.
         if let Some((num_ent, num_ver)) =
-            get_range_entries_and_versions(engine, cf, &range[0], &range[1])
+            box_try!(engine.get_range_entries_and_versions(CF_WRITE, &range[0], &range[1]))
         {
             if need_compact(
                 num_ent,
