@@ -7,7 +7,7 @@ use engine_traits::{KvEngine, Snapshot};
 use kvproto::metapb::Region;
 use tikv_util::worker::Runnable;
 
-use crate::coprocessor::{ConsistencyCheckMethod, CoprocessorHost};
+use crate::coprocessor::CoprocessorHost;
 use crate::store::metrics::*;
 use crate::store::{CasualMessage, CasualRouter};
 
