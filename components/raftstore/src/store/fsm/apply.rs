@@ -1650,6 +1650,15 @@ where
                 add_node_fp();
             }
             confchange_cmd_metric::inc_all(change_type);
+            if let Some(exist_peer) = util::find_peer(&mut region, store_id) {
+                let r = exist_peer.get_role();
+                if r == PeerRole::IncomingVoter || r == PeerRole::DemotingVoter {
+                    panic!(
+                        "{} can't apply confchange because configuration is still in joint state, confchange: {:?}, region: {:?}",
+                        self.tag, cp, self.region
+                    );
+                }
+            }
             match (util::find_peer_mut(&mut region, store_id), change_type) {
                 (None, ConfChangeType::AddNode) => {
                     let mut peer = peer.clone();
@@ -1679,109 +1688,95 @@ where
                         self.region
                     ));
                 }
-                (Some(exist_peer), cct) => match (exist_peer.get_role(), cct) {
-                    (PeerRole::IncomingVoter, _) | (PeerRole::DemotingVoter, _) => {
+                // Add node
+                (Some(exist_peer), ConfChangeType::AddNode)
+                | (Some(exist_peer), ConfChangeType::AddLearnerNode) => {
+                    let (role, exist_id, incoming_id) =
+                        (exist_peer.get_role(), exist_peer.get_id(), peer.get_id());
+
+                    if exist_id != incoming_id // Add peer with different id to the same store
+                            // The peer is already the requested role
+                            || (role, change_type) == (PeerRole::Voter, ConfChangeType::AddNode)
+                            || (role, change_type) == (PeerRole::Learner, ConfChangeType::AddLearnerNode)
+                    {
                         error!(
-                            "can't apply confchange because configuration is still in joint state";
+                            "can't add duplicated peer";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "peer" => ?peer,
+                            "exist peer" => ?exist_peer,
+                            "confchnage type" => ?change_type,
+                            "region" => ?&self.region
+                        );
+                        return Err(box_err!(
+                                "can't add duplicated peer {:?} to region {:?}, duplicated with exist peer {:?}",
+                                peer,
+                                self.region,
+                                exist_peer
+                            ));
+                    }
+                    match (role, change_type) {
+                        (PeerRole::Voter, ConfChangeType::AddLearnerNode) => match kind {
+                            ConfChangeKind::Simple => exist_peer.set_role(PeerRole::Learner),
+                            ConfChangeKind::EnterJoint => {
+                                exist_peer.set_role(PeerRole::DemotingVoter)
+                            }
+                            _ => unreachable!(),
+                        },
+                        (PeerRole::Learner, ConfChangeType::AddNode) => match kind {
+                            ConfChangeKind::Simple => exist_peer.set_role(PeerRole::Voter),
+                            ConfChangeKind::EnterJoint => {
+                                exist_peer.set_role(PeerRole::IncomingVoter)
+                            }
+                            _ => unreachable!(),
+                        },
+                        _ => unreachable!(),
+                    }
+                }
+                // Remove node
+                (Some(exist_peer), ConfChangeType::RemoveNode) => {
+                    if kind == ConfChangeKind::EnterJoint
+                        && exist_peer.get_role() == PeerRole::Voter
+                    {
+                        error!(
+                            "can't remove voter directly";
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
                             "peer" => ?peer,
                             "region" => ?&self.region
                         );
                         return Err(box_err!(
-                            "can't apply confchange {:?} to peer {:?} from region {:?}",
-                            cct,
+                            "can not remove voter {:?} directly from region {:?}",
                             peer,
                             self.region
                         ));
                     }
-                    // Add node
-                    (_, ConfChangeType::AddNode) | (_, ConfChangeType::AddLearnerNode) => {
-                        let (role, exist_id, incoming_id) =
-                            (exist_peer.get_role(), exist_peer.get_id(), peer.get_id());
-
-                        if exist_id != incoming_id // Add peer with different id to the same store
-                            // The peer is already the requested role
-                            || (role, cct) == (PeerRole::Voter, ConfChangeType::AddNode)
-                            || (role, cct) == (PeerRole::Learner, ConfChangeType::AddLearnerNode)
-                        {
-                            error!(
-                                "can't add duplicated peer";
-                                "region_id" => self.region_id(),
-                                "peer_id" => self.id(),
-                                "peer" => ?peer,
-                                "exist peer" => ?exist_peer,
-                                "confchnage type" => ?cct,
-                                "region" => ?&self.region
-                            );
-                            return Err(box_err!(
-                                "can't add duplicated peer {:?} to region {:?}, duplicated with exist peer {:?}",
-                                peer,
-                                self.region,
-                                exist_peer
-                            ));
-                        }
-                        match (role, cct) {
-                            (PeerRole::Voter, ConfChangeType::AddLearnerNode) => match kind {
-                                ConfChangeKind::Simple => exist_peer.set_role(PeerRole::Learner),
-                                ConfChangeKind::EnterJoint => {
-                                    exist_peer.set_role(PeerRole::DemotingVoter)
-                                }
-                                _ => unreachable!(),
-                            },
-                            (PeerRole::Learner, ConfChangeType::AddNode) => match kind {
-                                ConfChangeKind::Simple => exist_peer.set_role(PeerRole::Voter),
-                                ConfChangeKind::EnterJoint => {
-                                    exist_peer.set_role(PeerRole::IncomingVoter)
-                                }
-                                _ => unreachable!(),
-                            },
-                            _ => unreachable!(),
-                        }
-                    }
-                    // Remove node
-                    (role, ConfChangeType::RemoveNode) => {
-                        if kind == ConfChangeKind::EnterJoint && role == PeerRole::Voter {
-                            error!(
-                                "can't remove voter directly";
-                                "region_id" => self.region_id(),
-                                "peer_id" => self.id(),
-                                "peer" => ?peer,
-                                "region" => ?&self.region
-                            );
-                            return Err(box_err!(
-                                "can not remove voter {:?} directly from region {:?}",
-                                peer,
-                                self.region
-                            ));
-                        }
-                        match util::remove_peer(&mut region, store_id) {
-                            Some(p) => {
-                                if &p != peer {
-                                    error!(
-                                        "ignore remove unmatched peer";
-                                        "region_id" => self.region_id(),
-                                        "peer_id" => self.id(),
-                                        "expect_peer" => ?peer,
-                                        "get_peeer" => ?p
-                                    );
-                                    return Err(box_err!(
-                                        "remove unmatched peer: expect: {:?}, get {:?}, ignore",
-                                        peer,
-                                        p
-                                    ));
-                                }
-                                if self.id == peer.get_id() {
-                                    // Remove ourself, we will destroy all region data later.
-                                    // So we need not to apply following logs.
-                                    self.stopped = true;
-                                    self.pending_remove = true;
-                                }
+                    match util::remove_peer(&mut region, store_id) {
+                        Some(p) => {
+                            if &p != peer {
+                                error!(
+                                    "ignore remove unmatched peer";
+                                    "region_id" => self.region_id(),
+                                    "peer_id" => self.id(),
+                                    "expect_peer" => ?peer,
+                                    "get_peeer" => ?p
+                                );
+                                return Err(box_err!(
+                                    "remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                                    peer,
+                                    p
+                                ));
                             }
-                            None => unreachable!(),
+                            if self.id == peer.get_id() {
+                                // Remove ourself, we will destroy all region data later.
+                                // So we need not to apply following logs.
+                                self.stopped = true;
+                                self.pending_remove = true;
+                            }
                         }
+                        None => unreachable!(),
                     }
-                },
+                }
             }
             confchange_cmd_metric::inc_success(change_type);
         }
@@ -1808,6 +1803,12 @@ where
                 PeerRole::DemotingVoter => peer.set_role(PeerRole::Learner),
                 _ => change_num -= 1,
             }
+        }
+        if change_num == 0 {
+            panic!(
+                "{} can't leave a non-joint config, region: {:?}",
+                self.tag, self.region
+            );
         }
         let conf_ver = region.get_region_epoch().get_conf_ver() + change_num;
         region.mut_region_epoch().set_conf_ver(conf_ver);
