@@ -1,13 +1,38 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Interact with persistent storage.
+//! This module contains TiKV's transaction layer. It lowers high-level, transactional
+//! commands to low-level (raw key-value) interactions with persistent storage.
 //!
-//! The [`Storage`](Storage) structure provides raw and transactional APIs on top of
-//! a lower-level [`Engine`](kv::Engine).
+//! This module is further split into layers: [`txn`](txn) lowers transactional commands to
+//! key-value operations on an MVCC abstraction. [`mvcc`](mvcc) is our MVCC implementation.
+//! [`kv`](kv) is an abstraction layer over persistent storage.
 //!
-//! There are multiple [`Engine`](kv::Engine) implementations, [`RaftKv`](crate::server::raftkv::RaftKv)
-//! is used by the [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
-//! [`RocksEngine`](RocksEngine) are used for testing only.
+//! Other responsibilities of this module are managing latches (see [`latch`](txn::latch)), deadlock
+//! and wait handling (see [`lock_manager`](lock_manager)), scheduling command execution (see
+//! [`txn::scheduler`](txn::scheduler)), and handling commands from the raw and versioned APIs (in
+//! the [`Storage`](Storage) struct).
+//!
+//! For more information about TiKV's transactions, see the [sig-txn docs](https://github.com/tikv/sig-transaction/tree/master/doc).
+//!
+//! Some important types are:
+//!
+//! * the [`Engine`](kv::Engine) trait and related traits, which abstracts over underlying storage,
+//! * the [`MvccTxn`](mvcc::txn::MvccTxn) struct, which is the primary object in the MVCC
+//!   implementation,
+//! * the commands in the [`commands`](txn::commands) module, which are how each command is implemented,
+//! * the [`Storage`](Storage) struct, which is the primary entry point for this module.
+//!
+//! Related code:
+//!
+//! * the [`kv`](crate::server::service::kv) module, which is the interface for TiKV's APIs,
+//! * the [`lock_manager](crate::server::lock_manager), which takes part in lock and deadlock
+//!   management,
+//! * [`gc_worker`](crate::server::gc_worker), which drives garbage collection of old values,
+//! * the [`txn_types](::txn_types) crate, some important types for this module's interface,
+//! * the [`kvproto`](::kvproto) crate, which defines TiKV's protobuf API and includes some
+//!   documentation of the commands implemented here,
+//! * the [`test_storage`](::test_storage) crate, integration tests for this module,
+//! * the [`engine_traits`](::engine_traits) crate, more detail of the engine abstraction.
 
 pub mod config;
 pub mod errors;
