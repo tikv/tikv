@@ -119,10 +119,10 @@ impl<E: Engine> Endpoint<E> {
         self.concurrency_manager.update_max_ts(start_ts);
         if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
             for range in key_ranges {
-                let start_key = txn_types::Key::from_raw(range.get_start());
-                let end_key = txn_types::Key::from_raw(range.get_end());
+                let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());
+                let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
                 self.concurrency_manager
-                    .read_range_check(Some(&start_key), Some(&end_key), |key, lock| {
+                    .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
                         Lock::check_ts_conflict(
                             Cow::Borrowed(lock),
                             key,

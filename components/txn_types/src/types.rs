@@ -50,6 +50,16 @@ impl Key {
         Key(encoded)
     }
 
+    /// Creates a key from raw bytes but returns None if the key is an empty slice.
+    #[inline]
+    pub fn from_raw_maybe_unbounded(key: &[u8]) -> Option<Key> {
+        if key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(key))
+        }
+    }
+
     /// Gets and moves the raw representation of this key.
     #[inline]
     pub fn into_raw(self) -> Result<Vec<u8>, codec::Error> {
