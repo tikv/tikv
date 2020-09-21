@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{DeleteStrategy, MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{DeleteStrategy, MiscExt, Range, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, PdClient};
@@ -305,11 +305,15 @@ where
 
         let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
 
-        // First, call delete_files_in_range to free as much disk space as possible
+        // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
         let delete_files_start_time = Instant::now();
         for cf in cfs {
             local_storage
-                .delete_files_in_range_cf(cf, &start_data_key, &end_data_key, false)
+                .delete_ranges_cf(
+                    cf,
+                    DeleteStrategy::DeleteFiles,
+                    vec![Range::new(&start_data_key, &end_data_key)],
+                )
                 .map_err(|e| {
                     let e: Error = box_err!(e);
                     warn!("unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e);
@@ -328,11 +332,10 @@ where
         for cf in cfs {
             // TODO: set use_delete_range with config here.
             local_storage
-                .delete_all_in_range_cf(
+                .delete_ranges_cf(
                     cf,
                     DeleteStrategy::DeleteByKey,
-                    &start_data_key,
-                    &end_data_key,
+                    vec![Range::new(&start_data_key, &end_data_key)],
                 )
                 .map_err(|e| {
                     let e: Error = box_err!(e);

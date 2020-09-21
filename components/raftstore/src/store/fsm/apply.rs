@@ -18,7 +18,9 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{DeleteStrategy, KvEngine, RaftEngine, Snapshot, WriteBatch};
+use engine_traits::{
+    DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
+};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -1451,8 +1453,9 @@ where
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
         if !notify_only {
+            let range = vec![EngineRange::new(&start_key, &end_key)];
             engine
-                .delete_files_in_range_cf(cf, &start_key, &end_key, /* include_end */ false)
+                .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, range.clone())
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} failed to delete files in range [{}, {}): {:?}",
@@ -1470,7 +1473,7 @@ where
             };
             // Delete all remaining keys.
             engine
-                .delete_all_in_range_cf(cf, strategy, &start_key, &end_key)
+                .delete_ranges_cf(cf, strategy, range.clone())
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",

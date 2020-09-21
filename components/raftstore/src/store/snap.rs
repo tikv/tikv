@@ -1540,9 +1540,9 @@ pub mod tests {
 
     use engine_rocks::raw::{DBOptions, Env, DB};
     use engine_rocks::raw_util::CFOptions;
-    use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-    use engine_traits::Engines;
-    use engine_traits::{Iterable, Peekable, SyncMutable};
+    use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksSstWriterBuilder};
+    use engine_traits::{Engines, ExternalSstFileInfo, SstWriter};
+    use engine_traits::{Iterable, Peekable, SstWriterBuilder, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
@@ -1552,6 +1552,7 @@ pub mod tests {
 
     use protobuf::Message;
     use tempfile::{Builder, TempDir};
+    use tikv_util::file as file_util;
     use tikv_util::time::Limiter;
 
     use super::{
@@ -2466,5 +2467,36 @@ pub mod tests {
                 snap_size * cmp::min(max_snap_count, (i + 2) as u64)
             );
         }
+    }
+
+    #[test]
+    fn test_snap_temp_file_delete() {
+        let src_temp_dir = Builder::new()
+            .prefix("test_snap_temp_file_delete_snap")
+            .tempdir()
+            .unwrap();
+        let mgr_path = src_temp_dir.path().to_str().unwrap();
+        let src_mgr = SnapManager::new(mgr_path.to_owned());
+        src_mgr.init().unwrap();
+        let kv_temp_dir = Builder::new()
+            .prefix("test_snap_temp_file_delete_kv")
+            .tempdir()
+            .unwrap();
+        let db = open_test_db(&kv_temp_dir.path(), None, None).unwrap();
+        let engine = RocksEngine::from_db(db);
+        let sst_path = src_mgr.get_temp_path_for_ingest();
+        let mut writer = RocksSstWriterBuilder::new()
+            .set_db(&engine)
+            .build(&sst_path)
+            .unwrap();
+        writer.put(b"a", b"a").unwrap();
+        let r = writer.finish().unwrap();
+        assert!(file_util::file_exists(&sst_path));
+        assert_eq!(r.file_path().to_str().unwrap(), sst_path.as_str());
+        drop(src_mgr);
+        let src_mgr = SnapManager::new(mgr_path.to_owned());
+        src_mgr.init().unwrap();
+        // The sst_path will be deleted by SnapManager because it is a temp filet.
+        assert!(!file_util::file_exists(&sst_path));
     }
 }

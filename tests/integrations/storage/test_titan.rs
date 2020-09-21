@@ -307,7 +307,8 @@ fn test_delete_files_in_range_for_titan() {
     // so we set key_only for Titan.
     engines
         .kv
-        .delete_all_files_in_range(
+        .delete_all_in_range(
+            DeleteStrategy::DeleteFiles,
             &data_key(Key::from_raw(b"a").as_encoded()),
             &data_key(Key::from_raw(b"b").as_encoded()),
         )
