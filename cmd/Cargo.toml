@@ -59,6 +59,7 @@ encryption = { path = "../components/encryption" }
 engine = { path = "../components/engine" }
 engine_rocks = { path = "../components/engine_rocks" }
 engine_traits = { path = "../components/engine_traits" }
+error_code = { path = "../components/error_code" }
 fs2 = "0.4"
 futures = "0.1"
 futures-cpupool = "0.1"

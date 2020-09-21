@@ -8,6 +8,7 @@ use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{error, str};
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use quick_error::quick_error;
 use regex::Error as RegexpError;
 use serde_json::error::Error as SerdeError;
@@ -214,3 +215,16 @@ impl From<tidb_query_datatype::DataTypeError> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::InvalidDataType(_) => error_code::coprocessor::INVALID_DATA_TYPE,
+            Error::Encoding(_) => error_code::coprocessor::ENCODING,
+            Error::ColumnOffset(_) => error_code::coprocessor::COLUMN_OFFSET,
+            Error::UnknownSignature(_) => error_code::coprocessor::UNKNOWN_SIGNATURE,
+            Error::Eval(_, _) => error_code::coprocessor::EVAL,
+            Error::Other(_) => error_code::UNKNOWN,
+        }
+    }
+}

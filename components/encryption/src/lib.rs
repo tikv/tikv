@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+#![feature(specialization)]
 
-#[macro_use]
-extern crate slog_global;
 #[macro_use]
 extern crate failure;
 #[macro_use]

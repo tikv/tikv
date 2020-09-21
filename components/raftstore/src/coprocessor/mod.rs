@@ -5,10 +5,9 @@ use std::vec::IntoIter;
 use engine_traits::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{
-    AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
-};
+use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request};
 use raft::StateRole;
+use txn_types::TxnExtra;
 
 pub mod config;
 pub mod dispatcher;
@@ -90,24 +89,18 @@ pub trait QueryObserver: Coprocessor {
     fn pre_apply_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) {}
 
     /// Hook to call after applying write request.
-    fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {}
+    fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Cmd) {}
 }
 
 pub trait ApplySnapshotObserver: Coprocessor {
-    /// Hook to call before applying key from plain file.
+    /// Hook to call after applying key from plain file.
     /// This may be invoked multiple times for each plain file, and each time a batch of key-value
     /// pairs will be passed to the function.
-    fn pre_apply_plain_kvs(
-        &self,
-        _: &mut ObserverContext<'_>,
-        _: CfName,
-        _: &[(Vec<u8>, Vec<u8>)],
-    ) {
-    }
+    fn apply_plain_kvs(&self, _: &mut ObserverContext<'_>, _: CfName, _: &[(Vec<u8>, Vec<u8>)]) {}
 
-    /// Hook to call before applying sst file. Currently the content of the snapshot can't be
+    /// Hook to call after applying sst file. Currently the content of the snapshot can't be
     /// passed to the observer.
-    fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName, _path: &str) {}
+    fn apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName, _path: &str) {}
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use
@@ -238,11 +231,11 @@ impl CmdBatch {
     }
 }
 
-pub trait CmdObserver: Coprocessor {
+pub trait CmdObserver<E>: Coprocessor {
     /// Hook to call after preparing for applying write requests.
     fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64);
     /// Hook to call after applying a write request.
     fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd);
     /// Hook to call after flushing writes to db.
-    fn on_flush_apply(&self);
+    fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>, engine: E);
 }
