@@ -86,6 +86,7 @@ fn start_raftstore(
     };
     let store_meta = Arc::new(RwLock::new(StoreMeta::new(0)));
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
+    let cop_cfg = cfg.coprocessor.clone();
     let cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(
         Module::Raftstore,
@@ -97,6 +98,7 @@ fn start_raftstore(
         .spawn(
             Default::default(),
             cfg_track,
+            cop_cfg,
             engines,
             MockTransport,
             Arc::new(TestPdClient::new(0, true)),

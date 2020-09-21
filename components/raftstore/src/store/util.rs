@@ -1,13 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::{fmt, u64};
 
 use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
+use keys::{enc_end_key, enc_start_key};
 use kvproto::kvrpcpb::KeyRange;
-use kvproto::metapb::{self, PeerRole};
+use kvproto::metapb::{self, PeerRole, Region};
 use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
@@ -16,6 +18,10 @@ use raft_proto::ConfChangeI;
 use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use time::{Duration, Timespec};
+
+use crate::coprocessor::Config as CopConfig;
+use crate::store::fsm::StoreMeta;
+use crate::store::Config;
 
 use super::peer_storage;
 use crate::{Error, Result};
@@ -284,6 +290,27 @@ pub fn compare_region_epoch(
     }
 
     Ok(())
+}
+
+pub fn find_sibling_regions(
+    store_meta: &Arc<RwLock<StoreMeta>>,
+    cfg: &Config,
+    cop_cfg: &CopConfig,
+    region: &Region,
+) -> Vec<Region> {
+    let meta = store_meta.read().unwrap();
+    let region_ids = if cfg.right_derive_when_split {
+        meta.region_ranges
+            .range((Unbounded::<Vec<u8>>, Excluded(enc_end_key(region))))
+            .take(cop_cfg.batch_split_limit as usize)
+    } else {
+        meta.region_ranges
+            .range((Included(enc_start_key(region)), Unbounded::<Vec<u8>>))
+            .take(cop_cfg.batch_split_limit as usize)
+    };
+    region_ids
+        .map(|(_, region_id)| meta.regions[region_id].to_owned())
+        .collect()
 }
 
 #[inline]

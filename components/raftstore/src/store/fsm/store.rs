@@ -40,7 +40,9 @@ use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
 use crate::coprocessor::split_observer::SplitObserver;
-use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
+use crate::coprocessor::{
+    BoxAdminObserver, Config as CopConfig, CoprocessorHost, RegionChangeEvent,
+};
 use crate::observe_perf_context_type;
 use crate::report_perf_context;
 use crate::store::config::Config;
@@ -290,6 +292,7 @@ where
     ER: RaftEngine,
 {
     pub cfg: Config,
+    pub cop_cfg: CopConfig,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask<EK>>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
@@ -891,6 +894,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
 
 pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T, C> {
     pub cfg: Arc<VersionTrack<Config>>,
+    pub cop_cfg: CopConfig,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask<EK>>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
@@ -1089,6 +1093,7 @@ where
     fn build(&mut self) -> RaftPoller<EK, ER, T, C> {
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
+            cop_cfg: self.cop_cfg.clone(),
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
@@ -1172,6 +1177,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
+        cop_cfg: CopConfig,
         engines: Engines<EK, ER>,
         trans: T,
         pd_client: Arc<C>,
@@ -1204,6 +1210,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         };
         let mut builder = RaftPollerBuilder {
             cfg,
+            cop_cfg,
             store: meta,
             engines,
             router: self.router.clone(),

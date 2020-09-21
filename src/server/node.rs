@@ -19,6 +19,7 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
+use raftstore::coprocessor::Config as CopConfig;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
@@ -62,6 +63,7 @@ pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
+    cop_cfg: CopConfig,
     system: RaftBatchSystem<RocksEngine, ER>,
     has_started: bool,
 
@@ -79,6 +81,7 @@ where
         system: RaftBatchSystem<RocksEngine, ER>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
+        cop_cfg: CopConfig,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
     ) -> Node<C, ER> {
@@ -122,6 +125,7 @@ where
             cluster_id: cfg.cluster_id,
             store,
             store_cfg,
+            cop_cfg,
             pd_client,
             system,
             has_started: false,
@@ -391,11 +395,13 @@ where
         }
         self.has_started = true;
         let cfg = self.store_cfg.clone();
+        let cop_cfg = self.cop_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
         self.system.spawn(
             store,
             cfg,
+            cop_cfg,
             engines,
             trans,
             pd_client,
