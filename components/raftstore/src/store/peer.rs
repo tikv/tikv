@@ -690,7 +690,7 @@ where
             return None;
         }
         {
-            let meta = ctx.store_meta.lock().unwrap();
+            let meta = ctx.store_meta.read().unwrap();
             if meta.atomic_snap_regions.contains_key(&self.region_id) {
                 info!(
                     "stale peer is applying atomic snapshot, will destroy next time";
@@ -1447,7 +1447,7 @@ where
                 return None;
             }
 
-            let meta = ctx.store_meta.lock().unwrap();
+            let meta = ctx.store_meta.read().unwrap();
             // For merge process, the stale source peer is destroyed asynchronously when applying
             // snapshot or creating new peer. So here checks whether there is any overlap, if so,
             // wait and do not handle raft ready.
@@ -1643,7 +1643,7 @@ where
 
         if apply_snap_result.is_some() {
             self.activate(ctx);
-            let mut meta = ctx.store_meta.lock().unwrap();
+            let mut meta = ctx.store_meta.write().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));
         }
@@ -1919,7 +1919,7 @@ where
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
             let progress = ReadProgress::applied_index_term(applied_index_term);
-            let mut meta = ctx.store_meta.lock().unwrap();
+            let mut meta = ctx.store_meta.write().unwrap();
             let reader = meta.readers.get_mut(&self.region_id).unwrap();
             self.maybe_update_read_progress(reader, progress);
         }
@@ -1972,12 +1972,12 @@ where
             }
         };
         if let Some(progress) = progress {
-            let mut meta = ctx.store_meta.lock().unwrap();
+            let mut meta = ctx.store_meta.write().unwrap();
             let reader = meta.readers.get_mut(&self.region_id).unwrap();
             self.maybe_update_read_progress(reader, progress);
         }
         if let Some(progress) = read_progress {
-            let mut meta = ctx.store_meta.lock().unwrap();
+            let mut meta = ctx.store_meta.write().unwrap();
             let reader = meta.readers.get_mut(&self.region_id).unwrap();
             self.maybe_update_read_progress(reader, progress);
         }

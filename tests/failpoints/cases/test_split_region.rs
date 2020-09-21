@@ -139,7 +139,7 @@ fn test_split_lost_request_vote() {
     // Make sure pre-vote is cached in pending votes.
     {
         let store_meta = cluster.store_metas.get(&3).unwrap();
-        let meta = store_meta.lock().unwrap();
+        let meta = store_meta.read().unwrap();
         assert!(meta.pending_votes.iter().any(|m| {
             m.region_id == new_region.id
                 && raftstore::store::util::is_first_vote_msg(m.get_message())
