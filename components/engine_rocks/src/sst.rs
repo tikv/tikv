@@ -123,6 +123,7 @@ pub struct RocksSstWriterBuilder {
     db: Option<Arc<DB>>,
     in_memory: bool,
     compression_type: Option<DBCompressionType>,
+    compression_level: i32,
 }
 
 impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
@@ -132,6 +133,7 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
             in_memory: false,
             db: None,
             compression_type: None,
+            compression_level: 0,
         }
     }
 
@@ -152,6 +154,11 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
 
     fn set_compression_type(mut self, compression: Option<SstCompressionType>) -> Self {
         self.compression_type = compression.map(to_rocks_compression_type);
+        self
+    }
+
+    fn set_compression_level(mut self, level: i32) -> Self {
+        self.compression_level = level;
         self
     }
 
@@ -189,6 +196,12 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         } else {
             get_fastest_supported_compression_type()
         };
+        // TODO: 0 is a valid value for compression_level
+        if self.compression_level != 0 {
+            // other three fields are default value.
+            // see: https://github.com/facebook/rocksdb/blob/8cb278d11a43773a3ac22e523f4d183b06d37d88/include/rocksdb/advanced_options.h#L146-L153
+            io_options.set_compression_options(-14, self.compression_level, 0, 0);
+        }
         io_options.compression(compress_type);
         // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
         // compression_per_level first, so to make sure our specified compression type

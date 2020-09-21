@@ -107,7 +107,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         };
         match res {
             Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
-            Err(ref e) => error!("switch mode failed"; "mode" => ?req.get_mode(), "err" => %e),
+            Err(ref e) => error!(%e; "switch mode failed"; "mode" => ?req.get_mode(),),
         }
 
         ctx.spawn(

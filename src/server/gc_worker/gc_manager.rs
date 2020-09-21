@@ -338,7 +338,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             Ok(res) => res,
             // Return false directly so we will check it a while later.
             Err(e) => {
-                error!("failed to get safe point from pd"; "err" => ?e);
+                error!(?e; "failed to get safe point from pd");
                 return false;
             }
         };
@@ -530,7 +530,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             "end_key" => next_key.as_ref().map(DisplayValue)
         );
         if let Err(e) = sync_gc(&self.worker_scheduler, ctx.clone(), self.safe_point) {
-            error!(
+            warn!(
                 "failed gc"; "region_id" => ctx.get_region_id(), "region_epoch" => ?ctx.region_epoch.as_ref(),
                 "end_key" => next_key.as_ref().map(DisplayValue),
                 "err" => ?e
@@ -570,9 +570,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         );
 
         if let Err(e) = res {
-            error!(
-                "gc_worker: failed to get next region information"; "err" => ?e
-            );
+            error!(?e; "gc_worker: failed to get next region information");
             return (None, None);
         };
 

@@ -275,7 +275,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             kv_snap,
             notifier,
         ) {
-            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
+            error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
             return;
         }
 
@@ -389,7 +389,8 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                     .inc();
             }
             Err(e) => {
-                error!("failed to apply snap!!!"; "err" => %e);
+                error!(%e; "failed to apply snap!!!");
+
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
             }
@@ -413,12 +414,11 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                 .c()
                 .delete_all_files_in_range(start_key, end_key)
             {
-                error!(
+                error!(%e;
                     "failed to delete files in range";
                     "region_id" => region_id,
                     "start_key" => log_wrappers::Key(start_key),
                     "end_key" => log_wrappers::Key(end_key),
-                    "err" => %e,
                 );
                 return;
             }
@@ -429,12 +429,11 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                 .c()
                 .delete_all_in_range(start_key, end_key, self.use_delete_range)
         {
-            error!(
+            error!(%e;
                 "failed to delete data in range";
                 "region_id" => region_id,
                 "start_key" => log_wrappers::Key(start_key),
                 "end_key" => log_wrappers::Key(end_key),
-                "err" => %e,
             );
         } else {
             info!(
