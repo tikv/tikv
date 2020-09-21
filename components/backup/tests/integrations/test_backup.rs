@@ -98,7 +98,7 @@ impl TestSuite {
         cluster.must_put(b"foo", b"foo");
         let region_id = 1;
         let leader = cluster.leader_of_region(region_id).unwrap();
-        let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
+        let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id());
 
         let epoch = cluster.get_region_epoch(region_id);
         let mut context = Context::default();
