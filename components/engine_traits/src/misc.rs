@@ -120,4 +120,6 @@ pub trait MiscExt: CFNamesExt {
     fn get_latest_sequence_number(&self) -> u64;
 
     fn get_oldest_snapshot_sequence_number(&self) -> Option<u64>;
+
+    fn get_total_sst_files_size_cf(&self, cf: &str) -> Result<Option<u64>>;
 }

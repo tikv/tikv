@@ -195,6 +195,12 @@ impl MiscExt for RocksEngine {
             s => s,
         }
     }
+
+    fn get_total_sst_files_size_cf(&self, cf: &str) -> Result<Option<u64>> {
+        const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(self.as_inner().get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE))
+    }
 }
 
 #[cfg(test)]
