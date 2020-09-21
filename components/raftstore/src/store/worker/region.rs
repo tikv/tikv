@@ -438,13 +438,6 @@ where
                 "start_key" => log_wrappers::Value::key(start_key),
                 "end_key" => log_wrappers::Value::key(end_key),
             );
-        } else {
-            info!(
-                "succeed in deleting data in range";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Value::key(start_key),
-                "end_key" => log_wrappers::Value::key(end_key),
-            );
         }
         if use_delete_files {
             if let Err(e) = self
