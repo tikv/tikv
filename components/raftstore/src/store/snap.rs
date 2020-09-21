@@ -1520,7 +1520,7 @@ pub mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock};
 
-    use engine_test::ctor::{EngineConstructorExt, DBOptions, CFOptions};
+    use engine_test::ctor::{EngineConstructorExt, DBOptions, CFOptions, ColumnFamilyOptions};
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_test::raft::{RaftTestEngine};
     use engine_traits::Engines;
@@ -2385,7 +2385,15 @@ pub mod tests {
             .prefix("test-snapshot-max-total-size-db")
             .tempdir()
             .unwrap();
-        let engine = get_test_db_for_regions(&kv_path, None, None, None, None, &regions).unwrap();
+        // Disable property collection so that the total snapshot size
+        // isn't dependent on them.
+        let kv_cf_opts = ALL_CFS.iter().map(|cf| {
+            let mut cf_opts = ColumnFamilyOptions::new();
+            cf_opts.set_no_range_properties(true);
+            cf_opts.set_no_table_properties(true);
+            CFOptions::new(cf, cf_opts)
+        }).collect();
+        let engine = get_test_db_for_regions(&kv_path, None, None, None, Some(kv_cf_opts), &regions).unwrap();
 
         let snapfiles_path = Builder::new()
             .prefix("test-snapshot-max-total-size-snapshots")
