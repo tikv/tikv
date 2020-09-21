@@ -3,8 +3,7 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::ptr::NonNull;
-
-use servo_arc::Arc;
+use std::sync::Arc;
 
 use tipb::{Expr, FieldType, TopN};
 
