@@ -186,8 +186,8 @@ impl Debug for Range {
             f,
             "{{ cf: {:?}, start_key: {:?}, end_key: {:?} }}",
             self.cf,
-            log_wrappers::Key(&self.start_key),
-            log_wrappers::Key(&self.end_key)
+            log_wrappers::Value::key(&self.start_key),
+            log_wrappers::Value::key(&self.end_key)
         )
     }
 }
@@ -1362,8 +1362,8 @@ where
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
-                    log_wrappers::Key(&key),
-                    log_wrappers::Value(&value),
+                    log_wrappers::Value::key(&key),
+                    log_wrappers::Value::value(&value),
                     cf,
                     e
                 )
@@ -1373,8 +1373,8 @@ where
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
-                    log_wrappers::Key(&key),
-                    log_wrappers::Value(&value),
+                    log_wrappers::Value::key(&key),
+                    log_wrappers::Value::value(&value),
                     e
                 );
             });
@@ -1398,7 +1398,7 @@ where
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    log_wrappers::Key(&key),
+                    log_wrappers::Value::key(&key),
                     e
                 )
             });
@@ -1414,7 +1414,7 @@ where
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    log_wrappers::Key(&key),
+                    log_wrappers::Value::key(&key),
                     e
                 )
             });
@@ -1468,8 +1468,8 @@ where
                     panic!(
                         "{} failed to delete files in range [{}, {}): {:?}",
                         self.tag,
-                        log_wrappers::Key(&start_key),
-                        log_wrappers::Key(&end_key),
+                        log_wrappers::Value::key(&start_key),
+                        log_wrappers::Value::key(&end_key),
                         e
                     )
                 });
@@ -1481,8 +1481,8 @@ where
                     panic!(
                         "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
                         self.tag,
-                        log_wrappers::Key(&start_key),
-                        log_wrappers::Key(&end_key),
+                        log_wrappers::Value::key(&start_key),
+                        log_wrappers::Value::key(&end_key),
                         cf,
                         e
                     );

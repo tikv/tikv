@@ -91,44 +91,17 @@ pub fn set_redact_info_log(v: bool) {
     proto_set_redact_bytes(v);
 }
 
-pub struct Key<'a>(pub &'a [u8]);
-
-impl<'a> slog::Value for Key<'a> {
-    #[inline]
-    fn serialize(
-        &self,
-        _record: &::slog::Record<'_>,
-        key: slog::Key,
-        serializer: &mut dyn slog::Serializer,
-    ) -> slog::Result {
-        if REDACT_INFO_LOG.load(Ordering::Relaxed) {
-            serializer.emit_arguments(key, &format_args!("<key>"))
-        } else {
-            serializer.emit_arguments(key, &format_args!("{}", hex::encode_upper(self.0)))
-        }
-    }
-}
-
-impl<'a> fmt::Display for Key<'a> {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if REDACT_INFO_LOG.load(Ordering::Relaxed) {
-            // Print placeholder instead of the key itself.
-            write!(f, "<key>")
-        } else {
-            write!(f, "{}", hex::encode_upper(self.0))
-        }
-    }
-}
-
-impl<'a> fmt::Debug for Key<'a> {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
-
 pub struct Value<'a>(pub &'a [u8]);
+
+impl<'a> Value<'a> {
+    pub fn key(key: &'a [u8]) -> Self {
+        Value(key)
+    }
+
+    pub fn value(value: &'a [u8]) -> Self {
+        Value(value)
+    }
+}
 
 impl<'a> slog::Value for Value<'a> {
     #[inline]
@@ -139,7 +112,7 @@ impl<'a> slog::Value for Value<'a> {
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         if REDACT_INFO_LOG.load(Ordering::Relaxed) {
-            serializer.emit_arguments(key, &format_args!("<value>"))
+            serializer.emit_arguments(key, &format_args!("?"))
         } else {
             serializer.emit_arguments(key, &format_args!("{}", hex::encode_upper(self.0)))
         }
@@ -150,8 +123,8 @@ impl<'a> fmt::Display for Value<'a> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if REDACT_INFO_LOG.load(Ordering::Relaxed) {
-            // Print placeholder instead of the key itself.
-            write!(f, "<value>")
+            // Print placeholder instead of the value itself.
+            write!(f, "?")
         } else {
             write!(f, "{}", hex::encode_upper(self.0))
         }
@@ -170,16 +143,18 @@ impl<'a> fmt::Debug for Value<'a> {
 fn test_log_key() {
     let buffer = crate::test_util::SyncLoggerBuffer::new();
     let logger = buffer.build_logger();
-    slog_info!(logger, "foo"; "bar" => Key(b"\xAB \xCD"));
+    slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
     assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: AB20CD\n");
 }
 
 #[cfg(test)]
 #[test]
+#[ignore]
 fn test_redact_info_log() {
     let buffer = crate::test_util::SyncLoggerBuffer::new();
     let logger = buffer.build_logger();
     set_redact_info_log(true);
-    slog_info!(logger, "foo"; "bar" => Key(b"\xAB \xCD"));
-    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: <key>\n");
+    slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
+    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: ?\n");
+    set_redact_info_log(false);
 }

@@ -219,8 +219,8 @@ impl RangePropertiesExt for RocksEngine {
                 split_size,
                 collection.len(),
                 cfname,
-                log_wrappers::Key(&start_key),
-                log_wrappers::Key(&end_key)
+                log_wrappers::Value::key(&start_key),
+                log_wrappers::Value::key(&end_key)
             ));
         }
         keys.sort();

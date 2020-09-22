@@ -702,13 +702,13 @@ impl<
         let mut it = self.0.clone();
         match it.len() {
             0 => write!(f, "(no key)"),
-            1 => write!(f, "key {}", log_wrappers::Key(it.next().unwrap())),
+            1 => write!(f, "key {}", log_wrappers::Value::key(it.next().unwrap())),
             _ => write!(
                 f,
                 "{} keys range from {} to {}",
                 it.len(),
-                log_wrappers::Key(it.next().unwrap()),
-                log_wrappers::Key(it.next_back().unwrap())
+                log_wrappers::Value::key(it.next().unwrap()),
+                log_wrappers::Value::key(it.next_back().unwrap())
             ),
         }
     }

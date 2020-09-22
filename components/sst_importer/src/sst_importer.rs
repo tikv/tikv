@@ -367,7 +367,7 @@ impl SSTImporter {
                     .map_err(|e| {
                         Error::BadFormat(format!(
                             "key {}: {}",
-                            log_wrappers::Key(keys::origin_key(iter.key())),
+                            log_wrappers::Value::key(keys::origin_key(iter.key())),
                             e
                         ))
                     })?
@@ -377,7 +377,7 @@ impl SSTImporter {
                     let mut write = WriteRef::parse(iter.value()).map_err(|e| {
                         Error::BadFormat(format!(
                             "write {}: {}",
-                            log_wrappers::Key(keys::origin_key(iter.key())),
+                            log_wrappers::Value::key(keys::origin_key(iter.key())),
                             e
                         ))
                     })?;

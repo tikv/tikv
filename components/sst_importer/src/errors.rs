@@ -98,8 +98,8 @@ quick_error! {
             display("\
                 {} has wrong prefix: key {} does not start with {}",
                 what,
-                log_wrappers::Key(&key),
-                log_wrappers::Key(&prefix),
+                log_wrappers::Value::key(&key),
+                log_wrappers::Value::key(&prefix),
             )
         }
         BadFormat(msg: String) {

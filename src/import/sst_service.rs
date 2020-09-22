@@ -319,14 +319,14 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             match res {
                 Ok(_) => info!(
                     "compact files in range";
-                    "start" => start.map(log_wrappers::Key),
-                    "end" => end.map(log_wrappers::Key),
+                    "start" => start.map(log_wrappers::Value::key),
+                    "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level, "takes" => ?timer.elapsed()
                 ),
                 Err(ref e) => error!(%e;
                     "compact files in range failed";
-                    "start" => start.map(log_wrappers::Key),
-                    "end" => end.map(log_wrappers::Key),
+                    "start" => start.map(log_wrappers::Value::key),
+                    "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level,
                 ),
             }
@@ -334,14 +334,14 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             match res {
                 Ok(_) => info!(
                     "compact files in range";
-                    "start" => start.map(log_wrappers::Key),
-                    "end" => end.map(log_wrappers::Key),
+                    "start" => start.map(log_wrappers::Value::key),
+                    "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level, "takes" => ?timer.elapsed()
                 ),
                 Err(ref e) => error!(
                     "compact files in range failed";
-                    "start" => start.map(log_wrappers::Key),
-                    "end" => end.map(log_wrappers::Key),
+                    "start" => start.map(log_wrappers::Value::key),
+                    "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level, "err" => %e
                 ),
             }
