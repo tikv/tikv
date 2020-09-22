@@ -305,6 +305,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot, WriteData};
+    use crate::storage::txn::prewrite;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -361,57 +362,6 @@ pub mod tests {
         assert!(reader.get(&Key::from_raw(key), ts.into(), false).is_err());
     }
 
-    // Insert has a constraint that key should not exist
-    pub fn try_prewrite_insert<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-    ) -> Result<()> {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let ts = ts.into();
-        let cm = ConcurrencyManager::new(ts);
-        let mut txn = MvccTxn::new(snapshot, ts, true, cm);
-
-        txn.prewrite(
-            Mutation::Insert((Key::from_raw(key), value.to_vec())),
-            pk,
-            &None,
-            false,
-            0,
-            0,
-            TimeStamp::default(),
-        )?;
-        write(engine, &ctx, txn.into_modifies());
-        Ok(())
-    }
-
-    pub fn try_prewrite_check_not_exists<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-    ) -> Result<()> {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let ts = ts.into();
-        let cm = ConcurrencyManager::new(ts);
-        let mut txn = MvccTxn::new(snapshot, ts, true, cm);
-
-        txn.prewrite(
-            Mutation::CheckNotExists(Key::from_raw(key)),
-            pk,
-            &None,
-            false,
-            0,
-            0,
-            TimeStamp::default(),
-        )?;
-        Ok(())
-    }
-
     pub fn try_pessimistic_prewrite_check_not_exists<E: Engine>(
         engine: &E,
         key: &[u8],
@@ -459,7 +409,8 @@ pub mod tests {
 
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
         if for_update_ts.is_zero() {
-            txn.prewrite(
+            prewrite(
+                &mut txn,
                 mutation,
                 pk,
                 &secondary_keys,
@@ -686,8 +637,17 @@ pub mod tests {
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
 
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &None, false, 0, 0, TimeStamp::default())
-                .unwrap_err()
+            prewrite(
+                &mut txn,
+                mutation,
+                pk,
+                &None,
+                false,
+                0,
+                0,
+                TimeStamp::default(),
+            )
+            .unwrap_err()
         } else {
             txn.pessimistic_prewrite(
                 mutation,
@@ -772,8 +732,17 @@ pub mod tests {
         let mutation = Mutation::Delete(Key::from_raw(key));
 
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &None, false, 0, 0, TimeStamp::default())
-                .unwrap();
+            prewrite(
+                &mut txn,
+                mutation,
+                pk,
+                &None,
+                false,
+                0,
+                0,
+                TimeStamp::default(),
+            )
+            .unwrap();
         } else {
             txn.pessimistic_prewrite(
                 mutation,
@@ -829,8 +798,17 @@ pub mod tests {
 
         let mutation = Mutation::Lock(Key::from_raw(key));
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &None, false, 0, 0, TimeStamp::default())
-                .unwrap();
+            prewrite(
+                &mut txn,
+                mutation,
+                pk,
+                &None,
+                false,
+                0,
+                0,
+                TimeStamp::default(),
+            )
+            .unwrap();
         } else {
             txn.pessimistic_prewrite(
                 mutation,
@@ -871,17 +849,17 @@ pub mod tests {
         let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
-        assert!(txn
-            .prewrite(
-                Mutation::Lock(Key::from_raw(key)),
-                pk,
-                &None,
-                false,
-                0,
-                0,
-                TimeStamp::default(),
-            )
-            .is_err());
+        assert!(prewrite(
+            &mut txn,
+            Mutation::Lock(Key::from_raw(key)),
+            pk,
+            &None,
+            false,
+            0,
+            0,
+            TimeStamp::default(),
+        )
+        .is_err());
     }
 
     pub fn must_pessimistic_prewrite_lock<E: Engine>(
