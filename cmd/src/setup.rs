@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Local;
 use clap::ArgMatches;
-use kvproto::encryptionpb::EncryptionMethod;
 use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
 use tikv_util::collections::HashMap;
 use tikv_util::{self, config, logger};
