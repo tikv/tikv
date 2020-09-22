@@ -299,18 +299,20 @@ pub fn find_sibling_regions(
     region: &Region,
 ) -> Vec<Region> {
     let meta = store_meta.read().unwrap();
-    let region_ids = if cfg.right_derive_when_split {
+    if cfg.right_derive_when_split {
         meta.region_ranges
             .range((Unbounded::<Vec<u8>>, Excluded(enc_end_key(region))))
+            .rev()
             .take(cop_cfg.batch_split_limit as usize)
+            .map(|(_, region_id)| meta.regions[region_id].to_owned())
+            .collect()
     } else {
         meta.region_ranges
             .range((Included(enc_start_key(region)), Unbounded::<Vec<u8>>))
             .take(cop_cfg.batch_split_limit as usize)
-    };
-    region_ids
-        .map(|(_, region_id)| meta.regions[region_id].to_owned())
-        .collect()
+            .map(|(_, region_id)| meta.regions[region_id].to_owned())
+            .collect()
+    }
 }
 
 #[inline]
