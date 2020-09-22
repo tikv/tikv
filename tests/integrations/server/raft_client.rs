@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{thread, time};
 
-use futures::{Future, Stream};
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use grpcio::{
     ClientStreamingSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, Server,
 };
@@ -17,7 +17,7 @@ use tikv::server::{load_statistics::ThreadLoad, Config, RaftClient};
 
 use super::{mock_kv_service, MockKv, MockKvService};
 
-pub fn get_raft_client(pool: &tokio_threadpool::ThreadPool) -> RaftClient<RaftStoreBlackHole> {
+pub fn get_raft_client(pool: &tokio::runtime::Runtime) -> RaftClient<RaftStoreBlackHole> {
     let env = Arc::new(Environment::new(2));
     let cfg = Arc::new(Config::default());
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
@@ -28,7 +28,7 @@ pub fn get_raft_client(pool: &tokio_threadpool::ThreadPool) -> RaftClient<RaftSt
         security_mgr,
         RaftStoreBlackHole,
         grpc_thread_load,
-        Some(pool.sender().clone()),
+        Some(pool.handle().clone()),
     )
 }
 
@@ -61,14 +61,15 @@ impl MockKvService for MockKvForRaft {
         sink: ClientStreamingSink<Done>,
     ) {
         let counter = Arc::clone(&self.msg_count);
-        ctx.spawn(
+        ctx.spawn(async move {
             stream
                 .for_each(move |_| {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
+                    futures::future::ready(())
                 })
-                .map_err(|_| drop(sink)),
-        );
+                .await;
+            drop(sink);
+        });
     }
 
     fn batch_raft(
@@ -79,26 +80,32 @@ impl MockKvService for MockKvForRaft {
     ) {
         if !self.allow_batch {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
-            ctx.spawn(sink.fail(status).map_err(|_| ()));
+            ctx.spawn(sink.fail(status).map(|_| ()));
             return;
         }
         let msg_count = Arc::clone(&self.msg_count);
         let batch_msg_count = Arc::clone(&self.batch_msg_count);
-        ctx.spawn(
+        ctx.spawn(async move {
             stream
-                .for_each(move |msgs| {
+                .try_for_each(move |msgs| {
                     batch_msg_count.fetch_add(1, Ordering::SeqCst);
                     msg_count.fetch_add(msgs.msgs.len(), Ordering::SeqCst);
-                    Ok(())
+                    futures::future::ok(())
                 })
-                .map_err(|_| drop(sink)),
-        );
+                .await
+                .unwrap();
+            drop(sink);
+        });
     }
 }
 
 #[test]
 fn test_batch_raft_fallback() {
-    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
+    let pool = tokio::runtime::Builder::new()
+        .threaded_scheduler()
+        .core_threads(1)
+        .build()
+        .unwrap();
     let mut raft_client = get_raft_client(&pool);
 
     let msg_count = Arc::new(AtomicUsize::new(0));
@@ -115,20 +122,24 @@ fn test_batch_raft_fallback() {
 
     assert!(msg_count.load(Ordering::SeqCst) > 0);
     assert_eq!(batch_msg_count.load(Ordering::SeqCst), 0);
-    pool.shutdown().wait().unwrap();
+    pool.shutdown_timeout(time::Duration::from_secs(1));
     drop(mock_server)
 }
 
 #[test]
 // Test raft_client auto reconnect to servers after connection break.
 fn test_raft_client_reconnect() {
-    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
+    let pool = tokio::runtime::Builder::new()
+        .threaded_scheduler()
+        .core_threads(1)
+        .build()
+        .unwrap();
     let mut raft_client = get_raft_client(&pool);
 
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
-    let (mock_server, port) = create_mock_server(service, 60100, 60200).unwrap();
+    let (mut mock_server, port) = create_mock_server(service, 60100, 60200).unwrap();
 
     // `send` should success.
     let addr = format!("localhost:{}", port);
@@ -138,6 +149,7 @@ fn test_raft_client_reconnect() {
     check_msg_count(500, &msg_count, 50);
 
     // `send` should fail after the mock server stopped.
+    mock_server.shutdown();
     drop(mock_server);
 
     let send = |_| {
@@ -155,12 +167,16 @@ fn test_raft_client_reconnect() {
     check_msg_count(500, &msg_count, 100);
 
     drop(mock_server);
-    pool.shutdown().wait().unwrap();
+    pool.shutdown_timeout(time::Duration::from_secs(1));
 }
 
 #[test]
 fn test_batch_size_limit() {
-    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
+    let pool = tokio::runtime::Builder::new()
+        .threaded_scheduler()
+        .core_threads(1)
+        .build()
+        .unwrap();
     let mut raft_client = get_raft_client(&pool);
 
     let msg_count = Arc::new(AtomicUsize::new(0));

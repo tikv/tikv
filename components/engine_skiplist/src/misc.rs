@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::SkiplistEngine;
-use engine_traits::{MiscExt, Range, Result};
+use engine_traits::{MiscExt, Range, Result, SyncMutable};
 use std::sync::atomic::Ordering;
 
 impl MiscExt for SkiplistEngine {
@@ -64,5 +64,25 @@ impl MiscExt for SkiplistEngine {
 
     fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
         Some(self.get_latest_sequence_number() + 1)
+    }
+
+    fn delete_blob_files_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        include_end: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn delete_all_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        use_delete_range: bool,
+    ) -> Result<()> {
+        self.delete_files_in_range_cf(cf, start_key, end_key, false)
     }
 }

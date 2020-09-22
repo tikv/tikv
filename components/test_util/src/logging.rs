@@ -21,6 +21,7 @@ impl<'a> slog::Serializer for Serializer<'a> {
 /// A logger that add a test case tag before each line of log.
 struct CaseTraceLogger {
     f: Option<Mutex<File>>,
+    skip_tags: Vec<&'static str>,
 }
 
 // FIXME: Remove this type when slog::Never implements Display.
@@ -38,8 +39,12 @@ impl CaseTraceLogger {
         w: &mut dyn std::io::Write,
         record: &Record<'_>,
         values: &OwnedKVList,
+        skip_tags: &[&str],
     ) -> Result<(), std::io::Error> {
         use slog::KV;
+        if skip_tags.contains(&record.tag()) {
+            return Ok(());
+        }
 
         let tag = tikv_util::get_tag_from_thread_name().map_or_else(|| "".to_owned(), |s| s + " ");
         let t = time::now();
@@ -71,10 +76,10 @@ impl Drain for CaseTraceLogger {
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         if let Some(ref out) = self.f {
             let mut w = out.lock().unwrap();
-            let _ = Self::write_log(&mut *w, record, values);
+            let _ = Self::write_log(&mut *w, record, values, &self.skip_tags);
         } else {
             let mut w = io::stderr();
-            let _ = Self::write_log(&mut w, record, values);
+            let _ = Self::write_log(&mut w, record, values, &self.skip_tags);
         }
         Ok(())
     }
@@ -96,8 +101,17 @@ pub fn init_log_for_test() {
     )
     .unwrap();
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
-    // we don't mind set it multiple times.
-    let drainer = CaseTraceLogger { f: writer };
+    // We don't mind set it multiple times.
+    // We hardly ever read rocksdb log in tests.
+    let drainer = CaseTraceLogger {
+        f: writer,
+        skip_tags: vec![
+            "rocksdb_log",
+            "raftdb_log",
+            "rocksdb_log_header",
+            "raftdb_log_header",
+        ],
+    };
 
     // Default disabled log targets for test.
     let disabled_targets = vec!["tokio_core".to_owned(), "tokio_reactor".to_owned()];

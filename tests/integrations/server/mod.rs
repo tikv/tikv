@@ -10,7 +10,7 @@ mod status_server;
 use std::sync::Arc;
 
 use ::security::{SecurityConfig, SecurityManager};
-use futures::Future;
+use futures::future::FutureExt;
 use grpcio::RpcStatusCode;
 use grpcio::*;
 use kvproto::coprocessor::*;
@@ -24,7 +24,7 @@ macro_rules! unary_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: $req_name, sink: UnarySink<$resp_name>) {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
-            ctx.spawn(sink.fail(status).map_err(|_| ()));
+            ctx.spawn(sink.fail(status).map(|_| ()));
         }
     };
 }
@@ -38,7 +38,7 @@ macro_rules! sstream_call {
             sink: ServerStreamingSink<$resp_name>,
         ) {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
-            ctx.spawn(sink.fail(status).map_err(|_| ()));
+            ctx.spawn(sink.fail(status).map(|_| ()));
         }
     };
 }
@@ -52,7 +52,7 @@ macro_rules! cstream_call {
             sink: ClientStreamingSink<$resp_name>,
         ) {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
-            ctx.spawn(sink.fail(status).map_err(|_| ()));
+            ctx.spawn(sink.fail(status).map(|_| ()));
         }
     };
 }
@@ -66,7 +66,7 @@ macro_rules! bstream_call {
             sink: DuplexSink<$resp_name>,
         ) {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
-            ctx.spawn(sink.fail(status).map_err(|_| ()));
+            ctx.spawn(sink.fail(status).map(|_| ()));
         }
     };
 }

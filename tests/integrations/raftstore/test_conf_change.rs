@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::*;
 
-use futures03::executor::block_on;
+use futures::executor::block_on;
 
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
@@ -939,6 +939,7 @@ fn test_conf_change_fast() {
     let timer = Instant::now();
     // If conf change relies on heartbeat, it will take more than 5 seconds to finish,
     // hence it must timeout.
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     assert!(timer.elapsed() < Duration::from_secs(5));

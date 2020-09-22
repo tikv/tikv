@@ -1,5 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt::{self, Debug, Display, Formatter};
+use std::io::Error as IoError;
+use std::result;
+use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
+
 use engine_skiplist::{SkiplistEngine, SkiplistSnapshot, SkiplistTablePropertiesCollection};
 use engine_traits::CfName;
 use engine_traits::CF_DEFAULT;
@@ -13,11 +18,7 @@ use kvproto::raft_cmdpb::{
     RaftRequestHeader, Request, Response,
 };
 use kvproto::{errorpb, metapb};
-use std::fmt::{self, Debug, Display, Formatter};
-use std::io::Error as IoError;
-use std::result;
-use std::{sync::atomic::Ordering, time::Duration};
-use txn_types::{Key, TimeStamp, TxnExtra, Value};
+use txn_types::{Key, TimeStamp, TxnExtraScheduler, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -27,7 +28,7 @@ use crate::storage::kv::{
 };
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
-use raftstore::router::RaftStoreRouter;
+use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
 use tikv_util::time::Instant;
@@ -108,9 +109,13 @@ impl From<RaftServerError> for KvError {
 
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
-pub struct RaftKv<S: RaftStoreRouter<SkiplistEngine> + 'static> {
+pub struct RaftKv<S>
+where
+    S: RaftStoreRouter<SkiplistEngine> + LocalReadRouter<SkiplistEngine> + 'static,
+{
     router: S,
     engine: SkiplistEngine,
+    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
 }
 
 pub enum CmdRes {
@@ -165,10 +170,21 @@ fn on_read_result(
     }
 }
 
-impl<S: RaftStoreRouter<SkiplistEngine>> RaftKv<S> {
+impl<S> RaftKv<S>
+where
+    S: RaftStoreRouter<SkiplistEngine> + LocalReadRouter<SkiplistEngine> + 'static,
+{
     /// Create a RaftKv using specified configuration.
     pub fn new(router: S, engine: SkiplistEngine) -> RaftKv<S> {
-        RaftKv { router, engine }
+        RaftKv {
+            router,
+            engine,
+            txn_extra_scheduler: None,
+        }
+    }
+
+    pub fn set_txn_extra_scheduler(&mut self, txn_extra_scheduler: Arc<dyn TxnExtraScheduler>) {
+        self.txn_extra_scheduler = Some(txn_extra_scheduler);
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
@@ -211,7 +227,6 @@ impl<S: RaftStoreRouter<SkiplistEngine>> RaftKv<S> {
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
-        txn_extra: TxnExtra,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
@@ -243,9 +258,8 @@ impl<S: RaftStoreRouter<SkiplistEngine>> RaftKv<S> {
         cmd.set_requests(reqs.into());
 
         self.router
-            .send_command_txn_extra(
+            .send_command(
                 cmd,
-                txn_extra,
                 StoreCallback::Write(Box::new(move |resp| {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
@@ -262,19 +276,28 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     ))
 }
 
-impl<S: RaftStoreRouter<SkiplistEngine>> Display for RaftKv<S> {
+impl<S> Display for RaftKv<S>
+where
+    S: RaftStoreRouter<SkiplistEngine> + LocalReadRouter<SkiplistEngine> + 'static,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S: RaftStoreRouter<SkiplistEngine>> Debug for RaftKv<S> {
+impl<S> Debug for RaftKv<S>
+where
+    S: RaftStoreRouter<SkiplistEngine> + LocalReadRouter<SkiplistEngine> + 'static,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S: RaftStoreRouter<SkiplistEngine>> Engine for RaftKv<S> {
+impl<S> Engine for RaftKv<S>
+where
+    S: RaftStoreRouter<SkiplistEngine> + LocalReadRouter<SkiplistEngine> + 'static,
+{
     type Snap = RegionSnapshot<SkiplistSnapshot>;
     type Local = SkiplistEngine;
 
@@ -361,10 +384,15 @@ impl<S: RaftStoreRouter<SkiplistEngine>> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
+            if !batch.extra.is_empty() {
+                tx.schedule(batch.extra);
+            }
+        }
+
         self.exec_write_requests(
             ctx,
             reqs,
-            batch.extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();

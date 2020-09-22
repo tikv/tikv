@@ -10,12 +10,10 @@ use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
 use std::{cmp, io};
 
-use futures::Future;
-use futures03::compat::Compat;
-use futures03::future::TryFutureExt;
+use futures::future::TryFutureExt;
 use tokio::task::spawn_local;
 
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, RaftEngine};
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
@@ -23,7 +21,6 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
-use raft_engine::RaftEngine;
 
 use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::cmd_resp::new_error;
@@ -529,8 +526,12 @@ where
         spawn_local(f);
     }
 
+    // Note: The parameter doesn't contain `self` because this function may
+    // be called in an asynchronous context.
     fn handle_ask_batch_split(
-        &self,
+        router: RaftRouter<EK, ER>,
+        scheduler: Scheduler<Task<EK>>,
+        pd_client: Arc<T>,
         mut region: metapb::Region,
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
@@ -543,11 +544,7 @@ where
                 "region_id" => region.get_id());
             return;
         }
-        let router = self.router.clone();
-        let scheduler = self.scheduler.clone();
-        let resp = self
-            .pd_client
-            .ask_batch_split(region.clone(), split_keys.len());
+        let resp = pd_client.ask_batch_split(region.clone(), split_keys.len());
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -948,7 +945,7 @@ where
             while max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
                 match pd_client.get_tso().await {
                     Ok(ts) => {
-                        concurrency_manager.update_max_read_ts(ts);
+                        concurrency_manager.update_max_ts(ts);
                         // Set the least significant bit to 1 to mark it as synced.
                         let old_value = max_ts_sync_status.compare_and_swap(
                             initial_status,
@@ -1015,7 +1012,10 @@ where
                 peer,
                 right_derive,
                 callback,
-            } => self.handle_ask_batch_split(
+            } => Self::handle_ask_batch_split(
+                self.router.clone(),
+                self.scheduler.clone(),
+                self.pd_client.clone(),
                 region,
                 split_keys,
                 peer,
@@ -1024,20 +1024,30 @@ where
                 String::from("batch_split"),
             ),
             Task::AutoSplit { split_infos } => {
-                for split_info in split_infos {
-                    if let Ok(Some(region)) =
-                        Compat::new(self.pd_client.get_region_by_id(split_info.region_id)).wait()
-                    {
-                        self.handle_ask_batch_split(
-                            region,
-                            vec![split_info.split_key],
-                            split_info.peer,
-                            true,
-                            Callback::None,
-                            String::from("auto_split"),
-                        );
+                let pd_client = self.pd_client.clone();
+                let router = self.router.clone();
+                let scheduler = self.scheduler.clone();
+
+                let f = async move {
+                    for split_info in split_infos {
+                        if let Ok(Some(region)) =
+                            pd_client.get_region_by_id(split_info.region_id).await
+                        {
+                            Self::handle_ask_batch_split(
+                                router.clone(),
+                                scheduler.clone(),
+                                pd_client.clone(),
+                                region,
+                                vec![split_info.split_key],
+                                split_info.peer,
+                                true,
+                                Callback::None,
+                                String::from("auto_split"),
+                            );
+                        }
                     }
-                }
+                };
+                spawn_local(f);
             }
 
             Task::Heartbeat {
