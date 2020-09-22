@@ -5,6 +5,7 @@ use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{borrow::Cow, time::*};
 
 use concurrency_manager::ConcurrencyManager;
@@ -871,16 +872,23 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
     }
 }
 
-/// Construct an backup file name based on the given store id and region.
-/// A name consists with three parts: store id, region_id and a epoch version.
+/// Construct an backup file name based on the given store id, region, range start key and local unix timestamp.
+/// A name consists with five parts: store id, region_id, a epoch version, the hash of range start key and timestamp.
+/// range start key is used to keep the unique file name for file, to handle different tables exists on the same region.
+/// local unix timestamp is used to keep the unique file name for file, to handle receive the same request after connection reset.
 fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
+    let start = SystemTime::now();
+    let since_the_epoch = start
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards");
     match key {
         Some(k) => format!(
-            "{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}",
             store_id,
             region.get_id(),
             region.get_region_epoch().get_version(),
-            k
+            k,
+            since_the_epoch.as_millis()
         ),
         None => format!(
             "{}_{}_{}",
