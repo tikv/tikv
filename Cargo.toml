@@ -80,14 +80,13 @@ engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
 error_code = { path = "components/error_code" }
-fail = "0.3"
+fail = "0.4"
 failure = "0.1"
 fs2 = "0.4"
-futures = "0.1"
-futures03 = { package = "futures", version = "0.3.1", features = ["compat", "thread-pool"] }
+futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
-grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.6", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 hyper-tls = "0.4"
 itertools = "0.8"
@@ -180,7 +179,6 @@ raft = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-
 raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
-fail = { git = "https://github.com/tikv/fail-rs.git", rev = "2cf1175a1a5cc2c70bd20ebd45313afd69b558fc" }
 prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6" }
 
 [target.'cfg(target_os = "linux")'.dependencies]

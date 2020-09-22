@@ -620,6 +620,12 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
 /// Checks if a write is needed to be issued after handling the command.
 fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
+        if cmd.get_admin_request().get_cmd_type() == AdminCmdType::CompactLog {
+            // We do not need to sync WAL before compact log, because this request will send a msg to
+            // raft_gc_log thread to delete the entries before this index instead of deleting them in
+            // apply thread directly.
+            return false;
+        }
         return true;
     }
 
@@ -1469,6 +1475,19 @@ where
                         cf,
                         e
                     );
+                });
+            engine
+                .delete_blob_files_in_range_cf(
+                    cf, &start_key, &end_key, /* include_end */ false,
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete blob files in range [{}, {}): {:?}",
+                        self.tag,
+                        hex::encode_upper(&start_key),
+                        hex::encode_upper(&end_key),
+                        e
+                    )
                 });
         }
 

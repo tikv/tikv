@@ -103,9 +103,10 @@ pub enum SecondaryLockStatus {
     RolledBack,
 }
 
+/// An abstraction of a locally-transactional MVCC key-value store
 pub struct MvccTxn<S: Snapshot> {
     pub(crate) reader: MvccReader<S>,
-    start_ts: TimeStamp,
+    pub(crate) start_ts: TimeStamp,
     write_size: usize,
     writes: WriteData,
     // collapse continuous rollbacks.
@@ -114,7 +115,7 @@ pub struct MvccTxn<S: Snapshot> {
     // `concurrency_manager` is used to set memory locks for prewritten keys.
     // Prewritten locks of async commit transactions should be visible to
     // readers before they are written to the engine.
-    concurrency_manager: ConcurrencyManager,
+    pub(crate) concurrency_manager: ConcurrencyManager,
     // After locks are stored in memory in prewrite, the KeyHandleGuard
     // needs to be stored here.
     // When the locks are written to the underlying engine, subsequent
@@ -296,12 +297,12 @@ impl<S: Snapshot> MvccTxn<S> {
                 });
 
             async_commit_ts = key_guard.with_lock(|l| {
-                let max_read_ts = self.concurrency_manager.max_read_ts();
-                let min_commit_ts =
-                    cmp::max(cmp::max(max_read_ts, self.start_ts), for_update_ts).next();
+                let max_ts = self.concurrency_manager.max_ts();
+                fail_point!("before-set-lock-in-memory");
+                let min_commit_ts = cmp::max(cmp::max(max_ts, self.start_ts), for_update_ts).next();
                 lock.min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
                 *l = Some(lock.clone());
-                min_commit_ts
+                lock.min_commit_ts
             });
 
             self.guards.push(key_guard);
@@ -802,101 +803,6 @@ impl<S: Snapshot> MvccTxn<S> {
         )
     }
 
-    pub fn commit(&mut self, key: Key, commit_ts: TimeStamp) -> Result<Option<ReleasedLock>> {
-        fail_point!("commit", |err| Err(make_txn_error(
-            err,
-            &key,
-            self.start_ts,
-        )
-        .into()));
-
-        let mut lock = match self.reader.load_lock(&key)? {
-            Some(mut lock) if lock.ts == self.start_ts => {
-                // A lock with larger min_commit_ts than current commit_ts can't be committed
-                if commit_ts < lock.min_commit_ts {
-                    info!(
-                        "trying to commit with smaller commit_ts than min_commit_ts";
-                        "key" => %key,
-                        "start_ts" => self.start_ts,
-                        "commit_ts" => commit_ts,
-                        "min_commit_ts" => lock.min_commit_ts,
-                    );
-                    return Err(ErrorInner::CommitTsExpired {
-                        start_ts: self.start_ts,
-                        commit_ts,
-                        key: key.into_raw()?,
-                        min_commit_ts: lock.min_commit_ts,
-                    }
-                    .into());
-                }
-
-                // It's an abnormal routine since pessimistic locks shouldn't be committed in our
-                // transaction model. But a pessimistic lock will be left if the pessimistic
-                // rollback request fails to send and the transaction need not to acquire
-                // this lock again(due to WriteConflict). If the transaction is committed, we
-                // should commit this pessimistic lock too.
-                if lock.lock_type == LockType::Pessimistic {
-                    warn!(
-                        "commit a pessimistic lock with Lock type";
-                        "key" => %key,
-                        "start_ts" => self.start_ts,
-                        "commit_ts" => commit_ts,
-                    );
-                    // Commit with WriteType::Lock.
-                    lock.lock_type = LockType::Lock;
-                }
-                lock
-            }
-            _ => {
-                return match self
-                    .reader
-                    .get_txn_commit_record(&key, self.start_ts)?
-                    .info()
-                {
-                    Some((_, WriteType::Rollback)) | None => {
-                        MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
-                        // None: related Rollback has been collapsed.
-                        // Rollback: rollback by concurrent transaction.
-                        info!(
-                            "txn conflict (lock not found)";
-                            "key" => %key,
-                            "start_ts" => self.start_ts,
-                            "commit_ts" => commit_ts,
-                        );
-                        Err(ErrorInner::TxnLockNotFound {
-                            start_ts: self.start_ts,
-                            commit_ts,
-                            key: key.into_raw()?,
-                        }
-                        .into())
-                    }
-                    // Committed by concurrent transaction.
-                    Some((_, WriteType::Put))
-                    | Some((_, WriteType::Delete))
-                    | Some((_, WriteType::Lock)) => {
-                        MVCC_DUPLICATE_CMD_COUNTER_VEC.commit.inc();
-                        Ok(None)
-                    }
-                };
-            }
-        };
-        let mut write = Write::new(
-            WriteType::from_lock_type(lock.lock_type).unwrap(),
-            self.start_ts,
-            lock.short_value.take(),
-        );
-
-        for ts in &lock.rollback_ts {
-            if *ts == commit_ts {
-                write = write.set_overlapped_rollback(true);
-                break;
-            }
-        }
-
-        self.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
-        Ok(self.unlock_key(key, lock.is_pessimistic_txn()))
-    }
-
     pub fn rollback(&mut self, key: Key) -> Result<Option<ReleasedLock>> {
         fail_point!("rollback", |err| Err(make_txn_error(
             err,
@@ -1222,7 +1128,10 @@ mod tests {
     use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
+
     use crate::storage::txn::commands::*;
+    use crate::storage::txn::commit;
+    use crate::storage::txn::tests::*;
     use crate::storage::SecondaryLocksStatus;
     use kvproto::kvrpcpb::Context;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
@@ -1556,131 +1465,6 @@ mod tests {
         test_mvcc_txn_prewrite_imp(b"k2", &long_value);
     }
 
-    fn test_mvcc_txn_commit_ok_imp(k1: &[u8], v1: &[u8], k2: &[u8], k3: &[u8]) {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        must_prewrite_put(&engine, k1, v1, k1, 10);
-        must_prewrite_lock(&engine, k2, k1, 10);
-        must_prewrite_delete(&engine, k3, k1, 10);
-        must_locked(&engine, k1, 10);
-        must_locked(&engine, k2, 10);
-        must_locked(&engine, k3, 10);
-        must_commit(&engine, k1, 10, 15);
-        must_commit(&engine, k2, 10, 15);
-        must_commit(&engine, k3, 10, 15);
-        must_written(&engine, k1, 10, 15, WriteType::Put);
-        must_written(&engine, k2, 10, 15, WriteType::Lock);
-        must_written(&engine, k3, 10, 15, WriteType::Delete);
-        // commit should be idempotent
-        must_commit(&engine, k1, 10, 15);
-        must_commit(&engine, k2, 10, 15);
-        must_commit(&engine, k3, 10, 15);
-    }
-
-    #[test]
-    fn test_mvcc_txn_commit_ok() {
-        test_mvcc_txn_commit_ok_imp(b"x", b"v", b"y", b"z");
-
-        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
-        test_mvcc_txn_commit_ok_imp(b"x", &long_value, b"y", b"z");
-    }
-
-    fn test_mvcc_txn_commit_err_imp(k: &[u8], v: &[u8]) {
-        let engine = TestEngineBuilder::new().build().unwrap();
-
-        // Not prewrite yet
-        must_commit_err(&engine, k, 1, 2);
-        must_prewrite_put(&engine, k, v, k, 5);
-        // start_ts not match
-        must_commit_err(&engine, k, 4, 5);
-        must_rollback(&engine, k, 5);
-        // commit after rollback
-        must_commit_err(&engine, k, 5, 6);
-    }
-
-    #[test]
-    fn test_mvcc_txn_commit_err() {
-        test_mvcc_txn_commit_err_imp(b"k", b"v");
-
-        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
-        test_mvcc_txn_commit_err_imp(b"k2", &long_value);
-    }
-
-    #[test]
-    fn test_min_commit_ts() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-
-        let (k, v) = (b"k", b"v");
-
-        // Shortcuts
-        let ts = TimeStamp::compose;
-        let uncommitted = |ttl, min_commit_ts| {
-            move |s| {
-                if let TxnStatus::Uncommitted { lock } = s {
-                    lock.ttl == ttl && lock.min_commit_ts == min_commit_ts
-                } else {
-                    false
-                }
-            }
-        };
-
-        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(10, 0), 100, 0);
-        check_txn_status::tests::must_success(
-            &engine,
-            k,
-            ts(10, 0),
-            ts(20, 0),
-            ts(20, 0),
-            true,
-            uncommitted(100, ts(20, 1)),
-        );
-        // The the min_commit_ts should be ts(20, 1)
-        must_commit_err(&engine, k, ts(10, 0), ts(15, 0));
-        must_commit_err(&engine, k, ts(10, 0), ts(20, 0));
-        must_commit(&engine, k, ts(10, 0), ts(20, 1));
-
-        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(30, 0), 100, 0);
-        check_txn_status::tests::must_success(
-            &engine,
-            k,
-            ts(30, 0),
-            ts(40, 0),
-            ts(40, 0),
-            true,
-            uncommitted(100, ts(40, 1)),
-        );
-        must_commit(&engine, k, ts(30, 0), ts(50, 0));
-
-        // If the min_commit_ts of the pessimistic lock is greater than prewrite's, use it.
-        must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(60, 0), ts(60, 0), 100);
-        check_txn_status::tests::must_success(
-            &engine,
-            k,
-            ts(60, 0),
-            ts(70, 0),
-            ts(70, 0),
-            true,
-            uncommitted(100, ts(70, 1)),
-        );
-        must_prewrite_put_impl(
-            &engine,
-            k,
-            v,
-            k,
-            &None,
-            ts(60, 0),
-            true,
-            50,
-            ts(60, 0),
-            1,
-            ts(60, 1),
-            false,
-        );
-        // The min_commit_ts is ts(70, 0) other than ts(60, 1) in prewrite request.
-        must_large_txn_locked(&engine, k, ts(60, 0), 100, ts(70, 1), false);
-        must_commit_err(&engine, k, ts(60, 0), ts(65, 0));
-        must_commit(&engine, k, ts(60, 0), ts(80, 0));
-    }
-
     #[test]
     fn test_mvcc_txn_rollback_after_commit() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -1920,7 +1704,7 @@ mod tests {
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 10.into(), true, cm);
-        txn.commit(key, 15.into()).unwrap();
+        commit(&mut txn, key, 15.into()).unwrap();
         assert!(txn.write_size() > 0);
         engine
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
@@ -2796,7 +2580,7 @@ mod tests {
             }
             write(WriteData::from_modifies(txn.into_modifies()));
             let mut txn = new_txn(start_ts.into(), cm);
-            txn.commit(key.clone(), commit_ts.into()).unwrap();
+            commit(&mut txn, key.clone(), commit_ts.into()).unwrap();
             engine
                 .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
                 .unwrap();
@@ -2847,7 +2631,7 @@ mod tests {
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
 
-        // max_read_ts in the concurrency manager is 42, so the min_commit_ts is 43.
+        // max_ts in the concurrency manager is 42, so the min_commit_ts is 43.
         assert_eq!(lock.min_commit_ts, TimeStamp::new(43));
 
         // A duplicate prewrite request should return the min_commit_ts in the primary key
@@ -2900,11 +2684,39 @@ mod tests {
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
 
-        // max_read_ts in the concurrency manager is 42, so the min_commit_ts is 43.
+        // max_ts in the concurrency manager is 42, so the min_commit_ts is 43.
         assert_eq!(lock.min_commit_ts, TimeStamp::new(43));
 
         // A duplicate prewrite request should return the min_commit_ts in the primary key
         assert_eq!(do_pessimistic_prewrite(), 43.into());
+    }
+
+    #[test]
+    fn test_async_commit_pushed_min_commit_ts() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
+        let cm = ConcurrencyManager::new(42.into());
+
+        // Simulate that min_commit_ts is pushed forward larger than latest_ts
+        must_acquire_pessimistic_lock_impl(&engine, b"key", b"key", 2, 20000, 2, false, 100);
+
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm);
+        let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+        let min_commit_ts = txn
+            .pessimistic_prewrite(
+                mutation,
+                b"key",
+                &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+                true,
+                0,
+                4.into(),
+                4,
+                TimeStamp::zero(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(min_commit_ts.into_inner(), 100);
     }
 
     #[test]
