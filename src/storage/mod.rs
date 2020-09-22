@@ -71,7 +71,9 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::prelude::*;
-use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
+use kvproto::kvrpcpb::{
+    CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo, RawGetRequest,
+};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::{
@@ -1419,6 +1421,49 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
         }
+    }
+
+    /// Update max_ts with the start_ts and check the given range for locks
+    /// which blocks the reading.
+    pub fn check_memory_locks_in_ranges(
+        &self,
+        mut ctx: Context,
+        start_ts: TimeStamp,
+        ranges: Vec<KeyRange>,
+    ) -> impl Future<Output = Result<Option<LockInfo>>> {
+        let concurrency_manager = self.concurrency_manager.clone();
+        self.read_pool
+            .spawn_handle(
+                async move {
+                    concurrency_manager.update_max_ts(start_ts);
+                    let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
+                    for range in &ranges {
+                        let start_key = Key::from_raw_maybe_unbounded(range.get_start_key());
+                        let end_key = Key::from_raw_maybe_unbounded(range.get_end_key());
+                        let res = concurrency_manager.read_range_check(
+                            start_key.as_ref(),
+                            end_key.as_ref(),
+                            |key, lock| {
+                                Lock::check_ts_conflict(
+                                    Cow::Borrowed(lock),
+                                    key,
+                                    start_ts,
+                                    &bypass_locks,
+                                )
+                            },
+                        );
+                        if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) =
+                            res
+                        {
+                            return Some(lock);
+                        }
+                    }
+                    None
+                },
+                CommandPri::Normal,
+                thread_rng().next_u64(),
+            )
+            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
     }
 }
 
