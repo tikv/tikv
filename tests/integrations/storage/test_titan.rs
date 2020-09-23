@@ -327,9 +327,12 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
     engines
         .kv
-        .delete_blob_files_in_range(
-            &data_key(Key::from_raw(b"a").as_encoded()),
-            &data_key(Key::from_raw(b"b").as_encoded()),
+        .delete_all_in_range(
+            DeleteStrategy::DeleteBlobs,
+            &[Range::new(
+                &data_key(Key::from_raw(b"a").as_encoded()),
+                &data_key(Key::from_raw(b"b").as_encoded()),
+            )],
         )
         .unwrap();
 

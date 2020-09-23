@@ -12,12 +12,7 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn delete_ranges_cf(
-        &self,
-        cf: &str,
-        strategy: DeleteStrategy,
-        ranges: &[Range],
-    ) -> Result<usize> {
+    fn delete_ranges_cf(&self, cf: &str, strategy: DeleteStrategy, ranges: &[Range]) -> Result<()> {
         panic!()
     }
 

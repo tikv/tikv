@@ -403,15 +403,23 @@ where
     /// Cleans up the data within the range.
     fn cleanup_range(&self, ranges: &[Range]) -> Result<()> {
         for cf in self.engines.kv.cf_names() {
-            if let Err(e) =
-                self.engines
-                    .kv
-                    .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &ranges)
-            {
-                error!("failed to delete files in range"; "err" => %e);
-            }
+            self.engines
+                .kv
+                .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &ranges)
+                .unwrap_or_else(|e| {
+                    error!("failed to delete files in range"; "err" => %e);
+                });
         }
-        self.delete_all_in_range(ranges)
+        self.delete_all_in_range(ranges)?;
+        for cf in self.engines.kv.cf_names() {
+            self.engines
+                .kv
+                .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &ranges)
+                .unwrap_or_else(|e| {
+                    error!("failed to delete files in range"; "err" => %e);
+                });
+        }
+        Ok(())
     }
 
     /// Gets the overlapping ranges and cleans them up.
@@ -428,20 +436,12 @@ where
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
         let mut ranges = Vec::with_capacity(overlap_ranges.len());
+        let mut df_ranges = Vec::with_capacity(overlap_ranges.len());
         for (region_id, start_key, end_key, stale_sequence) in overlap_ranges.iter() {
-            // `delete_files_in_range` may break current rocksdb snapshots consistency,
+            // `DeleteFiles` may break current rocksdb snapshots consistency,
             // so do not use it unless we can make sure there is no reader of the destroyed peer anymore.
             if *stale_sequence < oldest_sequence {
-                if let Err(e) = self.engines.kv.delete_all_in_range(
-                    DeleteStrategy::DeleteFiles,
-                    &[Range::new(start_key, end_key)],
-                ) {
-                    error!("failed to delete files in range";
-                        "region_id" => region_id,
-                        "start_key" => log_wrappers::Key(&start_key),
-                        "end_key" => log_wrappers::Key(&end_key),
-                        "err" => %e);
-                }
+                df_ranges.push(Range::new(start_key, end_key));
             } else {
                 SNAP_COUNTER_VEC
                     .with_label_values(&["overlap", "not_delete_files"])
@@ -452,6 +452,13 @@ where
                   "end_key" => log_wrappers::Key(end_key));
             ranges.push(Range::new(start_key, end_key));
         }
+        self.engines
+            .kv
+            .delete_all_in_range(DeleteStrategy::DeleteFiles, &df_ranges)
+            .unwrap_or_else(|e| {
+                error!("failed to delete files in range"; "err" => %e);
+            });
+
         self.delete_all_in_range(&ranges)
     }
 
