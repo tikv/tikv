@@ -604,9 +604,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.config.coprocessor.clone(),
         );
         split_check_worker.start(split_check_runner).unwrap();
+        let raft_coprocessor = Arc::new(VersionTrack::new(self.config.coprocessor.clone()));
         cfg_controller.register(
             tikv::config::Module::Coprocessor,
-            Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
+            Box::new(SplitCheckConfigManager(
+                split_check_worker.scheduler(),
+                raft_coprocessor.clone(),
+            )),
         );
 
         self.config
@@ -632,7 +636,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.system.take().unwrap(),
             &server_config,
             raft_store,
-            self.config.coprocessor.clone(),
+            raft_coprocessor,
             self.pd_client.clone(),
             self.state.clone(),
         );

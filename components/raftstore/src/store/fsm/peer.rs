@@ -3024,7 +3024,7 @@ where
                 let sibling_regions = util::find_sibling_regions(
                     &self.ctx.store_meta,
                     &self.ctx.cfg,
-                    &self.ctx.cop_cfg,
+                    &self.ctx.cop_cfg.value(),
                     self.fsm.peer.region(),
                 );
                 new_regions.extend(sibling_regions);

@@ -98,7 +98,7 @@ fn start_raftstore(
         .spawn(
             Default::default(),
             cfg_track,
-            cop_cfg,
+            Arc::new(VersionTrack::new(cop_cfg)),
             engines,
             MockTransport,
             Arc::new(TestPdClient::new(0, true)),

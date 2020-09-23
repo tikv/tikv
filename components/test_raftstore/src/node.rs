@@ -194,7 +194,7 @@ impl Simulator for NodeCluster {
             system,
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
-            cfg.coprocessor.clone(),
+            Arc::new(VersionTrack::new(cfg.coprocessor.clone())),
             Arc::clone(&self.pd_client),
             Arc::default(),
         );
@@ -242,9 +242,13 @@ impl Simulator for NodeCluster {
             cfg.coprocessor.clone(),
         );
         split_check_worker.start(split_check_runner).unwrap();
+        let raft_coprocessor = Arc::new(VersionTrack::new(cfg.coprocessor.clone()));
         cfg_controller.register(
             Module::Coprocessor,
-            Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
+            Box::new(SplitCheckConfigManager(
+                split_check_worker.scheduler(),
+                raft_coprocessor,
+            )),
         );
 
         let mut raftstore_cfg = cfg.raft_store;

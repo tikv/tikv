@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::{fmt, u64};
 
 use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
-use keys::{enc_end_key, enc_start_key};
+use keys::enc_end_key;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole, Region};
 use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};

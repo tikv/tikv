@@ -2874,8 +2874,12 @@ where
         let region = self.region().clone();
         let map_epoch_err = |mut e| {
             if let Error::EpochNotMatch(_, ref mut new_regions) = e {
-                let sibling_regions =
-                    util::find_sibling_regions(&ctx.store_meta, &ctx.cfg, &ctx.cop_cfg, &region);
+                let sibling_regions = util::find_sibling_regions(
+                    &ctx.store_meta,
+                    &ctx.cfg,
+                    &ctx.cop_cfg.value(),
+                    &region,
+                );
                 new_regions.extend(sibling_regions);
             }
             e

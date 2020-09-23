@@ -63,7 +63,7 @@ pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
-    cop_cfg: CopConfig,
+    cop_cfg: Arc<VersionTrack<CopConfig>>,
     system: RaftBatchSystem<RocksEngine, ER>,
     has_started: bool,
 
@@ -81,7 +81,7 @@ where
         system: RaftBatchSystem<RocksEngine, ER>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
-        cop_cfg: CopConfig,
+        cop_cfg: Arc<VersionTrack<CopConfig>>,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
     ) -> Node<C, ER> {

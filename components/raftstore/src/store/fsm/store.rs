@@ -292,7 +292,7 @@ where
     ER: RaftEngine,
 {
     pub cfg: Config,
-    pub cop_cfg: CopConfig,
+    pub cop_cfg: Arc<VersionTrack<CopConfig>>,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask<EK>>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
@@ -894,7 +894,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
 
 pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T, C> {
     pub cfg: Arc<VersionTrack<Config>>,
-    pub cop_cfg: CopConfig,
+    pub cop_cfg: Arc<VersionTrack<CopConfig>>,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask<EK>>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
@@ -1177,7 +1177,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
-        cop_cfg: CopConfig,
+        cop_cfg: Arc<VersionTrack<CopConfig>>,
         engines: Engines<EK, ER>,
         trans: T,
         pd_client: Arc<C>,

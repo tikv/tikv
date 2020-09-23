@@ -13,6 +13,7 @@ use raftstore::coprocessor::{
 };
 use raftstore::store::{SplitCheckRunner as Runner, SplitCheckTask as Task};
 use tikv::config::{ConfigController, Module, TiKvConfig};
+use tikv_util::config::VersionTrack;
 use tikv_util::worker::{Scheduler, Worker};
 
 fn tmp_engine<P: AsRef<Path>>(path: P) -> Arc<DB> {
@@ -38,10 +39,13 @@ fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<Task>) {
     let mut worker: Worker<Task> = Worker::new("split-check-config");
     worker.start(runner).unwrap();
 
-    let cfg_controller = ConfigController::new(cfg);
+    let cfg_controller = ConfigController::new(cfg.clone());
     cfg_controller.register(
         Module::Coprocessor,
-        Box::new(SplitCheckConfigManager(worker.scheduler())),
+        Box::new(SplitCheckConfigManager(
+            worker.scheduler(),
+            Arc::new(VersionTrack::new(cfg.coprocessor)),
+        )),
     );
 
     (cfg_controller, worker)

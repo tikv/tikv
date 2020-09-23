@@ -328,7 +328,7 @@ impl Simulator for ServerCluster {
             system,
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
-            cfg.coprocessor.clone(),
+            Arc::new(VersionTrack::new(cfg.coprocessor.clone())),
             Arc::clone(&self.pd_client),
             state,
         );
