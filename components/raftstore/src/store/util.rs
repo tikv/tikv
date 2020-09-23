@@ -305,12 +305,18 @@ pub fn find_sibling_regions(
             .rev()
             .take(cop_cfg.batch_split_limit as usize)
             .map(|(_, region_id)| meta.regions[region_id].to_owned())
+            .filter(|r| {
+                compare_region_epoch(r.get_region_epoch(), region, true, true, false).is_ok()
+            })
             .collect()
     } else {
         meta.region_ranges
             .range((Included(enc_start_key(region)), Unbounded::<Vec<u8>>))
             .take(cop_cfg.batch_split_limit as usize)
             .map(|(_, region_id)| meta.regions[region_id].to_owned())
+            .filter(|r| {
+                compare_region_epoch(r.get_region_epoch(), region, true, true, false).is_ok()
+            })
             .collect()
     }
 }

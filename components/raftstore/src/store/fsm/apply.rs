@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use std::vec::Drain;
 use std::{cmp, usize};
 
@@ -40,8 +41,8 @@ use tikv_util::{escape, Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
-use crate::coprocessor::{Cmd, Config as CopConfig, CoprocessorHost};
-use crate::store::fsm::{RaftPollerBuilder, StoreMeta};
+use crate::coprocessor::{Cmd, CoprocessorHost};
+use crate::store::fsm::RaftPollerBuilder;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
@@ -314,9 +315,6 @@ where
     cbs: MustConsumeVec<ApplyCallback<EK>>,
     apply_res: Vec<ApplyRes<EK::Snapshot>>,
     exec_ctx: Option<ExecContext>,
-    store_meta: Arc<RwLock<StoreMeta>>,
-    cfg: Config,
-    cop_cfg: CopConfig,
 
     kv_wb: Option<W>,
     kv_wb_last_bytes: u64,
@@ -328,7 +326,12 @@ where
     // Whether synchronize WAL is preferred.
     sync_log_hint: bool,
 
+    // Whether to use the delete range API instead of deleting one by one.
+    use_delete_range: bool,
+
     perf_context_statistics: PerfContextStatistics,
+
+    yield_duration: Duration,
 
     store_id: u64,
     /// region_id -> (peer_id, is_splitting)
@@ -350,9 +353,7 @@ where
         engine: EK,
         router: ApplyRouter<EK>,
         notifier: Box<dyn Notifier<EK>>,
-        cfg: Config,
-        cop_cfg: CopConfig,
-        store_meta: Arc<RwLock<StoreMeta>>,
+        cfg: &Config,
         store_id: u64,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     ) -> ApplyContext<EK, W> {
@@ -374,10 +375,9 @@ where
             committed_count: 0,
             sync_log_hint: false,
             exec_ctx: None,
+            use_delete_range: cfg.use_delete_range,
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
-            cfg,
-            cop_cfg,
-            store_meta,
+            yield_duration: cfg.apply_yield_duration.0,
             store_id,
             pending_create_peers,
         }
@@ -911,7 +911,7 @@ where
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
-                    if start.elapsed() >= apply_ctx.cfg.apply_yield_duration.0 {
+                    if start.elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
                     }
                 }
@@ -1202,18 +1202,7 @@ where
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
-        check_region_epoch(req, &self.region, include_region).map_err(|mut e| {
-            if let Error::EpochNotMatch(_, ref mut new_regions) = e {
-                let sibling_regions = util::find_sibling_regions(
-                    &ctx.store_meta,
-                    &ctx.cfg,
-                    &ctx.cop_cfg,
-                    &self.region,
-                );
-                new_regions.extend(sibling_regions);
-            }
-            e
-        })?;
+        check_region_epoch(req, &self.region, include_region)?;
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req)
         } else {
@@ -1288,12 +1277,9 @@ where
             let mut resp = match cmd_type {
                 CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
                 CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
-                CmdType::DeleteRange => self.handle_delete_range(
-                    &ctx.engine,
-                    req,
-                    &mut ranges,
-                    ctx.cfg.use_delete_range,
-                ),
+                CmdType::DeleteRange => {
+                    self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
+                }
                 CmdType::IngestSst => {
                     self.handle_ingest_sst(&ctx.importer, &ctx.engine, req, &mut ssts)
                 }
@@ -3296,8 +3282,6 @@ where
 pub struct Builder<EK: KvEngine, W: WriteBatch<EK>> {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
-    cop_cfg: CopConfig,
-    store_meta: Arc<RwLock<StoreMeta>>,
     coprocessor_host: CoprocessorHost<EK>,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<<EK as KvEngine>::Snapshot>>,
@@ -3321,8 +3305,6 @@ where
         Builder {
             tag: format!("[store {}]", builder.store.get_id()),
             cfg: builder.cfg.clone(),
-            cop_cfg: builder.cop_cfg.clone(),
-            store_meta: builder.store_meta.clone(),
             coprocessor_host: builder.coprocessor_host.clone(),
             importer: builder.importer.clone(),
             region_scheduler: builder.region_scheduler.clone(),
@@ -3355,9 +3337,7 @@ where
                 self.engine.clone(),
                 self.router.clone(),
                 self.sender.clone_box(),
-                cfg.clone(),
-                self.cop_cfg.clone(),
-                self.store_meta.clone(),
+                &cfg,
                 self.store_id,
                 self.pending_create_peers.clone(),
             ),
@@ -3735,15 +3715,11 @@ mod tests {
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let cop_cfg = CopConfig::default();
-        let store_meta = Arc::new(RwLock::new(StoreMeta::new(1)));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
-            cop_cfg,
-            store_meta,
             coprocessor_host: CoprocessorHost::<RocksEngine>::default(),
             importer,
             region_scheduler,
@@ -4104,15 +4080,11 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Box::new(TestNotifier { tx });
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let cop_cfg = CopConfig::default();
-        let store_meta = Arc::new(RwLock::new(StoreMeta::new(1)));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
-            cop_cfg,
-            store_meta,
             sender,
             region_scheduler,
             coprocessor_host: host,
@@ -4466,15 +4438,11 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Box::new(TestNotifier { tx });
         let cfg = Config::default();
-        let cop_cfg = CopConfig::default();
-        let store_meta = Arc::new(RwLock::new(StoreMeta::new(1)));
         let (router, mut system) = create_apply_batch_system(&cfg);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg: Arc::new(VersionTrack::new(cfg)),
-            cop_cfg,
-            store_meta,
             sender,
             region_scheduler,
             coprocessor_host: host,
@@ -4769,15 +4737,11 @@ mod tests {
             .register_cmd_observer(1, BoxCmdObserver::new(obs));
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
-        let cop_cfg = CopConfig::default();
-        let store_meta = Arc::new(RwLock::new(StoreMeta::new(1)));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
-            cop_cfg,
-            store_meta,
             sender,
             importer,
             region_scheduler,
