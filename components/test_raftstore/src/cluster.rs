@@ -1118,8 +1118,12 @@ impl<T: Simulator> Cluster<T> {
         loop {
             self.reset_leader_of_region(region_id);
             let cur_leader = self.leader_of_region(region_id);
-            if cur_leader == Some(leader.clone()) {
-                return;
+            if let Some(ref cur_leader) = cur_leader {
+                if cur_leader.get_id() == leader.get_id()
+                    && cur_leader.get_store_id() == leader.get_store_id()
+                {
+                    return;
+                }
             }
             if timer.elapsed() > Duration::from_secs(5) {
                 panic!(
