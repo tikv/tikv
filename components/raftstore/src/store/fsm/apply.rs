@@ -1494,6 +1494,19 @@ where
                         e
                     );
                 });
+            engine
+                .delete_blob_files_in_range_cf(
+                    cf, &start_key, &end_key, /* include_end */ false,
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete blob files in range [{}, {}): {:?}",
+                        self.tag,
+                        hex::encode_upper(&start_key),
+                        hex::encode_upper(&end_key),
+                        e
+                    )
+                });
         }
 
         // TODO: Should this be executed when `notify_only` is set?
