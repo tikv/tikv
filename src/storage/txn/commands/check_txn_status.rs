@@ -175,6 +175,7 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::{pessimistic_rollback, WriteCommand, WriteContext};
+    use crate::storage::txn::prewrite;
     use crate::storage::txn::tests::*;
     use crate::storage::{types::TxnStatus, ProcessResult, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
@@ -273,7 +274,8 @@ pub mod tests {
 
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
         let secondaries = vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()];
-        txn.prewrite(
+        prewrite(
+            &mut txn,
             mutation,
             b"key",
             &Some(secondaries.clone()),
