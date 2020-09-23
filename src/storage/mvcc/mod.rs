@@ -305,7 +305,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot, WriteData};
-    use crate::storage::txn::prewrite;
+    use crate::storage::txn::{pessimistic_prewrite, prewrite};
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -374,7 +374,8 @@ pub mod tests {
         let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
-        txn.pessimistic_prewrite(
+        pessimistic_prewrite(
+            &mut txn,
             Mutation::CheckNotExists(Key::from_raw(key)),
             pk,
             &None,
@@ -421,7 +422,8 @@ pub mod tests {
             )
             .unwrap();
         } else {
-            txn.pessimistic_prewrite(
+            pessimistic_prewrite(
+                &mut txn,
                 mutation,
                 pk,
                 &secondary_keys,
@@ -649,7 +651,8 @@ pub mod tests {
             )
             .unwrap_err()
         } else {
-            txn.pessimistic_prewrite(
+            pessimistic_prewrite(
+                &mut txn,
                 mutation,
                 pk,
                 &None,
@@ -744,7 +747,8 @@ pub mod tests {
             )
             .unwrap();
         } else {
-            txn.pessimistic_prewrite(
+            pessimistic_prewrite(
+                &mut txn,
                 mutation,
                 pk,
                 &None,
@@ -810,7 +814,8 @@ pub mod tests {
             )
             .unwrap();
         } else {
-            txn.pessimistic_prewrite(
+            pessimistic_prewrite(
+                &mut txn,
                 mutation,
                 pk,
                 &None,

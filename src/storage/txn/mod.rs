@@ -8,9 +8,10 @@ pub mod scheduler;
 
 mod actions;
 
-pub use actions::commit::commit;
-pub use actions::prewrite::prewrite;
-pub use actions::shared::prewrite_key_value;
+pub use actions::{
+    commit::commit, pessimistic_prewrite::pessimistic_prewrite, prewrite::prewrite,
+    shared::prewrite_key_value,
+};
 
 mod latch;
 mod store;

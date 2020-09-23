@@ -6,6 +6,7 @@
 //! for archiving a certain target
 
 pub mod commit;
+pub mod pessimistic_prewrite;
 pub mod prewrite;
 pub mod shared;
 
