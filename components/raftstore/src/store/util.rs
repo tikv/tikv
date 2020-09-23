@@ -311,7 +311,7 @@ pub fn find_sibling_regions(
             .collect()
     } else {
         meta.region_ranges
-            .range((Included(enc_start_key(region)), Unbounded::<Vec<u8>>))
+            .range((Included(enc_end_key(region)), Unbounded::<Vec<u8>>))
             .take(cop_cfg.batch_split_limit as usize)
             .map(|(_, region_id)| meta.regions[region_id].to_owned())
             .filter(|r| {
