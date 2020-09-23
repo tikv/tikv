@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::collections::Bound::{Excluded, Unbounded};
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, RwLock};
