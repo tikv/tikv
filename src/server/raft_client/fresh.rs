@@ -22,7 +22,7 @@ use std::marker::Unpin;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use std::{cmp, mem, result};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::lru::LruCache;
@@ -628,11 +628,11 @@ where
     }
 }
 
-async fn maybe_backoff(last_wake_time: &mut Instant, retry_times: &mut u64) {
+async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: &mut u32) {
     if *retry_times == 0 {
         return;
     }
-    let timeout = Duration::from_secs(cmp::min(*retry_times, 5));
+    let timeout = cfg.raft_client_backoff_step.0 * cmp::min(*retry_times, 5);
     let now = Instant::now();
     if *last_wake_time + timeout < now {
         // We have spent long enough time in last retry, no need to backoff again.
@@ -667,7 +667,7 @@ async fn start<S, R>(
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
     loop {
-        maybe_backoff(&mut last_wake_time, &mut retry_times).await;
+        maybe_backoff(&back_end.builder.cfg, &mut last_wake_time, &mut retry_times).await;
         retry_times += 1;
         let f = back_end.resolve();
         let addr = match f.await {
