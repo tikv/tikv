@@ -276,19 +276,31 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             .map(|cmd| cmd.index)
     }
 
-    pub fn advance_apply(&mut self, index: u64, term: u64, region: &metapb::Region) {
+    pub fn advance_apply<T>(
+        &mut self,
+        index: u64,
+        term: u64,
+        region: &metapb::Region,
+        find_current_regions: T,
+    ) where
+        T: Fn(&metapb::Region) -> Vec<metapb::Region>,
+    {
         self.maybe_update_term(term);
+        let mut current_regions = None;
         while !self.proposed_admin_cmd.is_empty() {
             let cmd = self.proposed_admin_cmd.front_mut().unwrap();
             if cmd.index <= index {
                 for cb in cmd.cbs.drain(..) {
+                    if current_regions.is_none() {
+                        current_regions = Some(find_current_regions(region));
+                    }
                     let mut resp = cmd_resp::new_error(Error::EpochNotMatch(
                         format!(
                             "current epoch of region {} is {:?}",
                             region.get_id(),
                             region.get_region_epoch(),
                         ),
-                        vec![region.to_owned()],
+                        current_regions.clone().unwrap(),
                     ));
                     cmd_resp::bind_term(&mut resp, term);
                     cb.invoke_with_response(resp);
@@ -1753,7 +1765,11 @@ where
         self.apply_reads(ctx, ready);
     }
 
-    pub fn handle_raft_ready_advance(&mut self, ready: Ready) {
+    pub fn handle_raft_ready_advance<T: Transport, C>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T, C>,
+        ready: Ready,
+    ) {
         if !ready.snapshot().is_empty() {
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
@@ -1765,6 +1781,14 @@ where
                 self.last_applying_idx,
                 self.term(),
                 self.raft_group.store().region(),
+                |region| {
+                    util::find_sibling_regions(
+                        &ctx.store_meta,
+                        &ctx.cfg,
+                        &ctx.cop_cfg.value(),
+                        region,
+                    )
+                },
             );
         } else {
             self.raft_group.advance_append(ready);
@@ -1891,6 +1915,9 @@ where
             apply_state.get_applied_index(),
             self.term(),
             self.raft_group.store().region(),
+            |region| {
+                util::find_sibling_regions(&ctx.store_meta, &ctx.cfg, &ctx.cop_cfg.value(), region)
+            },
         );
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
@@ -3753,11 +3780,11 @@ mod tests {
             Some(6)
         );
 
-        epoch_checker.advance_apply(4, 10, &region);
+        epoch_checker.advance_apply(4, 10, &region, |_| vec![]);
         // Have no effect on `proposed_admin_cmd`
         assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
 
-        epoch_checker.advance_apply(5, 10, &region);
+        epoch_checker.advance_apply(5, 10, &region, |_| vec![]);
         // Left one change peer admin cmd
         assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
 

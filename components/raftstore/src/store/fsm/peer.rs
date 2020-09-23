@@ -876,7 +876,7 @@ where
             .fsm
             .peer
             .post_raft_ready_append(self.ctx, &mut ready, invoke_ctx);
-        self.fsm.peer.handle_raft_ready_advance(ready);
+        self.fsm.peer.handle_raft_ready_advance(self.ctx, ready);
         let mut has_snapshot = false;
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
