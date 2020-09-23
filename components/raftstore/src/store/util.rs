@@ -680,8 +680,8 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
     conf_state
 }
 
-pub fn is_learner(p: &metapb::Peer) -> bool {
-    p.get_role() == PeerRole::Learner
+pub fn is_learner(peer: &metapb::Peer) -> bool {
+    peer.get_role() == PeerRole::Learner
 }
 
 pub struct KeysInfoFormatter<
