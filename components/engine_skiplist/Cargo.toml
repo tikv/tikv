@@ -15,6 +15,7 @@ protobuf-codec = [
 
 [dependencies]
 engine_traits = { path = "../engine_traits" }
+engine_rocks = { path = "../engine_rocks" }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 txn_types = { path = "../txn_types" }
