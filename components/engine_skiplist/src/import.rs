@@ -1,7 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::SkiplistEngine;
-use engine_traits::{ImportExt, IngestExternalFileOptions, Result};
+use crate::write_batch::SkiplistWriteBatch;
+use engine_rocks::RocksSstReader;
+use engine_traits::{
+    ImportExt, IngestExternalFileOptions, Iterable, Iterator, Mutable, Result, SstReader,
+    WriteBatchExt,
+};
 use std::path::Path;
 
 impl ImportExt for SkiplistEngine {
@@ -13,6 +18,17 @@ impl ImportExt for SkiplistEngine {
         opts: &Self::IngestExternalFileOptions,
         files: &[&str],
     ) -> Result<()> {
+        for path in files {
+            let mut batch = SkiplistWriteBatch::new(self);
+            let reader = RocksSstReader::open(path)?;
+            reader.verify_checksum()?;
+            let mut iter = reader.iter();
+            while iter.valid()? {
+                batch.put_cf(cf.cf_name, iter.key(), iter.value())?;
+                iter.next()?;
+            }
+            self.write(&batch)?;
+        }
         Ok(())
     }
 

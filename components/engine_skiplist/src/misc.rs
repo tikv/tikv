@@ -28,7 +28,7 @@ impl MiscExt for SkiplistEngine {
     }
 
     fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool> {
-        Ok(true)
+        Ok(false)
     }
 
     fn get_engine_used_size(&self) -> Result<u64> {

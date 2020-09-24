@@ -11,7 +11,9 @@ impl CFHandleExt for SkiplistEngine {
     type ColumnFamilyOptions = SkiplistColumnFamilyOptions;
 
     fn cf_handle(&self, name: &str) -> Result<&Self::CFHandle> {
-        Err(Error::CFName(name.to_owned()))
+        self.cf_handles
+            .get(name)
+            .ok_or_else(|| Error::CFName(name.to_owned()))
     }
     fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::ColumnFamilyOptions {
         SkiplistColumnFamilyOptions
