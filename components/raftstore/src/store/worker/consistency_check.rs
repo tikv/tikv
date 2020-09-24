@@ -58,13 +58,7 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash(
-        &mut self,
-        region: Region,
-        index: u64,
-        mut context: Vec<u8>,
-        snap: EK::Snapshot,
-    ) {
+    fn compute_hash(&mut self, region: Region, index: u64, context: Vec<u8>, snap: EK::Snapshot) {
         if context.is_empty() {
             // For backward compatibility.
             warn!("skip compute hash without context"; "region_id" => region.get_id());
