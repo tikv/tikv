@@ -26,7 +26,7 @@ use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::collections::HashSet;
-use tikv_util::config::{OptionReadableSize, ReadableDuration, ReadableSize};
+use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
 
 mod dynamic;
 mod test_config_client;
@@ -56,6 +56,7 @@ fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
     value.log_level = Level::Debug;
     value.log_file = "foo".to_owned();
+    value.log_format = LogFormat::Json;
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.server = ServerConfig {
@@ -193,6 +194,7 @@ fn test_serde_custom_tikv_config() {
         store_batch_system,
         future_poll_size: 2,
         hibernate_regions: false,
+        hibernate_timeout: ReadableDuration::hours(1),
         early_apply: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
@@ -600,6 +602,9 @@ fn test_serde_custom_tikv_config() {
         wait_for_lock_timeout: ReadableDuration::millis(10),
         wake_up_delay_duration: ReadableDuration::millis(100),
         pipelined: true,
+    };
+    value.cdc = CdcConfig {
+        min_ts_interval: ReadableDuration::secs(4),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

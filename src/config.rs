@@ -53,7 +53,7 @@ use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
 use security::SecurityConfig;
 use tikv_util::config::{
-    self, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
+    self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
 };
 use tikv_util::future_pool;
 use tikv_util::sys::sys_quota::SysQuota;
@@ -167,7 +167,7 @@ fn get_background_job_limit(
     // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
     // the rest shared by flush and compaction.
     let max_background_jobs: i32 =
-        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1) as i32));
+        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1.0) as i32));
     // Cap max_sub_compactions to allow at least two compactions.
     let max_compactions = max_background_jobs - max_background_jobs / 4;
     let max_sub_compactions: u32 = cmp::max(
@@ -1410,7 +1410,7 @@ const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 impl Default for UnifiedReadPoolConfig {
     fn default() -> UnifiedReadPoolConfig {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.8) as usize;
+        let mut concurrency = (cpu_num * 0.8) as usize;
         concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             min_thread_count: 1,
@@ -1646,7 +1646,7 @@ readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 impl Default for StorageReadPoolConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.5) as usize;
+        let mut concurrency = (cpu_num * 0.5) as usize;
         concurrency = cmp::max(DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY, concurrency);
         concurrency = cmp::min(DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY, concurrency);
         Self {
@@ -1688,7 +1688,7 @@ readpool_config!(
 impl Default for CoprReadPoolConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.8) as usize;
+        let mut concurrency = (cpu_num * 0.8) as usize;
         concurrency = cmp::max(DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             use_unified_pool: None,
@@ -1918,7 +1918,22 @@ impl Default for BackupConfig {
         let cpu_num = SysQuota::new().cpu_cores_quota();
         Self {
             // use at most 75% of vCPU by default
-            num_threads: (cpu_num - cpu_num / 4).clamp(1, 32),
+            num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct CdcConfig {
+    pub min_ts_interval: ReadableDuration,
+}
+
+impl Default for CdcConfig {
+    fn default() -> Self {
+        Self {
+            min_ts_interval: ReadableDuration::secs(1),
         }
     }
 }
@@ -1938,6 +1953,9 @@ pub struct TiKvConfig {
 
     #[config(skip)]
     pub log_file: String,
+
+    #[config(skip)]
+    pub log_format: LogFormat,
 
     #[config(skip)]
     pub slow_log_file: String,
@@ -1999,6 +2017,9 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub split: SplitConfig,
+
+    #[config(submodule)]
+    pub cdc: CdcConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2007,6 +2028,7 @@ impl Default for TiKvConfig {
             cfg_path: "".to_owned(),
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
+            log_format: LogFormat::Text,
             slow_log_file: "".to_owned(),
             slow_log_threshold: ReadableDuration::secs(1),
             log_rotation_timespan: ReadableDuration::hours(24),
@@ -2027,6 +2049,7 @@ impl Default for TiKvConfig {
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
             split: SplitConfig::default(),
+            cdc: CdcConfig::default(),
         }
     }
 }

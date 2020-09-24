@@ -12,6 +12,7 @@ use crossbeam::atomic::AtomicCell;
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{KvEngine, Peekable, Snapshot, WriteBatchExt, WriteOptions};
+use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
@@ -432,13 +433,8 @@ impl Peer {
             );
             return None;
         }
-        // If initialized is false, it implicitly means apply fsm does not exist now.
-        let initialized = self.get_store().is_initialized();
-        // If async_remove is true, it means peer fsm needs to be removed after its
-        // corresponding apply fsm was removed.
-        // If it is false, it means either apply fsm does not exist or there is no task
-        // in apply fsm so it's ok to remove peer fsm immediately.
-        let async_remove = if self.is_applying_snapshot() {
+
+        if self.is_applying_snapshot() {
             if !self.mut_store().cancel_applying_snap() {
                 info!(
                     "stale peer is applying snapshot, will destroy next time";
@@ -447,16 +443,12 @@ impl Peer {
                 );
                 return None;
             }
-            // There is no tasks in apply/local read worker.
-            false
-        } else {
-            initialized
-        };
+        }
+
         self.pending_remove = true;
 
         Some(DestroyPeerJob {
-            async_remove,
-            initialized,
+            initialized: self.get_store().is_initialized(),
             region_id: self.region_id,
             peer: self.peer.clone(),
         })
@@ -497,11 +489,10 @@ impl Peer {
             // If we meet panic when deleting data and raft log, the dirty data
             // will be cleared by a newer snapshot applying or restart.
             if let Err(e) = self.get_store().clear_data() {
-                error!(
+                error!(?e;
                     "failed to schedule clear data task";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
-                    "err" => ?e,
                 );
             }
         }
@@ -2332,6 +2323,7 @@ impl Peer {
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
                 return Err(e);
             }
@@ -2678,6 +2670,7 @@ impl Peer {
                 "target_peer_id" => to_peer_id,
                 "target_store_id" => to_store_id,
                 "err" => ?e,
+                "error_code" => %e.error_code(),
             );
             if to_peer_id == self.leader_id() {
                 self.leader_unreachable = true;
@@ -2704,13 +2697,12 @@ impl Peer {
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
             if let Err(e) = ctx.trans.send(send_msg) {
-                error!(
+                error!(?e;
                     "failed to send wake up message";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
-                    "err" => ?e,
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -2735,13 +2727,12 @@ impl Peer {
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgCheckStalePeer);
             if let Err(e) = ctx.trans.send(send_msg) {
-                error!(
+                error!(?e;
                     "failed to send check stale peer message";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
-                    "err" => ?e,
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -2786,13 +2777,12 @@ impl Peer {
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_premerge_commit(premerge_commit);
         if let Err(e) = ctx.trans.send(send_msg) {
-            error!(
+            error!(?e;
                 "failed to send want rollback merge message";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "target_peer_id" => to_peer.get_id(),
                 "target_store_id" => to_peer.get_store_id(),
-                "err" => ?e
             );
         } else {
             ctx.need_flush_trans = true;

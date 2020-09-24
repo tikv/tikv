@@ -3,6 +3,30 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.6] - 2020-09-15
+
++ Improvements
+  + Reduce QPS drop when `DropTable` or `TruncateTable` is being executed [#8627](https://github.com/tikv/tikv/pull/8627)
+  + Support generating metafile of error codes [#8619](https://github.com/tikv/tikv/pull/8619)
+  + Add performance statistics for cf scan detail [#8618](https://github.com/tikv/tikv/pull/8618)
+  + Add the `rocksdb perf context` panel in the Grafana default template [#8467](https://github.com/tikv/tikv/pull/8467)
++ Bug Fixes
+  + Fix the estimation error for a non-index column when collation is enabled [#8620](https://github.com/tikv/tikv/pull/8620)
+  + Fix the issue that Green GC might miss locks during the process of Region transfer [#8460](https://github.com/tikv/tikv/pull/8460)
+  + Fix a panic issue that occurs when TiKV runs very slowly during Raft membership change [#8497](https://github.com/tikv/tikv/pull/8497)
+  + Fix the deadlock issue that occurs between the PD client thread and other threads when calling PD sync requests [#8612](https://github.com/tikv/tikv/pull/8612)
+  + Upgrade jemalloc to v5.2.1 to address the issue of memory allocation in huge page [#8463](https://github.com/tikv/tikv/pull/8463)
+  + Fix the issue that the unified thread pool hangs for long-running queries [#8427](https://github.com/tikv/tikv/pull/8427)
+
+## [4.0.5] - 2020-08-28
+
++ New Features
+  + Define error code for errors [#8387](https://github.com/tikv/tikv/pull/8387)
++ Bug Fixes
+  + Speed up leader election when Hibernate Region is enabled [#8292](https://github.com/tikv/tikv/pull/8292)
+  + Fix the memory leak issue during scheduling [#8357](https://github.com/tikv/tikv/pull/8357)
+  + Add the `hibernate-timeout` configuration item to prevent the leader from becoming hibernate too fast [#8208](https://github.com/tikv/tikv/pull/8208)
+
 ## [4.0.3] - 2020-07-24
 
 + Improvements
