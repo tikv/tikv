@@ -28,7 +28,6 @@ pub fn oct_int(num: &Int, writer: BytesWriter) -> Result<BytesGuard> {
 #[rpn_fn]
 #[inline]
 pub fn length(arg: BytesRef) -> Result<Option<i64>> {
-    // Ok(arg.map(|bytes| bytes.len() as i64))
     Ok(Some(arg.len() as i64))
 }
 
