@@ -644,16 +644,14 @@ pub fn to_base64(bs: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
         return Ok(writer.write_ref(Some(b"")));
     }
 
-    let result = if let Some(size) = encoded_size(bs.len()) {
+    if let Some(size) = encoded_size(bs.len()) {
         let mut buf = vec![0; size];
         let len_without_wrap = base64::encode_config_slice(bs, base64::STANDARD, &mut buf);
         line_wrap(&mut buf, len_without_wrap);
-        buf
+        Ok(writer.write(Some(buf)))
     } else {
-        b"".to_vec()
-    };
-
-    Ok(writer.write(Some(result)))
+        Ok(writer.write_ref(Some(b"")))
+    }
 }
 
 #[rpn_fn(writer)]
