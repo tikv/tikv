@@ -263,14 +263,20 @@ pub fn left_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesG
     }
     match str::from_utf8(&*lhs) {
         Ok(s) => {
-            let l = *rhs as usize;
-            let result = if s.chars().count() > l {
-                s.chars().take(l).collect::<String>().into_bytes()
+            let rhs = *rhs as usize;
+            let len = s.chars().count();
+            let result = if len > rhs {
+                let idx = s
+                    .char_indices()
+                    .nth( rhs)
+                    .map(|(idx, _)| idx)
+                    .unwrap_or_else(|| s.len());
+                s[..idx].as_bytes()
             } else {
-                s.to_string().into_bytes()
+                s.as_bytes()
             };
 
-            Ok(writer.write(Some(result)))
+            Ok(writer.write_ref(Some(result)))
         }
         Err(err) => Err(box_err!("invalid input value: {:?}", err)),
     }
