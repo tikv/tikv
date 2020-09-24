@@ -246,11 +246,7 @@ pub fn left(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesGuard>
         return Ok(writer.write_ref(Some(b"")));
     }
     let rhs = *rhs as usize;
-    let result = if lhs.len() < rhs {
-        &lhs
-    } else {
-        &lhs[..rhs]
-    };
+    let result = if lhs.len() < rhs { &lhs } else { &lhs[..rhs] };
 
     Ok(writer.write_ref(Some(result)))
 }
@@ -268,7 +264,7 @@ pub fn left_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesG
             let result = if len > rhs {
                 let idx = s
                     .char_indices()
-                    .nth( rhs)
+                    .nth(rhs)
                     .map(|(idx, _)| idx)
                     .unwrap_or_else(|| s.len());
                 s[..idx].as_bytes()
