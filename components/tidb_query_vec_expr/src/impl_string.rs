@@ -635,6 +635,12 @@ pub fn trim_1_arg(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 
 #[rpn_fn(writer)]
 #[inline]
+pub fn trim_2_args(arg: BytesRef, pat: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    trim_3_args(arg, pat, &TrimDirection::Both.into_i64(), writer)
+}
+
+#[rpn_fn(writer)]
+#[inline]
 pub fn trim_3_args(
     arg: BytesRef,
     pat: BytesRef,
@@ -664,6 +670,14 @@ impl TrimDirection {
             2 => Some(TrimDirection::Leading),
             3 => Some(TrimDirection::Trailing),
             _ => None,
+        }
+    }
+
+    fn into_i64(self) -> i64 {
+        match self {
+            TrimDirection::Both => 1,
+            TrimDirection::Leading => 2,
+            TrimDirection::Trailing => 3,
         }
     }
 }
@@ -2704,6 +2718,40 @@ mod tests {
             invalid_utf8_output,
             Some(b"\xF0 Hello \x90 World \x80".to_vec())
         );
+    }
+
+    #[test]
+    fn test_trim_2_args() {
+        let tests = vec![
+            (Some("xxxbarxxx"), Some("x"), Some("bar")),
+            (Some("barxxyz"), Some("xyz"), Some("barx")),
+            (Some("xxxbarxxx"), Some("x"), Some("bar")),
+        ];
+        for (arg, pat, exp) in tests {
+            let arg = arg.map(|s| s.as_bytes().to_vec());
+            let pat = pat.map(|s| s.as_bytes().to_vec());
+            let exp = exp.map(|s| s.as_bytes().to_vec());
+
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(pat)
+                .evaluate(ScalarFuncSig::Trim3Args)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let invalid_tests = vec![
+            (None, Some(b"x".to_vec()), None as Option<Bytes>),
+            (Some(b"bar".to_vec()), None, None as Option<Bytes>),
+        ];
+        for (arg, pat, exp) in invalid_tests {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(pat)
+                .evaluate(ScalarFuncSig::Trim3Args)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
     }
 
     #[test]
