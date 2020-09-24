@@ -112,8 +112,10 @@ pub fn ascii(arg: BytesRef) -> Result<Option<i64>> {
 #[rpn_fn(writer)]
 #[inline]
 pub fn reverse_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
-    let s = String::from_utf8_lossy(arg);
-    Ok(writer.write(Some(s.chars().rev().collect::<String>().into_bytes())))
+    match str::from_utf8(arg) {
+        Ok(s) => Ok(writer.write(Some(s.chars().rev().collect::<String>().into_bytes()))),
+        Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+    }
 }
 
 #[rpn_fn(writer)]
