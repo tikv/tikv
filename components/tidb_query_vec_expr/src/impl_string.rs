@@ -425,6 +425,27 @@ pub fn hex_str_arg(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|b| hex::encode_upper(b).into_bytes()))
 }
 
+#[inline]
+fn find_str(text: &str, pattern: &str) -> Option<usize> {
+    twoway::find_str(text, pattern).map(|i| text[..i].chars().count())
+}
+
+#[rpn_fn(nullable)]
+#[inline]
+pub fn locate_2_args_utf8(substr: Option<BytesRef>, s: Option<BytesRef>) -> Result<Option<i64>> {
+    let (substr, s) = match (substr, s) {
+        (Some(v1), Some(v2)) => match (str::from_utf8(v1), str::from_utf8(v2)) {
+            (Ok(s1), Ok(s2)) => (s1, s2),
+            _ => return Ok(None),
+        },
+        _ => return Ok(None),
+    };
+
+    Ok(find_str(&s.to_lowercase(), &substr.to_lowercase())
+        .map(|i| 1 + i as i64)
+        .or(Some(0)))
+}
+
 #[rpn_fn(nullable)]
 #[inline]
 pub fn locate_2_args(substr: Option<BytesRef>, s: Option<BytesRef>) -> Result<Option<i64>> {
@@ -1959,6 +1980,33 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate(ScalarFuncSig::HexStrArg)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_locate_2_args_utf8() {
+        let test_cases = vec![
+            (None, None, None),
+            (None, Some("abc"), None),
+            (Some("abc"), None, None),
+            (Some("bar"), Some("foobarbar"), Some(4i64)),
+            (Some("xbar"), Some("foobar"), Some(0i64)),
+            (Some(""), Some("foobar"), Some(1i64)),
+            (Some("foobar"), Some(""), Some(0i64)),
+            (Some(""), Some(""), Some(1i64)),
+            (Some("好世"), Some("你好世界"), Some(2i64)),
+            (Some("界面"), Some("你好世界"), Some(0i64)),
+            (Some("b"), Some("中a英b文"), Some(4i64)),
+            (Some("BaR"), Some("foobArbar"), Some(4i64)),
+        ];
+
+        for (substr, s, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(substr.map(|v| v.as_bytes().to_vec()))
+                .push_param(s.map(|v| v.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::Locate2ArgsUtf8)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
