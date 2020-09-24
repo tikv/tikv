@@ -644,44 +644,28 @@ where
     }
 
     fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, _store_info: StoreInfo<EK>) {
-        // let disk_stats = match fs2::statvfs(store_info.engine.path()) {
-        //     Err(e) => {
-        //         error!(
-        //             "get disk stat for rocksdb failed";
-        //             "engine_path" => store_info.engine.path(),
-        //             "err" => ?e
-        //         );
-        //         return;
-        //     }
-        //     Ok(stats) => stats,
-        // };
+        let disk_stats = match fs2::statvfs(std::env::current_dir().unwrap()) {
+            Err(e) => {
+                error!(
+                    "get disk stat for rocksdb failed";
+                    "err" => ?e
+                );
+                return;
+            }
+            Ok(stats) => stats,
+        };
 
-        // let disk_cap = disk_stats.total_space();
-        // let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
-        //     disk_cap
-        // } else {
-        //     store_info.capacity
-        // };
-        // stats.set_capacity(capacity);
+        let disk_cap = disk_stats.total_space();
+        stats.set_capacity(disk_cap);
 
-        // // already include size of snapshot files
-        // let used_size =
-        //     stats.get_used_size() + store_info.engine.get_engine_used_size().expect("cf");
-        // stats.set_used_size(used_size);
+        let mut available = disk_cap;
 
-        // let mut available = if capacity > used_size {
-        //     capacity - used_size
-        // } else {
-        //     warn!("no available space");
-        //     0
-        // };
+        // We only care about rocksdb SST file size, so we should check disk available here.
+        if available > disk_stats.free_space() {
+            available = disk_stats.free_space();
+        }
 
-        // // We only care about rocksdb SST file size, so we should check disk available here.
-        // if available > disk_stats.free_space() {
-        //     available = disk_stats.free_space();
-        // }
-
-        // stats.set_available(available);
+        stats.set_available(available);
         stats.set_bytes_read(
             self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,
         );
