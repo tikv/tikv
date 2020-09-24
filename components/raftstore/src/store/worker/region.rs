@@ -750,14 +750,14 @@ mod tests {
     use crate::store::snap::tests::get_test_db_for_regions;
     use crate::store::worker::RegionRunner;
     use crate::store::{CasualMessage, SnapKey, SnapManager};
+    use engine_test::ctor::CFOptions;
     use engine_test::ctor::ColumnFamilyOptions;
+    use engine_test::kv::KvTestEngine;
     use engine_traits::{
         CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
     };
     use engine_traits::{Engines, KvEngine};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
-    use engine_test::kv::KvTestEngine;
-    use engine_test::ctor::CFOptions;
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
     use tempfile::Builder;
@@ -922,11 +922,11 @@ mod tests {
                 engine.kv.flush_cf(cf_name, true).unwrap();
                 // check level 0 files
                 assert_eq!(
-                    engine.kv.get_cf_num_files_at_level(
-                        cf_name,
-                        0
-                    )
-                    .unwrap().unwrap(),
+                    engine
+                        .kv
+                        .get_cf_num_files_at_level(cf_name, 0)
+                        .unwrap()
+                        .unwrap(),
                     u64::from(i) + 1
                 );
             }
@@ -1029,14 +1029,22 @@ mod tests {
         // snapshot will not ingest cause already write stall
         gen_and_apply_snap(1);
         assert_eq!(
-            engine.kv.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap().unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             6
         );
 
         // compact all files to the bottomest level
         engine.kv.compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
-            engine.kv.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap().unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             0
         );
 
@@ -1046,7 +1054,11 @@ mod tests {
         // note that when ingest sst, it may flush memtable if overlap,
         // so here will two level 0 files.
         assert_eq!(
-            engine.kv.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap().unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             2
         );
 
@@ -1054,31 +1066,51 @@ mod tests {
         gen_and_apply_snap(2);
         wait_apply_finish(2);
         assert_eq!(
-            engine.kv.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap().unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             4
         );
 
         // snapshot will not ingest cause it may cause write stall
         gen_and_apply_snap(3);
         assert_eq!(
-            engine.kv.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap().unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             4
         );
         gen_and_apply_snap(4);
         assert_eq!(
-            engine.kv.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap().unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             4
         );
         gen_and_apply_snap(5);
         assert_eq!(
-            engine.kv.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap().unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             4
         );
 
         // compact all files to the bottomest level
         engine.kv.compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
-            engine.kv.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap().unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             0
         );
 
@@ -1088,21 +1120,33 @@ mod tests {
         // before two pending apply tasks should be finished and snapshots are ingested
         // and one still in pending.
         assert_eq!(
-            engine.kv.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap().unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             4
         );
 
         // make sure have checked pending applies
         engine.kv.compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
-            engine.kv.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap().unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             0
         );
         wait_apply_finish(5);
 
         // the last one pending task finished
         assert_eq!(
-            engine.kv.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap().unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             2
         );
     }

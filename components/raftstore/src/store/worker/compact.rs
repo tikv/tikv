@@ -249,10 +249,10 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
-    use engine_test::ctor::{ColumnFamilyOptions, DBOptions, CFOptions};
-    use engine_test::kv::{new_engine, new_engine_opt};
+    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
     use engine_test::kv::KvTestEngine;
-    use engine_traits::{Mutable, WriteBatchExt, MiscExt, SyncMutable};
+    use engine_test::kv::{new_engine, new_engine_opt};
+    use engine_traits::{MiscExt, Mutable, SyncMutable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempfile::Builder;
 
@@ -292,9 +292,7 @@ mod tests {
         db.flush_cf(CF_DEFAULT, true).unwrap();
 
         // Get the total SST files size.
-        let old_sst_files_size = db
-            .get_total_sst_files_size_cf(CF_DEFAULT)
-            .unwrap().unwrap();
+        let old_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
 
         // Schedule compact range task.
         runner.run(Task::Compact {
@@ -305,9 +303,7 @@ mod tests {
         sleep(Duration::from_secs(5));
 
         // Get the total SST files size after compact range.
-        let new_sst_files_size = db
-            .get_total_sst_files_size_cf(CF_DEFAULT)
-            .unwrap().unwrap();
+        let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
         assert!(old_sst_files_size > new_sst_files_size);
     }
 
@@ -356,8 +352,10 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (start, end) = (data_key(b"k0"), data_key(b"k5"));
-        let (entries, version) =
-            engine.get_range_entries_and_versions(CF_WRITE, &start, &end).unwrap().unwrap();
+        let (entries, version) = engine
+            .get_range_entries_and_versions(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
 
@@ -369,7 +367,10 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = engine.get_range_entries_and_versions(CF_WRITE, &s, &e).unwrap().unwrap();
+        let (entries, version) = engine
+            .get_range_entries_and_versions(CF_WRITE, &s, &e)
+            .unwrap()
+            .unwrap();
         assert_eq!(entries, 5);
         assert_eq!(version, 5);
 
@@ -393,7 +394,10 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = engine.get_range_entries_and_versions(CF_WRITE, &s, &e).unwrap().unwrap();
+        let (entries, version) = engine
+            .get_range_entries_and_versions(CF_WRITE, &s, &e)
+            .unwrap()
+            .unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
 

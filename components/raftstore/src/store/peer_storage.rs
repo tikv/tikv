@@ -1663,9 +1663,12 @@ mod tests {
         sched: Scheduler<RegionTask<KvTestSnapshot>>,
         path: &TempDir,
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
-        let kv_db = engine_test::kv::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let kv_db = engine_test::kv::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+            .unwrap();
         let raft_path = path.path().join(Path::new("raft"));
-        let raft_db = engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
+        let raft_db =
+            engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                .unwrap();
         let engines = Engines::new(kv_db, raft_db);
         bootstrap_store(&engines, 1, 1).unwrap();
 
@@ -2489,9 +2492,12 @@ mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
-        let kv_db = engine_test::kv::new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let kv_db =
+            engine_test::kv::new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = td.path().join(Path::new("raft"));
-        let raft_db = engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
+        let raft_db =
+            engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                .unwrap();
         let engines = Engines::new(kv_db, raft_db);
         bootstrap_store(&engines, 1, 1).unwrap();
 

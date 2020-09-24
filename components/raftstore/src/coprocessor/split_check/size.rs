@@ -254,7 +254,7 @@ pub mod tests {
     use super::Checker;
     use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
-    use engine_test::ctor::{ColumnFamilyOptions, DBOptions, CFOptions};
+    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
     use engine_test::kv::KvTestEngine;
     use engine_traits::CF_LOCK;
     use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
@@ -349,12 +349,8 @@ pub mod tests {
         cfg.region_split_size = ReadableSize(60);
         cfg.batch_split_limit = 5;
 
-        let mut runnable = SplitCheckRunner::new(
-            engine.clone(),
-            tx.clone(),
-            CoprocessorHost::new(tx),
-            cfg,
-        );
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx), cfg);
 
         // so split key will be [z0006]
         for i in 0..7 {
@@ -512,12 +508,8 @@ pub mod tests {
             .collect();
         let engine = engine_test::kv::new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
 
-        let mut runnable = SplitCheckRunner::new(
-            engine.clone(),
-            tx.clone(),
-            CoprocessorHost::new(tx),
-            cfg,
-        );
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx), cfg);
 
         // Flush a sst of CF_LOCK with range properties.
         for i in 7..15 {
@@ -591,8 +583,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine =
-            engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+        let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
         let region = make_region(1, vec![], vec![]);
         assert_eq!(
@@ -748,8 +739,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db =
-            engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         let cf_size = 2 + 1024 + 2 + 2048 + 2 + 4096;
@@ -786,8 +776,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db =
-            engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let mut cf_size = 0;
         for i in 0..100 {
@@ -825,8 +814,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db =
-            engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let mut cf_size = 0;
         for i in 0..10 {

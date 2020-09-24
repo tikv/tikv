@@ -214,13 +214,13 @@ mod tests {
     use super::super::size::tests::must_split_at;
     use crate::coprocessor::{Config, CoprocessorHost};
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use engine_test::ctor::{ColumnFamilyOptions, DBOptions, CFOptions};
-    use engine_traits::{MiscExt, KvEngine, SyncMutable};
+    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
+    use engine_traits::{KvEngine, MiscExt, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
     use std::cmp;
-    use std::sync::{mpsc};
+    use std::sync::mpsc;
     use std::u64;
     use tempfile::Builder;
     use tikv_util::worker::Runnable;
@@ -285,12 +285,8 @@ mod tests {
         cfg.region_split_keys = 80;
         cfg.batch_split_limit = 5;
 
-        let mut runnable = SplitCheckRunner::new(
-            engine.clone(),
-            tx.clone(),
-            CoprocessorHost::new(tx),
-            cfg,
-        );
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx), cfg);
 
         // so split key will be z0080
         put_data(&engine, 0, 90, false);
@@ -373,8 +369,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db =
-            engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         for &(key, vlen) in &cases {
@@ -414,8 +409,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db =
-            engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         // size >= 4194304 will insert a new point in range properties
         // 3 points will be inserted into range properties

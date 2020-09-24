@@ -55,56 +55,70 @@
 
 /// Types and constructors for the "raft" engine
 pub mod raft {
+    use crate::ctor::{CFOptions, DBOptions, EngineConstructorExt};
     use engine_traits::Result;
-    use crate::ctor::{EngineConstructorExt, DBOptions, CFOptions};
 
     #[cfg(feature = "test-engine-raft-panic")]
     pub use engine_panic::{
-        PanicEngine as RaftTestEngine,
-        PanicSnapshot as RaftTestSnapshot,
+        PanicEngine as RaftTestEngine, PanicSnapshot as RaftTestSnapshot,
         PanicWriteBatch as RaftTestWriteBatch,
     };
 
     #[cfg(feature = "test-engine-raft-rocksdb")]
     pub use engine_rocks::{
-        RocksEngine as RaftTestEngine,
-        RocksSnapshot as RaftTestSnapshot,
+        RocksEngine as RaftTestEngine, RocksSnapshot as RaftTestSnapshot,
         RocksWriteBatch as RaftTestWriteBatch,
     };
 
-    pub fn new_engine(path: &str, db_opt: Option<DBOptions>, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<RaftTestEngine> {
+    pub fn new_engine(
+        path: &str,
+        db_opt: Option<DBOptions>,
+        cfs: &[&str],
+        opts: Option<Vec<CFOptions>>,
+    ) -> Result<RaftTestEngine> {
         RaftTestEngine::new_engine(path, db_opt, cfs, opts)
     }
 
-    pub fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<RaftTestEngine> {
+    pub fn new_engine_opt(
+        path: &str,
+        db_opt: DBOptions,
+        cfs_opts: Vec<CFOptions>,
+    ) -> Result<RaftTestEngine> {
         RaftTestEngine::new_engine_opt(path, db_opt, cfs_opts)
     }
 }
 
 /// Types and constructors for the "kv" engine
 pub mod kv {
+    use crate::ctor::{CFOptions, DBOptions, EngineConstructorExt};
     use engine_traits::Result;
-    use crate::ctor::{EngineConstructorExt, DBOptions, CFOptions};
 
     #[cfg(feature = "test-engine-kv-panic")]
     pub use engine_panic::{
-        PanicEngine as KvTestEngine,
-        PanicSnapshot as KvTestSnapshot,
+        PanicEngine as KvTestEngine, PanicSnapshot as KvTestSnapshot,
         PanicWriteBatch as KvTestWriteBatch,
     };
 
     #[cfg(feature = "test-engine-kv-rocksdb")]
     pub use engine_rocks::{
-        RocksEngine as KvTestEngine,
-        RocksSnapshot as KvTestSnapshot,
+        RocksEngine as KvTestEngine, RocksSnapshot as KvTestSnapshot,
         RocksWriteBatch as KvTestWriteBatch,
     };
 
-    pub fn new_engine(path: &str, db_opt: Option<DBOptions>, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<KvTestEngine> {
+    pub fn new_engine(
+        path: &str,
+        db_opt: Option<DBOptions>,
+        cfs: &[&str],
+        opts: Option<Vec<CFOptions>>,
+    ) -> Result<KvTestEngine> {
         KvTestEngine::new_engine(path, db_opt, cfs, opts)
     }
 
-    pub fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<KvTestEngine> {
+    pub fn new_engine_opt(
+        path: &str,
+        db_opt: DBOptions,
+        cfs_opts: Vec<CFOptions>,
+    ) -> Result<KvTestEngine> {
         KvTestEngine::new_engine_opt(path, db_opt, cfs_opts)
     }
 }
@@ -137,7 +151,12 @@ pub mod ctor {
         /// - The column families specified as `opts`, with options.
         ///
         /// Note that if `opts` is not `None` then the `cfs` argument is completely ignored.
-        fn new_engine(path: &str, db_opt: Option<DBOptions>, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<Self>;
+        fn new_engine(
+            path: &str,
+            db_opt: Option<DBOptions>,
+            cfs: &[&str],
+            opts: Option<Vec<CFOptions>>,
+        ) -> Result<Self>;
 
         /// Create a new engine with specified column families and options
         fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self>;
@@ -253,7 +272,7 @@ pub mod ctor {
         pub fn get_no_range_properties(&self) -> bool {
             self.no_range_properties
         }
-        
+
         pub fn set_no_table_properties(&mut self, v: bool) {
             self.no_table_properties = v;
         }
@@ -264,39 +283,55 @@ pub mod ctor {
     }
 
     mod panic {
-        use engine_traits::Result;
+        use super::{CFOptions, DBOptions, EngineConstructorExt};
         use engine_panic::PanicEngine;
-        use super::{EngineConstructorExt, DBOptions, CFOptions};
+        use engine_traits::Result;
 
         impl EngineConstructorExt for engine_panic::PanicEngine {
-            fn new_engine(_path: &str, _db_opt: Option<DBOptions>, _cfs: &[&str], _opts: Option<Vec<CFOptions>>) -> Result<Self> {
+            fn new_engine(
+                _path: &str,
+                _db_opt: Option<DBOptions>,
+                _cfs: &[&str],
+                _opts: Option<Vec<CFOptions>>,
+            ) -> Result<Self> {
                 Ok(PanicEngine)
             }
 
-            fn new_engine_opt(_path: &str, _db_opt: DBOptions, _cfs_opts: Vec<CFOptions>) -> Result<Self> {
+            fn new_engine_opt(
+                _path: &str,
+                _db_opt: DBOptions,
+                _cfs_opts: Vec<CFOptions>,
+            ) -> Result<Self> {
                 Ok(PanicEngine)
             }
         }
     }
 
     mod rocks {
-        use super::{EngineConstructorExt, ColumnFamilyOptions, DBOptions, CFOptions, CryptoOpts};
+        use super::{CFOptions, ColumnFamilyOptions, CryptoOpts, DBOptions, EngineConstructorExt};
 
-        use engine_traits::{Result, ColumnFamilyOptions as ColumnFamilyOptionsTrait};
+        use engine_traits::{ColumnFamilyOptions as ColumnFamilyOptionsTrait, Result};
 
-        use engine_rocks::{RocksColumnFamilyOptions, RocksDBOptions};
-        use engine_rocks::util::{new_engine_opt as rocks_new_engine_opt, new_engine as rocks_new_engine, RocksCFOptions};
-        use engine_rocks::raw::{ColumnFamilyOptions as RawRocksColumnFamilyOptions};
         use engine_rocks::properties::{
             MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
         };
+        use engine_rocks::raw::ColumnFamilyOptions as RawRocksColumnFamilyOptions;
         use engine_rocks::raw::{DBOptions as RawRocksDBOptions, Env};
+        use engine_rocks::util::{
+            new_engine as rocks_new_engine, new_engine_opt as rocks_new_engine_opt, RocksCFOptions,
+        };
+        use engine_rocks::{RocksColumnFamilyOptions, RocksDBOptions};
         use std::sync::Arc;
 
         impl EngineConstructorExt for engine_rocks::RocksEngine {
             // FIXME this is duplicating behavior from engine_rocks::raw_util in order to
             // call set_standard_cf_opts.
-            fn new_engine(path: &str, db_opt: Option<DBOptions>, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<Self> {
+            fn new_engine(
+                path: &str,
+                db_opt: Option<DBOptions>,
+                cfs: &[&str],
+                opts: Option<Vec<CFOptions>>,
+            ) -> Result<Self> {
                 let rocks_db_opts = match db_opt {
                     Some(db_opt) => Some(get_rocks_db_opts(db_opt)?),
                     None => None,
@@ -323,7 +358,11 @@ pub mod ctor {
                 rocks_new_engine(path, rocks_db_opts, &[], Some(rocks_cfs_opts))
             }
 
-            fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self> {
+            fn new_engine_opt(
+                path: &str,
+                db_opt: DBOptions,
+                cfs_opts: Vec<CFOptions>,
+            ) -> Result<Self> {
                 let rocks_db_opts = get_rocks_db_opts(db_opt)?;
                 let rocks_cfs_opts = cfs_opts
                     .iter()
@@ -338,23 +377,33 @@ pub mod ctor {
             }
         }
 
-        fn set_standard_cf_opts(rocks_cf_opts: &mut RawRocksColumnFamilyOptions, cf_opts: &ColumnFamilyOptions) {
+        fn set_standard_cf_opts(
+            rocks_cf_opts: &mut RawRocksColumnFamilyOptions,
+            cf_opts: &ColumnFamilyOptions,
+        ) {
             if !cf_opts.get_no_range_properties() {
                 let f = Box::new(RangePropertiesCollectorFactory::default());
-                rocks_cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+                rocks_cf_opts
+                    .add_table_properties_collector_factory("tikv.range-properties-collector", f);
             }
             if !cf_opts.get_no_table_properties() {
                 let f = Box::new(MvccPropertiesCollectorFactory::default());
-                rocks_cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+                rocks_cf_opts
+                    .add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
             }
         }
 
-        fn set_cf_opts(rocks_cf_opts: &mut RocksColumnFamilyOptions, cf_opts: &ColumnFamilyOptions) {
+        fn set_cf_opts(
+            rocks_cf_opts: &mut RocksColumnFamilyOptions,
+            cf_opts: &ColumnFamilyOptions,
+        ) {
             if let Some(trigger) = cf_opts.get_level_zero_file_num_compaction_trigger() {
                 rocks_cf_opts.set_level_zero_file_num_compaction_trigger(trigger);
             }
             if let Some(trigger) = cf_opts.get_level_zero_slowdown_writes_trigger() {
-                rocks_cf_opts.as_raw_mut().set_level_zero_slowdown_writes_trigger(trigger);
+                rocks_cf_opts
+                    .as_raw_mut()
+                    .set_level_zero_slowdown_writes_trigger(trigger);
             }
             if cf_opts.get_disable_auto_compactions() {
                 rocks_cf_opts.set_disable_auto_compactions(true);
@@ -376,11 +425,12 @@ pub mod ctor {
     }
 }
 
-
 /// Create a new set of engines in a temporary directory
 ///
 /// This is little-used and probably shouldn't exist.
-pub fn new_temp_engine(path: &tempfile::TempDir) -> engine_traits::Engines<crate::kv::KvTestEngine, crate::raft::RaftTestEngine> {
+pub fn new_temp_engine(
+    path: &tempfile::TempDir,
+) -> engine_traits::Engines<crate::kv::KvTestEngine, crate::raft::RaftTestEngine> {
     let raft_path = path.path().join(std::path::Path::new("raft"));
     engine_traits::Engines::new(
         crate::kv::new_engine(
@@ -399,4 +449,3 @@ pub fn new_temp_engine(path: &tempfile::TempDir) -> engine_traits::Engines<crate
         .unwrap(),
     )
 }
-

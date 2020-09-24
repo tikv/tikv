@@ -86,7 +86,12 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn get_range_entries_and_versions(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<(u64, u64)>> {
+    fn get_range_entries_and_versions(
+        &self,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Option<(u64, u64)>> {
         panic!()
     }
 

@@ -3908,11 +3908,10 @@ mod tests {
     }
 
     // Make sure msgs are handled in the same batch.
-    fn batch_messages<E>(
-        router: &ApplyRouter<E>,
-        region_id: u64,
-        msgs: Vec<Msg<E>>,
-    ) where E: KvEngine {
+    fn batch_messages<E>(router: &ApplyRouter<E>, region_id: u64, msgs: Vec<Msg<E>>)
+    where
+        E: KvEngine,
+    {
         let (notify1, wait1) = mpsc::channel();
         let (notify2, wait2) = mpsc::channel();
         router.schedule_task(
@@ -3936,7 +3935,10 @@ mod tests {
 
     fn fetch_apply_res<E>(
         receiver: &::std::sync::mpsc::Receiver<PeerMsg<E>>,
-    ) -> ApplyRes<E::Snapshot> where E: KvEngine {
+    ) -> ApplyRes<E::Snapshot>
+    where
+        E: KvEngine,
+    {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,
@@ -4316,7 +4318,10 @@ mod tests {
         }
     }
 
-    impl<E> CmdObserver<E> for ApplyObserver where E: KvEngine {
+    impl<E> CmdObserver<E> for ApplyObserver
+    where
+        E: KvEngine,
+    {
         fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
             self.cmd_batches
                 .borrow_mut()
@@ -4939,13 +4944,19 @@ mod tests {
         req
     }
 
-    struct SplitResultChecker<'a, E> where E: KvEngine {
+    struct SplitResultChecker<'a, E>
+    where
+        E: KvEngine,
+    {
         engine: E,
         origin_peers: &'a [metapb::Peer],
         epoch: Rc<RefCell<RegionEpoch>>,
     }
 
-    impl<'a, E> SplitResultChecker<'a, E> where E: KvEngine {
+    impl<'a, E> SplitResultChecker<'a, E>
+    where
+        E: KvEngine,
+    {
         fn check(&self, start: &[u8], end: &[u8], id: u64, children: &[u64], check_initial: bool) {
             let key = keys::region_state_key(id);
             let state: RegionLocalState = self.engine.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();

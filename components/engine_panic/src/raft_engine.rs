@@ -1,8 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Error, RaftEngine, RaftLogBatch, Result};
 use crate::engine::PanicEngine;
 use crate::write_batch::PanicWriteBatch;
+use engine_traits::{Error, RaftEngine, RaftLogBatch, Result};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 

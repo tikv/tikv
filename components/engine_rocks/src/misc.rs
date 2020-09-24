@@ -3,8 +3,8 @@
 use crate::engine::RocksEngine;
 use crate::util;
 use engine_traits::{
-    CFNamesExt, IterOptions, Iterable, Iterator, MiscExt, Mutable, Range, Result, WriteBatchExt,
-    ALL_CFS, CF_LOCK, MAX_DELETE_BATCH_COUNT, CFHandleExt,
+    CFHandleExt, CFNamesExt, IterOptions, Iterable, Iterator, MiscExt, Mutable, Range, Result,
+    WriteBatchExt, ALL_CFS, CF_LOCK, MAX_DELETE_BATCH_COUNT,
 };
 use rocksdb::Range as RocksRange;
 use tikv_util::keybuilder::KeyBuilder;
@@ -199,20 +199,29 @@ impl MiscExt for RocksEngine {
     fn get_total_sst_files_size_cf(&self, cf: &str) -> Result<Option<u64>> {
         const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        Ok(self.as_inner().get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE))
+        Ok(self
+            .as_inner()
+            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE))
     }
 
-    fn get_range_entries_and_versions(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<(u64, u64)>> {
+    fn get_range_entries_and_versions(
+        &self,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Option<(u64, u64)>> {
         let handle = self.cf_handle(cf)?;
         Ok(crate::properties::get_range_entries_and_versions(
-            self, handle, start, end
+            self, handle, start, end,
         ))
     }
 
     fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> Result<Option<u64>> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         Ok(crate::util::get_cf_num_files_at_level(
-            self.as_inner(), &handle, level
+            self.as_inner(),
+            &handle,
+            level,
         ))
     }
 }

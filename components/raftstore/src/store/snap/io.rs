@@ -240,7 +240,7 @@ mod tests {
     use super::*;
     use crate::store::snap::tests::*;
     use crate::store::snap::SNAPSHOT_CFS;
-    use engine_test::kv::{KvTestEngine};
+    use engine_test::kv::KvTestEngine;
     use engine_traits::CF_DEFAULT;
     use tempfile::Builder;
     use tikv_util::time::Limiter;
@@ -302,8 +302,8 @@ mod tests {
                                 .for_each(|pair| applied_keys.entry(cf).or_default().push(pair))
                         },
                     )
-                    .unwrap(); 
-               }
+                    .unwrap();
+                }
 
                 assert_eq_db(&db, &db1);
 

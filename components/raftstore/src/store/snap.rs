@@ -1520,13 +1520,13 @@ pub mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock};
 
-    use engine_test::ctor::{EngineConstructorExt, DBOptions, CFOptions, ColumnFamilyOptions};
-    use engine_test::kv::{KvTestEngine};
-    use engine_test::raft::{RaftTestEngine};
+    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions, EngineConstructorExt};
+    use engine_test::kv::KvTestEngine;
+    use engine_test::raft::RaftTestEngine;
     use engine_traits::Engines;
-    use engine_traits::{SyncMutable};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::SyncMutable;
     use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
@@ -1554,17 +1554,17 @@ pub mod tests {
     const TEST_META_FILE_BUFFER_SIZE: usize = 1000;
     const BYTE_SIZE: usize = 1;
 
-    type DBBuilder<E> = fn(
-        p: &Path,
-        db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions<'_>>>,
-    ) -> Result<E>;
+    type DBBuilder<E> =
+        fn(p: &Path, db_opt: Option<DBOptions>, cf_opts: Option<Vec<CFOptions<'_>>>) -> Result<E>;
 
     pub fn open_test_empty_db<E>(
         path: &Path,
         db_opt: Option<DBOptions>,
         cf_opts: Option<Vec<CFOptions<'_>>>,
-    ) -> Result<E> where E: KvEngine + EngineConstructorExt {
+    ) -> Result<E>
+    where
+        E: KvEngine + EngineConstructorExt,
+    {
         let p = path.to_str().unwrap();
         let db = E::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
         Ok(db)
@@ -1574,7 +1574,10 @@ pub mod tests {
         path: &Path,
         db_opt: Option<DBOptions>,
         cf_opts: Option<Vec<CFOptions<'_>>>,
-    ) -> Result<E> where E: KvEngine + EngineConstructorExt {
+    ) -> Result<E>
+    where
+        E: KvEngine + EngineConstructorExt,
+    {
         let p = path.to_str().unwrap();
         let db = E::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
         let key = keys::data_key(TEST_KEY);
@@ -1611,22 +1614,16 @@ pub mod tests {
             apply_entry.set_index(10);
             apply_entry.set_term(0);
             apply_state.mut_truncated_state().set_index(10);
-            kv
-                .put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
-            raft
-                .put_msg(&keys::raft_log_key(region_id, 10), &apply_entry)?;
+            kv.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
+            raft.put_msg(&keys::raft_log_key(region_id, 10), &apply_entry)?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
             let mut region_state = RegionLocalState::default();
             region_state.set_region(region);
-            kv
-                .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
+            kv.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
-        Ok(Engines {
-            kv: kv,
-            raft: raft,
-        })
+        Ok(Engines { kv: kv, raft: raft })
     }
 
     pub fn get_kv_count(snap: &impl EngineSnapshot) -> usize {
@@ -1853,8 +1850,7 @@ pub mod tests {
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
-        let dst_db =
-            engine_test::kv::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap();
+        let dst_db = engine_test::kv::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap();
         let options = ApplyOptions {
             db: dst_db.clone(),
             region,
@@ -2387,13 +2383,18 @@ pub mod tests {
             .unwrap();
         // Disable property collection so that the total snapshot size
         // isn't dependent on them.
-        let kv_cf_opts = ALL_CFS.iter().map(|cf| {
-            let mut cf_opts = ColumnFamilyOptions::new();
-            cf_opts.set_no_range_properties(true);
-            cf_opts.set_no_table_properties(true);
-            CFOptions::new(cf, cf_opts)
-        }).collect();
-        let engine = get_test_db_for_regions(&kv_path, None, None, None, Some(kv_cf_opts), &regions).unwrap();
+        let kv_cf_opts = ALL_CFS
+            .iter()
+            .map(|cf| {
+                let mut cf_opts = ColumnFamilyOptions::new();
+                cf_opts.set_no_range_properties(true);
+                cf_opts.set_no_table_properties(true);
+                CFOptions::new(cf, cf_opts)
+            })
+            .collect();
+        let engine =
+            get_test_db_for_regions(&kv_path, None, None, None, Some(kv_cf_opts), &regions)
+                .unwrap();
 
         let snapfiles_path = Builder::new()
             .prefix("test-snapshot-max-total-size-snapshots")

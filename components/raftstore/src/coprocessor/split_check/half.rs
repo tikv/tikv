@@ -147,7 +147,7 @@ mod tests {
     use std::iter;
     use std::sync::mpsc;
 
-    use engine_test::ctor::{ColumnFamilyOptions, DBOptions, CFOptions};
+    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
     use engine_traits::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
@@ -188,12 +188,8 @@ mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let mut cfg = Config::default();
         cfg.region_max_size = ReadableSize(BUCKET_NUMBER_LIMIT as u64);
-        let mut runnable = SplitCheckRunner::new(
-            engine.clone(),
-            tx.clone(),
-            CoprocessorHost::new(tx),
-            cfg,
-        );
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx), cfg);
 
         // so split key will be z0005
         for i in 0..11 {
@@ -233,8 +229,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine =
-            engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+        let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
         let mut big_value = Vec::with_capacity(256);
         big_value.extend(iter::repeat(b'v').take(256));
