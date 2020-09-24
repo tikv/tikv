@@ -106,6 +106,7 @@ pub struct Config {
     pub enable_request_batch: bool,
 
     // Test only.
+    #[config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub raft_client_backoff_step: ReadableDuration,
