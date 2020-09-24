@@ -233,6 +233,11 @@ error = 'KV-Raft-RequestSnapshotDropped'
 description = ''
 workaround = ''
 
+[error.KV-Raft-ConfChangeError]
+error = 'KV-Raft-ConfChangeError'
+description = ''
+workaround = ''
+
 [error.KV-Raftstore-EntryTooLarge]
 error = 'KV-Raftstore-EntryTooLarge'
 description = ''
