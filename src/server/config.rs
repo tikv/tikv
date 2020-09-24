@@ -105,6 +105,11 @@ pub struct Config {
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
 
+    // Test only.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub raft_client_backoff_step: ReadableDuration,
+
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
 
@@ -170,6 +175,7 @@ impl Default for Config {
             // The resolution of timer in tokio is 1ms.
             heavy_load_wait_duration: ReadableDuration::millis(1),
             enable_request_batch: true,
+            raft_client_backoff_step: ReadableDuration::secs(1),
         }
     }
 }
