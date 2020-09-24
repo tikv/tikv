@@ -127,11 +127,7 @@ pub fn hex_int_arg(arg: &Int, writer: BytesWriter) -> Result<BytesGuard> {
 #[inline]
 pub fn ltrim(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     let pos = arg.iter().position(|&x| x != SPACE);
-    let result = if let Some(i) = pos {
-        &arg[i..]
-    } else {
-        b""
-    };
+    let result = if let Some(i) = pos { &arg[i..] } else { b"" };
 
     Ok(writer.write_ref(Some(result)))
 }
@@ -140,23 +136,14 @@ pub fn ltrim(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 #[inline]
 pub fn rtrim(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     let pos = arg.iter().rposition(|&x| x != SPACE);
-    let result = if let Some(i) = pos {
-        &arg[..=i]
-    } else {
-        b""
-    };
+    let result = if let Some(i) = pos { &arg[..=i] } else { b"" };
 
     Ok(writer.write_ref(Some(result)))
 }
 
 #[rpn_fn(writer)]
 #[inline]
-pub fn lpad(
-    arg: BytesRef,
-    len: &Int,
-    pad: BytesRef,
-    writer: BytesWriter,
-) -> Result<BytesGuard> {
+pub fn lpad(arg: BytesRef, len: &Int, pad: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     match validate_target_len_for_pad(*len < 0, *len, arg.len(), 1, pad.is_empty()) {
         None => Ok(writer.write(None)),
         Some(0) => Ok(writer.write_ref(Some(b""))),
@@ -213,12 +200,7 @@ pub fn lpad_utf8(
 
 #[rpn_fn(writer)]
 #[inline]
-pub fn rpad(
-    arg: BytesRef,
-    len: &Int,
-    pad: BytesRef,
-    writer: BytesWriter,
-) -> Result<BytesGuard> {
+pub fn rpad(arg: BytesRef, len: &Int, pad: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     match validate_target_len_for_pad(*len < 0, *len, arg.len(), 1, pad.is_empty()) {
         None => Ok(writer.write(None)),
         Some(0) => Ok(writer.write_ref(Some(b""))),
@@ -404,11 +386,7 @@ pub fn reverse(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 
 #[rpn_fn]
 #[inline]
-pub fn locate_3_args(
-    substr: BytesRef,
-    s: BytesRef,
-    pos: &Int,
-) -> Result<Option<Int>> {
+pub fn locate_3_args(substr: BytesRef, s: BytesRef, pos: &Int) -> Result<Option<Int>> {
     if *pos < 1 || *pos as usize > s.len() + 1 {
         return Ok(Some(0));
     }
@@ -665,8 +643,7 @@ pub fn to_base64(bs: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 
     let result = if let Some(size) = encoded_size(bs.len()) {
         let mut buf = vec![0; size];
-        let len_without_wrap =
-            base64::encode_config_slice(bs, base64::STANDARD, &mut buf);
+        let len_without_wrap = base64::encode_config_slice(bs, base64::STANDARD, &mut buf);
         line_wrap(&mut buf, len_without_wrap);
         buf
     } else {
