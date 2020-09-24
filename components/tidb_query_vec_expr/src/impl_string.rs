@@ -247,12 +247,12 @@ pub fn left(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesGuard>
     }
     let rhs = *rhs as usize;
     let result = if lhs.len() < rhs {
-        lhs.to_vec()
+        &lhs
     } else {
-        lhs[..rhs].to_vec()
+        &lhs[..rhs]
     };
 
-    Ok(writer.write(Some(result)))
+    Ok(writer.write_ref(Some(result)))
 }
 
 #[rpn_fn(writer)]
