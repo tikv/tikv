@@ -63,7 +63,6 @@ stats-concurrency = 10
 heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
-raft-client-backoff-step = "2ms"
 
 [server.labels]
 a = "b"
