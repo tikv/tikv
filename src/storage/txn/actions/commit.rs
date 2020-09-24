@@ -109,6 +109,11 @@ pub mod tests {
     use txn_types::TimeStamp;
 
     #[cfg(test)]
+    use crate::storage::txn::tests::{
+        must_prewrite_delete, must_prewrite_lock, must_prewrite_put,
+        must_prewrite_put_for_large_txn, must_prewrite_put_impl,
+    };
+    #[cfg(test)]
     use crate::storage::{
         mvcc::SHORT_VALUE_MAX_LEN, txn::commands::check_txn_status, TestEngineBuilder, TxnStatus,
     };

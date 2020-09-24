@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::shared::prewrite_key_value;
 use crate::storage::mvcc::{
     metrics::MVCC_DUPLICATE_CMD_COUNTER_VEC, ErrorInner, LockType, Mutation, MvccTxn,
     Result as MvccResult, TimeStamp,
 };
-use crate::storage::txn::prewrite_key_value;
 use crate::storage::Snapshot;
 
 pub fn pessimistic_prewrite<S: Snapshot>(
@@ -81,4 +81,39 @@ pub fn pessimistic_prewrite<S: Snapshot>(
         txn_size,
         min_commit_ts,
     )
+}
+
+pub mod tests {
+    use super::*;
+    use crate::storage::mvcc::{Key, MvccTxn, Result as MvccResult, TimeStamp};
+    use crate::storage::Engine;
+    use concurrency_manager::ConcurrencyManager;
+    use kvproto::kvrpcpb::Context;
+
+    pub fn try_pessimistic_prewrite_check_not_exists<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: impl Into<TimeStamp>,
+    ) -> MvccResult<()> {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let ts = ts.into();
+        let cm = ConcurrencyManager::new(ts);
+        let mut txn = MvccTxn::new(snapshot, ts, true, cm);
+
+        pessimistic_prewrite(
+            &mut txn,
+            Mutation::CheckNotExists(Key::from_raw(key)),
+            pk,
+            &None,
+            false,
+            0,
+            TimeStamp::default(),
+            0,
+            TimeStamp::default(),
+            false,
+        )?;
+        Ok(())
+    }
 }

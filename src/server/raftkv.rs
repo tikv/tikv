@@ -24,6 +24,7 @@ use crate::storage::kv::{
     Snapshot as EngineSnapshot, WriteData,
 };
 use crate::storage::{self, kv};
+use flog::{log, LogItem};
 use raftstore::errors::Error as RaftServerError;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
@@ -337,6 +338,7 @@ where
     }
 
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
+        let start = minstant::now();
         fail_point!("raftkv_async_write");
         if batch.modifies.is_empty() {
             return Err(KvError::from(KvErrorInner::EmptyRequest));
@@ -397,15 +399,29 @@ where
                         .write
                         .observe(begin_instant.elapsed_secs());
                     fail_point!("raftkv_async_write_finish");
+                    let end = minstant::now();
+                    let mut item = LogItem::new();
+                    item.u64(end - start).str("async_write\n");
+                    log(item);
                     cb((cb_ctx, Ok(())))
                 }
-                Ok(CmdRes::Snap(_)) => cb((
-                    cb_ctx,
-                    Err(box_err!("unexpect snapshot, should mutate instead.")),
-                )),
+                Ok(CmdRes::Snap(_)) => {
+                    let end = minstant::now();
+                    let mut item = LogItem::new();
+                    item.u64(end - start).str("async_write\n");
+                    log(item);
+                    cb((
+                        cb_ctx,
+                        Err(box_err!("unexpect snapshot, should mutate instead.")),
+                    ))
+                }
                 Err(e) => {
                     let status_kind = get_status_kind_from_engine_error(&e);
                     ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
+                    let end = minstant::now();
+                    let mut item = LogItem::new();
+                    item.u64(end - start).str("async_write\n");
+                    log(item);
                     cb((cb_ctx, Err(e)))
                 }
             }),
