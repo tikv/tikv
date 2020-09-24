@@ -125,7 +125,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::{BoxConsistencyCheckObserver, RawConsistencyCheckObserver};
+    use crate::coprocessor::{
+        BoxConsistencyCheckObserver, ConsistencyCheckMethod, RawConsistencyCheckObserver,
+    };
     use byteorder::{BigEndian, WriteBytesExt};
     use engine_rocks::util::new_engine;
     use engine_rocks::{RocksEngine, RocksSnapshot};
@@ -172,7 +174,7 @@ mod tests {
         let sum = digest.finalize();
         runner.run(Task::<RocksSnapshot>::ComputeHash {
             index: 10,
-            context: vec![],
+            context: vec![ConsistencyCheckMethod::Raw as u8],
             region: region.clone(),
             snap: db.snapshot(),
         });

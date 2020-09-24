@@ -537,6 +537,7 @@ where
         let store_id = self.store_id;
         let res = self.builder.resolver.resolve(
             store_id,
+            #[allow(unused_mut)]
             Box::new(move |mut addr| {
                 {
                     // Wrapping the fail point in a closure, so we can modify

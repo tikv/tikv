@@ -457,15 +457,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .engine
             .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
-        // Create CoprocessorHost.
-        let mut coprocessor_host = self.coprocessor_host.take().unwrap();
-
         let lock_mgr = LockManager::new();
         cfg_controller.register(
             tikv::config::Module::PessimisticTxn,
             Box::new(lock_mgr.config_manager()),
         );
-        lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
+        lock_mgr.register_detector_role_change_observer(self.coprocessor_host.as_mut().unwrap());
 
         let engines = self.engines.as_ref().unwrap();
 
@@ -546,7 +543,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         // Register cdc
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
-        cdc_ob.register_to(&mut coprocessor_host);
+        cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 
         let server_config = Arc::new(self.config.server.clone());
 
@@ -577,7 +574,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
             self.router.clone(),
-            coprocessor_host.clone(),
+            self.coprocessor_host.clone().unwrap(),
             self.config.coprocessor.clone(),
         );
         split_check_worker.start(split_check_runner).unwrap();
@@ -619,7 +616,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             snap_mgr,
             pd_worker,
             engines.store_meta.clone(),
-            coprocessor_host,
+            self.coprocessor_host.clone().unwrap(),
             importer.clone(),
             split_check_worker,
             auto_split_controller,
