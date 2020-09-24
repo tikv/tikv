@@ -5,24 +5,16 @@ use std::process;
 
 use crate::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use clap::{App, Arg};
-use libc::{c_char, c_int};
-use raftstore::tiflash_ffi::{
-    get_tiflash_server_helper, TiFlashServerHelper, TIFLASH_SERVER_HELPER_PTR,
-};
+use raftstore::tiflash_ffi::{get_tiflash_server_helper, TIFLASH_SERVER_HELPER_PTR};
 use std::ffi::CStr;
+use std::os::raw::{c_char, c_int};
 use tikv::config::TiKvConfig;
 
-#[no_mangle]
-pub unsafe extern "C" fn print_tiflash_proxy_version() {
+pub fn print_proxy_version() {
     println!("{}", crate::proxy_version_info());
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn run_tiflash_proxy_ffi(
-    argc: c_int,
-    argv: *const *const c_char,
-    tiflash_server_helper: *const TiFlashServerHelper,
-) {
+pub unsafe fn run_proxy(argc: c_int, argv: *const *const c_char, tiflash_server_helper: *const u8) {
     {
         let ptr = &TIFLASH_SERVER_HELPER_PTR as *const _ as *mut _;
         *ptr = tiflash_server_helper;

@@ -1,39 +1,21 @@
-// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+use std::os::raw::{c_char, c_int};
 
-extern crate slog_global;
-
-#[macro_use]
-extern crate tikv_util;
-
-#[macro_use]
-pub mod setup;
-pub mod server;
-
-mod tiflash_raft_proxy;
-
-fn proxy_version_info() -> String {
-    let fallback = "Unknown (env var does not exist when building)";
-    format!(
-        "Git Commit Hash:   {}\
-         \nGit Commit Branch: {}\
-         \nUTC Build Time:    {}\
-         \nRust Version:      {}\
-         \nStorage Engine:    {}\
-         \nPrometheus Prefix: {}\
-         \nProfile:           {}",
-        option_env!("PROXY_BUILD_GIT_HASH").unwrap_or(fallback),
-        option_env!("PROXY_BUILD_GIT_BRANCH").unwrap_or(fallback),
-        option_env!("PROXY_BUILD_TIME").unwrap_or(fallback),
-        option_env!("PROXY_BUILD_RUSTC_VERSION").unwrap_or(fallback),
-        option_env!("ENGINE_LABEL_VALUE").unwrap_or(fallback),
-        option_env!("PROMETHEUS_METRIC_NAME_PREFIX").unwrap_or(fallback),
-        option_env!("PROXY_PROFILE").unwrap_or(fallback),
-    )
+#[no_mangle]
+fn ____useless_func_to_make_compiler_happy(pp: &mut engine_rocks::raw::Env) {
+    *pp = Default::default();
+    engine_rocks::encryption::get_env(None, None).unwrap();
 }
 
-fn log_proxy_info() {
-    info!("Welcome To TiFlash Raft Proxy");
-    for line in proxy_version_info().lines() {
-        info!("{}", line);
-    }
+#[no_mangle]
+pub unsafe extern "C" fn print_tiflash_proxy_version() {
+    cmd::print_proxy_version();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn run_tiflash_proxy_ffi(
+    argc: c_int,
+    argv: *const *const c_char,
+    helper: *const u8,
+) {
+    cmd::run_proxy(argc, argv, helper);
 }

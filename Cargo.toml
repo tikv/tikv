@@ -184,7 +184,7 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b7
 
 [workspace]
 members = [
-  "tiflash-proxy",
+  "cmd",
   "components/tikv_alloc",
   "components/match_template",
   "components/codec",
@@ -212,6 +212,7 @@ members = [
   "components/encryption",
   "components/error_code",
   "components/concurrency_manager",
+  "tiflash-proxy",
 ]
 default-members = ["tiflash-proxy"]
 
