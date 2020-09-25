@@ -20,7 +20,7 @@ pub trait SstReader: Iterable + Sized {
 }
 
 /// SstWriter is used to create sst files that can be added to database later.
-pub trait SstWriter {
+pub trait SstWriter: Send {
     type ExternalSstFileInfo: ExternalSstFileInfo;
     type ExternalSstFileReader: std::io::Read;
 
