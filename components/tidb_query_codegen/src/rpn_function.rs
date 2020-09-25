@@ -2063,7 +2063,7 @@ mod tests_normal {
 
     #[test]
     fn test_get_type_path_ref() {
-        let input = quote! { Option<&Int> };
+        let input = quote! { &Int };
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
         let type_path = x.get_type_path();
         let expected = quote! { Int };
@@ -2073,28 +2073,28 @@ mod tests_normal {
     #[test]
     fn test_get_type_path_type() {
         {
-            let input = quote! { Option<JsonRef> };
+            let input = quote! { JsonRef };
             let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
             let type_path = x.get_type_path();
             let expected = quote! { JsonRef };
             assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
         }
         {
-            let input = quote! { Option<BytesRef> };
+            let input = quote! { BytesRef };
             let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
             let type_path = x.get_type_path();
             let expected = quote! { BytesRef };
             assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
         }
         {
-            let input = quote! { Option<C::T> };
+            let input = quote! { C::T };
             let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
             let type_path = x.get_type_path();
             let expected = quote! { C::T };
             assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
         }
         {
-            let input = quote! { Option<T> };
+            let input = quote! { T };
             let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
             let type_path = x.get_type_path();
             let expected = quote! { T };
@@ -2104,19 +2104,19 @@ mod tests_normal {
 
     #[test]
     fn test_is_json_or_bytes() {
-        let input = quote! { Option<BytesRef> };
+        let input = quote! { BytesRef };
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
         let type_path = x.get_type_path();
         assert!(is_bytes(&type_path));
         assert!(!is_json(&type_path));
 
-        let input = quote! { Option<&Int> };
+        let input = quote! { &Int };
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
         let type_path = x.get_type_path();
         assert!(!is_bytes(&type_path));
         assert!(!is_json(&type_path));
 
-        let input = quote! { Option<JsonRef> };
+        let input = quote! { JsonRef };
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
         let type_path = x.get_type_path();
         assert!(!is_bytes(&type_path));
@@ -2125,7 +2125,7 @@ mod tests_normal {
 
     #[test]
     fn test_add_lifetime_ref() {
-        let input = quote! { Option<&Int> };
+        let input = quote! { &Int };
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
         let parsed_type = x.get_type_with_lifetime(quote! { 'arg_ });
         let expected = quote! { &'arg_ Int };
@@ -2134,7 +2134,7 @@ mod tests_normal {
 
     #[test]
     fn test_add_lifetime_type() {
-        let input = quote! { Option<JsonRef> };
+        let input = quote! { JsonRef };
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
         let parsed_type = x.get_type_with_lifetime(quote! { 'arg_ });
         let expected = quote! { JsonRef <'arg_> };
