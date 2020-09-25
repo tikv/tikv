@@ -420,6 +420,7 @@ impl parse::Parse for RpnFnAttr {
     }
 }
 
+/// Parses an evaluable type like `Option<&T>`, `Option<JsonRef>` or `Option<BytesRef>`.
 struct RpnFnRefEvaluableTypeWithOption(RpnFnRefEvaluableType);
 
 impl parse::Parse for RpnFnRefEvaluableTypeWithOption {
@@ -447,9 +448,9 @@ impl parse::Parse for RpnFnEvaluableType {
     }
 }
 
-/// Parses an evaluable type like `Option<&T>`, `Option<JsonRef>` or `Option<BytesRef>`.
-/// Option<&T> corresponds to `Ref`.
-/// Option<JsonRef> corresponds to `Type`.
+/// Parses an evaluable type like `&T`, `JsonRef` or `BytesRef`.
+/// &T corresponds to `Ref`.
+/// JsonRef corresponds to `Type`.
 enum RpnFnRefEvaluableType {
     Type(TypePath),
     Ref(TypePath),
@@ -511,7 +512,9 @@ impl parse::Parse for RpnFnRefEvaluableType {
     }
 }
 
-/// Parses a function signature parameter like `val: &Option<T>`.
+/// Parses a function signature parameter like `val: &Option<T>` or `val: &T`.
+/// If input has &Option<T>, set has_option to true; otherwise, set has_option to false.
+/// Caller can use has_option to check if input is valid.
 struct RpnFnSignatureParam {
     _pat: Pat,
     has_option: bool,
@@ -537,7 +540,9 @@ impl parse::Parse for RpnFnSignatureParam {
     }
 }
 
-/// Parses a function signature parameter like `val: &[&Option<T>]`.
+/// Parses a function signature parameter like `val: &[&Option<T>]` or `val: &[&T]`.
+/// If input has &Option<T>, set has_option to true; otherwise, set has_option to false.
+/// Caller can use has_option to check if input is valid.
 struct VargsRpnFnSignatureParam {
     _pat: Pat,
     has_option: bool,
