@@ -459,4 +459,101 @@ mod tests {
         assert_eq!(checksums[0], checksums[1]);
         assert_ne!(checksums[0], checksums[2]);
     }
+
+    #[test]
+    fn test_mvcc_info_collector() {
+        use crate::storage::mvcc::Write;
+        use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
+        use engine_rocks::raw_util::CFOptions;
+        use engine_traits::SyncMutable;
+        use txn_types::TimeStamp;
+
+        let tmp = tempfile::Builder::new()
+            .prefix("test_debug")
+            .tempdir()
+            .unwrap();
+        let path = tmp.path().to_str().unwrap();
+        let engine = Arc::new(
+            engine_rocks::raw_util::new_engine_opt(
+                path,
+                DBOptions::new(),
+                vec![
+                    CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
+                    CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
+                    CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
+                    CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+                ],
+            )
+            .unwrap(),
+        );
+        let engine = RocksEngine::from_db(engine);
+
+        let cf_default_data = vec![
+            (b"k1", b"v", 5.into()),
+            (b"k2", b"x", 10.into()),
+            (b"k3", b"y", 15.into()),
+        ];
+        for &(prefix, value, ts) in &cf_default_data {
+            let encoded_key = Key::from_raw(prefix).append_ts(ts);
+            let key = keys::data_key(encoded_key.as_encoded().as_slice());
+            engine.put(key.as_slice(), value).unwrap();
+        }
+
+        let cf_lock_data = vec![
+            (b"k1", LockType::Put, b"v", 5.into()),
+            (b"k4", LockType::Lock, b"x", 10.into()),
+            (b"k5", LockType::Delete, b"y", 15.into()),
+        ];
+        for &(prefix, tp, value, version) in &cf_lock_data {
+            let encoded_key = Key::from_raw(prefix);
+            let key = keys::data_key(encoded_key.as_encoded().as_slice());
+            let lock = Lock::new(
+                tp,
+                value.to_vec(),
+                version,
+                0,
+                None,
+                TimeStamp::zero(),
+                0,
+                TimeStamp::zero(),
+            );
+            let value = lock.to_bytes();
+            engine
+                .put_cf(CF_LOCK, key.as_slice(), value.as_slice())
+                .unwrap();
+        }
+
+        let cf_write_data = vec![
+            (b"k2", WriteType::Put, 5.into(), 10.into()),
+            (b"k3", WriteType::Put, 15.into(), 20.into()),
+            (b"k6", WriteType::Lock, 25.into(), 30.into()),
+            (b"k7", WriteType::Rollback, 35.into(), 40.into()),
+        ];
+        for &(prefix, tp, start_ts, commit_ts) in &cf_write_data {
+            let encoded_key = Key::from_raw(prefix).append_ts(commit_ts);
+            let key = keys::data_key(encoded_key.as_encoded().as_slice());
+            let write = Write::new(tp, start_ts, None);
+            let value = write.as_ref().to_bytes();
+            engine
+                .put_cf(CF_WRITE, key.as_slice(), value.as_slice())
+                .unwrap();
+        }
+
+        let scan_mvcc = |start: &[u8], end: &[u8], limit: u64| {
+            MvccInfoIterator::new(
+                |cf, opts| engine.iterator_cf_opt(cf, opts).map_err(|e| box_err!(e)),
+                if start.is_empty() { None } else { Some(start) },
+                if end.is_empty() { None } else { Some(end) },
+                limit as usize,
+            )
+            .unwrap()
+        };
+
+        let mut count = 0;
+        for key_and_mvcc in scan_mvcc(b"z", &[], 30) {
+            assert!(key_and_mvcc.is_ok());
+            count += 1;
+        }
+        assert_eq!(count, 7);
+    }
 }

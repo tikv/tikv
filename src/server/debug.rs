@@ -1505,66 +1505,6 @@ mod tests {
     #[test]
     fn test_scan_mvcc() {
         let debugger = new_debugger();
-        let engine = &debugger.engines.kv;
-
-        let cf_default_data = vec![
-            (b"k1", b"v", 5.into()),
-            (b"k2", b"x", 10.into()),
-            (b"k3", b"y", 15.into()),
-        ];
-        for &(prefix, value, ts) in &cf_default_data {
-            let encoded_key = Key::from_raw(prefix).append_ts(ts);
-            let key = keys::data_key(encoded_key.as_encoded().as_slice());
-            engine.put(key.as_slice(), value).unwrap();
-        }
-
-        let cf_lock_data = vec![
-            (b"k1", LockType::Put, b"v", 5.into()),
-            (b"k4", LockType::Lock, b"x", 10.into()),
-            (b"k5", LockType::Delete, b"y", 15.into()),
-        ];
-        for &(prefix, tp, value, version) in &cf_lock_data {
-            let encoded_key = Key::from_raw(prefix);
-            let key = keys::data_key(encoded_key.as_encoded().as_slice());
-            let lock = Lock::new(
-                tp,
-                value.to_vec(),
-                version,
-                0,
-                None,
-                TimeStamp::zero(),
-                0,
-                TimeStamp::zero(),
-            );
-            let value = lock.to_bytes();
-            engine
-                .put_cf(CF_LOCK, key.as_slice(), value.as_slice())
-                .unwrap();
-        }
-
-        let cf_write_data = vec![
-            (b"k2", WriteType::Put, 5.into(), 10.into()),
-            (b"k3", WriteType::Put, 15.into(), 20.into()),
-            (b"k6", WriteType::Lock, 25.into(), 30.into()),
-            (b"k7", WriteType::Rollback, 35.into(), 40.into()),
-        ];
-        for &(prefix, tp, start_ts, commit_ts) in &cf_write_data {
-            let encoded_key = Key::from_raw(prefix).append_ts(commit_ts);
-            let key = keys::data_key(encoded_key.as_encoded().as_slice());
-            let write = Write::new(tp, start_ts, None);
-            let value = write.as_ref().to_bytes();
-            engine
-                .put_cf(CF_WRITE, key.as_slice(), value.as_slice())
-                .unwrap();
-        }
-
-        let mut count = 0;
-        for key_and_mvcc in debugger.scan_mvcc(b"z", &[], 30).unwrap() {
-            assert!(key_and_mvcc.is_ok());
-            count += 1;
-        }
-        assert_eq!(count, 7);
-
         // Test scan with bad start, end or limit.
         assert!(debugger.scan_mvcc(b"z", b"", 0).is_err());
         assert!(debugger.scan_mvcc(b"z", b"x", 3).is_err());
