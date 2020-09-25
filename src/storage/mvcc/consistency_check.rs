@@ -28,6 +28,13 @@ fn get_safe_point_for_check(mut safe_point: u64) -> u64 {
     safe_point << PHYSICAL_SHIFT_BITS
 }
 
+const fn zero_safe_point_for_check() -> u64 {
+    let mut safe_point = 0;
+    safe_point >>= PHYSICAL_SHIFT_BITS;
+    safe_point += (SAFE_POINT_WINDOW * 1000) as u64; // 120s * 1000ms/s.
+    safe_point << PHYSICAL_SHIFT_BITS
+}
+
 #[derive(Clone)]
 pub struct Mvcc<E: KvEngine> {
     _engine: PhantomData<E>,
@@ -79,11 +86,12 @@ impl<E: KvEngine> ConsistencyCheckObserver<E> for Mvcc<E> {
         *context = &context[9..];
 
         let local_safe_point = self.local_safe_point.load(AtomicOrdering::Acquire);
-        if safe_point < local_safe_point {
+        if safe_point < local_safe_point || safe_point <= zero_safe_point_for_check() {
             warn!(
                 "skip consistency check"; "region_id" => region.get_id(),
                 "safe_ponit" => safe_point,
                 "local_safe_point" => local_safe_point,
+                "zero" => zero_safe_point_for_check(),
             );
             return Ok(None);
         }
