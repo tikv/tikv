@@ -7,8 +7,8 @@ extern crate tikv_util;
 
 #[macro_use]
 mod setup;
+pub mod dump;
 mod server;
-
 mod proxy;
 
 fn proxy_version_info() -> String {

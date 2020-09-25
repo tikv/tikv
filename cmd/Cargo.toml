@@ -41,6 +41,7 @@ name = "cmd"
 
 [dependencies]
 chrono = "0.4"
+tempfile = "3.0"
 clap = "2.32"
 concurrency_manager = { path = "../components/concurrency_manager" }
 encryption = { path = "../components/encryption" }

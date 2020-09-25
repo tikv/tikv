@@ -493,6 +493,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
+ "tempfile",
  "tikv",
  "tikv_alloc",
  "tikv_util",
@@ -2108,9 +2109,9 @@ dependencies = [
 
 [[package]]
 name = "more-asserts"
-version = "0.1.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf21d96e87e5d48e3b50ab1512142f2fbe06fc48b7b032dead87fbfcb83f9a89"
+checksum = "0debeb9fcf88823ea64d64e4a815ab1643f33127d995978e099942ce38f25238"
 
 [[package]]
 name = "msvc-demangler"
