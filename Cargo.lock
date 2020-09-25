@@ -1118,7 +1118,6 @@ dependencies = [
  "configuration",
  "encryption",
  "engine_traits",
- "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -1147,7 +1146,6 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "error_code",
- "hex 0.4.2",
  "kvproto",
  "log_wrappers",
  "protobuf",
@@ -2111,7 +2109,6 @@ version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
  "kvproto",
- "paste 1.0.1",
  "protobuf",
  "slog",
  "slog-term",
@@ -2663,12 +2660,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "paste"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0520af26d4cf99643dbbe093a61507922b57232d9978d8491fdc8f7b44573c8c"
-
-[[package]]
 name = "paste-impl"
 version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3134,7 +3125,6 @@ dependencies = [
  "coarsetime",
  "configuration",
  "engine_traits",
- "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4118,7 +4108,6 @@ dependencies = [
  "futures 0.3.5",
  "futures-util",
  "grpcio",
- "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4931,7 +4920,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b441ce9e5ab1d28f7643e62f0fa445086d8c84075150be840adae054cc05bd9c"
 dependencies = [
  "libc",
- "paste 0.1.18",
+ "paste",
  "tikv-jemalloc-sys",
 ]
 
