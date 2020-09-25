@@ -810,7 +810,7 @@
 #
 ## Avoid outputing data (e.g. user keys) to info log. It currently does not avoid printing
 ## user data altogether, but greatly reduce those logs.
-## Default is true when encryption is enabled and default to false otherwise.
+## Default is false.
 # redact-info-log = false
 
 # Configurations for encryption at rest. Experimental.
