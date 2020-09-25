@@ -328,18 +328,37 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 Some(req.get_output_level())
             };
 
+<<<<<<< HEAD
             let res = compact_files_in_range(&engine, start, end, output_level);
+=======
+            let res = engine.compact_files_in_range(start, end, output_level);
             match res {
                 Ok(_) => info!(
                     "compact files in range";
-                    "start" => start.map(log_wrappers::Key),
-                    "end" => end.map(log_wrappers::Key),
+                    "start" => start.map(log_wrappers::Value::key),
+                    "end" => end.map(log_wrappers::Value::key),
+                    "output_level" => ?output_level, "takes" => ?timer.elapsed()
+                ),
+                Err(ref e) => error!(%e;
+                    "compact files in range failed";
+                    "start" => start.map(log_wrappers::Value::key),
+                    "end" => end.map(log_wrappers::Value::key),
+                    "output_level" => ?output_level,
+                ),
+            }
+            let res = engine.compact_files_in_range(start, end, output_level);
+>>>>>>> ed75263f9... *: add config to redact log in raftstore and engine (#8670)
+            match res {
+                Ok(_) => info!(
+                    "compact files in range";
+                    "start" => start.map(log_wrappers::Value::key),
+                    "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level, "takes" => ?timer.elapsed()
                 ),
                 Err(ref e) => error!(
                     "compact files in range failed";
-                    "start" => start.map(log_wrappers::Key),
-                    "end" => end.map(log_wrappers::Key),
+                    "start" => start.map(log_wrappers::Value::key),
+                    "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level, "err" => %e
                 ),
             }

@@ -594,6 +594,7 @@ dependencies = [
  "kvproto",
  "libc",
  "log",
+ "log_wrappers",
  "nix 0.11.1",
  "pd_client",
  "prometheus",
@@ -1089,8 +1090,16 @@ dependencies = [
  "encryption",
  "engine",
  "engine_traits",
+<<<<<<< HEAD
  "kvproto",
  "lazy_static",
+=======
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "log_wrappers",
+ "num_cpus",
+>>>>>>> ed75263f9... *: add config to redact log in raftstore and engine (#8670)
  "prometheus",
  "rand 0.7.3",
  "rocksdb",
@@ -1110,7 +1119,12 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "error_code",
+<<<<<<< HEAD
  "hex 0.4.2",
+=======
+ "kvproto",
+ "log_wrappers",
+>>>>>>> ed75263f9... *: add config to redact log in raftstore and engine (#8670)
  "protobuf",
  "quick-error",
  "tikv_alloc",
@@ -2025,6 +2039,8 @@ name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
+ "kvproto",
+ "protobuf",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -2880,7 +2896,7 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?rev=b67d432c1b74350b38a5d96ddf885ac6c3ff46f5#b67d432c1b74350b38a5d96ddf885ac6c3ff46f5"
+source = "git+https://github.com/pingcap/rust-protobuf?rev=65e9df20fbcbcf2409d5ee86a2332ecd04c534f8#65e9df20fbcbcf2409d5ee86a2332ecd04c534f8"
 dependencies = [
  "heck",
  "hex 0.3.2",
@@ -2961,6 +2977,32 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
+=======
+name = "raft_log_engine"
+version = "0.0.1"
+dependencies = [
+ "coarsetime",
+ "configuration",
+ "engine_traits",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "num_cpus",
+ "protobuf",
+ "raft",
+ "raft-engine",
+ "serde",
+ "serde_derive",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "tikv_util",
+ "time 0.1.42",
+]
+
+[[package]]
+>>>>>>> ed75263f9... *: add config to redact log in raftstore and engine (#8670)
 name = "raftstore"
 version = "0.0.1"
 dependencies = [
@@ -3926,10 +3968,10 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio",
- "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "serde",

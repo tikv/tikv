@@ -15,12 +15,18 @@ sse = ["rocksdb/sse"]
 encryption = { path = "../encryption" }
 engine = { path = "../engine" }
 engine_traits = { path = "../engine_traits" }
+<<<<<<< HEAD
+=======
+keys = { path = "../keys" }
+num_cpus = "1"
+>>>>>>> ed75263f9... *: add config to redact log in raftstore and engine (#8670)
 prometheus = { version = "0.8", features = ["nightly", "push"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 lazy_static = "1.4.0"
+log_wrappers = { path = "../log_wrappers" }
 time = "0.1"
 configuration = { path = "../configuration" }
 serde = "1.0"

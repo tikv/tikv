@@ -96,8 +96,8 @@ quick_error! {
             display("\
                 {} has wrong prefix: key {} does not start with {}",
                 what,
-                hex::encode_upper(&key),
-                hex::encode_upper(&prefix),
+                log_wrappers::Value::key(&key),
+                log_wrappers::Value::key(&prefix),
             )
         }
         BadFormat(msg: String) {
