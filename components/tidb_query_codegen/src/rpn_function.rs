@@ -1020,7 +1020,7 @@ impl VargsRpnFn {
             }
         } else {
             quote! {
-            let mut has_null = false;
+                let mut has_null = false;
                 for arg_index in 0..args_len {
                     let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
                     let arg = EvaluableRef::borrow_scalar_value_ref(scalar_arg);
@@ -1036,7 +1036,7 @@ impl VargsRpnFn {
                 } else {
                 result.chunked_push(#fn_ident #ty_generics_turbofish( #(#captures,)*
                     unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [#vectorized_type]) })?);
-                    }
+                }
             }
         };
 
