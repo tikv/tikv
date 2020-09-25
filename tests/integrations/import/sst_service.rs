@@ -24,8 +24,13 @@ const CLEANUP_SST_MILLIS: u64 = 10;
 macro_rules! assert_to_string_contains {
     ($e:expr, $substr:expr) => {{
         let msg = $e.to_string();
-        assert!(msg.contains($substr), "msg: {}; expr: {}", msg, stringify!($e));
-    }}
+        assert!(
+            msg.contains($substr),
+            "msg: {}; expr: {}",
+            msg,
+            stringify!($e)
+        );
+    }};
 }
 
 fn new_cluster() -> (Cluster<ServerCluster>, Context) {
@@ -75,7 +80,10 @@ fn test_upload_sst() {
 
     // Mismatch length
     let meta = new_sst_meta(crc32, 0);
-    assert_to_string_contains!(send_upload_sst(&import, &meta, &data).unwrap_err(), "length");
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "length"
+    );
 
     let mut meta = new_sst_meta(crc32, length);
     meta.set_region_id(ctx.get_region_id());
@@ -83,7 +91,10 @@ fn test_upload_sst() {
     send_upload_sst(&import, &meta, &data).unwrap();
 
     // Can't upload the same uuid file again.
-    assert_to_string_contains!(send_upload_sst(&import, &meta, &data).unwrap_err(), "FileExists");
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "FileExists"
+    );
 }
 
 #[test]
@@ -137,7 +148,10 @@ fn test_ingest_sst() {
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     send_upload_sst(&import, &meta, &data).unwrap();
     // Can't upload the same file again.
-    assert_to_string_contains!(send_upload_sst(&import, &meta, &data).unwrap_err(), "FileExists");
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "FileExists"
+    );
 
     ingest.set_sst(meta.clone());
     let resp = import.ingest(&ingest).unwrap();
@@ -244,7 +258,10 @@ fn test_cleanup_sst() {
     send_upload_sst(&import, &meta, &data).unwrap();
 
     // Can not upload the same file when it exists.
-    assert_to_string_contains!(send_upload_sst(&import, &meta, &data).unwrap_err(), "FileExists");
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "FileExists"
+    );
 
     // The uploaded SST should be deleted if the region split.
     let region = cluster.get_region(&[]);

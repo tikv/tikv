@@ -709,7 +709,10 @@ impl ImportFile {
         self.validate()?;
         self.file.take().unwrap().sync_all()?;
         if self.path.save.exists() {
-            return Err(Error::FileExists(self.path.save.clone(), "finalize SST write cache"));
+            return Err(Error::FileExists(
+                self.path.save.clone(),
+                "finalize SST write cache",
+            ));
         }
         fs::rename(&self.path.temp, &self.path.save)?;
         Ok(())
