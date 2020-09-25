@@ -117,7 +117,7 @@ mod tests {
     fn test_dump() {
         let data_path = tempfile::Builder::new().tempdir().unwrap().into_path();
         let mut raftdb_path = data_path.clone();
-        let mut raftengine_path = data_path.clone();
+        let mut raftengine_path = data_path;
         raftdb_path.push("raft");
         raftengine_path.push("raft-engine");
         {
