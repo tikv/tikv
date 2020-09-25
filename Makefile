@@ -92,9 +92,6 @@ export PROXY_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev
 export PROMETHEUS_METRIC_NAME_PREFIX ?= tiflash_proxy_
 export ENGINE_LABEL_VALUE ?= tiflash
 
-$(info prometheus metric name prefix is ${PROMETHEUS_METRIC_NAME_PREFIX})
-$(info engine is ${ENGINE_LABEL_VALUE})
-
 export DOCKER_IMAGE_NAME ?= "pingcap/tikv"
 export DOCKER_IMAGE_TAG ?= "latest"
 
@@ -121,9 +118,14 @@ all: format build test error-code
 dev: format clippy
 	@env FAIL_POINT=1 make test
 
-build: export PROXY_PROFILE=debug
-build: error-code
-	cargo build --no-default-features --features "${ENABLE_FEATURES}"
+build_by_type: error-code
+	@echo prometheus metric name prefix is ${PROMETHEUS_METRIC_NAME_PREFIX}
+	@echo engine is ${ENGINE_LABEL_VALUE}
+	@echo profile is ${PROXY_PROFILE}
+	cargo build --no-default-features --features "${ENABLE_FEATURES}" --${BUILD_TYPE}
+
+build:
+	@export PROXY_PROFILE=debug; make build_by_type
 
 ## Release builds (optimized dev builds)
 ## ----------------------------
@@ -135,9 +137,14 @@ build: error-code
 # with RocksDB compiled with the "portable" option, for -march=x86-64 (an
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
-release: export PROXY_PROFILE=release
-release: error-code
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
+release:
+	@export BUILD_TYPE=release; export PROXY_PROFILE=release; \
+	if [[ $(shell uname -s) == "Darwin" ]]; then \
+		echo "Kernel is Darwin, change build type to debug"; \
+		unset BUILD_TYPE; \
+		export PROXY_PROFILE=debug; \
+	fi; \
+	make build_by_type;
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
