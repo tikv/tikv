@@ -84,6 +84,7 @@ pub fn check_and_dump_raft_db<E: RaftEngine>(raftdb_path: &str, engine: &E, env:
 fn convert_to_dirty_raftdb(path: &str) {
     let mut dirty_path = get_dirty_raftdb(path);
     fs::rename(path, &dirty_path).unwrap();
+    // fsync the parent directory to ensure that the rename is committed.
     dirty_path.pop();
     let dirty_dir = fs::File::open(&dirty_path).unwrap();
     dirty_dir.sync_all().unwrap();
