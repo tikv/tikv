@@ -372,9 +372,11 @@ fn send_write_sst(
 
     let (mut tx, rx) = client.write().unwrap();
     let mut stream = stream::iter(reqs);
-    block_on(tx.send_all(&mut stream)).unwrap();
-    block_on(tx.close()).unwrap();
-    block_on(rx)
+    block_on(async move {
+        tx.send_all(&mut stream).await?;
+        tx.close().await?;
+        rx.await
+    })
 }
 
 fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {
