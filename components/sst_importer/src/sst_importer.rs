@@ -588,7 +588,7 @@ impl ImportDir {
     fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
         let path = self.join(meta)?;
         if path.save.exists() {
-            return Err(Error::FileExists(path.save));
+            return Err(Error::FileExists(path.save, "create SST upload cache"));
         }
         ImportFile::create(meta.clone(), path)
     }
@@ -709,7 +709,10 @@ impl ImportFile {
         self.validate()?;
         self.file.take().unwrap().sync_all()?;
         if self.path.save.exists() {
-            return Err(Error::FileExists(self.path.save.clone()));
+            return Err(Error::FileExists(
+                self.path.save.clone(),
+                "finalize SST write cache",
+            ));
         }
         fs::rename(&self.path.temp, &self.path.save)?;
         Ok(())
