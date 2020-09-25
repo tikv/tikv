@@ -614,6 +614,7 @@ dependencies = [
  "signal",
  "slog",
  "slog-global",
+ "tempfile",
  "tikv",
  "tikv_alloc",
  "tikv_util",
