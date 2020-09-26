@@ -91,8 +91,8 @@ impl<S> Display for Task<S> {
                 f,
                 "Destroy {} [{}, {})",
                 region_id,
-                hex::encode_upper(start_key),
-                hex::encode_upper(end_key)
+                log_wrappers::Value::key(&start_key),
+                log_wrappers::Value::key(&end_key)
             ),
         }
     }
@@ -190,8 +190,8 @@ impl PendingDeleteRanges {
             panic!(
                 "[region {}] register deleting data in [{}, {}) failed due to overlap",
                 region_id,
-                hex::encode_upper(&start_key),
-                hex::encode_upper(&end_key),
+                log_wrappers::Value::key(&start_key),
+                log_wrappers::Value::key(&end_key),
             );
         }
         let info = StalePeerInfo {
@@ -343,7 +343,7 @@ where
                 None => {
                     return Err(box_err!(
                         "failed to get region_state from {}",
-                        hex::encode_upper(&region_key)
+                        log_wrappers::Value::key(&region_key)
                     ));
                 }
             };
@@ -484,8 +484,8 @@ where
                 error!(%e;
                     "failed to delete files in range";
                     "region_id" => region_id,
-                    "start_key" => log_wrappers::Key(start_key),
-                    "end_key" => log_wrappers::Key(end_key),
+                    "start_key" => log_wrappers::Value::key(start_key),
+                    "end_key" => log_wrappers::Value::key(end_key),
                 );
                 return;
             }
@@ -498,8 +498,8 @@ where
             error!(%e;
                 "failed to delete data in range";
                 "region_id" => region_id,
-                "start_key" => log_wrappers::Key(start_key),
-                "end_key" => log_wrappers::Key(end_key),
+                "start_key" => log_wrappers::Value::key(start_key),
+                "end_key" => log_wrappers::Value::key(end_key),
             );
         }
         if use_delete_files {
@@ -511,8 +511,8 @@ where
                 error!(%e;
                     "failed to delete blob files in range";
                     "region_id" => region_id,
-                    "start_key" => log_wrappers::Key(start_key),
-                    "end_key" => log_wrappers::Key(end_key),
+                    "start_key" => log_wrappers::Value::key(start_key),
+                    "end_key" => log_wrappers::Value::key(end_key),
                 );
                 return;
             }
@@ -520,8 +520,8 @@ where
         info!(
             "succeed in deleting data in range";
             "region_id" => region_id,
-            "start_key" => log_wrappers::Key(start_key),
-            "end_key" => log_wrappers::Key(end_key),
+            "start_key" => log_wrappers::Value::key(start_key),
+            "end_key" => log_wrappers::Value::key(end_key),
         );
     }
 
@@ -558,8 +558,8 @@ where
         info!(
             "register deleting data in range";
             "region_id" => region_id,
-            "start_key" => log_wrappers::Key(start_key),
-            "end_key" => log_wrappers::Key(end_key),
+            "start_key" => log_wrappers::Value::key(start_key),
+            "end_key" => log_wrappers::Value::key(end_key),
         );
 
         self.pending_delete_ranges.insert(
@@ -602,7 +602,7 @@ where
             assert!(
                 self.pending_delete_ranges.remove(&key).is_some(),
                 "cleanup pending_delete_ranges {} should exist",
-                hex::encode_upper(&key)
+                log_wrappers::Value::key(&key)
             );
         }
     }
