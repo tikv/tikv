@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-/// A boolean vector, which consolidates 8 booleans into 1 u64 to save space.
+/// A boolean vector, which consolidates 64 booleans into 1 u64 to save space.
 ///
 /// `BitVec` is mainly used to implement bitmap in ChunkedVec.
 #[derive(Debug, PartialEq, Clone)]
@@ -27,8 +27,14 @@ impl BitVec {
         if idx >= self.data.len() {
             self.data.push(0);
         }
+
+        let mask = (1 as u64) << (self.length & (BITS - 1));
         self.length += 1;
-        self.replace(self.length - 1, value);
+        if value {
+            self.data[idx] |= mask;
+        } else {
+            self.data[idx] &= !mask;
+        }
     }
 
     pub fn replace(&mut self, idx: usize, value: bool) {
