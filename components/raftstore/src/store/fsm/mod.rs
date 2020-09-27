@@ -8,6 +8,7 @@ pub mod apply;
 mod metrics;
 mod peer;
 pub mod store;
+mod async_io;
 
 pub use self::apply::{
     create_apply_batch_system, flush_tls_ctx, Apply, ApplyBatchSystem, ApplyMetrics, ApplyRes,

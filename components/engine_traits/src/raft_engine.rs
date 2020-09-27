@@ -1,8 +1,9 @@
 use crate::*;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
+use futures::future::BoxFuture;
 
-pub trait RaftEngine: Clone + Sync + Send + 'static {
+pub trait RaftEngine: Clone + Send + 'static {
     type LogBatch: RaftLogBatch;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch;
@@ -27,6 +28,11 @@ pub trait RaftEngine: Clone + Sync + Send + 'static {
     /// Consume the write batch by moving the content into the engine itself
     /// and return written bytes.
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize>;
+
+    /// Consume the write batch by moving the content into the engine itself
+    /// and return a future of written bytes. The future will be ready when data
+    /// has been persisted on disk.
+    fn async_write(&self, batch: Self::LogBatch, sync: bool) -> BoxFuture<'static, Result<usize>>;
 
     /// Like `consume` but shrink `batch` if need.
     fn consume_and_shrink(

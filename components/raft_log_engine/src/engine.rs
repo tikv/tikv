@@ -2,13 +2,13 @@
 
 use std::fs;
 use std::path::Path;
+use futures::future::BoxFuture;
 
 use engine_traits::{CacheStats, RaftEngine, RaftLogBatch as RaftLogBatchTrait, Result};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 use raft_engine::{EntryExt, Error as RaftEngineError, LogBatch, RaftLogEngine as RawRaftEngine};
 
-pub use raft_engine::config::RecoveryMode;
 pub use raft_engine::Config as RaftEngineConfig;
 
 #[derive(Clone)]
@@ -106,6 +106,14 @@ impl RaftEngine for RaftLogEngine {
         Ok(ret)
     }
 
+    fn async_write(&self, batch: Self::LogBatch, sync: bool) -> BoxFuture<'static,Result<usize>> {
+        let f = self.0.async_write(batch.0, sync);
+        Box::pin(async move {
+            let ret = box_try!(f.await);
+            Ok(ret)
+        })
+    }
+
     fn consume_and_shrink(
         &self,
         batch: &mut Self::LogBatch,
@@ -157,7 +165,7 @@ impl RaftEngine for RaftLogEngine {
     }
     /// Flush current cache stats.
     fn flush_stats(&self) -> Option<CacheStats> {
-        let stat = self.0.flush_stats();
+        let stat = self.0.flush_cache_stats();
         Some(engine_traits::CacheStats {
             hit: stat.hit,
             miss: stat.miss,

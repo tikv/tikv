@@ -8,6 +8,8 @@ use engine_traits::{
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
+use futures::future::BoxFuture;
+use futures::future::{err, ok, FutureExt};
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
@@ -111,6 +113,13 @@ impl RaftEngine for RocksEngine {
         self.write_opt(batch, &opts)?;
         batch.clear();
         Ok(bytes)
+    }
+
+    fn async_write(&self, mut batch: Self::LogBatch, sync: bool) -> BoxFuture<'static, Result<usize>> {
+        match self.consume(&mut batch, sync) {
+            Ok(resp) => Box::pin(ok(resp)),
+            Err(e) => Box::pin(err(e)),
+        }
     }
 
     fn consume_and_shrink(
