@@ -88,7 +88,7 @@ impl SSTImporter {
                 Ok(())
             }
             Err(e) => {
-                error!(%e; "ingest failed"; "meta" => ?meta,);
+                error!(%e; "ingest failed"; "meta" => ?meta, );
                 Err(e)
             }
         }
@@ -367,7 +367,7 @@ impl SSTImporter {
                     .map_err(|e| {
                         Error::BadFormat(format!(
                             "key {}: {}",
-                            hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
+                            log_wrappers::Value::key(keys::origin_key(iter.key())),
                             e
                         ))
                     })?
@@ -377,7 +377,7 @@ impl SSTImporter {
                     let mut write = WriteRef::parse(iter.value()).map_err(|e| {
                         Error::BadFormat(format!(
                             "write {}: {}",
-                            hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
+                            log_wrappers::Value::key(keys::origin_key(iter.key())),
                             e
                         ))
                     })?;
@@ -588,7 +588,7 @@ impl ImportDir {
     fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
         let path = self.join(meta)?;
         if path.save.exists() {
-            return Err(Error::FileExists(path.save));
+            return Err(Error::FileExists(path.save, "create SST upload cache"));
         }
         ImportFile::create(meta.clone(), path)
     }
@@ -709,7 +709,10 @@ impl ImportFile {
         self.validate()?;
         self.file.take().unwrap().sync_all()?;
         if self.path.save.exists() {
-            return Err(Error::FileExists(self.path.save.clone()));
+            return Err(Error::FileExists(
+                self.path.save.clone(),
+                "finalize SST write cache",
+            ));
         }
         fs::rename(&self.path.temp, &self.path.save)?;
         Ok(())
