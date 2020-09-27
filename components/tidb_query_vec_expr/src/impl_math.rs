@@ -474,7 +474,6 @@ pub fn truncate_int_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
 #[inline]
 #[rpn_fn]
 pub fn truncate_uint_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
-    // TODO: TruncateUint
     let x = arg0;
     let d = arg1;
     Ok(Some(if *d >= 0 {
@@ -491,7 +490,6 @@ pub fn truncate_uint_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
 #[inline]
 #[rpn_fn]
 pub fn truncate_uint_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
-    // TODO: TruncateUint
     Ok(Some(*arg0))
 }
 
@@ -1562,7 +1560,6 @@ mod tests {
 
     #[test]
     fn test_truncate_uint() {
-        // TODO: TruncateUint
         let tests = vec![
             (
                 18446744073709551615 as u64,
