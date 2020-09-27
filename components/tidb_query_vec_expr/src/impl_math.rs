@@ -32,6 +32,29 @@ const I64_TEN_POWS: [i64; 19] = [
     1_000_000_000_000_000_000,
 ];
 
+const U64_TEN_POWS: [u64; 20] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+    10_000_000_000,
+    100_000_000_000,
+    1_000_000_000_000,
+    10_000_000_000_000,
+    100_000_000_000_000,
+    1_000_000_000_000_000,
+    10_000_000_000_000_000,
+    100_000_000_000_000_000,
+    1_000_000_000_000_000_000,
+    10_000_000_000_000_000_000,
+];
+
 #[rpn_fn]
 #[inline]
 pub fn pi() -> Result<Option<Real>> {
@@ -445,6 +468,28 @@ pub fn truncate_int_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
 #[inline]
 #[rpn_fn]
 pub fn truncate_int_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
+    Ok(Some(*arg0))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_uint_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
+    let x = arg0;
+    let d = arg1;
+    Ok(Some(if *d >= 0 {
+        *x
+    } else if *d <= -(U64_TEN_POWS.len() as i64) {
+        0
+    } else {
+        let x = *x as u64;
+        let shift = U64_TEN_POWS[-d as usize];
+        (x / shift * shift) as i64
+    }))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_uint_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
     Ok(Some(*arg0))
 }
 
@@ -1510,6 +1555,49 @@ mod tests {
                 .unwrap();
 
             assert_eq!(output, Some(Int::from(expected)));
+        }
+    }
+
+    #[test]
+    fn test_truncate_uint() {
+        let tests = vec![
+            (
+                18446744073709551615 as u64,
+                u64::max_value() as i64,
+                true,
+                18446744073709551615 as u64,
+            ),
+            (
+                18446744073709551615 as u64,
+                -2 as i64,
+                false,
+                18446744073709551600 as u64,
+            ),
+            (18446744073709551615 as u64, -20 as i64, false, 0 as u64),
+            (
+                18446744073709551615 as u64,
+                2 as i64,
+                false,
+                18446744073709551615 as u64,
+            ),
+        ];
+        for (lhs, rhs, rhs_is_unsigned, expected) in tests {
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(lhs as i64))
+                .push_param_with_field_type(Some(rhs), rhs_field_type)
+                .evaluate::<Int>(ScalarFuncSig::TruncateUint)
+                .unwrap();
+
+            assert_eq!(output, Some(expected as i64));
         }
     }
 
