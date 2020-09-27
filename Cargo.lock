@@ -236,6 +236,7 @@ dependencies = [
  "tikv_util",
  "txn_types",
  "uuid",
+ "yatp",
 ]
 
 [[package]]
@@ -598,6 +599,7 @@ dependencies = [
  "kvproto",
  "libc",
  "log",
+ "log_wrappers",
  "nix 0.11.1",
  "pd_client",
  "prometheus",
@@ -612,6 +614,7 @@ dependencies = [
  "signal",
  "slog",
  "slog-global",
+ "tempfile",
  "tikv",
  "tikv_alloc",
  "tikv_util",
@@ -1116,10 +1119,10 @@ dependencies = [
  "configuration",
  "encryption",
  "engine_traits",
- "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "num_cpus",
  "prometheus",
  "prometheus-static-metric",
@@ -1144,8 +1147,8 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "error_code",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "protobuf",
  "quick-error",
  "raft",
@@ -1940,7 +1943,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#c0e3a4d8bbece2b8d796ed5a08649ea5223b7abf"
+source = "git+https://github.com/pingcap/kvproto.git#54c11254946639b975e8e9da093c515e2c84a120"
 dependencies = [
  "futures 0.3.5",
  "grpcio",
@@ -2015,7 +2018,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#ee6c08ad9fe9634301d1ac2bbfe64194ed4167db"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9d62f85259f3dc819dc5e00a3b5cb11efa092dc4"
 dependencies = [
  "cc",
  "cmake",
@@ -2024,7 +2027,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#ee6c08ad9fe9634301d1ac2bbfe64194ed4167db"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9d62f85259f3dc819dc5e00a3b5cb11efa092dc4"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2044,7 +2047,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#ee6c08ad9fe9634301d1ac2bbfe64194ed4167db"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9d62f85259f3dc819dc5e00a3b5cb11efa092dc4"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2058,9 +2061,9 @@ dependencies = [
 
 [[package]]
 name = "libz-sys"
-version = "1.0.25"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2eb5e43362e38e2bca2fd5f5134c4d4564a23a5c28e9b95411652021a8675ebe"
+checksum = "602113192b08db8f38796c4e85c39e960c145965140e918018bcde1952429655"
 dependencies = [
  "cc",
  "libc",
@@ -2106,6 +2109,8 @@ name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
+ "kvproto",
+ "protobuf",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -2309,9 +2314,9 @@ dependencies = [
 
 [[package]]
 name = "more-asserts"
-version = "0.1.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf21d96e87e5d48e3b50ab1512142f2fbe06fc48b7b032dead87fbfcb83f9a89"
+checksum = "0debeb9fcf88823ea64d64e4a815ab1643f33127d995978e099942ce38f25238"
 
 [[package]]
 name = "multimap"
@@ -3009,7 +3014,7 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?rev=b67d432c1b74350b38a5d96ddf885ac6c3ff46f5#b67d432c1b74350b38a5d96ddf885ac6c3ff46f5"
+source = "git+https://github.com/pingcap/rust-protobuf?rev=65e9df20fbcbcf2409d5ee86a2332ecd04c534f8#65e9df20fbcbcf2409d5ee86a2332ecd04c534f8"
 dependencies = [
  "heck",
  "hex 0.3.2",
@@ -3106,7 +3111,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#d71daff2ff6619d85d7f2c318500408b5e3ebef8"
+source = "git+https://github.com/pingcap/raft-rs#0c53e7b85a3a81f445c4c64ffbef860d0f315445"
 dependencies = [
  "lazy_static",
  "prost",
@@ -3121,7 +3126,6 @@ dependencies = [
  "coarsetime",
  "configuration",
  "engine_traits",
- "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -3558,7 +3562,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#ee6c08ad9fe9634301d1ac2bbfe64194ed4167db"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9d62f85259f3dc819dc5e00a3b5cb11efa092dc4"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4105,10 +4109,10 @@ dependencies = [
  "futures 0.3.5",
  "futures-util",
  "grpcio",
- "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "serde",
@@ -4534,6 +4538,7 @@ dependencies = [
  "hyper",
  "keys",
  "kvproto",
+ "more-asserts",
  "panic_hook",
  "pd_client",
  "profiler",

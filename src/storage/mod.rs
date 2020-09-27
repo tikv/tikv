@@ -1,13 +1,38 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Interact with persistent storage.
+//! This module contains TiKV's transaction layer. It lowers high-level, transactional
+//! commands to low-level (raw key-value) interactions with persistent storage.
 //!
-//! The [`Storage`](Storage) structure provides raw and transactional APIs on top of
-//! a lower-level [`Engine`](kv::Engine).
+//! This module is further split into layers: [`txn`](txn) lowers transactional commands to
+//! key-value operations on an MVCC abstraction. [`mvcc`](mvcc) is our MVCC implementation.
+//! [`kv`](kv) is an abstraction layer over persistent storage.
 //!
-//! There are multiple [`Engine`](kv::Engine) implementations, [`RaftKv`](crate::server::raftkv::RaftKv)
-//! is used by the [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
-//! [`RocksEngine`](RocksEngine) are used for testing only.
+//! Other responsibilities of this module are managing latches (see [`latch`](txn::latch)), deadlock
+//! and wait handling (see [`lock_manager`](lock_manager)), scheduling command execution (see
+//! [`txn::scheduler`](txn::scheduler)), and handling commands from the raw and versioned APIs (in
+//! the [`Storage`](Storage) struct).
+//!
+//! For more information about TiKV's transactions, see the [sig-txn docs](https://github.com/tikv/sig-transaction/tree/master/doc).
+//!
+//! Some important types are:
+//!
+//! * the [`Engine`](kv::Engine) trait and related traits, which abstracts over underlying storage,
+//! * the [`MvccTxn`](mvcc::txn::MvccTxn) struct, which is the primary object in the MVCC
+//!   implementation,
+//! * the commands in the [`commands`](txn::commands) module, which are how each command is implemented,
+//! * the [`Storage`](Storage) struct, which is the primary entry point for this module.
+//!
+//! Related code:
+//!
+//! * the [`kv`](crate::server::service::kv) module, which is the interface for TiKV's APIs,
+//! * the [`lock_manager](crate::server::lock_manager), which takes part in lock and deadlock
+//!   management,
+//! * [`gc_worker`](crate::server::gc_worker), which drives garbage collection of old values,
+//! * the [`txn_types](::txn_types) crate, some important types for this module's interface,
+//! * the [`kvproto`](::kvproto) crate, which defines TiKV's protobuf API and includes some
+//!   documentation of the commands implemented here,
+//! * the [`test_storage`](::test_storage) crate, integration tests for this module,
+//! * the [`engine_traits`](::engine_traits) crate, more detail of the engine abstraction.
 
 pub mod config;
 pub mod errors;
@@ -46,7 +71,9 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::prelude::*;
-use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
+use kvproto::kvrpcpb::{
+    CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo, RawGetRequest,
+};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::{
@@ -1394,6 +1421,49 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
         }
+    }
+
+    /// Update max_ts with the start_ts and check the given range for locks
+    /// which blocks the reading.
+    pub fn check_memory_locks_in_ranges(
+        &self,
+        mut ctx: Context,
+        start_ts: TimeStamp,
+        ranges: Vec<KeyRange>,
+    ) -> impl Future<Output = Result<Option<LockInfo>>> {
+        let concurrency_manager = self.concurrency_manager.clone();
+        self.read_pool
+            .spawn_handle(
+                async move {
+                    concurrency_manager.update_max_ts(start_ts);
+                    let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
+                    for range in &ranges {
+                        let start_key = Key::from_raw_maybe_unbounded(range.get_start_key());
+                        let end_key = Key::from_raw_maybe_unbounded(range.get_end_key());
+                        let res = concurrency_manager.read_range_check(
+                            start_key.as_ref(),
+                            end_key.as_ref(),
+                            |key, lock| {
+                                Lock::check_ts_conflict(
+                                    Cow::Borrowed(lock),
+                                    key,
+                                    start_ts,
+                                    &bypass_locks,
+                                )
+                            },
+                        );
+                        if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) =
+                            res
+                        {
+                            return Some(lock);
+                        }
+                    }
+                    None
+                },
+                CommandPri::Normal,
+                thread_rng().next_u64(),
+            )
+            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
     }
 }
 

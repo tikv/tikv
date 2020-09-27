@@ -545,6 +545,7 @@ dir = "test-dir"
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
+redact-info-log = true
 cert-allowed-cn = [
     "example.tikv.com",
 ]
