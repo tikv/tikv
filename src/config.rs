@@ -17,21 +17,13 @@ use std::sync::{Arc, RwLock};
 use std::usize;
 
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
+use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
+use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionFilterFactory, CompactionPriority,
     DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode,
     LRUCacheOptions, TitanDBOptions,
 };
-
-use crate::import::Config as ImportConfig;
-use crate::server::gc_worker::GcConfig;
-use crate::server::gc_worker::WriteCompactionFilterFactory;
-use crate::server::lock_manager::Config as PessimisticTxnConfig;
-use crate::server::Config as ServerConfig;
-use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
-use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::util::{
     FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
@@ -56,6 +48,16 @@ use tikv_util::config::{
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
 use tikv_util::yatp_pool;
+
+use crate::import::Config as ImportConfig;
+use crate::server::gc_worker::GcConfig;
+use crate::server::gc_worker::WriteCompactionFilterFactory;
+use crate::server::lock_manager::Config as PessimisticTxnConfig;
+use crate::server::Config as ServerConfig;
+use crate::server::CONFIG_ROCKSDB_GAUGE;
+use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR};
+
+pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -2184,24 +2186,22 @@ impl TiKvConfig {
                 .to_owned();
         }
 
-        if !self.raft_engine.enable {
-            let default_raftdb_path =
-                config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
-            if self.raft_store.raftdb_path.is_empty() {
-                self.raft_store.raftdb_path = default_raftdb_path;
-            } else if self.raft_store.raftdb_path != default_raftdb_path {
-                self.raft_store.raftdb_path =
-                    config::canonicalize_path(&self.raft_store.raftdb_path)?;
-            }
-        } else {
-            let default_er_path =
-                config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
-            if self.raft_engine.config.dir.is_empty() {
-                self.raft_engine.config.dir = default_er_path;
-            } else if self.raft_engine.config.dir != default_er_path {
-                self.raft_engine.config.dir =
-                    config::canonicalize_path(&self.raft_engine.config.dir)?;
-            }
+        let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
+        if self.raft_store.raftdb_path.is_empty() {
+            self.raft_store.raftdb_path = default_raftdb_path;
+        } else if self.raft_store.raftdb_path != default_raftdb_path
+            && RocksEngine::exists(&self.raft_store.raftdb_path)
+        {
+            self.raft_store.raftdb_path = config::canonicalize_path(&self.raft_store.raftdb_path)?;
+        }
+
+        let default_er_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
+        if self.raft_engine.config.dir.is_empty() {
+            self.raft_engine.config.dir = default_er_path;
+        } else if self.raft_engine.config.dir != default_er_path
+            && RaftLogEngine::exists(&self.raft_engine.config.dir)
+        {
+            self.raft_engine.config.dir = config::canonicalize_path(&self.raft_engine.config.dir)?;
         }
 
         let kv_db_path =
@@ -2214,23 +2214,24 @@ impl TiKvConfig {
             if RocksEngine::exists(&kv_db_path)
                 && !RocksEngine::exists(&self.raft_store.raftdb_path)
             {
-                return Err("default rocksdb exist, buf raftdb not exist".into());
+                return Err("default rocksdb exist, but raftdb not exist".into());
             }
             if !RocksEngine::exists(&kv_db_path)
                 && RocksEngine::exists(&self.raft_store.raftdb_path)
             {
-                return Err("default rocksdb not exist, buf raftdb exist".into());
+                return Err("default rocksdb not exist, but raftdb exist".into());
             }
         } else {
             if RocksEngine::exists(&kv_db_path)
                 && !RaftLogEngine::exists(&self.raft_engine.config.dir)
+                && !RocksEngine::exists(&self.raft_store.raftdb_path)
             {
-                return Err("default rocksdb exist, buf raft engine not exist".into());
+                return Err("default rocksdb exist, but raftdb and raft engine not exist".into());
             }
             if !RocksEngine::exists(&kv_db_path)
                 && RaftLogEngine::exists(&self.raft_engine.config.dir)
             {
-                return Err("default rocksdb not exist, buf raft engine exist".into());
+                return Err("default rocksdb not exist, but raft engine exist".into());
             }
         }
 

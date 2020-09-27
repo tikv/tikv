@@ -273,11 +273,6 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         let before_state = &before_states[&id];
         let idx = after_state.get_index();
         assert!(idx > before_state.get_index());
-
-        for i in 0..idx {
-            let key = keys::raft_log_key(1, i);
-            assert!(engines.raft.get_value(&key).unwrap().is_none());
-        }
     }
 }
 

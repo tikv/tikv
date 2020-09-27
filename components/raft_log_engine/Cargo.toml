@@ -20,7 +20,6 @@ prost-codec = [
 [dependencies]
 engine_traits = { path = "../engine_traits" }
 tikv_util = { path = "../tikv_util" }
-hex = "0.4"
 keys = { path = "../keys" }
 num_cpus = "1"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

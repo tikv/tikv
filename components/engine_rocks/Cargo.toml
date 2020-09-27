@@ -24,7 +24,6 @@ sse = ["rocksdb/sse"]
 [dependencies]
 encryption = { path = "../encryption" }
 engine_traits = { path = "../engine_traits" }
-hex = "0.4"
 keys = { path = "../keys" }
 num_cpus = "1"
 prometheus = { version = "0.8", features = ["nightly", "push"] }
@@ -34,6 +33,7 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 txn_types = { path = "../txn_types"}
 lazy_static = "1.4.0"
+log_wrappers = { path = "../log_wrappers" }
 time = "0.1"
 configuration = { path = "../configuration" }
 tempfile = "3.0"
