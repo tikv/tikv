@@ -94,6 +94,7 @@ fn test_serde_custom_tikv_config() {
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),
         enable_request_batch: false,
+        raft_client_backoff_step: ReadableDuration::secs(1),
     };
     value.readpool = ReadPoolConfig {
         unified: UnifiedReadPoolConfig {
@@ -625,6 +626,7 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn,
+        redact_info_log: Some(true),
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),

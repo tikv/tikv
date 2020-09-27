@@ -22,7 +22,7 @@ use engine_traits::{KvEngine, RaftEngine, Snapshot, WriteBatch};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::{Peer as PeerMeta, PeerRole, Region, RegionEpoch};
+use kvproto::metapb::{PeerRole, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
     RaftCmdRequest, RaftCmdResponse, Request, Response,
@@ -30,14 +30,17 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
-use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
+use raft::eraftpb::{
+    ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
+};
+use raft_proto::ConfChangeI;
 use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
-use tikv_util::{escape, Either, MustConsumeVec};
+use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
@@ -50,8 +53,8 @@ use crate::store::peer_storage::{
     self, write_initial_apply_state, write_peer_state, ENTRY_MEM_SIZE,
 };
 use crate::store::util::{
-    check_region_epoch, compare_region_epoch, is_learner, KeysInfoFormatter, PerfContextStatistics,
-    ADMIN_CMD_EPOCH_MAP,
+    check_region_epoch, compare_region_epoch, is_learner, ChangePeerI, ConfChangeKind,
+    KeysInfoFormatter, PerfContextStatistics, ADMIN_CMD_EPOCH_MAP,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
 use crate::{observe_perf_context_type, report_perf_context, Error, Result};
@@ -169,16 +172,32 @@ where
 #[derive(Default, Debug)]
 pub struct ChangePeer {
     pub index: u64,
-    pub conf_change: ConfChange,
-    pub peer: PeerMeta,
+    // The proposed ConfChangeV2 or (legacy) ConfChange
+    // ConfChange (if it is) will convert to ConfChangeV2
+    pub conf_change: ConfChangeV2,
+    // The change peer requests come along with ConfChangeV2
+    // or (legacy) ConfChange, for ConfChange, it only contains
+    // one element
+    pub changes: Vec<ChangePeerRequest>,
     pub region: Region,
 }
 
-#[derive(Debug)]
 pub struct Range {
     pub cf: String,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
+}
+
+impl Debug for Range {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{{ cf: {:?}, start_key: {:?}, end_key: {:?} }}",
+            self.cf,
+            log_wrappers::Value::key(&self.start_key),
+            log_wrappers::Value::key(&self.end_key)
+        )
+    }
 }
 
 impl Range {
@@ -835,10 +854,14 @@ where
                 );
             }
 
+            // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by `unimplemented!()`,
+            // which can break compatibility (i.e. old version tikv running on data written by new version tikv),
+            // but PD will reject old version tikv join the cluster, so this should not happen.
             let res = match entry.get_entry_type() {
                 EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
-                EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, &entry),
-                EntryType::EntryConfChangeV2 => unimplemented!(),
+                EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
+                    self.handle_raft_entry_conf_change(apply_ctx, &entry)
+                }
             };
 
             match res {
@@ -951,9 +974,16 @@ where
         fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
             ApplyResult::Yield
         });
-        let index = entry.get_index();
-        let term = entry.get_term();
-        let conf_change: ConfChange = util::parse_data_at(entry.get_data(), index, &self.tag);
+        let (index, term) = (entry.get_index(), entry.get_term());
+        let conf_change: ConfChangeV2 = match entry.get_entry_type() {
+            EntryType::EntryConfChange => {
+                let conf_change: ConfChange =
+                    util::parse_data_at(entry.get_data(), index, &self.tag);
+                conf_change.into_v2()
+            }
+            EntryType::EntryConfChangeV2 => util::parse_data_at(entry.get_data(), index, &self.tag),
+            _ => unreachable!(),
+        };
         let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
         match self.process_raft_cmd(apply_ctx, index, term, cmd) {
             ApplyResult::None => {
@@ -1028,7 +1058,6 @@ where
         // Set sync log hint if the cmd requires so.
         apply_ctx.sync_log_hint |= should_sync_log(&cmd);
 
-        let is_conf_change = get_change_peer_cmd(&cmd).is_some();
         apply_ctx.host.pre_apply(&self.region, &cmd);
         let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx, index, term, &cmd);
         if let ApplyResult::WaitMergeSource(_) = exec_result {
@@ -1045,8 +1074,8 @@ where
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
+        let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
         let cmd = Cmd::new(index, cmd, resp);
-        let cmd_cb = self.find_pending(index, term, is_conf_change);
         if let Some(observe_cmd) = self.observe_cmd.as_ref() {
             apply_ctx
                 .host
@@ -1223,13 +1252,13 @@ where
                 "peer_id" => self.id(),
                 "term" => ctx.exec_ctx.as_ref().unwrap().term,
                 "index" => ctx.exec_ctx.as_ref().unwrap().index,
-                "command" => ?request
+                "command" => ?request,
             );
         }
 
         let (mut response, exec_result) = match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
-            AdminCmdType::ChangePeerV2 => panic!("unsupported admin command type"),
+            AdminCmdType::ChangePeerV2 => self.exec_change_peer_v2(ctx, request),
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
@@ -1291,7 +1320,7 @@ where
                         "skip readonly command";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "command" => ?req
+                        "command" => ?req,
                     );
                     continue;
                 }
@@ -1351,8 +1380,8 @@ where
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
-                    hex::encode_upper(&key),
-                    escape(value),
+                    log_wrappers::Value::key(&key),
+                    log_wrappers::Value::value(&value),
                     cf,
                     e
                 )
@@ -1362,8 +1391,8 @@ where
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
-                    hex::encode_upper(&key),
-                    escape(value),
+                    log_wrappers::Value::key(&key),
+                    log_wrappers::Value::value(&value),
                     e
                 );
             });
@@ -1387,7 +1416,7 @@ where
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    hex::encode_upper(&key),
+                    log_wrappers::Value::key(&key),
                     e
                 )
             });
@@ -1403,7 +1432,7 @@ where
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    hex::encode_upper(&key),
+                    log_wrappers::Value::key(&key),
                     e
                 )
             });
@@ -1457,8 +1486,8 @@ where
                     panic!(
                         "{} failed to delete files in range [{}, {}): {:?}",
                         self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
+                        log_wrappers::Value::key(&start_key),
+                        log_wrappers::Value::key(&end_key),
                         e
                     )
                 });
@@ -1470,8 +1499,8 @@ where
                     panic!(
                         "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
                         self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
+                        log_wrappers::Value::key(&start_key),
+                        log_wrappers::Value::key(&end_key),
                         cf,
                         e
                     );
@@ -1530,6 +1559,29 @@ where
     }
 }
 
+mod confchange_cmd_metric {
+    use super::*;
+
+    fn write_metric(cct: ConfChangeType, kind: &str) {
+        let metric = match cct {
+            ConfChangeType::AddNode => "add_peer",
+            ConfChangeType::RemoveNode => "remove_peer",
+            ConfChangeType::AddLearnerNode => "add_learner",
+        };
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&[metric, kind])
+            .inc();
+    }
+
+    pub fn inc_all(cct: ConfChangeType) {
+        write_metric(cct, "all")
+    }
+
+    pub fn inc_success(cct: ConfChangeType) {
+        write_metric(cct, "success")
+    }
+}
+
 // Admin commands related.
 impl<EK> ApplyDelegate<EK>
 where
@@ -1540,6 +1592,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         request: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        assert!(request.has_change_peer());
         let request = request.get_change_peer();
         let peer = request.get_peer();
         let store_id = peer.get_store_id();
@@ -1657,7 +1710,7 @@ where
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
-                        "region" => ?&self.region,
+                        "region" => ?&self.region
                     );
                     return Err(box_err!(
                         "remove missing peer {:?} from region {:?}",
@@ -1706,7 +1759,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => ?&self.region,
+                    "region" => ?&self.region
                 );
             }
         }
@@ -1728,10 +1781,237 @@ where
             ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
                 index: ctx.exec_ctx.as_ref().unwrap().index,
                 conf_change: Default::default(),
-                peer: peer.clone(),
+                changes: vec![request.clone()],
                 region,
             })),
         ))
+    }
+
+    fn exec_change_peer_v2<W: WriteBatch<EK>>(
+        &mut self,
+        ctx: &mut ApplyContext<EK, W>,
+        request: &AdminRequest,
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        assert!(request.has_change_peer_v2());
+        let changes = request.get_change_peer_v2().get_change_peers().to_vec();
+
+        info!(
+            "exec ConfChangeV2";
+            "region_id" => self.region_id(),
+            "peer_id" => self.id(),
+            "kind" => ?ConfChangeKind::confchange_kind(changes.len()),
+            "epoch" => ?self.region.get_region_epoch(),
+        );
+
+        let region = match ConfChangeKind::confchange_kind(changes.len()) {
+            ConfChangeKind::LeaveJoint => self.apply_leave_joint()?,
+            kind => self.apply_conf_change(kind, changes.as_slice())?,
+        };
+
+        let state = if self.pending_remove {
+            PeerState::Tombstone
+        } else {
+            PeerState::Normal
+        };
+
+        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None) {
+            panic!("{} failed to update region state: {:?}", self.tag, e);
+        }
+
+        let mut resp = AdminResponse::default();
+        resp.mut_change_peer().set_region(region.clone());
+        Ok((
+            resp,
+            ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
+                index: ctx.exec_ctx.as_ref().unwrap().index,
+                conf_change: Default::default(),
+                changes,
+                region,
+            })),
+        ))
+    }
+
+    fn apply_conf_change(
+        &mut self,
+        kind: ConfChangeKind,
+        changes: &[ChangePeerRequest],
+    ) -> Result<Region> {
+        let mut region = self.region.clone();
+        for cp in changes.iter() {
+            let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
+            let store_id = peer.get_store_id();
+
+            confchange_cmd_metric::inc_all(change_type);
+
+            if let Some(exist_peer) = util::find_peer(&region, store_id) {
+                let r = exist_peer.get_role();
+                if r == PeerRole::IncomingVoter || r == PeerRole::DemotingVoter {
+                    panic!(
+                        "{} can't apply confchange because configuration is still in joint state, confchange: {:?}, region: {:?}",
+                        self.tag, cp, self.region
+                    );
+                }
+            }
+            match (util::find_peer_mut(&mut region, store_id), change_type) {
+                (None, ConfChangeType::AddNode) => {
+                    let mut peer = peer.clone();
+                    match kind {
+                        ConfChangeKind::Simple => peer.set_role(PeerRole::Voter),
+                        ConfChangeKind::EnterJoint => peer.set_role(PeerRole::IncomingVoter),
+                        _ => unreachable!(),
+                    }
+                    region.mut_peers().push(peer);
+                }
+                (None, ConfChangeType::AddLearnerNode) => {
+                    let mut peer = peer.clone();
+                    peer.set_role(PeerRole::Learner);
+                    region.mut_peers().push(peer);
+                }
+                (None, ConfChangeType::RemoveNode) => {
+                    error!(
+                        "remove missing peer";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "peer" => ?peer,
+                        "region" => ?&self.region,
+                    );
+                    return Err(box_err!(
+                        "remove missing peer {:?} from region {:?}",
+                        peer,
+                        self.region
+                    ));
+                }
+                // Add node
+                (Some(exist_peer), ConfChangeType::AddNode)
+                | (Some(exist_peer), ConfChangeType::AddLearnerNode) => {
+                    let (role, exist_id, incoming_id) =
+                        (exist_peer.get_role(), exist_peer.get_id(), peer.get_id());
+
+                    if exist_id != incoming_id // Add peer with different id to the same store
+                            // The peer is already the requested role
+                            || (role, change_type) == (PeerRole::Voter, ConfChangeType::AddNode)
+                            || (role, change_type) == (PeerRole::Learner, ConfChangeType::AddLearnerNode)
+                    {
+                        error!(
+                            "can't add duplicated peer";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "peer" => ?peer,
+                            "exist peer" => ?exist_peer,
+                            "confchnage type" => ?change_type,
+                            "region" => ?&self.region
+                        );
+                        return Err(box_err!(
+                                "can't add duplicated peer {:?} to region {:?}, duplicated with exist peer {:?}",
+                                peer,
+                                self.region,
+                                exist_peer
+                            ));
+                    }
+                    match (role, change_type) {
+                        (PeerRole::Voter, ConfChangeType::AddLearnerNode) => match kind {
+                            ConfChangeKind::Simple => exist_peer.set_role(PeerRole::Learner),
+                            ConfChangeKind::EnterJoint => {
+                                exist_peer.set_role(PeerRole::DemotingVoter)
+                            }
+                            _ => unreachable!(),
+                        },
+                        (PeerRole::Learner, ConfChangeType::AddNode) => match kind {
+                            ConfChangeKind::Simple => exist_peer.set_role(PeerRole::Voter),
+                            ConfChangeKind::EnterJoint => {
+                                exist_peer.set_role(PeerRole::IncomingVoter)
+                            }
+                            _ => unreachable!(),
+                        },
+                        _ => unreachable!(),
+                    }
+                }
+                // Remove node
+                (Some(exist_peer), ConfChangeType::RemoveNode) => {
+                    if kind == ConfChangeKind::EnterJoint
+                        && exist_peer.get_role() == PeerRole::Voter
+                    {
+                        error!(
+                            "can't remove voter directly";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "peer" => ?peer,
+                            "region" => ?&self.region
+                        );
+                        return Err(box_err!(
+                            "can not remove voter {:?} directly from region {:?}",
+                            peer,
+                            self.region
+                        ));
+                    }
+                    match util::remove_peer(&mut region, store_id) {
+                        Some(p) => {
+                            if &p != peer {
+                                error!(
+                                    "ignore remove unmatched peer";
+                                    "region_id" => self.region_id(),
+                                    "peer_id" => self.id(),
+                                    "expect_peer" => ?peer,
+                                    "get_peeer" => ?p
+                                );
+                                return Err(box_err!(
+                                    "remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                                    peer,
+                                    p
+                                ));
+                            }
+                            if self.id == peer.get_id() {
+                                // Remove ourself, we will destroy all region data later.
+                                // So we need not to apply following logs.
+                                self.stopped = true;
+                                self.pending_remove = true;
+                            }
+                        }
+                        None => unreachable!(),
+                    }
+                }
+            }
+            confchange_cmd_metric::inc_success(change_type);
+        }
+        let conf_ver = region.get_region_epoch().get_conf_ver() + changes.len() as u64;
+        region.mut_region_epoch().set_conf_ver(conf_ver);
+        info!(
+            "conf change successfully";
+            "region_id" => self.region_id(),
+            "peer_id" => self.id(),
+            "changes" => ?changes,
+            "original region" => ?&self.region,
+            "current region" => ?&region,
+        );
+        Ok(region)
+    }
+
+    fn apply_leave_joint(&self) -> Result<Region> {
+        let mut region = self.region.clone();
+        let mut change_num = 0;
+        for peer in region.mut_peers().iter_mut() {
+            match peer.get_role() {
+                PeerRole::IncomingVoter => peer.set_role(PeerRole::Voter),
+                PeerRole::DemotingVoter => peer.set_role(PeerRole::Learner),
+                _ => continue,
+            }
+            change_num += 1;
+        }
+        if change_num == 0 {
+            panic!(
+                "{} can't leave a non-joint config, region: {:?}",
+                self.tag, self.region
+            );
+        }
+        let conf_ver = region.get_region_epoch().get_conf_ver() + change_num;
+        region.mut_region_epoch().set_conf_ver(conf_ver);
+        info!(
+            "leave joint state successfully";
+            "region_id" => self.region_id(),
+            "peer_id" => self.id(),
+            "region" => ?&region,
+        );
+        Ok(region)
     }
 
     fn exec_split<W: WriteBatch<EK>>(
@@ -2306,16 +2586,12 @@ where
     }
 }
 
-pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
+pub fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {
     if !msg.has_admin_request() {
-        return None;
+        return false;
     }
     let req = msg.get_admin_request();
-    if !req.has_change_peer() {
-        return None;
-    }
-
-    Some(req.get_change_peer())
+    req.has_change_peer() || req.has_change_peer_v2()
 }
 
 fn check_sst_for_ingestion(sst: &SstMeta, region: &Region) -> Result<()> {
