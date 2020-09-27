@@ -111,17 +111,19 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
                     Ok((TxnStatus::TtlExpire, released))
                 } else {
-                    if !lock.min_commit_ts.is_zero()
+                    let push_min_commit_ts =
                         // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
                         // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
                         // during rolling update.
+                        !lock.min_commit_ts.is_zero()
                         // If the caller_start_ts is max, it's a point get in the autocommit transaction.
                         // We don't push forward lock's min_commit_ts and the point get can ingore the lock
                         // next time because it's not committed.
                         && !self.caller_start_ts.is_max()
                         // Push forward the min_commit_ts so that reading won't be blocked by locks.
-                        && self.caller_start_ts >= lock.min_commit_ts
-                    {
+                        && self.caller_start_ts >= lock.min_commit_ts;
+
+                    if push_min_commit_ts {
                         assert!(!lock.use_async_commit);
                         lock.min_commit_ts = self.caller_start_ts.next();
 
@@ -133,7 +135,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
                     }
 
-                    Ok((TxnStatus::uncommitted(lock), None))
+                    Ok((TxnStatus::uncommitted(lock, push_min_commit_ts), None))
                 }
             }
             // The rollback must be protected, see more on
@@ -326,7 +328,8 @@ pub mod tests {
                             4,
                             43.into()
                         )
-                        .use_async_commit(secondaries.clone())
+                        .use_async_commit(secondaries.clone()),
+                        false
                     )
                 );
             } else {
@@ -352,10 +355,16 @@ pub mod tests {
         // Shortcuts
         use super::TxnStatus::*;
         let committed = |commit_ts| move |s| s == TxnStatus::Committed { commit_ts };
-        let uncommitted = |ttl, min_commit_ts| {
+        let uncommitted = |ttl, min_commit_ts, should_be_pushed| {
             move |s| {
-                if let TxnStatus::Uncommitted { lock } = s {
-                    lock.ttl == ttl && lock.min_commit_ts == min_commit_ts
+                if let TxnStatus::Uncommitted {
+                    lock,
+                    min_commit_ts_pushed,
+                } = s
+                {
+                    lock.ttl == ttl
+                        && lock.min_commit_ts == min_commit_ts
+                        && should_be_pushed == min_commit_ts_pushed
                 } else {
                     false
                 }
@@ -381,7 +390,15 @@ pub mod tests {
 
         // CheckTxnStatus with caller_start_ts = 0 and current_ts = 0 should just return the
         // information of the lock without changing it.
-        must_success(&engine, k, ts(5, 0), 0, 0, r, uncommitted(100, ts(5, 1)));
+        must_success(
+            &engine,
+            k,
+            ts(5, 0),
+            0,
+            0,
+            r,
+            uncommitted(100, ts(5, 1), false),
+        );
 
         // Update min_commit_ts to current_ts.
         must_success(
@@ -391,7 +408,7 @@ pub mod tests {
             ts(6, 0),
             ts(7, 0),
             r,
-            uncommitted(100, ts(7, 0)),
+            uncommitted(100, ts(7, 0), true),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(7, 0), false);
 
@@ -404,7 +421,7 @@ pub mod tests {
             ts(9, 0),
             ts(8, 0),
             r,
-            uncommitted(100, ts(9, 1)),
+            uncommitted(100, ts(9, 1), true),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
@@ -417,7 +434,7 @@ pub mod tests {
             ts(8, 0),
             ts(10, 0),
             r,
-            uncommitted(100, ts(9, 1)),
+            uncommitted(100, ts(9, 1), false),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
@@ -429,7 +446,7 @@ pub mod tests {
             ts(11, 0),
             ts(9, 0),
             r,
-            uncommitted(100, ts(11, 1)),
+            uncommitted(100, ts(11, 1), true),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(11, 1), false);
 
@@ -441,7 +458,7 @@ pub mod tests {
             ts(12, 0),
             ts(12, 0),
             r,
-            uncommitted(100, ts(12, 1)),
+            uncommitted(100, ts(12, 1), true),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(12, 1), false);
 
@@ -453,7 +470,7 @@ pub mod tests {
             ts(13, 1),
             ts(13, 3),
             r,
-            uncommitted(100, ts(13, 3)),
+            uncommitted(100, ts(13, 3), true),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(13, 3), false);
 
@@ -513,7 +530,7 @@ pub mod tests {
             ts(21, 105),
             ts(21, 105),
             r,
-            uncommitted(100, ts(21, 106)),
+            uncommitted(100, ts(21, 106), true),
         );
         must_large_txn_locked(&engine, k, ts(20, 0), 100, ts(21, 106), false);
 
@@ -541,7 +558,7 @@ pub mod tests {
             ts(135, 0),
             ts(135, 0),
             r,
-            uncommitted(200, ts(135, 1)),
+            uncommitted(200, ts(135, 1), true),
         );
         must_large_txn_locked(&engine, k, ts(4, 0), 200, ts(135, 1), true);
 
@@ -586,7 +603,7 @@ pub mod tests {
             ts(160, 0),
             ts(160, 0),
             r,
-            uncommitted(100, ts(160, 1)),
+            uncommitted(100, ts(160, 1), true),
         );
         must_large_txn_locked(&engine, k, ts(150, 0), 100, ts(160, 1), true);
         must_success(&engine, k, ts(150, 0), ts(160, 0), ts(260, 0), r, |s| {
@@ -655,7 +672,7 @@ pub mod tests {
             ts(300, 0),
             ts(300, 0),
             r,
-            uncommitted(100, TimeStamp::zero()),
+            uncommitted(100, TimeStamp::zero(), false),
         );
         must_large_txn_locked(&engine, k, ts(290, 0), 100, TimeStamp::zero(), true);
         pessimistic_rollback::tests::must_success(&engine, k, ts(290, 0), ts(290, 0));
@@ -681,7 +698,7 @@ pub mod tests {
             ts(310, 0),
             ts(310, 0),
             r,
-            uncommitted(100, TimeStamp::zero()),
+            uncommitted(100, TimeStamp::zero(), false),
         );
         must_large_txn_locked(&engine, k, ts(300, 0), 100, TimeStamp::zero(), false);
         must_rollback(&engine, k, ts(300, 0));
@@ -696,7 +713,7 @@ pub mod tests {
             TimeStamp::max(),
             ts(320, 0),
             r,
-            uncommitted(100, ts(310, 1)),
+            uncommitted(100, ts(310, 1), false),
         );
         must_commit(&engine, k, ts(310, 0), ts(315, 0));
         must_success(
