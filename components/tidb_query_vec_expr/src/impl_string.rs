@@ -13,46 +13,42 @@ use tidb_query_shared_expr::string::{
 
 const SPACE: u8 = 0o40u8;
 
-#[rpn_fn(nullable)]
+#[rpn_fn(writer)]
 #[inline]
-pub fn bin(num: Option<&Int>) -> Result<Option<Bytes>> {
-    Ok(num.map(|i| Bytes::from(format!("{:b}", i))))
+pub fn bin(num: &Int, writer: BytesWriter) -> Result<BytesGuard> {
+    Ok(writer.write(Some(Bytes::from(format!("{:b}", num)))))
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn(writer)]
 #[inline]
-pub fn oct_int(num: Option<&Int>) -> Result<Option<Bytes>> {
-    Ok(num.map(|i| Bytes::from(format!("{:o}", i))))
+pub fn oct_int(num: &Int, writer: BytesWriter) -> Result<BytesGuard> {
+    Ok(writer.write(Some(Bytes::from(format!("{:o}", num)))))
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn]
 #[inline]
-pub fn length(arg: Option<BytesRef>) -> Result<Option<i64>> {
-    Ok(arg.map(|bytes| bytes.len() as i64))
+pub fn length(arg: BytesRef) -> Result<Option<i64>> {
+    Ok(Some(arg.len() as i64))
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn(writer)]
 #[inline]
-pub fn unhex(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    if let Some(content) = arg {
-        // hex::decode will fail on odd-length content
-        // but mysql won't
-        // so do some padding
-        let mut padded_content = Vec::with_capacity(content.len() + content.len() % 2);
-        if content.len() % 2 == 1 {
-            padded_content.push(b'0')
-        }
-        padded_content.extend_from_slice(content);
-        Ok(hex::decode(padded_content).ok())
-    } else {
-        Ok(None)
+pub fn unhex(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    // hex::decode will fail on odd-length content
+    // but mysql won't
+    // so do some padding
+    let mut padded_content = Vec::with_capacity(arg.len() + arg.len() % 2);
+    if arg.len() % 2 == 1 {
+        padded_content.push(b'0')
     }
+    padded_content.extend_from_slice(arg);
+    Ok(writer.write(hex::decode(padded_content).ok()))
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn]
 #[inline]
-pub fn bit_length(arg: Option<BytesRef>) -> Result<Option<i64>> {
-    Ok(arg.map(|bytes| bytes.len() as i64 * 8))
+pub fn bit_length(arg: BytesRef) -> Result<Option<i64>> {
+    Ok(Some(arg.len() as i64 * 8))
 }
 
 #[rpn_fn(nullable)]
@@ -102,369 +98,304 @@ pub fn concat_ws(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn]
 #[inline]
-pub fn ascii(arg: Option<BytesRef>) -> Result<Option<i64>> {
-    Ok(arg.map(|bytes| {
-        if bytes.is_empty() {
-            0
-        } else {
-            i64::from(bytes[0])
-        }
-    }))
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn reverse_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.map(|bytes| {
-        let s = String::from_utf8_lossy(bytes);
-        s.chars().rev().collect::<String>().into_bytes()
-    }))
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn hex_int_arg(arg: Option<&Int>) -> Result<Option<Bytes>> {
-    Ok(arg.map(|i| format!("{:X}", i).into_bytes()))
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn ltrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.map(|bytes| {
-        let pos = bytes.iter().position(|&x| x != SPACE);
-        if let Some(i) = pos {
-            bytes[i..].to_vec()
-        } else {
-            b"".to_vec()
-        }
-    }))
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn rtrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.map(|bytes| {
-        let pos = bytes.iter().rposition(|&x| x != SPACE);
-        if let Some(i) = pos {
-            bytes[..=i].to_vec()
-        } else {
-            Vec::new()
-        }
-    }))
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn lpad(
-    arg: Option<BytesRef>,
-    len: Option<&Int>,
-    pad: Option<BytesRef>,
-) -> Result<Option<Bytes>> {
-    match (arg, len, pad) {
-        (Some(arg), Some(len), Some(pad)) => {
-            match validate_target_len_for_pad(*len < 0, *len, arg.len(), 1, pad.is_empty()) {
-                None => Ok(None),
-                Some(0) => Ok(Some(b"".to_vec())),
-                Some(target_len) => {
-                    let r = if let Some(remain) = target_len.checked_sub(arg.len()) {
-                        pad.iter()
-                            .cycle()
-                            .take(remain)
-                            .chain(arg.iter())
-                            .copied()
-                            .collect::<Bytes>()
-                    } else {
-                        arg[..target_len].to_vec()
-                    };
-                    Ok(Some(r))
-                }
-            }
-        }
-        _ => Ok(None),
-    }
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn lpad_utf8(
-    arg: Option<BytesRef>,
-    len: Option<&Int>,
-    pad: Option<BytesRef>,
-) -> Result<Option<Bytes>> {
-    match (arg, len, pad) {
-        (Some(arg), Some(len), Some(pad)) => {
-            let input = match str::from_utf8(&*arg) {
-                Ok(arg) => arg,
-                Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-            };
-            let pad = match str::from_utf8(&*pad) {
-                Ok(pad) => pad,
-                Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-            };
-            let input_len = input.chars().count();
-            match validate_target_len_for_pad(*len < 0, *len, input_len, 4, pad.is_empty()) {
-                None => Ok(None),
-                Some(0) => Ok(Some(b"".to_vec())),
-                Some(target_len) => {
-                    let r = if let Some(remain) = target_len.checked_sub(input_len) {
-                        pad.chars()
-                            .cycle()
-                            .take(remain)
-                            .chain(input.chars())
-                            .collect::<String>()
-                    } else {
-                        input.chars().take(target_len).collect::<String>()
-                    };
-                    Ok(Some(r.into_bytes()))
-                }
-            }
-        }
-        _ => Ok(None),
-    }
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn rpad(
-    arg: Option<BytesRef>,
-    len: Option<&Int>,
-    pad: Option<BytesRef>,
-) -> Result<Option<Bytes>> {
-    match (arg, len, pad) {
-        (Some(arg), Some(len), Some(pad)) => {
-            match validate_target_len_for_pad(*len < 0, *len, arg.len(), 1, pad.is_empty()) {
-                None => Ok(None),
-                Some(0) => Ok(Some(b"".to_vec())),
-                Some(target_len) => {
-                    let r = arg
-                        .iter()
-                        .chain(pad.iter().cycle())
-                        .copied()
-                        .take(target_len)
-                        .collect::<Bytes>();
-                    Ok(Some(r))
-                }
-            }
-        }
-        _ => Ok(None),
-    }
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn replace(
-    s: Option<BytesRef>,
-    from_str: Option<BytesRef>,
-    to_str: Option<BytesRef>,
-) -> Result<Option<Bytes>> {
-    Ok(match (s, from_str, to_str) {
-        (Some(s), Some(from_str), Some(to_str)) => {
-            if from_str.is_empty() {
-                return Ok(Some(s.to_vec()));
-            }
-            let mut dest = Vec::with_capacity(s.len());
-            let mut last = 0;
-            while let Some(mut start) = twoway::find_bytes(&s[last..], from_str) {
-                start += last;
-                dest.extend_from_slice(&s[last..start]);
-                dest.extend_from_slice(to_str);
-                last = start + from_str.len();
-            }
-            dest.extend_from_slice(&s[last..]);
-            Some(dest)
-        }
-        _ => None,
-    })
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn left(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
-    match (lhs, rhs) {
-        (Some(lhs), Some(rhs)) => {
-            if *rhs <= 0 {
-                return Ok(Some(Vec::new()));
-            }
-            let rhs = *rhs as usize;
-            if lhs.len() < rhs {
-                Ok(Some(lhs.to_vec()))
-            } else {
-                Ok(Some(lhs[..rhs].to_vec()))
-            }
-        }
-        _ => Ok(None),
-    }
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn left_utf8(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
-    match (lhs, rhs) {
-        (Some(lhs), Some(rhs)) => {
-            if *rhs <= 0 {
-                return Ok(Some(Vec::new()));
-            }
-            match str::from_utf8(&*lhs) {
-                Ok(s) => {
-                    let l = *rhs as usize;
-                    if s.chars().count() > l {
-                        Ok(Some(s.chars().take(l).collect::<String>().into_bytes()))
-                    } else {
-                        Ok(Some(s.to_string().into_bytes()))
-                    }
-                }
-                Err(err) => Err(box_err!("invalid input value: {:?}", err)),
-            }
-        }
-        _ => Ok(None),
-    }
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn right(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
-    match (lhs, rhs) {
-        (Some(lhs), Some(rhs)) => {
-            if *rhs <= 0 {
-                return Ok(Some(Vec::new()));
-            }
-            let rhs = *rhs as usize;
-            if lhs.len() < rhs {
-                Ok(Some(lhs.to_vec()))
-            } else {
-                Ok(Some(lhs[(lhs.len() - rhs)..].to_vec()))
-            }
-        }
-        _ => Ok(None),
-    }
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn insert(
-    s: Option<BytesRef>,
-    pos: Option<&Int>,
-    len: Option<&Int>,
-    newstr: Option<BytesRef>,
-) -> Result<Option<Bytes>> {
-    match (s, pos, len, newstr) {
-        (Some(s), Some(pos), Some(len), Some(newstr)) => {
-            let pos = *pos;
-            let len = *len;
-            let upos: usize = pos as usize;
-            let mut ulen: usize = len as usize;
-            if pos < 1 || upos > s.len() {
-                return Ok(Some(s.to_vec()));
-            }
-            if ulen > s.len() - upos + 1 || len < 0 {
-                ulen = s.len() - upos + 1;
-            }
-            let mut ret = Vec::with_capacity(newstr.len() + s.len());
-            ret.extend_from_slice(&s[0..upos - 1]);
-            ret.extend_from_slice(&newstr);
-            ret.extend_from_slice(&s[upos + ulen - 1..]);
-            Ok(Some(ret.to_vec()))
-        }
-        _ => Ok(None),
-    }
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn right_utf8(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
-    match (lhs, rhs) {
-        (Some(lhs), Some(rhs)) => {
-            if *rhs <= 0 {
-                return Ok(Some(Vec::new()));
-            }
-            match str::from_utf8(&*lhs) {
-                Ok(s) => {
-                    let rhs = *rhs as usize;
-                    let len = s.chars().count();
-                    if len > rhs {
-                        let idx = s
-                            .char_indices()
-                            .nth(len - rhs)
-                            .map(|(idx, _)| idx)
-                            .unwrap_or_else(|| s.len());
-                        Ok(Some(s[idx..].to_string().into_bytes()))
-                    } else {
-                        Ok(Some(s.to_string().into_bytes()))
-                    }
-                }
-                Err(err) => Err(box_err!("invalid input value: {:?}", err)),
-            }
-        }
-        _ => Ok(None),
-    }
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn upper_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    match arg {
-        Some(bytes) => match str::from_utf8(bytes) {
-            Ok(s) => Ok(Some(s.to_uppercase().into_bytes())),
-            Err(err) => Err(box_err!("invalid input value: {:?}", err)),
-        },
-        _ => Ok(None),
-    }
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn upper(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.map(|b| b.to_vec()))
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn hex_str_arg(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.map(|b| hex::encode_upper(b).into_bytes()))
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn locate_2_args(substr: Option<BytesRef>, s: Option<BytesRef>) -> Result<Option<i64>> {
-    let (substr, s) = match (substr, s) {
-        (Some(v1), Some(v2)) => (v1, v2),
-        _ => return Ok(None),
+pub fn ascii(arg: BytesRef) -> Result<Option<i64>> {
+    let result = match arg.is_empty() {
+        true => 0,
+        false => i64::from(arg[0]),
     };
 
+    Ok(Some(result))
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn reverse_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    match str::from_utf8(arg) {
+        Ok(s) => Ok(writer.write(Some(s.chars().rev().collect::<String>().into_bytes()))),
+        Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+    }
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn hex_int_arg(arg: &Int, writer: BytesWriter) -> Result<BytesGuard> {
+    Ok(writer.write(Some(format!("{:X}", arg).into_bytes())))
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn ltrim(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    let pos = arg.iter().position(|&x| x != SPACE);
+    let result = if let Some(i) = pos { &arg[i..] } else { b"" };
+
+    Ok(writer.write_ref(Some(result)))
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn rtrim(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    let pos = arg.iter().rposition(|&x| x != SPACE);
+    let result = if let Some(i) = pos { &arg[..=i] } else { b"" };
+
+    Ok(writer.write_ref(Some(result)))
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn lpad(arg: BytesRef, len: &Int, pad: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    match validate_target_len_for_pad(*len < 0, *len, arg.len(), 1, pad.is_empty()) {
+        None => Ok(writer.write(None)),
+        Some(0) => Ok(writer.write_ref(Some(b""))),
+        Some(target_len) => {
+            let r = if let Some(remain) = target_len.checked_sub(arg.len()) {
+                pad.iter()
+                    .cycle()
+                    .take(remain)
+                    .chain(arg.iter())
+                    .copied()
+                    .collect::<Bytes>()
+            } else {
+                arg[..target_len].to_vec()
+            };
+            Ok(writer.write(Some(r)))
+        }
+    }
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn lpad_utf8(
+    arg: BytesRef,
+    len: &Int,
+    pad: BytesRef,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    let input = match str::from_utf8(&*arg) {
+        Ok(arg) => arg,
+        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+    };
+    let pad = match str::from_utf8(&*pad) {
+        Ok(pad) => pad,
+        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+    };
+    let input_len = input.chars().count();
+    match validate_target_len_for_pad(*len < 0, *len, input_len, 4, pad.is_empty()) {
+        None => Ok(writer.write(None)),
+        Some(0) => Ok(writer.write_ref(Some(b""))),
+        Some(target_len) => {
+            let r = if let Some(remain) = target_len.checked_sub(input_len) {
+                pad.chars()
+                    .cycle()
+                    .take(remain)
+                    .chain(input.chars())
+                    .collect::<String>()
+            } else {
+                input.chars().take(target_len).collect::<String>()
+            };
+            Ok(writer.write(Some(r.into_bytes())))
+        }
+    }
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn rpad(arg: BytesRef, len: &Int, pad: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    match validate_target_len_for_pad(*len < 0, *len, arg.len(), 1, pad.is_empty()) {
+        None => Ok(writer.write(None)),
+        Some(0) => Ok(writer.write_ref(Some(b""))),
+        Some(target_len) => {
+            let r = arg
+                .iter()
+                .chain(pad.iter().cycle())
+                .copied()
+                .take(target_len)
+                .collect::<Bytes>();
+            Ok(writer.write(Some(r)))
+        }
+    }
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn replace(
+    s: BytesRef,
+    from_str: BytesRef,
+    to_str: BytesRef,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    if from_str.is_empty() {
+        return Ok(writer.write_ref(Some(s)));
+    }
+    let mut dest = Vec::with_capacity(s.len());
+    let mut last = 0;
+    while let Some(mut start) = twoway::find_bytes(&s[last..], from_str) {
+        start += last;
+        dest.extend_from_slice(&s[last..start]);
+        dest.extend_from_slice(to_str);
+        last = start + from_str.len();
+    }
+    dest.extend_from_slice(&s[last..]);
+    Ok(writer.write(Some(dest)))
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn left(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesGuard> {
+    if *rhs <= 0 {
+        return Ok(writer.write_ref(Some(b"")));
+    }
+    let rhs = *rhs as usize;
+    let result = if lhs.len() < rhs { &lhs } else { &lhs[..rhs] };
+
+    Ok(writer.write_ref(Some(result)))
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn left_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesGuard> {
+    if *rhs <= 0 {
+        return Ok(writer.write_ref(Some(b"")));
+    }
+    match str::from_utf8(&*lhs) {
+        Ok(s) => {
+            let rhs = *rhs as usize;
+            let len = s.chars().count();
+            let result = if len > rhs {
+                let idx = s
+                    .char_indices()
+                    .nth(rhs)
+                    .map(|(idx, _)| idx)
+                    .unwrap_or_else(|| s.len());
+                s[..idx].as_bytes()
+            } else {
+                s.as_bytes()
+            };
+
+            Ok(writer.write_ref(Some(result)))
+        }
+        Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+    }
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn right(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesGuard> {
+    if *rhs <= 0 {
+        return Ok(writer.write_ref(Some(b"")));
+    }
+    let rhs = *rhs as usize;
+    let result = if lhs.len() < rhs {
+        lhs
+    } else {
+        &lhs[(lhs.len() - rhs)..]
+    };
+
+    Ok(writer.write_ref(Some(result)))
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn insert(
+    s: BytesRef,
+    pos: &Int,
+    len: &Int,
+    newstr: BytesRef,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    let pos = *pos;
+    let len = *len;
+    let upos: usize = pos as usize;
+    let mut ulen: usize = len as usize;
+    if pos < 1 || upos > s.len() {
+        return Ok(writer.write_ref(Some(s)));
+    }
+    if ulen > s.len() - upos + 1 || len < 0 {
+        ulen = s.len() - upos + 1;
+    }
+    let mut ret = Vec::with_capacity(newstr.len() + s.len());
+    ret.extend_from_slice(&s[0..upos - 1]);
+    ret.extend_from_slice(&newstr);
+    ret.extend_from_slice(&s[upos + ulen - 1..]);
+    Ok(writer.write(Some(ret)))
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn right_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesGuard> {
+    if *rhs <= 0 {
+        return Ok(writer.write_ref(Some(b"")));
+    }
+    match str::from_utf8(&*lhs) {
+        Ok(s) => {
+            let rhs = *rhs as usize;
+            let len = s.chars().count();
+            let result = if len > rhs {
+                let idx = s
+                    .char_indices()
+                    .nth(len - rhs)
+                    .map(|(idx, _)| idx)
+                    .unwrap_or_else(|| s.len());
+                s[idx..].as_bytes()
+            } else {
+                s.as_bytes()
+            };
+
+            Ok(writer.write_ref(Some(result)))
+        }
+        Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+    }
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn upper_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    match str::from_utf8(arg) {
+        Ok(s) => Ok(writer.write_ref(Some(s.to_uppercase().as_bytes()))),
+        Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+    }
+}
+
+#[rpn_fn(writer)]
+#[inline]
+// upper is a noop in TiDB side, keep the same logic here.
+// ref: https://github.com/pingcap/tidb/blob/master/expression/builtin_string_vec.go#L152-L158
+pub fn upper(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    Ok(writer.write_ref(Some(arg)))
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn hex_str_arg(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    Ok(writer.write(Some(hex::encode_upper(arg).into_bytes())))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn locate_2_args(substr: BytesRef, s: BytesRef) -> Result<Option<i64>> {
     Ok(twoway::find_bytes(s, substr)
         .map(|i| 1 + i as i64)
         .or(Some(0)))
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn(writer)]
 #[inline]
-pub fn reverse(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.map(|bytes| {
-        let mut s = bytes.to_vec();
-        s.reverse();
-        s
-    }))
+pub fn reverse(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    let mut result = arg.to_vec();
+    result.reverse();
+    Ok(writer.write(Some(result)))
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn]
 #[inline]
-pub fn locate_3_args(
-    substr: Option<BytesRef>,
-    s: Option<BytesRef>,
-    pos: Option<&Int>,
-) -> Result<Option<Int>> {
-    if let (Some(substr), Some(s), Some(pos)) = (substr, s, pos) {
-        if *pos < 1 || *pos as usize > s.len() + 1 {
-            return Ok(Some(0));
-        }
-        Ok(twoway::find_bytes(&s[*pos as usize - 1..], substr)
-            .map(|i| pos + i as i64)
-            .or(Some(0)))
-    } else {
-        Ok(None)
+pub fn locate_3_args(substr: BytesRef, s: BytesRef, pos: &Int) -> Result<Option<Int>> {
+    if *pos < 1 || *pos as usize > s.len() + 1 {
+        return Ok(Some(0));
     }
+    Ok(twoway::find_bytes(&s[*pos as usize - 1..], substr)
+        .map(|i| pos + i as i64)
+        .or(Some(0)))
 }
 
 #[rpn_fn(nullable, varg, min_args = 1)]
@@ -558,214 +489,185 @@ fn elt_validator(expr: &tipb::Expr) -> Result<()> {
     Ok(())
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn(writer)]
 #[inline]
-pub fn space(len: Option<&Int>) -> Result<Option<Bytes>> {
-    Ok(match len.cloned() {
-        Some(len) => {
-            if len > i64::from(tidb_query_datatype::MAX_BLOB_WIDTH) {
-                None
-            } else if len <= 0 {
-                Some(Vec::new())
-            } else {
-                Some(vec![SPACE; len as usize])
-            }
-        }
-        None => None,
-    })
+pub fn space(len: &Int, writer: BytesWriter) -> Result<BytesGuard> {
+    let guard = if *len > i64::from(tidb_query_datatype::MAX_BLOB_WIDTH) {
+        writer.write(None)
+    } else if *len <= 0 {
+        writer.write_ref(Some(b""))
+    } else {
+        writer.write(Some(vec![SPACE; *len as usize]))
+    };
+
+    Ok(guard)
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn(writer)]
 #[inline]
 pub fn substring_index(
-    s: Option<BytesRef>,
-    delim: Option<BytesRef>,
-    count: Option<&Int>,
-) -> Result<Option<Bytes>> {
-    if let (Some(s), Some(delim), Some(count)) = (s, delim, count) {
-        let count = *count;
-        if count == 0 || s.is_empty() || delim.is_empty() {
-            return Ok(Some(Vec::new()));
-        }
-        let finder = if count > 0 {
-            twoway::find_bytes
-        } else {
-            twoway::rfind_bytes
-        };
-        let mut remaining = &s[..];
-        let mut remaining_pattern_count = count.abs();
-        let mut bound = 0;
-        while remaining_pattern_count > 0 {
-            if let Some(offset) = finder(&remaining, delim) {
-                if count > 0 {
-                    bound += offset + delim.len();
-                    remaining = &s[bound..];
-                } else {
-                    bound = offset;
-                    remaining = &s[..bound];
-                }
-            } else {
-                break;
-            }
-            remaining_pattern_count -= 1;
-        }
-        Ok(Some(if remaining_pattern_count > 0 {
-            s[..].to_vec()
-        } else if count > 0 {
-            s[..bound - delim.len()].to_vec()
-        } else {
-            s[bound + delim.len()..].to_vec()
-        }))
-    } else {
-        Ok(None)
+    s: BytesRef,
+    delim: BytesRef,
+    count: &Int,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    let count = *count;
+    if count == 0 || s.is_empty() || delim.is_empty() {
+        return Ok(writer.write_ref(Some(b"")));
     }
+    let finder = if count > 0 {
+        twoway::find_bytes
+    } else {
+        twoway::rfind_bytes
+    };
+    let mut remaining = &s[..];
+    let mut remaining_pattern_count = count.abs();
+    let mut bound = 0;
+    while remaining_pattern_count > 0 {
+        if let Some(offset) = finder(&remaining, delim) {
+            if count > 0 {
+                bound += offset + delim.len();
+                remaining = &s[bound..];
+            } else {
+                bound = offset;
+                remaining = &s[..bound];
+            }
+        } else {
+            break;
+        }
+        remaining_pattern_count -= 1;
+    }
+
+    let result = if remaining_pattern_count > 0 {
+        &s[..]
+    } else if count > 0 {
+        &s[..bound - delim.len()]
+    } else {
+        &s[bound + delim.len()..]
+    };
+
+    Ok(writer.write_ref(Some(result)))
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn]
 #[inline]
-pub fn strcmp(left: Option<BytesRef>, right: Option<BytesRef>) -> Result<Option<i64>> {
+pub fn strcmp(left: BytesRef, right: BytesRef) -> Result<Option<i64>> {
     use std::cmp::Ordering::*;
-    Ok(match (left, right) {
-        (Some(left), Some(right)) => Some(match left.cmp(right) {
-            Less => -1,
-            Equal => 0,
-            Greater => 1,
-        }),
-        _ => None,
-    })
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn instr_utf8(s: Option<BytesRef>, substr: Option<BytesRef>) -> Result<Option<Int>> {
-    if let (Some(s), Some(substr)) = (s, substr) {
-        let s = String::from_utf8_lossy(s);
-        let substr = String::from_utf8_lossy(substr);
-        let index = twoway::find_str(&s.to_lowercase(), &substr.to_lowercase())
-            .map(|i| s[..i].chars().count())
-            .map(|i| 1 + i as i64)
-            .or(Some(0));
-        Ok(index)
-    } else {
-        Ok(None)
-    }
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn find_in_set(s: Option<BytesRef>, str_list: Option<BytesRef>) -> Result<Option<Int>> {
-    Ok(match (s, str_list) {
-        (Some(s), Some(str_list)) => {
-            if str_list.is_empty() {
-                Some(0)
-            } else {
-                let s = String::from_utf8_lossy(s);
-                String::from_utf8_lossy(str_list)
-                    .split(',')
-                    .position(|str_in_set| str_in_set == s)
-                    .map(|p| p as i64 + 1)
-                    .or(Some(0))
-            }
-        }
-        _ => None,
-    })
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn trim_1_arg(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.map(|bytes| {
-        let l_pos = bytes.iter().position(|&x| x != SPACE);
-        if let Some(i) = l_pos {
-            let r_pos = bytes.iter().rposition(|&x| x != SPACE);
-            bytes[i..=r_pos.unwrap()].to_vec()
-        } else {
-            Vec::new()
-        }
+    Ok(Some(match left.cmp(right) {
+        Less => -1,
+        Equal => 0,
+        Greater => 1,
     }))
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn]
+#[inline]
+pub fn instr_utf8(s: BytesRef, substr: BytesRef) -> Result<Option<Int>> {
+    let s = String::from_utf8_lossy(s);
+    let substr = String::from_utf8_lossy(substr);
+    let index = twoway::find_str(&s.to_lowercase(), &substr.to_lowercase())
+        .map(|i| s[..i].chars().count())
+        .map(|i| 1 + i as i64)
+        .or(Some(0));
+    Ok(index)
+}
+
+#[rpn_fn]
+#[inline]
+pub fn find_in_set(s: BytesRef, str_list: BytesRef) -> Result<Option<Int>> {
+    if str_list.is_empty() {
+        return Ok(Some(0));
+    }
+
+    let s = String::from_utf8_lossy(s);
+    let result = String::from_utf8_lossy(str_list)
+        .split(',')
+        .position(|str_in_set| str_in_set == s)
+        .map(|p| p as i64 + 1)
+        .or(Some(0));
+
+    Ok(result)
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn trim_1_arg(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    let l_pos = arg.iter().position(|&x| x != SPACE);
+
+    let result = if let Some(i) = l_pos {
+        let r_pos = arg.iter().rposition(|&x| x != SPACE);
+        &arg[i..=r_pos.unwrap()]
+    } else {
+        b""
+    };
+
+    Ok(writer.write_ref(Some(result)))
+}
+
+#[rpn_fn(writer)]
 #[inline]
 pub fn trim_3_args(
-    arg: Option<BytesRef>,
-    pat: Option<BytesRef>,
-    direction: Option<&i64>,
-) -> Result<Option<Bytes>> {
-    if let (Some(arg), Some(pat), Some(direction)) = (arg, pat, direction) {
-        match TrimDirection::from_i64(*direction) {
-            Some(d) => {
-                let arg = String::from_utf8_lossy(arg);
-                let pat = String::from_utf8_lossy(pat);
-                Ok(Some(trim(&arg, &pat, d)))
-            }
-            _ => Err(box_err!("invalid direction value: {}", direction)),
+    arg: BytesRef,
+    pat: BytesRef,
+    direction: &i64,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    match TrimDirection::from_i64(*direction) {
+        Some(d) => {
+            let arg = String::from_utf8_lossy(arg);
+            let pat = String::from_utf8_lossy(pat);
+            Ok(writer.write(Some(trim(&arg, &pat, d))))
         }
+        _ => Err(box_err!("invalid direction value: {}", direction)),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn char_length(bs: BytesRef) -> Result<Option<Int>> {
+    Ok(Some(bs.len() as i64))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn char_length_utf8(bs: BytesRef) -> Result<Option<Int>> {
+    match str::from_utf8(bs) {
+        Ok(s) => Ok(Some(s.chars().count() as i64)),
+        Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+    }
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn to_base64(bs: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    if bs.len() > tidb_query_datatype::MAX_BLOB_WIDTH as usize {
+        return Ok(writer.write_ref(Some(b"")));
+    }
+
+    if let Some(size) = encoded_size(bs.len()) {
+        let mut buf = vec![0; size];
+        let len_without_wrap = base64::encode_config_slice(bs, base64::STANDARD, &mut buf);
+        line_wrap(&mut buf, len_without_wrap);
+        Ok(writer.write(Some(buf)))
     } else {
-        Ok(None)
+        Ok(writer.write_ref(Some(b"")))
     }
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn(writer)]
 #[inline]
-pub fn char_length(bs: Option<BytesRef>) -> Result<Option<Int>> {
-    Ok(bs.map(|b| b.len() as i64))
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn char_length_utf8(bs: Option<BytesRef>) -> Result<Option<Int>> {
-    match bs {
-        Some(bytes) => match str::from_utf8(bytes) {
-            Ok(s) => Ok(Some(s.chars().count() as i64)),
-            Err(err) => Err(box_err!("invalid input value: {:?}", err)),
-        },
-        _ => Ok(None),
-    }
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn to_base64(bs: Option<BytesRef>) -> Result<Option<Bytes>> {
-    match bs {
-        Some(bytes) => {
-            if bytes.len() > tidb_query_datatype::MAX_BLOB_WIDTH as usize {
-                return Ok(Some(Vec::new()));
-            }
-
-            if let Some(size) = encoded_size(bytes.len()) {
-                let mut buf = vec![0; size];
-                let len_without_wrap =
-                    base64::encode_config_slice(bytes, base64::STANDARD, &mut buf);
-                line_wrap(&mut buf, len_without_wrap);
-                Ok(Some(buf))
-            } else {
-                Ok(Some(Vec::new()))
-            }
-        }
-        None => Ok(None),
-    }
-}
-
-#[rpn_fn(nullable)]
-#[inline]
-pub fn from_base64(bs: Option<BytesRef>) -> Result<Option<Bytes>> {
-    match bs {
-        Some(bytes) => {
-            let input_copy = strip_whitespace(bytes);
-            let will_overflow = input_copy
-                .len()
-                .checked_mul(BASE64_INPUT_CHUNK_LENGTH)
-                .is_none();
-            // mysql will return "" when the input is incorrectly padded
-            let invalid_padding = input_copy.len() % BASE64_ENCODED_CHUNK_LENGTH != 0;
-            if will_overflow || invalid_padding {
-                Ok(Some(Vec::new()))
-            } else {
-                Ok(base64::decode_config(&input_copy, base64::STANDARD).ok())
-            }
-        }
-        _ => Ok(None),
+pub fn from_base64(bs: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    let input_copy = strip_whitespace(bs);
+    let will_overflow = input_copy
+        .len()
+        .checked_mul(BASE64_INPUT_CHUNK_LENGTH)
+        .is_none();
+    // mysql will return "" when the input is incorrectly padded
+    let invalid_padding = input_copy.len() % BASE64_ENCODED_CHUNK_LENGTH != 0;
+    if will_overflow || invalid_padding {
+        Ok(writer.write_ref(Some(b"")))
+    } else {
+        Ok(writer.write(base64::decode_config(&input_copy, base64::STANDARD).ok()))
     }
 }
 
@@ -861,14 +763,6 @@ mod tests {
         let cases = vec![
             (Some(b"4D7953514C".to_vec()), Some(b"MySQL".to_vec())),
             (Some(b"GG".to_vec()), None),
-            (
-                hex_str_arg(Some(&b"string".to_vec())).unwrap(),
-                Some(b"string".to_vec()),
-            ),
-            (
-                hex_str_arg(Some(&b"1267".to_vec())).unwrap(),
-                Some(b"1267".to_vec()),
-            ),
             (Some(b"41\0".to_vec()), None),
             (Some(b"".to_vec()), Some(b"".to_vec())),
             (Some(b"b".to_vec()), Some(vec![0xb])),
