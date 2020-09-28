@@ -372,15 +372,24 @@ mod tests {
 
     #[test]
     fn test_parse_storage_class() {
-        assert_matches!(parse_storage_class("STANDARD"), Ok(Some(StorageClass::Standard)));
+        assert_matches!(
+            parse_storage_class("STANDARD"),
+            Ok(Some(StorageClass::Standard))
+        );
         assert_matches!(parse_storage_class(""), Ok(None));
-        assert_matches!(parse_storage_class("NOT_A_STORAGE_CLASS"), Err("NOT_A_STORAGE_CLASS"));
+        assert_matches!(
+            parse_storage_class("NOT_A_STORAGE_CLASS"),
+            Err("NOT_A_STORAGE_CLASS")
+        );
     }
 
     #[test]
     fn test_parse_acl() {
         // can't use assert_matches!(), PredefinedAcl doesn't even implement Debug.
-        assert!(matches!(parse_predefined_acl("private"), Ok(Some(PredefinedAcl::Private))));
+        assert!(matches!(
+            parse_predefined_acl("private"),
+            Ok(Some(PredefinedAcl::Private))
+        ));
         assert!(matches!(parse_predefined_acl(""), Ok(None)));
         assert!(matches!(parse_predefined_acl("notAnACL"), Err("notAnACL")));
     }
