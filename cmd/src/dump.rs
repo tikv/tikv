@@ -7,7 +7,6 @@ use engine_traits::{Iterable, Iterator, RaftEngine, RaftLogBatch as RaftLogBatch
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
-use raft_log_engine::RaftLogBatch;
 use raft_log_engine::RaftLogEngine;
 use std::fs;
 use std::path::PathBuf;
@@ -49,8 +48,7 @@ pub fn check_and_dump_raft_db(
         let (tx, rx) = mpsc::channel::<Option<u64>>();
         senders.push(tx);
         let t = std::thread::spawn(move || {
-            let batch = raft_engine.log_batch(0);
-            run_worker(batch, rx, raftdb_engine, raft_engine, count_size);
+            run_worker(rx, raftdb_engine, raft_engine, count_size);
         });
         threads.push(t);
     }
@@ -93,12 +91,12 @@ pub fn check_and_dump_raft_db(
 
 // Worker receives region id and scan the related range.
 fn run_worker(
-    mut batch: RaftLogBatch,
     rx: Receiver<Option<u64>>,
     old_engine: RocksEngine,
     new_engine: RaftLogEngine,
     count_size: Arc<AtomicUsize>,
 ) {
+    let mut batch = new_engine.log_batch(0);
     while let Some(id) = rx.recv().unwrap() {
         let mut entries = Some(vec![]);
         old_engine
