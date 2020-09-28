@@ -77,7 +77,7 @@ pub fn check_and_dump_raft_db(
                                         // There is only 2 types of keys in raft.
                                         _ => unreachable!(),
                                     }
-                                    if local_count % 128 == 0 {
+                                    if local_count % 512 == 0 {
                                         let size = raft_engine.consume(&mut batch, false).unwrap();
                                         count_size.fetch_add(size, Ordering::Relaxed);
                                     }
@@ -87,10 +87,10 @@ pub fn check_and_dump_raft_db(
                         },
                     )
                     .unwrap();
-                // Consume remaining log batch.
-                let size = raft_engine.consume(&mut batch, false).unwrap();
-                count_size.fetch_add(size, Ordering::Relaxed);
             }
+            // Consume remaining log batch.
+            let size = raft_engine.consume(&mut batch, false).unwrap();
+            count_size.fetch_add(size, Ordering::Relaxed);
         });
         threads.push(t);
     }
