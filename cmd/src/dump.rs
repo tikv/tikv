@@ -100,7 +100,7 @@ fn run_worker(
     loop {
         match rx.recv() {
             Ok(id) => {
-                let mut entries = Some(vec![]);
+                let mut entries = vec![];
                 old_engine
                     .scan(
                         &keys::raft_log_prefix(id),
@@ -116,7 +116,7 @@ fn run_worker(
                                         keys::RAFT_LOG_SUFFIX => {
                                             let mut entry = Entry::default();
                                             entry.merge_from_bytes(&value)?;
-                                            entries.as_mut().unwrap().push(entry);
+                                            entries.push(entry);
                                         }
                                         keys::RAFT_STATE_SUFFIX => {
                                             let mut state = RaftLocalState::default();
@@ -124,9 +124,8 @@ fn run_worker(
                                             batch.put_raft_state(region_id, &state).unwrap();
                                             // Assume that we always scan entry first and raft state at the end.
                                             batch
-                                                .append(region_id, entries.take().unwrap())
+                                                .append(region_id, std::mem::take(&mut entries))
                                                 .unwrap();
-                                            entries = Some(vec![]);
                                         }
                                         // There is only 2 types of keys in raft.
                                         _ => unreachable!(),
@@ -134,8 +133,10 @@ fn run_worker(
                                     // Avoid long log batch.
                                     if local_size >= CONSUME_THRESHOLD {
                                         local_size = 0;
-                                        batch.append(region_id, entries.take().unwrap()).unwrap();
-                                        entries = Some(vec![]);
+                                        batch
+                                            .append(region_id, std::mem::take(&mut entries))
+                                            .unwrap();
+
                                         let size = new_engine.consume(&mut batch, false).unwrap();
                                         count_size.fetch_add(size, Ordering::Relaxed);
                                     }
