@@ -60,7 +60,10 @@ pub fn check_and_dump_raft_db(
     let mut valid = it.seek(SeekKey::Key(keys::REGION_RAFT_MIN_KEY)).unwrap();
     while valid {
         match keys::decode_raft_key(it.key()) {
-            Err(_) => continue,
+            Err(e) => {
+                error!("Error happened when decoding raft key: {}", e);
+                break;
+            }
             Ok((id, _)) => {
                 tx.send(id).unwrap();
                 count_region += 1;
