@@ -402,23 +402,19 @@ where
 
     /// Cleans up the data within the range.
     fn cleanup_range(&self, ranges: &[Range]) -> Result<()> {
-        for cf in self.engines.kv.cf_names() {
-            self.engines
-                .kv
-                .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &ranges)
-                .unwrap_or_else(|e| {
-                    error!("failed to delete files in range"; "err" => %e);
-                });
-        }
+        self.engines
+            .kv
+            .delete_all_in_range(DeleteStrategy::DeleteFiles, &ranges)
+            .unwrap_or_else(|e| {
+                error!("failed to delete files in range"; "err" => %e);
+            });
         self.delete_all_in_range(ranges)?;
-        for cf in self.engines.kv.cf_names() {
-            self.engines
-                .kv
-                .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &ranges)
-                .unwrap_or_else(|e| {
-                    error!("failed to delete files in range"; "err" => %e);
-                });
-        }
+        self.engines
+            .kv
+            .delete_all_in_range(DeleteStrategy::DeleteBlobs, &ranges)
+            .unwrap_or_else(|e| {
+                error!("failed to delete files in range"; "err" => %e);
+            });
         Ok(())
     }
 
@@ -448,8 +444,8 @@ where
                     .inc();
             }
             info!("delete data in range because of overlap"; "region_id" => region_id,
-                  "start_key" => log_wrappers::Key(start_key),
-                  "end_key" => log_wrappers::Key(end_key));
+                  "start_key" => log_wrappers::Value::key(start_key),
+                  "end_key" => log_wrappers::Value::key(end_key));
             ranges.push(Range::new(start_key, end_key));
         }
         self.engines
@@ -467,15 +463,15 @@ where
         if let Err(e) = self.cleanup_overlap_ranges(start_key, end_key) {
             warn!("cleanup_overlap_ranges failed";
                 "region_id" => region_id,
-                "start_key" => log_wrappers::Key(start_key),
-                "end_key" => log_wrappers::Key(end_key),
+                "start_key" => log_wrappers::Value::key(start_key),
+                "end_key" => log_wrappers::Value::key(end_key),
                 "err" => %e,
             );
         } else {
             info!("register deleting data in range";
                 "region_id" => region_id,
-                "start_key" => log_wrappers::Key(start_key),
-                "end_key" => log_wrappers::Key(end_key),
+                "start_key" => log_wrappers::Value::key(start_key),
+                "end_key" => log_wrappers::Value::key(end_key),
             );
         }
 
@@ -506,8 +502,8 @@ where
             .iter()
             .map(|(region_id, start, end)| {
                 info!("delete data in range because of stale"; "region_id" => region_id,
-                  "start_key" => log_wrappers::Key(start),
-                  "end_key" => log_wrappers::Key(end));
+                  "start_key" => log_wrappers::Value::key(start),
+                  "end_key" => log_wrappers::Value::key(end));
                 Range::new(start, end)
             })
             .collect();
