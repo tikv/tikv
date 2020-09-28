@@ -5602,7 +5602,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git#3894a861643b6ba384aaad352bbaed9717f66838"
+source = "git+https://github.com/sticnarf/yatp.git?branch=calculate-chance#b9e8e0b25f454139822e1de9a57925b2c4ba774a"
 dependencies = [
  "crossbeam-deque",
  "dashmap",
