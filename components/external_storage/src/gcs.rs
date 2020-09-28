@@ -368,7 +368,7 @@ impl ExternalStorage for GCSStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use matches::assert_matches;
+    use matches::{assert_matches, matches};
 
     #[test]
     fn test_parse_storage_class() {
