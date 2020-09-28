@@ -130,6 +130,8 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
                 secondary_keys,
+                req.get_try_one_pc(),
+                req.get_one_pc_max_commit_ts().into(),
                 req.take_context(),
             )
         } else {
@@ -149,6 +151,8 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
                 secondary_keys,
+                req.get_try_one_pc(),
+                req.get_one_pc_max_commit_ts().into(),
                 req.take_context(),
             )
         }

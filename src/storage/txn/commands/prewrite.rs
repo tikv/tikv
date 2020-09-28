@@ -9,6 +9,7 @@ use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
 };
 use crate::storage::txn::actions::prewrite::prewrite;
+use crate::storage::txn::actions::shared::handle_1pc;
 use crate::storage::txn::commands::{WriteCommand, WriteContext, WriteResult};
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{
@@ -42,6 +43,12 @@ command! {
             /// All secondary keys in the whole transaction (i.e., as sent to all nodes, not only
             /// this node). Only present if using async commit.
             secondary_keys: Option<Vec<Vec<u8>>>,
+            /// When the transaction involves only one region, it's possible to commit the
+            /// transaction directly with 1PC protocol.
+            try_one_pc: bool,
+            /// Limits the maximum value of commit ts of 1PC, which can be used to avoid
+            /// inconsistency with schema change.
+            one_pc_max_commit_ts: TimeStamp,
         }
 }
 
@@ -86,6 +93,8 @@ impl Prewrite {
             0,
             TimeStamp::default(),
             None,
+            false,
+            TimeStamp::zero(),
             Context::default(),
         )
     }
@@ -106,6 +115,8 @@ impl Prewrite {
             0,
             TimeStamp::default(),
             None,
+            false,
+            TimeStamp::zero(),
             Context::default(),
         )
     }
@@ -123,8 +134,10 @@ impl Prewrite {
             0,
             false,
             0,
-            TimeStamp::default(),
+            TimeStamp::zero(),
             None,
+            false,
+            TimeStamp::zero(),
             ctx,
         )
     }
@@ -164,7 +177,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
         // Async commit requires the max timestamp in the concurrency manager to be up-to-date.
         // If it is possibly stale due to leader transfer or region merge, return an error.
         // TODO: Fallback to non-async commit if not synced instead of returning an error.
-        if self.secondary_keys.is_some() && !snapshot.is_max_ts_synced() {
+        if (self.secondary_keys.is_some() || self.try_one_pc) && !snapshot.is_max_ts_synced() {
             return Err(ErrorInner::MaxTimestampNotSynced {
                 region_id: self.get_ctx().get_region_id(),
                 start_ts: self.start_ts,
@@ -189,7 +202,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             .map(|_| Key::from_raw(&self.primary));
 
         let mut locks = vec![];
-        let mut async_commit_ts = TimeStamp::zero();
+        let mut final_min_commit_ts = TimeStamp::zero();
         for m in self.mutations {
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
 
@@ -205,10 +218,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 self.lock_ttl,
                 self.txn_size,
                 self.min_commit_ts,
+                self.try_one_pc,
             ) {
                 Ok(ts) => {
-                    if secondaries.is_some() && async_commit_ts < ts {
-                        async_commit_ts = ts;
+                    if secondaries.is_some() && final_min_commit_ts < ts {
+                        final_min_commit_ts = ts;
                     }
                 }
                 e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
@@ -224,10 +238,21 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
 
         context.statistics.add(&txn.take_statistics());
         let (pr, to_be_write, rows, ctx, lock_info, lock_guards) = if locks.is_empty() {
+            let one_pc_commit_ts = if self.try_one_pc {
+                assert_eq!(txn.locks_for_1pc.len(), rows);
+                // All keys can be successfully locked and `try_one_pc` is set. Try to directly
+                // commit them.
+                handle_1pc(&mut txn, final_min_commit_ts, self.one_pc_max_commit_ts)
+            } else {
+                assert!(txn.locks_for_1pc.is_empty());
+                TimeStamp::zero()
+            };
+
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks: vec![],
-                    min_commit_ts: async_commit_ts,
+                    min_commit_ts: final_min_commit_ts,
+                    one_pc_commit_ts,
                 },
             };
             let txn_extra = txn.take_extra();
@@ -242,7 +267,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks,
-                    min_commit_ts: async_commit_ts,
+                    min_commit_ts: final_min_commit_ts,
+                    one_pc_commit_ts: TimeStamp::zero(),
                 },
             };
             (pr, WriteData::default(), 0, self.ctx, None, vec![])

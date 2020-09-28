@@ -110,6 +110,7 @@ pub struct MvccTxn<S: Snapshot> {
     pub(crate) start_ts: TimeStamp,
     write_size: usize,
     writes: WriteData,
+    pub(crate) locks_for_1pc: Vec<(Key, Lock)>,
     // collapse continuous rollbacks.
     pub(crate) collapse_rollback: bool,
     pub extra_op: ExtraOp,
@@ -173,6 +174,7 @@ impl<S: Snapshot> MvccTxn<S> {
             start_ts,
             write_size: 0,
             writes: WriteData::default(),
+            locks_for_1pc: Vec::new(),
             collapse_rollback: true,
             extra_op: ExtraOp::Noop,
             concurrency_manager,
@@ -189,6 +191,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn into_modifies(self) -> Vec<Modify> {
+        assert!(self.locks_for_1pc.is_empty());
         self.writes.modifies
     }
 
@@ -214,6 +217,10 @@ impl<S: Snapshot> MvccTxn<S> {
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
         self.writes.modifies.push(write);
+    }
+
+    pub(crate) fn put_locks_for_1pc(&mut self, key: Key, lock: Lock) {
+        self.locks_for_1pc.push((key, lock));
     }
 
     pub(crate) fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
@@ -521,6 +528,7 @@ impl<S: Snapshot> MvccTxn<S> {
         txn_size: u64,
         mut min_commit_ts: TimeStamp,
         pipelined_pessimistic_lock: bool,
+        try_one_pc: bool,
     ) -> Result<TimeStamp> {
         if mutation.should_not_write() {
             return Err(box_err!(
@@ -586,6 +594,7 @@ impl<S: Snapshot> MvccTxn<S> {
             for_update_ts,
             txn_size,
             min_commit_ts,
+            try_one_pc,
         )
     }
 
@@ -1536,6 +1545,7 @@ mod tests {
             0,
             0,
             TimeStamp::default(),
+            false,
         )
         .unwrap();
         assert!(txn.write_size() > 0);
@@ -1581,6 +1591,7 @@ mod tests {
             0,
             0,
             TimeStamp::default(),
+            false
         )
         .is_err());
 
@@ -1596,6 +1607,7 @@ mod tests {
             0,
             0,
             TimeStamp::default(),
+            false
         )
         .is_ok());
     }
@@ -2402,6 +2414,7 @@ mod tests {
                     0,
                     TimeStamp::zero(),
                     false,
+                    false,
                 )
                 .unwrap();
             } else {
@@ -2414,6 +2427,7 @@ mod tests {
                     0,
                     0,
                     TimeStamp::default(),
+                    false,
                 )
                 .unwrap();
             }
@@ -2458,6 +2472,7 @@ mod tests {
                 0,
                 4,
                 TimeStamp::zero(),
+                false,
             )
             .unwrap();
             let modifies = txn.into_modifies();
@@ -2511,6 +2526,7 @@ mod tests {
                     4,
                     TimeStamp::zero(),
                     false,
+                    false,
                 )
                 .unwrap();
             let modifies = txn.into_modifies();
@@ -2563,6 +2579,7 @@ mod tests {
                 4.into(),
                 4,
                 TimeStamp::zero(),
+                false,
                 false,
             )
             .unwrap();
