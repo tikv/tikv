@@ -1,3 +1,4 @@
+use crossbeam::channel::{unbounded, Receiver, TryRecvError};
 use engine_rocks::{
     self,
     raw::{DBOptions, Env},
@@ -11,8 +12,9 @@ use raft_log_engine::RaftLogEngine;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
+
+const CONSUME_THRESHOLD: usize = 32 * 1024;
 
 /// Check the potential original raftdb directory and try to dump data out.
 ///
@@ -40,13 +42,12 @@ pub fn check_and_dump_raft_db(
     let count_size = Arc::new(AtomicUsize::new(0));
     let mut count_region = 0;
     let mut threads = vec![];
-    let mut senders = vec![];
+    let (tx, rx) = unbounded();
     for _ in 0..thread_num {
         let raft_engine = engine.clone();
         let raftdb_engine = origin_engine.clone();
         let count_size = count_size.clone();
-        let (tx, rx) = mpsc::channel::<Option<u64>>();
-        senders.push(tx);
+        let rx = rx.clone();
         let t = std::thread::spawn(move || {
             run_worker(rx, raftdb_engine, raft_engine, count_size);
         });
@@ -57,23 +58,19 @@ pub fn check_and_dump_raft_db(
     // Seek all region id from raftdb and seed them to workers.
     let mut it = origin_engine.iterator().unwrap();
     let mut valid = it.seek(SeekKey::Key(keys::REGION_RAFT_MIN_KEY)).unwrap();
-    let mut count_seek = 0;
     while valid {
-        count_seek += 1;
         let (key, _) = (it.key(), it.value());
         match keys::decode_raft_key(key) {
             Err(_) => continue,
             Ok((id, _)) => {
-                senders[count_seek % thread_num].send(Some(id)).unwrap();
+                tx.send(id).unwrap();
                 count_region += 1;
                 let next_key = keys::raft_log_prefix(id + 1);
                 valid = it.seek(SeekKey::Key(&next_key)).unwrap();
             }
         }
     }
-    for tx in senders {
-        tx.send(None).unwrap();
-    }
+    drop(tx);
     info!("Scanned all region id and waiting for dump");
     for t in threads {
         t.join().unwrap();
@@ -91,57 +88,68 @@ pub fn check_and_dump_raft_db(
 
 // Worker receives region id and scan the related range.
 fn run_worker(
-    rx: Receiver<Option<u64>>,
+    rx: Receiver<u64>,
     old_engine: RocksEngine,
     new_engine: RaftLogEngine,
     count_size: Arc<AtomicUsize>,
 ) {
     let mut batch = new_engine.log_batch(0);
-    while let Some(id) = rx.recv().unwrap() {
-        let mut entries = Some(vec![]);
-        old_engine
-            .scan(
-                &keys::raft_log_prefix(id),
-                &keys::raft_log_prefix(id + 1),
-                false,
-                |key, value| {
-                    let res = keys::decode_raft_key(key);
-                    match res {
-                        Err(_) => Ok(true),
-                        Ok((region_id, suffix)) => {
-                            match suffix {
-                                keys::RAFT_LOG_SUFFIX => {
-                                    let mut entry = Entry::default();
-                                    entry.merge_from_bytes(&value)?;
-                                    entries.as_mut().unwrap().push(entry);
+    let mut local_size = 0;
+    loop {
+        match rx.try_recv() {
+            Ok(id) => {
+                let mut entries = Some(vec![]);
+                old_engine
+                    .scan(
+                        &keys::raft_log_prefix(id),
+                        &keys::raft_log_prefix(id + 1),
+                        false,
+                        |key, value| {
+                            let res = keys::decode_raft_key(key);
+                            match res {
+                                Err(_) => Ok(true),
+                                Ok((region_id, suffix)) => {
+                                    local_size += value.len();
+                                    match suffix {
+                                        keys::RAFT_LOG_SUFFIX => {
+                                            let mut entry = Entry::default();
+                                            entry.merge_from_bytes(&value)?;
+                                            entries.as_mut().unwrap().push(entry);
+                                        }
+                                        keys::RAFT_STATE_SUFFIX => {
+                                            let mut state = RaftLocalState::default();
+                                            state.merge_from_bytes(&value)?;
+                                            batch.put_raft_state(region_id, &state).unwrap();
+                                            // Assume that we always scan entry first and raft state at the end.
+                                            batch
+                                                .append(region_id, entries.take().unwrap())
+                                                .unwrap();
+                                            entries = Some(vec![]);
+                                        }
+                                        // There is only 2 types of keys in raft.
+                                        _ => unreachable!(),
+                                    }
+                                    // Avoid long log batch.
+                                    if local_size >= CONSUME_THRESHOLD {
+                                        local_size = 0;
+                                        batch.append(region_id, entries.take().unwrap()).unwrap();
+                                        entries = Some(vec![]);
+                                        let size = new_engine.consume(&mut batch, false).unwrap();
+                                        count_size.fetch_add(size, Ordering::Relaxed);
+                                    }
+                                    Ok(true)
                                 }
-                                keys::RAFT_STATE_SUFFIX => {
-                                    let mut state = RaftLocalState::default();
-                                    state.merge_from_bytes(&value)?;
-                                    batch.put_raft_state(region_id, &state).unwrap();
-                                    // Assume that we always scan entry first and raft state at the end.
-                                    batch.append(region_id, entries.take().unwrap()).unwrap();
-                                    entries = Some(vec![]);
-                                    let size = new_engine.consume(&mut batch, false).unwrap();
-                                    count_size.fetch_add(size, Ordering::Relaxed);
-                                }
-                                // There is only 2 types of keys in raft.
-                                _ => unreachable!(),
                             }
-                            // Avoid long log batch.
-                            if entries.as_ref().unwrap().len() >= 128 {
-                                batch.append(region_id, entries.take().unwrap()).unwrap();
-                                entries = Some(vec![]);
-                                let size = new_engine.consume(&mut batch, false).unwrap();
-                                count_size.fetch_add(size, Ordering::Relaxed);
-                            }
-                            Ok(true)
-                        }
-                    }
-                },
-            )
-            .unwrap();
+                        },
+                    )
+                    .unwrap();
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => break,
+        }
     }
+    let size = new_engine.consume(&mut batch, false).unwrap();
+    count_size.fetch_add(size, Ordering::Relaxed);
 }
 
 fn convert_to_dirty_raftdb(path: &str) {

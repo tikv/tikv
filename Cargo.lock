@@ -587,6 +587,7 @@ dependencies = [
  "chrono",
  "clap",
  "concurrency_manager",
+ "crossbeam",
  "encryption",
  "engine_rocks",
  "engine_traits",
