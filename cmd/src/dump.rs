@@ -7,11 +7,12 @@ use engine_traits::{Iterable, Iterator, RaftEngine, RaftLogBatch as RaftLogBatch
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
+use raft_log_engine::RaftLogBatch;
 use raft_log_engine::RaftLogEngine;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 
 /// Check the potential original raftdb directory and try to dump data out.
@@ -48,49 +49,8 @@ pub fn check_and_dump_raft_db(
         let (tx, rx) = mpsc::channel::<Option<u64>>();
         senders.push(tx);
         let t = std::thread::spawn(move || {
-            // Worker receives region id and scan the related range.
-            let mut local_count = 0;
-            let mut batch = raft_engine.log_batch(0);
-            while let Some(id) = rx.recv().unwrap() {
-                raftdb_engine
-                    .scan(
-                        &keys::raft_log_prefix(id),
-                        &keys::raft_log_prefix(id + 1),
-                        false,
-                        |key, value| {
-                            let res = keys::decode_raft_key(key);
-                            match res {
-                                Err(_) => Ok(true),
-                                Ok((region_id, suffix)) => {
-                                    match suffix {
-                                        keys::RAFT_LOG_SUFFIX => {
-                                            let mut entry = Entry::default();
-                                            entry.merge_from_bytes(&value)?;
-                                            batch.append(region_id, vec![entry]).unwrap();
-                                            local_count += 1;
-                                        }
-                                        keys::RAFT_STATE_SUFFIX => {
-                                            let mut state = RaftLocalState::default();
-                                            state.merge_from_bytes(&value)?;
-                                            batch.put_raft_state(region_id, &state).unwrap();
-                                        }
-                                        // There is only 2 types of keys in raft.
-                                        _ => unreachable!(),
-                                    }
-                                    if local_count % 512 == 0 {
-                                        let size = raft_engine.consume(&mut batch, false).unwrap();
-                                        count_size.fetch_add(size, Ordering::Relaxed);
-                                    }
-                                    Ok(true)
-                                }
-                            }
-                        },
-                    )
-                    .unwrap();
-            }
-            // Consume remaining log batch.
-            let size = raft_engine.consume(&mut batch, false).unwrap();
-            count_size.fetch_add(size, Ordering::Relaxed);
+            let batch = raft_engine.log_batch(0);
+            run_worker(batch, rx, raftdb_engine, raft_engine, count_size);
         });
         threads.push(t);
     }
@@ -129,6 +89,61 @@ pub fn check_and_dump_raft_db(
     );
     convert_to_dirty_raftdb(raftdb_path);
     check_and_delete_safely(raftdb_path);
+}
+
+// Worker receives region id and scan the related range.
+fn run_worker(
+    mut batch: RaftLogBatch,
+    rx: Receiver<Option<u64>>,
+    old_engine: RocksEngine,
+    new_engine: RaftLogEngine,
+    count_size: Arc<AtomicUsize>,
+) {
+    while let Some(id) = rx.recv().unwrap() {
+        let mut entries = Some(vec![]);
+        old_engine
+            .scan(
+                &keys::raft_log_prefix(id),
+                &keys::raft_log_prefix(id + 1),
+                false,
+                |key, value| {
+                    let res = keys::decode_raft_key(key);
+                    match res {
+                        Err(_) => Ok(true),
+                        Ok((region_id, suffix)) => {
+                            match suffix {
+                                keys::RAFT_LOG_SUFFIX => {
+                                    let mut entry = Entry::default();
+                                    entry.merge_from_bytes(&value)?;
+                                    entries.as_mut().unwrap().push(entry);
+                                }
+                                keys::RAFT_STATE_SUFFIX => {
+                                    let mut state = RaftLocalState::default();
+                                    state.merge_from_bytes(&value)?;
+                                    batch.put_raft_state(region_id, &state).unwrap();
+                                    // Assume that we always scan entry first and raft state at the end.
+                                    batch.append(region_id, entries.take().unwrap()).unwrap();
+                                    entries = Some(vec![]);
+                                    let size = new_engine.consume(&mut batch, false).unwrap();
+                                    count_size.fetch_add(size, Ordering::Relaxed);
+                                }
+                                // There is only 2 types of keys in raft.
+                                _ => unreachable!(),
+                            }
+                            // Avoid long log batch.
+                            if entries.as_ref().unwrap().len() >= 128 {
+                                batch.append(region_id, entries.take().unwrap()).unwrap();
+                                entries = Some(vec![]);
+                                let size = new_engine.consume(&mut batch, false).unwrap();
+                                count_size.fetch_add(size, Ordering::Relaxed);
+                            }
+                            Ok(true)
+                        }
+                    }
+                },
+            )
+            .unwrap();
+    }
 }
 
 fn convert_to_dirty_raftdb(path: &str) {
