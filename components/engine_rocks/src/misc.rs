@@ -355,7 +355,6 @@ mod tests {
         for (_, key) in keys.iter().enumerate() {
             kvs.push((key.as_slice(), b"value"));
         }
-        // let kvs_left = kvs.iter().filter(|k | k.0 < start || k.0 >= end).collect();
         for &(k, v) in kvs.as_slice() {
             for cf in ALL_CFS {
                 wb.put_cf(cf, k, v).unwrap();
