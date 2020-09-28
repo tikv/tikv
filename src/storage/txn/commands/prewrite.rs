@@ -8,6 +8,7 @@ use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
 };
+use crate::storage::txn::actions::prewrite::prewrite;
 use crate::storage::txn::commands::{WriteCommand, WriteContext, WriteResult};
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{
@@ -195,7 +196,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             if Some(m.key()) == async_commit_pk.as_ref() {
                 secondaries = &self.secondary_keys;
             }
-            match txn.prewrite(
+            match prewrite(
+                &mut txn,
                 m,
                 &self.primary,
                 secondaries,
