@@ -1,4 +1,4 @@
-use crossbeam::channel::{unbounded, Receiver, TryRecvError};
+use crossbeam::channel::{unbounded, Receiver};
 use engine_rocks::{
     self,
     raw::{DBOptions, Env},
@@ -98,7 +98,7 @@ fn run_worker(
     let mut batch = new_engine.log_batch(0);
     let mut local_size = 0;
     loop {
-        match rx.try_recv() {
+        match rx.recv() {
             Ok(id) => {
                 let mut entries = Some(vec![]);
                 old_engine
@@ -146,8 +146,7 @@ fn run_worker(
                     )
                     .unwrap();
             }
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => break,
+            Err(_) => break,
         }
     }
     let size = new_engine.consume(&mut batch, false).unwrap();
