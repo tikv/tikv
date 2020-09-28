@@ -55,12 +55,11 @@ pub fn check_and_dump_raft_db(
     }
     info!("Start to scan raft log from raftdb and dump into raft engine");
     let consumed_time = std::time::Instant::now();
-    // Seek all region id from raftdb and seed them to workers.
+    // Seek all region id from raftdb and send them to workers.
     let mut it = origin_engine.iterator().unwrap();
     let mut valid = it.seek(SeekKey::Key(keys::REGION_RAFT_MIN_KEY)).unwrap();
     while valid {
-        let (key, _) = (it.key(), it.value());
-        match keys::decode_raft_key(key) {
+        match keys::decode_raft_key(it.key()) {
             Err(_) => continue,
             Ok((id, _)) => {
                 tx.send(id).unwrap();
