@@ -129,7 +129,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
                 self.try_one_pc,
             ) {
                 Ok(ts) => {
-                    if secondaries.is_some() && final_min_commit_ts < ts {
+                    if (secondaries.is_some() || self.try_one_pc) && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
                     }
                 }

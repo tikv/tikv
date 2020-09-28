@@ -100,6 +100,28 @@ impl Prewrite {
     }
 
     #[cfg(test)]
+    pub fn with_1pc(
+        mutations: Vec<Mutation>,
+        primary: Vec<u8>,
+        start_ts: TimeStamp,
+        one_pc_max_commit_ts: TimeStamp,
+    ) -> TypedCommand<PrewriteResult> {
+        Prewrite::new(
+            mutations,
+            primary,
+            start_ts,
+            0,
+            false,
+            0,
+            TimeStamp::default(),
+            None,
+            true,
+            one_pc_max_commit_ts,
+            Context::default(),
+        )
+    }
+
+    #[cfg(test)]
     pub fn with_lock_ttl(
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
@@ -221,7 +243,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 self.try_one_pc,
             ) {
                 Ok(ts) => {
-                    if secondaries.is_some() && final_min_commit_ts < ts {
+                    if (secondaries.is_some() || self.try_one_pc) && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
                     }
                 }
@@ -240,6 +262,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
         let (pr, to_be_write, rows, ctx, lock_info, lock_guards) = if locks.is_empty() {
             let one_pc_commit_ts = if self.try_one_pc {
                 assert_eq!(txn.locks_for_1pc.len(), rows);
+                assert_ne!(final_min_commit_ts, TimeStamp::zero());
                 // All keys can be successfully locked and `try_one_pc` is set. Try to directly
                 // commit them.
                 handle_1pc(&mut txn, final_min_commit_ts, self.one_pc_max_commit_ts)
@@ -324,6 +347,7 @@ mod tests {
             ))],
             pri_key.to_vec(),
             99,
+            false,
         )
         .unwrap();
         assert_eq!(1, statistic.write.seek);
@@ -333,6 +357,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             100,
+            false,
         )
         .err()
         .unwrap();
@@ -356,6 +381,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             101,
+            false,
         )
         .err()
         .unwrap();
@@ -371,6 +397,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             104,
+            false,
         )
         .err()
         .unwrap();
@@ -394,6 +421,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             104,
+            false,
         )
         .unwrap();
         // All keys are prewrited successful with only one seek operations.
@@ -440,6 +468,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             100,
+            false,
         )
         .unwrap();
         // Rollback to make tombstones in lock-cf.
@@ -453,10 +482,34 @@ mod tests {
         while mutations.len() > FORWARD_MIN_MUTATIONS_NUM + 1 {
             mutations.pop();
         }
-        prewrite(&engine, &mut statistic, mutations, pri_key.to_vec(), 110).unwrap();
+        prewrite(
+            &engine,
+            &mut statistic,
+            mutations,
+            pri_key.to_vec(),
+            110,
+            false,
+        )
+        .unwrap();
         let d = perf.delta();
         assert_eq!(1, statistic.write.seek);
         assert_eq!(d.0.internal_delete_skipped_count, 0);
+    }
+
+    #[test]
+    fn test_prewrite_1pc() {
+        use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"k";
+        let value = b"v";
+        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
+
+        let mut statistics = Statistics::default();
+        prewrite(&engine, &mut statistics, mutations, key.to_vec(), 10, true).unwrap();
+        must_unlocked(&engine, key);
+        must_get(&engine, key, 12, value);
+        must_get_commit_ts(&engine, key, 10, 11);
     }
 
     fn prewrite<E: Engine>(
@@ -465,11 +518,21 @@ mod tests {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: u64,
+        try_one_pc: bool,
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
         let concurrency_manager = ConcurrencyManager::new(start_ts.into());
-        let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts));
+        let cmd = if try_one_pc {
+            Prewrite::with_1pc(
+                mutations,
+                primary,
+                TimeStamp::from(start_ts),
+                TimeStamp::max(),
+            )
+        } else {
+            Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts))
+        };
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager,
