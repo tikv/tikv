@@ -97,58 +97,53 @@ fn run_worker(
 ) {
     let mut batch = new_engine.log_batch(0);
     let mut local_size = 0;
-    loop {
-        match rx.recv() {
-            Ok(id) => {
-                let mut entries = vec![];
-                old_engine
-                    .scan(
-                        &keys::raft_log_prefix(id),
-                        &keys::raft_log_prefix(id + 1),
-                        false,
-                        |key, value| {
-                            let res = keys::decode_raft_key(key);
-                            match res {
-                                Err(_) => Ok(true),
-                                Ok((region_id, suffix)) => {
-                                    local_size += value.len();
-                                    match suffix {
-                                        keys::RAFT_LOG_SUFFIX => {
-                                            let mut entry = Entry::default();
-                                            entry.merge_from_bytes(&value)?;
-                                            entries.push(entry);
-                                        }
-                                        keys::RAFT_STATE_SUFFIX => {
-                                            let mut state = RaftLocalState::default();
-                                            state.merge_from_bytes(&value)?;
-                                            batch.put_raft_state(region_id, &state).unwrap();
-                                            // Assume that we always scan entry first and raft state at the end.
-                                            batch
-                                                .append(region_id, std::mem::take(&mut entries))
-                                                .unwrap();
-                                        }
-                                        // There is only 2 types of keys in raft.
-                                        _ => unreachable!(),
-                                    }
-                                    // Avoid long log batch.
-                                    if local_size >= CONSUME_THRESHOLD {
-                                        local_size = 0;
-                                        batch
-                                            .append(region_id, std::mem::take(&mut entries))
-                                            .unwrap();
-
-                                        let size = new_engine.consume(&mut batch, false).unwrap();
-                                        count_size.fetch_add(size, Ordering::Relaxed);
-                                    }
-                                    Ok(true)
+    while let Ok(id) = rx.recv() {
+        let mut entries = vec![];
+        old_engine
+            .scan(
+                &keys::raft_log_prefix(id),
+                &keys::raft_log_prefix(id + 1),
+                false,
+                |key, value| {
+                    let res = keys::decode_raft_key(key);
+                    match res {
+                        Err(_) => Ok(true),
+                        Ok((region_id, suffix)) => {
+                            local_size += value.len();
+                            match suffix {
+                                keys::RAFT_LOG_SUFFIX => {
+                                    let mut entry = Entry::default();
+                                    entry.merge_from_bytes(&value)?;
+                                    entries.push(entry);
                                 }
+                                keys::RAFT_STATE_SUFFIX => {
+                                    let mut state = RaftLocalState::default();
+                                    state.merge_from_bytes(&value)?;
+                                    batch.put_raft_state(region_id, &state).unwrap();
+                                    // Assume that we always scan entry first and raft state at the end.
+                                    batch
+                                        .append(region_id, std::mem::take(&mut entries))
+                                        .unwrap();
+                                }
+                                // There is only 2 types of keys in raft.
+                                _ => unreachable!(),
                             }
-                        },
-                    )
-                    .unwrap();
-            }
-            Err(_) => break,
-        }
+                            // Avoid long log batch.
+                            if local_size >= CONSUME_THRESHOLD {
+                                local_size = 0;
+                                batch
+                                    .append(region_id, std::mem::take(&mut entries))
+                                    .unwrap();
+
+                                let size = new_engine.consume(&mut batch, false).unwrap();
+                                count_size.fetch_add(size, Ordering::Relaxed);
+                            }
+                            Ok(true)
+                        }
+                    }
+                },
+            )
+            .unwrap();
     }
     let size = new_engine.consume(&mut batch, false).unwrap();
     count_size.fetch_add(size, Ordering::Relaxed);
