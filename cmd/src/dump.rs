@@ -48,6 +48,7 @@ pub fn check_and_dump_raft_db(
         let (tx, rx) = mpsc::channel::<Option<u64>>();
         senders.push(tx);
         let t = std::thread::spawn(move || {
+            // Worker receives region id and scan the related range.
             let mut local_count = 0;
             let mut batch = raft_engine.log_batch(0);
             while let Some(id) = rx.recv().unwrap() {
@@ -115,7 +116,7 @@ pub fn check_and_dump_raft_db(
     for tx in senders {
         tx.send(None).unwrap();
     }
-    info!("Send stop signal to dump workers");
+    info!("Scanned all region id and waiting for dump");
     for t in threads {
         t.join().unwrap();
     }
