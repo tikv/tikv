@@ -21,7 +21,7 @@ use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, L
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionFilterFactory, CompactionPriority,
-    DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode,
+    DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, IndexType,
     LRUCacheOptions, TitanDBOptions,
 };
 use engine_rocks::raw_util::CFOptions;
@@ -430,6 +430,63 @@ macro_rules! build_cf_opt {
         }
         cf_opts
     }};
+
+    ($opt:ident) => {{
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_num_levels($opt.num_levels);
+        assert!($opt.compression_per_level.len() >= $opt.num_levels as usize);
+        let compression_per_level = $opt.compression_per_level[..$opt.num_levels as usize].to_vec();
+        cf_opts.compression_per_level(compression_per_level.as_slice());
+        cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
+        cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
+        cf_opts.set_min_write_buffer_number_to_merge($opt.min_write_buffer_number_to_merge);
+        cf_opts.set_max_bytes_for_level_base($opt.max_bytes_for_level_base.0);
+        cf_opts.set_target_file_size_base($opt.target_file_size_base.0);
+        cf_opts.set_level_zero_file_num_compaction_trigger($opt.level0_file_num_compaction_trigger);
+        cf_opts.set_level_zero_slowdown_writes_trigger($opt.level0_slowdown_writes_trigger);
+        cf_opts.set_level_zero_stop_writes_trigger($opt.level0_stop_writes_trigger);
+        cf_opts.set_max_compaction_bytes($opt.max_compaction_bytes.0);
+        cf_opts.compaction_priority($opt.compaction_pri);
+        cf_opts.set_level_compaction_dynamic_level_bytes($opt.dynamic_level_bytes);
+        cf_opts.set_max_bytes_for_level_multiplier($opt.max_bytes_for_level_multiplier);
+        cf_opts.set_compaction_style($opt.compaction_style);
+        cf_opts.set_disable_auto_compactions($opt.disable_auto_compactions);
+        cf_opts.set_soft_pending_compaction_bytes_limit($opt.soft_pending_compaction_bytes_limit.0);
+        cf_opts.set_hard_pending_compaction_bytes_limit($opt.hard_pending_compaction_bytes_limit.0);
+        cf_opts.set_optimize_filters_for_hits($opt.optimize_filters_for_hits);
+        cf_opts.set_force_consistency_checks($opt.force_consistency_checks);
+        if $opt.enable_doubly_skiplist {
+            cf_opts.set_doubly_skiplist();
+        }
+        cf_opts
+    }};
+}
+
+macro_rules! build_block_based_table_opts {
+    ($opt:ident, $cache:ident) => {{
+        let mut block_base_opts = BlockBasedOptions::new();
+        block_base_opts.set_block_size($opt.block_size.0 as usize);
+        block_base_opts.set_no_block_cache($opt.disable_block_cache);
+        if let Some(cache) = $cache {
+            block_base_opts.set_block_cache(cache);
+        } else {
+            let mut cache_opts = LRUCacheOptions::new();
+            cache_opts.set_capacity($opt.block_cache_size.0 as usize);
+            block_base_opts.set_block_cache(&Cache::new_lru_cache(cache_opts));
+        }
+        block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
+        block_base_opts
+            .set_pin_l0_filter_and_index_blocks_in_cache($opt.pin_l0_filter_and_index_blocks);
+        if $opt.use_bloom_filter {
+            block_base_opts.set_bloom_filter(
+                $opt.bloom_filter_bits_per_key,
+                $opt.block_based_bloom_filter,
+            );
+            block_base_opts.set_whole_key_filtering($opt.whole_key_filtering);
+        }
+        block_base_opts.set_read_amp_bytes_per_bit($opt.read_amp_bytes_per_bit);
+        block_base_opts
+    }};
 }
 
 cf_config!(DefaultCfConfig);
@@ -627,7 +684,11 @@ impl Default for LockCfConfig {
 
 impl LockCfConfig {
     pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, cache);
+        let mut bbt_opts = build_block_based_table_opts!(self, cache);
+        bbt_opts.set_index_type(IndexType::HashSearch);
+
+        let mut cf_opts = build_cf_opt!(self);
+        cf_opts.set_block_based_table_factory(&bbt_opts);
         let f = Box::new(NoopSliceTransform);
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
