@@ -24,6 +24,7 @@ grpc-raft-conn-num = 1
 # Disable stats concurrency. procinfo performs too bad without optimization,
 # disable it to save CPU for real tests.
 stats-concurrency = 0
+raft-client-backoff-step = "5ms"
 
 [server.labels]
 
@@ -46,6 +47,8 @@ raft-heartbeat-ticks = 2
 raft-election-timeout-ticks = 25
 raft-log-gc-tick-interval = "100ms"
 raft-log-gc-threshold = 1
+raft-log-reserve-max-ticks = 1000000
+raft-engine-purge-interval = "100ms"
 region-split-check-diff = 10000
 region-compact-check-interval = "12s"
 clean-stale-peer-delay = "0s"

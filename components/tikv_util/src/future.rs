@@ -1,17 +1,21 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::callback::must_call;
-use crate::Either;
-use futures::{Async, Future, IntoFuture, Poll};
-use tokio_sync::oneshot;
+use futures::channel::mpsc;
+use futures::channel::oneshot as futures_oneshot;
+use futures::future::{self, BoxFuture, Future, FutureExt, TryFutureExt};
+use futures::stream::{Stream, StreamExt};
+use futures::task::{self, ArcWake, Context, Poll};
+
+use std::sync::{Arc, Mutex};
 
 /// Generates a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.
-pub fn paired_future_callback<T>() -> (Box<dyn FnOnce(T) + Send>, oneshot::Receiver<T>)
+pub fn paired_future_callback<T>() -> (Box<dyn FnOnce(T) + Send>, futures_oneshot::Receiver<T>)
 where
     T: Send + 'static,
 {
-    let (tx, future) = oneshot::channel::<T>();
+    let (tx, future) = futures_oneshot::channel::<T>();
     let callback = Box::new(move |result| {
         let r = tx.send(result);
         if r.is_err() {
@@ -21,33 +25,13 @@ where
     (callback, future)
 }
 
-pub fn paired_std_future_callback<T>() -> (
-    Box<dyn FnOnce(T) + Send>,
-    futures03::channel::oneshot::Receiver<T>,
-)
-where
-    T: Send + 'static,
-{
-    let (tx, future) = futures03::channel::oneshot::channel::<T>();
-    let callback = Box::new(move |result| {
-        let r = tx.send(result);
-        if r.is_err() {
-            warn!("paired_future_callback: Failed to send result to the future rx, discarded.");
-        }
-    });
-    (callback, future)
-}
-
-pub fn paired_must_called_std_future_callback<T>(
+pub fn paired_must_called_future_callback<T>(
     arg_on_drop: impl FnOnce() -> T + Send + 'static,
-) -> (
-    Box<dyn FnOnce(T) + Send>,
-    futures03::channel::oneshot::Receiver<T>,
-)
+) -> (Box<dyn FnOnce(T) + Send>, futures_oneshot::Receiver<T>)
 where
     T: Send + 'static,
 {
-    let (tx, future) = futures03::channel::oneshot::channel::<T>();
+    let (tx, future) = futures_oneshot::channel::<T>();
     let callback = must_call(
         move |result| {
             let r = tx.send(result);
@@ -60,61 +44,53 @@ where
     (callback, future)
 }
 
-/// A shortcut for `f1.and_then(|()| f2.flatten())`. Note that
-/// the expression is just a simplified version as f2's Error
-/// type may not be easy handled via combinators.
-pub struct AndThenWith<F1, F2>
+/// Create a stream proxy with buffer representing the remote stream. The returned task
+/// will receive messages from the remote stream as much as possible.
+pub fn create_stream_with_buffer<T, S>(
+    s: S,
+    size: usize,
+) -> (
+    impl Stream<Item = T> + Send + 'static,
+    impl Future<Output = ()> + Send + 'static,
+)
 where
-    F2: Future,
-    F2::Item: IntoFuture,
+    S: Stream<Item = T> + Send + 'static,
+    T: Send + 'static,
 {
-    f1: Option<F1>,
-    f2: Either<F2, <F2::Item as IntoFuture>::Future>,
+    let (tx, rx) = mpsc::channel::<T>(size);
+    let driver = s
+        .then(future::ok::<T, mpsc::SendError>)
+        .forward(tx)
+        .map_err(|e| warn!("stream with buffer send error"; "error" => %e))
+        .map(|_| ());
+    (rx, driver)
 }
 
-impl<F1, F2> AndThenWith<F1, F2>
-where
-    F2: Future,
-    F2::Item: IntoFuture,
-{
-    #[inline]
-    pub fn new(f1: F1, f2: F2) -> AndThenWith<F1, F2> {
-        AndThenWith {
-            f1: Some(f1),
-            f2: Either::Left(f2),
-        }
-    }
+/// Polls the provided future immediately. If the future is not ready,
+/// it will register the waker. When the event is ready, the waker will
+/// be notified, then the internal future is immediately polled in the
+/// thread calling `wake()`.
+pub fn poll_future_notify<F: Future<Output = ()> + Send + 'static>(f: F) {
+    let f: BoxFuture<'static, ()> = Box::pin(f);
+    let waker = Arc::new(BatchCommandsWaker(Mutex::new(Some(f))));
+    waker.wake();
 }
 
-impl<E, F2> Future for AndThenWith<Result<(), E>, F2>
-where
-    F2: Future,
-    F2::Item: IntoFuture<Error = E>,
-{
-    type Item = Result<<F2::Item as IntoFuture>::Item, E>;
-    type Error = F2::Error;
+// BatchCommandsWaker is used to make business pool notifiy completion queues directly.
+struct BatchCommandsWaker(Mutex<Option<BoxFuture<'static, ()>>>);
 
-    #[inline]
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if self.f1.is_some() {
-            match self.f1.take().unwrap() {
-                Ok(()) => {}
-                Err(e) => return Ok(Async::Ready(Err(e))),
-            }
-        }
-
-        loop {
-            let res = match self.f2 {
-                Either::Left(ref mut f1) => try_ready!(f1.poll()).into_future(),
-                Either::Right(ref mut f2) => {
-                    return match f2.poll() {
-                        Ok(Async::Ready(r)) => Ok(Async::Ready(Ok(r))),
-                        Ok(Async::NotReady) => Ok(Async::NotReady),
-                        Err(e) => Ok(Async::Ready(Err(e))),
-                    };
+impl ArcWake for BatchCommandsWaker {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        let mut future_slot = arc_self.0.lock().unwrap();
+        if let Some(mut future) = future_slot.take() {
+            let waker = task::waker_ref(&arc_self);
+            let cx = &mut Context::from_waker(&*waker);
+            match future.as_mut().poll(cx) {
+                Poll::Pending => {
+                    *future_slot = Some(future);
                 }
-            };
-            self.f2 = Either::Right(res);
+                Poll::Ready(()) => {}
+            }
         }
     }
 }

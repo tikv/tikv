@@ -105,6 +105,11 @@ pub struct Config {
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
 
+    // Test only.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub raft_client_backoff_step: ReadableDuration,
+
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
 
@@ -160,7 +165,7 @@ impl Default for Config {
                 DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
-            end_point_check_memory_locks: false,
+            end_point_check_memory_locks: true,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
@@ -170,6 +175,7 @@ impl Default for Config {
             // The resolution of timer in tokio is 1ms.
             heavy_load_wait_duration: ReadableDuration::millis(1),
             enable_request_batch: true,
+            raft_client_backoff_step: ReadableDuration::secs(1),
         }
     }
 }

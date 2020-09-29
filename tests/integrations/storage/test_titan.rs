@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use engine_rocks::raw::{IngestExternalFileOptions, Writable};
 use engine_rocks::util::get_cf_handle;
+use engine_rocks::util::new_temp_engine;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
 use engine_traits::{
@@ -16,8 +17,8 @@ use engine_traits::{
 };
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
+use raftstore::store::RegionSnapshot;
 use raftstore::store::{apply_sst_cf_file, build_sst_cf_file};
-use raftstore::store::{new_temp_engine, RegionSnapshot};
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv::config::TiKvConfig;
@@ -162,7 +163,6 @@ fn test_delete_files_in_range_for_titan() {
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache, None);
 
     let raft_path = path.path().join(Path::new("titan"));
-    let shared_block_cache = false;
     let engines = Engines::new(
         RocksEngine::from_db(Arc::new(
             engine_rocks::raw_util::new_engine(
@@ -182,7 +182,6 @@ fn test_delete_files_in_range_for_titan() {
             )
             .unwrap(),
         )),
-        shared_block_cache,
     );
 
     // Write some mvcc keys and values into db
@@ -319,6 +318,13 @@ fn test_delete_files_in_range_for_titan() {
             &data_key(Key::from_raw(b"a").as_encoded()),
             &data_key(Key::from_raw(b"b").as_encoded()),
             false,
+        )
+        .unwrap();
+    engines
+        .kv
+        .delete_blob_files_in_range(
+            &data_key(Key::from_raw(b"a").as_encoded()),
+            &data_key(Key::from_raw(b"b").as_encoded()),
         )
         .unwrap();
 

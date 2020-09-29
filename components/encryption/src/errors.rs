@@ -74,7 +74,7 @@ impl ErrorCodeExt for Error {
             Error::UnknownEncryption => error_code::encryption::UNKNOWN_ENCRYPTION,
             Error::WrongMasterKey(_) => error_code::encryption::WRONG_MASTER_KEY,
             Error::BothMasterKeyFail(_, _) => error_code::encryption::BOTH_MASTER_KEY_FAIL,
-            Error::Other(_) => error_code::encryption::UNKNOWN,
+            Error::Other(_) => error_code::UNKNOWN,
         }
     }
 }

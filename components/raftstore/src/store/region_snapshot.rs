@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    Engines, IterOptions, KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot,
+    IterOptions, KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot,
 };
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use crate::store::{util, PeerStorage};
 use crate::{Error, Result};
-use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::util::check_key_in_range;
+use engine_traits::RaftEngine;
 use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
 use keys::DATA_PREFIX_KEY;
@@ -27,6 +27,8 @@ pub struct RegionSnapshot<S: Snapshot> {
     snap: Arc<S>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
+    // `None` means the snapshot does not care about max_ts
+    pub max_ts_sync_status: Option<Arc<AtomicU64>>,
 }
 
 impl<S> RegionSnapshot<S>
@@ -34,11 +36,17 @@ where
     S: Snapshot,
 {
     #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
-    pub fn new(ps: &PeerStorage<RocksEngine, RocksEngine>) -> RegionSnapshot<RocksSnapshot> {
+    pub fn new<EK>(ps: &PeerStorage<EK, impl RaftEngine>) -> RegionSnapshot<EK::Snapshot>
+    where
+        EK: KvEngine,
+    {
         RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), Arc::new(ps.region().clone()))
     }
 
-    pub fn from_raw(db: RocksEngine, region: Region) -> RegionSnapshot<RocksSnapshot> {
+    pub fn from_raw<EK>(db: EK, region: Region) -> RegionSnapshot<EK::Snapshot>
+    where
+        EK: KvEngine,
+    {
         RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), Arc::new(region))
     }
 
@@ -49,6 +57,7 @@ where
             // Use 0 to indicate that the apply index is missing and we need to KvGet it,
             // since apply index must be >= RAFT_INIT_LOG_INDEX.
             apply_index: Arc::new(AtomicU64::new(0)),
+            max_ts_sync_status: None,
         }
     }
 
@@ -160,6 +169,7 @@ where
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
             apply_index: Arc::clone(&self.apply_index),
+            max_ts_sync_status: self.max_ts_sync_status.clone(),
         }
     }
 }
@@ -219,14 +229,14 @@ where
             set_panic_mark();
             panic!(
                 "failed to get value of key {} in region {}: {:?}",
-                hex::encode_upper(&key),
+                log_wrappers::Value::key(&key),
                 self.region.get_id(),
                 e,
             );
         } else {
             error!(
                 "failed to get value of key in cf";
-                "key" => hex::encode_upper(&key),
+                "key" => log_wrappers::Value::key(&key),
                 "region" => self.region.get_id(),
                 "cf" => cf,
                 "error" => ?e,
@@ -367,33 +377,12 @@ fn handle_check_key_in_region_error(e: crate::Error) -> Result<()> {
     }
 }
 
-pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
-    let raft_path = path.path().join(std::path::Path::new("raft"));
-    let shared_block_cache = false;
-    Engines::new(
-        engine_rocks::util::new_engine(
-            path.path().to_str().unwrap(),
-            None,
-            engine_traits::ALL_CFS,
-            None,
-        )
-        .unwrap(),
-        engine_rocks::util::new_engine(
-            raft_path.to_str().unwrap(),
-            None,
-            &[engine_traits::CF_DEFAULT],
-            None,
-        )
-        .unwrap(),
-        shared_block_cache,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use crate::store::PeerStorage;
     use crate::Result;
 
+    use engine_rocks::util::new_temp_engine;
     use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::{CompactExt, Engines, MiscExt, Peekable, SyncMutable};
     use keys::data_key;
@@ -538,19 +527,23 @@ mod tests {
                         assert!(
                             res.is_err(),
                             "exp failed at {}",
-                            hex::encode_upper(seek_key)
+                            log_wrappers::Value::key(seek_key)
                         );
                         return;
                     }
                     if exp.is_none() {
-                        assert!(!res.unwrap(), "exp none at {}", hex::encode_upper(seek_key));
+                        assert!(
+                            !res.unwrap(),
+                            "exp none at {}",
+                            log_wrappers::Value::key(seek_key)
+                        );
                         return;
                     }
 
                     assert!(
                         res.unwrap(),
                         "should succeed at {}",
-                        hex::encode_upper(seek_key)
+                        log_wrappers::Value::key(seek_key)
                     );
                     let (exp_key, exp_val) = exp.unwrap();
                     assert_eq!(iter.key(), exp_key);

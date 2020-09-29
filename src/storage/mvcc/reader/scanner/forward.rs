@@ -274,6 +274,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                         &mut self.cursors,
                         &mut self.statistics,
                     )? {
+                        self.statistics.write.processed_keys += 1;
                         return Ok(Some(output));
                     }
                 }
@@ -364,7 +365,6 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     ) -> Result<HandleRes<Self::Output>> {
         let value: Option<Value> = loop {
             let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
-            statistics.write.processed += 1;
 
             match write.write_type {
                 WriteType::Put => {
@@ -465,7 +465,6 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
             }
             let write_value = cursors.write.value(&mut statistics.write);
             let write = WriteRef::parse(write_value)?;
-            statistics.write.processed += 1;
 
             match write.write_type {
                 WriteType::Put => {
@@ -552,6 +551,7 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
     // Even if there is a lock error, we still need to step the cursor for future
     // calls.
     if result.is_err() {
+        statistics.lock.processed_keys += 1;
         cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
     }
     result
@@ -878,6 +878,7 @@ mod latest_kv_tests {
     use crate::storage::mvcc::tests::*;
     use crate::storage::Scanner;
 
+    use crate::storage::txn::tests::*;
     use kvproto::kvrpcpb::Context;
 
     /// Check whether everything works as usual when `ForwardKvScanner::get()` goes out of bound.
@@ -1163,8 +1164,8 @@ mod latest_entry_tests {
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::mvcc::tests::*;
+    use crate::storage::txn::tests::must_commit;
     use crate::storage::{Engine, TestEngineBuilder};
-
     use kvproto::kvrpcpb::Context;
 
     use super::test_util::EntryBuilder;
@@ -1515,10 +1516,10 @@ mod latest_entry_tests {
 
 #[cfg(test)]
 mod delta_entry_tests {
-
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::mvcc::tests::*;
+    use crate::storage::txn::tests::*;
     use crate::storage::{Engine, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;

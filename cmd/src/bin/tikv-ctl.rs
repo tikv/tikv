@@ -19,11 +19,7 @@ use std::time::Duration;
 use std::{process, str, u64};
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
-use futures03::{
-    compat::{Future01CompatExt, Stream01CompatExt},
-    executor::block_on,
-    future, stream, Stream, StreamExt, TryStreamExt,
-};
+use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
@@ -32,8 +28,8 @@ use encryption::{
 };
 use engine_rocks::encryption::get_env;
 use engine_rocks::RocksEngine;
-use engine_traits::Engines;
 use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{Engines, RaftEngine};
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
@@ -42,7 +38,8 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
-use raft::eraftpb::{ConfChange, Entry, EntryType};
+use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
+use raft_log_engine::RaftLogEngine;
 use raftstore::store::INIT_EPOCH_CONF_VER;
 use security::{SecurityConfig, SecurityManager};
 use std::pin::Pin;
@@ -77,8 +74,10 @@ fn new_debug_executor(
                 DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .unwrap()
                     .map(|key_manager| Arc::new(key_manager));
-            let env = get_env(key_manager, None).unwrap();
             let cache = cfg.storage.block_cache.build_shared_cache();
+            let shared_block_cache = cache.is_some();
+            let env = get_env(key_manager, None).unwrap();
+
             let mut kv_db_opts = cfg.rocksdb.build_opt();
             kv_db_opts.set_env(env.clone());
             kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
@@ -87,6 +86,8 @@ fn new_debug_executor(
             let kv_path = kv_path.to_str().unwrap();
             let kv_db =
                 engine_rocks::raw_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+            let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
+            kv_db.set_shared_block_cache(shared_block_cache);
 
             let mut raft_path = raft_db
                 .map(ToString::to_string)
@@ -97,21 +98,28 @@ fn new_debug_executor(
                 .to_str()
                 .map(ToString::to_string)
                 .unwrap();
-            let mut raft_db_opts = cfg.raftdb.build_opt();
-            raft_db_opts.set_env(env);
-            let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache, None);
-            let raft_db =
-                engine_rocks::raw_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts)
-                    .unwrap();
 
-            Box::new(Debugger::new(
-                Engines::new(
-                    RocksEngine::from_db(Arc::new(kv_db)),
-                    RocksEngine::from_db(Arc::new(raft_db)),
-                    cache.is_some(),
-                ),
-                ConfigController::default(),
-            )) as Box<dyn DebugExecutor>
+            let cfg_controller = ConfigController::default();
+            if !cfg.raft_engine.enable {
+                let mut raft_db_opts = cfg.raftdb.build_opt();
+                raft_db_opts.set_env(env);
+                let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache, None);
+                let raft_db = engine_rocks::raw_util::new_engine_opt(
+                    &raft_path,
+                    raft_db_opts,
+                    raft_db_cf_opts,
+                )
+                .unwrap();
+                let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
+                raft_db.set_shared_block_cache(shared_block_cache);
+                let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
+                Box::new(debugger) as Box<dyn DebugExecutor>
+            } else {
+                let config = cfg.raft_engine.config();
+                let raft_db = RaftLogEngine::new(config);
+                let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
+                Box::new(debugger) as Box<dyn DebugExecutor>
+            }
         }
         (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
         _ => unreachable!(),
@@ -214,7 +222,15 @@ trait DebugExecutor {
                 cmd.merge_from_bytes(&ctx).unwrap();
                 v1!("ConfChange.RaftCmdRequest: {:#?}", cmd);
             }
-            EntryType::EntryConfChangeV2 => unimplemented!(),
+            EntryType::EntryConfChangeV2 => {
+                let mut msg = ConfChangeV2::new();
+                msg.merge_from_bytes(&data).unwrap();
+                let ctx = msg.take_context();
+                v1!("ConfChangeV2: {:?}", msg);
+                let mut cmd = RaftCmdRequest::default();
+                cmd.merge_from_bytes(&ctx).unwrap();
+                v1!("ConfChangeV2.RaftCmdRequest: {:#?}", cmd);
+            }
         }
     }
 
@@ -476,7 +492,7 @@ trait DebugExecutor {
         let regions = region_ids
             .into_iter()
             .map(|region_id| {
-                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id).compat())
+                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id))
                     .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
                 {
                     return region;
@@ -517,7 +533,7 @@ trait DebugExecutor {
         let regions = region_ids
             .into_iter()
             .map(|region_id| {
-                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id).compat())
+                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id))
                     .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
                 {
                     return region;
@@ -649,7 +665,6 @@ impl DebugExecutor for DebugClient {
         Box::pin(
             self.scan_mvcc(&req)
                 .unwrap()
-                .compat()
                 .map_err(|e| e.to_string())
                 .map_ok(|mut resp| (resp.take_key(), resp.take_info())),
         )
@@ -780,7 +795,7 @@ impl DebugExecutor for DebugClient {
     }
 }
 
-impl DebugExecutor for Debugger {
+impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     fn check_local_mode(&self) {}
 
     fn get_all_meta_regions(&self) -> Vec<u64> {
@@ -912,7 +927,7 @@ impl DebugExecutor for Debugger {
         let rpc_client =
             RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
-        let mut region = match block_on(rpc_client.get_region_by_id(region_id).compat()) {
+        let mut region = match block_on(rpc_client.get_region_by_id(region_id)) {
             Ok(Some(region)) => region,
             Ok(None) => {
                 ve1!("no such region {} on PD", region_id);
@@ -2288,7 +2303,7 @@ fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
 }
 
 fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64, key: Vec<u8>) {
-    let region = block_on(pd_client.get_region_by_id(region_id).compat())
+    let region = block_on(pd_client.get_region_by_id(region_id))
         .expect("get_region_by_id should success")
         .expect("must have the region");
 
