@@ -125,6 +125,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         }
     }
 
+    #[allow(dead_code)]
     fn send_fail_status<M>(
         &self,
         ctx: RpcContext<'_>,
@@ -721,8 +722,18 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             callback: Callback::Write(cb),
         };
 
-        if let Err(e) = self.ch.send_casual_msg(region_id, req) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
+        if self.ch.send_casual_msg(region_id, req).is_err() {
+            // Retrun `RegionNotFound` so that TiDB will retry it.
+            let mut resp = SplitRegionResponse::default();
+            resp.mut_region_error().mut_region_not_found().region_id = region_id;
+            ctx.spawn(
+                async move {
+                    sink.success(resp).await?;
+                    ServerResult::Ok(())
+                }
+                .map_err(|_| ())
+                .map(|_| ()),
+            );
             return;
         }
 
@@ -800,8 +811,17 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let (cb, f) = paired_future_callback();
 
         // We must deal with all requests which acquire read-quorum in raftstore-thread, so just send it as an command.
-        if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
+        if self.ch.send_command(cmd, Callback::Read(cb)).is_err() {
+            let mut resp = ReadIndexResponse::default();
+            resp.mut_region_error().mut_region_not_found().region_id = region_id;
+            ctx.spawn(
+                async move {
+                    sink.success(resp).await?;
+                    ServerResult::Ok(())
+                }
+                .map_err(|_| ())
+                .map(|_| ()),
+            );
             return;
         }
 
