@@ -61,8 +61,7 @@ pub fn check_and_dump_raft_db(
     while valid {
         match keys::decode_raft_key(it.key()) {
             Err(e) => {
-                error!("Error happened when decoding raft key: {}", e);
-                break;
+                panic!("Error happened when decoding raft key: {}", e);
             }
             Ok((id, _)) => {
                 tx.send(id).unwrap();
@@ -125,8 +124,7 @@ fn run_worker(
                                         .append(region_id, std::mem::take(&mut entries))
                                         .unwrap();
                                 }
-                                // There is only 2 types of keys in raft.
-                                _ => unreachable!(),
+                                _ => unreachable!("There is only 2 types of keys in raft"),
                             }
                             // Avoid long log batch.
                             if local_size >= CONSUME_THRESHOLD {
