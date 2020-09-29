@@ -599,6 +599,7 @@ dependencies = [
  "kvproto",
  "libc",
  "log",
+ "log_wrappers",
  "nix 0.11.1",
  "pd_client",
  "prometheus",
@@ -613,6 +614,7 @@ dependencies = [
  "signal",
  "slog",
  "slog-global",
+ "tempfile",
  "tikv",
  "tikv_alloc",
  "tikv_util",
@@ -1117,10 +1119,10 @@ dependencies = [
  "configuration",
  "encryption",
  "engine_traits",
- "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "num_cpus",
  "prometheus",
  "prometheus-static-metric",
@@ -1145,8 +1147,8 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "error_code",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "protobuf",
  "quick-error",
  "raft",
@@ -1226,13 +1228,13 @@ dependencies = [
  "hyper",
  "hyper-tls",
  "kvproto",
+ "matches",
  "rand 0.7.3",
  "rusoto_core",
  "rusoto_mock",
  "rusoto_s3",
  "rusoto_util",
  "rust-ini",
- "serde_json",
  "slog",
  "slog-global",
  "structopt",
@@ -2107,6 +2109,8 @@ name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
+ "kvproto",
+ "protobuf",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -2310,9 +2314,9 @@ dependencies = [
 
 [[package]]
 name = "more-asserts"
-version = "0.1.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf21d96e87e5d48e3b50ab1512142f2fbe06fc48b7b032dead87fbfcb83f9a89"
+checksum = "0debeb9fcf88823ea64d64e4a815ab1643f33127d995978e099942ce38f25238"
 
 [[package]]
 name = "multimap"
@@ -3010,7 +3014,7 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?rev=b67d432c1b74350b38a5d96ddf885ac6c3ff46f5#b67d432c1b74350b38a5d96ddf885ac6c3ff46f5"
+source = "git+https://github.com/pingcap/rust-protobuf?rev=65e9df20fbcbcf2409d5ee86a2332ecd04c534f8#65e9df20fbcbcf2409d5ee86a2332ecd04c534f8"
 dependencies = [
  "heck",
  "hex 0.3.2",
@@ -3122,7 +3126,6 @@ dependencies = [
  "coarsetime",
  "configuration",
  "engine_traits",
- "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4106,10 +4109,10 @@ dependencies = [
  "futures 0.3.5",
  "futures-util",
  "grpcio",
- "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "serde",
@@ -4535,6 +4538,7 @@ dependencies = [
  "hyper",
  "keys",
  "kvproto",
+ "more-asserts",
  "panic_hook",
  "pd_client",
  "profiler",

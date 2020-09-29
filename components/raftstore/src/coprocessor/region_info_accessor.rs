@@ -93,7 +93,7 @@ impl Display for RegionInfoQuery {
         match self {
             RegionInfoQuery::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
             RegionInfoQuery::SeekRegion { from, .. } => {
-                write!(f, "SeekRegion(from: {})", hex::encode_upper(from))
+                write!(f, "SeekRegion(from: {})", log_wrappers::Value::key(&from))
             }
             RegionInfoQuery::FindRegionById { region_id, .. } => {
                 write!(f, "FindRegionById(region_id: {})", region_id)
