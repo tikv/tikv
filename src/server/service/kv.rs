@@ -36,7 +36,6 @@ use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
-use raftstore::{DiscardReason, Error as RaftStoreError};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
@@ -714,17 +713,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         if let Err(e) = self.ch.send_casual_msg(region_id, req) {
             // Retrun region error instead a gRPC error.
             let mut resp = SplitRegionResponse::default();
-            match e {
-                RaftStoreError::Transport(DiscardReason::Full) => {
-                    let msg = "raftstore is busy".to_owned();
-                    resp.mut_region_error().mut_server_is_busy().set_reason(msg);
-                }
-                RaftStoreError::Transport(DiscardReason::Disconnected)
-                | RaftStoreError::RegionNotFound(_) => {
-                    resp.mut_region_error().mut_region_not_found().region_id = region_id;
-                }
-                _ => unreachable!(),
-            }
+            resp.set_region_error(e.into());
             ctx.spawn(
                 async move {
                     sink.success(resp).await?;
@@ -814,17 +803,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
             // Retrun region error instead a gRPC error.
             let mut resp = ReadIndexResponse::default();
-            match e {
-                RaftStoreError::Transport(DiscardReason::Full) => {
-                    let msg = "raftstore is busy".to_owned();
-                    resp.mut_region_error().mut_server_is_busy().set_reason(msg);
-                }
-                RaftStoreError::Transport(DiscardReason::Disconnected)
-                | RaftStoreError::RegionNotFound(_) => {
-                    resp.mut_region_error().mut_region_not_found().region_id = region_id;
-                }
-                _ => unreachable!(),
-            }
+            resp.set_region_error(e.into());
             ctx.spawn(
                 async move {
                     sink.success(resp).await?;
