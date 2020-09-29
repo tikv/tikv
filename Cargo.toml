@@ -34,11 +34,6 @@ prost-codec = [
   "tipb/prost-codec",
   "txn_types/prost-codec",
   "encryption/prost-codec",
-<<<<<<< HEAD
-=======
-  "tikv_util/prost-codec",
-  "log_wrappers/prost-codec"
->>>>>>> ed75263f9... *: add config to redact log in raftstore and engine (#8670)
 ]
 protobuf-codec = [
   "engine/protobuf-codec",
@@ -53,13 +48,8 @@ protobuf-codec = [
   "tidb_query/protobuf-codec",
   "tipb/protobuf-codec",
   "txn_types/protobuf-codec",
-<<<<<<< HEAD
-  "encryption/protobuf-codec"
-=======
   "encryption/protobuf-codec",
-  "tikv_util/protobuf-codec",
   "log_wrappers/protobuf-codec"
->>>>>>> ed75263f9... *: add config to redact log in raftstore and engine (#8670)
 ]
 testexport = ["raftstore/testexport"]
 
@@ -175,16 +165,10 @@ zipf = "6.1.0"
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
-<<<<<<< HEAD
 raft = { git = "https://github.com/pingcap/raft-rs", branch = "0.6.x", default-features = false }
 raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "0.6.x", default-features = false }
-protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
-=======
-raft = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
-raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
->>>>>>> ed75263f9... *: add config to redact log in raftstore and engine (#8670)
-protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
+protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }

@@ -259,10 +259,6 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
                 fmt,
                 "ComputeHashResult [index: {}, hash: {}]",
                 index,
-<<<<<<< HEAD
-=======
-                log_wrappers::Value::key(&context),
->>>>>>> ed75263f9... *: add config to redact log in raftstore and engine (#8670)
                 escape(hash)
             ),
             CasualMessage::SplitRegion { ref split_keys, .. } => write!(

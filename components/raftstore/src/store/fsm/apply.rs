@@ -32,22 +32,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
-<<<<<<< HEAD
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
-=======
-use raft::eraftpb::{
-    ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
-};
-use raft_proto::ConfChangeI;
-use sst_importer::SSTImporter;
-use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
-use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, Instant};
-use tikv_util::worker::Scheduler;
-use tikv_util::{Either, MustConsumeVec};
-use time::Timespec;
->>>>>>> ed75263f9... *: add config to redact log in raftstore and engine (#8670)
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
