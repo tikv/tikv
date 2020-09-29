@@ -36,6 +36,7 @@ use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
+use raftstore::{DiscardReason, Error as RaftStoreError};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
@@ -123,18 +124,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             enable_req_batch,
             security_mgr,
         }
-    }
-
-    #[allow(dead_code)]
-    fn send_fail_status<M>(
-        &self,
-        ctx: RpcContext<'_>,
-        sink: UnarySink<M>,
-        err: Error,
-        code: RpcStatusCode,
-    ) {
-        let status = RpcStatus::new(code, Some(format!("{}", err)));
-        ctx.spawn(sink.fail(status).map(|_| ()));
     }
 }
 
@@ -722,10 +711,20 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             callback: Callback::Write(cb),
         };
 
-        if self.ch.send_casual_msg(region_id, req).is_err() {
-            // Retrun `RegionNotFound` so that TiDB will retry it.
+        if let Err(e) = self.ch.send_casual_msg(region_id, req) {
+            // Retrun region error instead a gRPC error.
             let mut resp = SplitRegionResponse::default();
-            resp.mut_region_error().mut_region_not_found().region_id = region_id;
+            match e {
+                RaftStoreError::Transport(DiscardReason::Full) => {
+                    let msg = "raftstore is busy".to_owned();
+                    resp.mut_region_error().mut_server_is_busy().set_reason(msg);
+                }
+                RaftStoreError::Transport(DiscardReason::Disconnected)
+                | RaftStoreError::RegionNotFound(_) => {
+                    resp.mut_region_error().mut_region_not_found().region_id = region_id;
+                }
+                _ => unreachable!(),
+            }
             ctx.spawn(
                 async move {
                     sink.success(resp).await?;
@@ -810,10 +809,22 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
         let (cb, f) = paired_future_callback();
 
-        // We must deal with all requests which acquire read-quorum in raftstore-thread, so just send it as an command.
-        if self.ch.send_command(cmd, Callback::Read(cb)).is_err() {
+        // We must deal with all requests which acquire read-quorum in raftstore-thread,
+        // so just send it as an command.
+        if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
+            // Retrun region error instead a gRPC error.
             let mut resp = ReadIndexResponse::default();
-            resp.mut_region_error().mut_region_not_found().region_id = region_id;
+            match e {
+                RaftStoreError::Transport(DiscardReason::Full) => {
+                    let msg = "raftstore is busy".to_owned();
+                    resp.mut_region_error().mut_server_is_busy().set_reason(msg);
+                }
+                RaftStoreError::Transport(DiscardReason::Disconnected)
+                | RaftStoreError::RegionNotFound(_) => {
+                    resp.mut_region_error().mut_region_not_found().region_id = region_id;
+                }
+                _ => unreachable!(),
+            }
             ctx.spawn(
                 async move {
                     sink.success(resp).await?;
