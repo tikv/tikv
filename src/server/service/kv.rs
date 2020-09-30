@@ -1744,8 +1744,8 @@ impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Respon
 fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionError {
     if let RaftStoreError::Transport(DiscardReason::Disconnected) = e {
         // `From::from(RaftStoreError) -> RegionError` treats `Disconnected` as `Other`.
-        let mut region_error = RegionError::new();
-        let mut region_not_found = RegionNotFound::new();
+        let mut region_error = RegionError::default();
+        let mut region_not_found = RegionNotFound::default();
         region_not_found.region_id = region_id;
         region_error.set_region_not_found(region_not_found);
         return region_error;
