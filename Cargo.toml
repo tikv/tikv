@@ -230,6 +230,8 @@ members = [
   "components/encryption",
   "components/error_code",
   "components/concurrency_manager",
+  "tikv-server",
+  "tikv-ctl",
 ]
 default-members = ["cmd"]
 
