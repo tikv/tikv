@@ -227,39 +227,25 @@ docker-tag-with-git-hash:
 docker-tag-with-git-tag:
 	docker tag pingcap/tikv pingcap/tikv:${TIKV_BUILD_GIT_TAG}
 
+
+## Execution environment
+## -------
+## Run a command in the environment setup by the Makefile
+##
+##     COMMAND="echo" make run
+##
+.PHONY: run
+run:
+	@env MAKEFILE_RUN=1 $(COMMAND)
+
 ## Testing
 ## -------
 
 # Run tests under a variety of conditions. This should pass before
-# submitting pull requests. Note though that the CI system tests TiKV
-# through its own scripts and does not use this rule.
-.PHONY: run-test
-run-test:
-	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
-	# again here. LOCAL_DIR is defined in .travis.yml.
-	# The special Linux case below is testing the mem-profiling
-	# features in tikv_alloc, which are marked #[ignore] since
-	# they require special compile-time and run-time setup
-	# Fortunately rebuilding with the mem-profiling feature will only
-	# rebuild starting at jemalloc-sys.
-	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
-	export LOG_LEVEL=DEBUG && \
-	export RUST_BACKTRACE=1 && \
-	cargo -Zpackage-features test --workspace \
-		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	if [[ "`uname`" == "Linux" ]]; then \
-		cargo -Zpackage-features test --workspace \
-			--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-			--features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -p tikv -p tikv_alloc --lib -- --nocapture --ignored; \
-	fi
-
+# submitting pull requests.
 .PHONY: test
-test: run-test
-	@if [[ "`uname`" = "Linux" ]]; then \
-		env EXTRA_CARGO_ARGS="--message-format=json-render-diagnostics -q --no-run" make run-test |\
-                python scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-tests; \
-	fi
+test:
+	./scripts/test-all
 
 ## Static analysis
 ## ---------------
