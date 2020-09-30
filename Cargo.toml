@@ -255,6 +255,10 @@ debug-assertions = false
 overflow-checks = false
 rpath = false
 
+[profile.release.package.cmd]
+opt-level = 0
+codegen-units = 4
+
 [profile.test]
 opt-level = 0
 debug = 1 # enable line numbers by default for easy test debugging
