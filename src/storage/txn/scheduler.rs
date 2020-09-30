@@ -534,13 +534,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(self, snapshot: E::Snap, task: Task) {
         let tag = task.cmd.tag();
-        SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
         self.get_sched_pool(task.cmd.priority())
             .clone()
             .pool
             .spawn(async move {
                 fail_point!("scheduler_async_snapshot_finish");
+                SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
                 let read_duration = Instant::now_coarse();
 
