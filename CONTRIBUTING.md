@@ -111,7 +111,7 @@ When building with make, cargo will automatically use [pipelined][p] compilation
 
 ## Running TiKV
 
-To run TiKV as an actual key-value store, you will need to run it as a cluster (a cluster can have just one node, which is useful for testing). You can do this on a single machine or on multiple machines. You need to use [PD](https://github.com/pingcap/pd) to manage the cluster (even if there is just one node on a single machine). Instructions are in our [docs](docs/how-to/deploy/using-binary.md) (if you build TiKV from source, then you don't need to download the binary).
+To run TiKV as an actual key-value store, you will need to run it as a cluster (a cluster can have just one node, which is useful for testing). You can do this on a single machine or on multiple machines. You need to use [PD](https://github.com/tikv/pd) to manage the cluster (even if there is just one node on a single machine). Instructions are in our [docs](docs/how-to/deploy/using-binary.md) (if you build TiKV from source, then you don't need to download the binary).
 
 
 ### Configuration
@@ -146,11 +146,11 @@ If you are planning something big, for example, relates to multiple components o
 
 The TiKV team actively develops and maintains a bunch of dependencies used in TiKV, which you may be also interested in:
 
-- [rust-prometheus](https://github.com/pingcap/rust-prometheus): The Prometheus client for Rust, our metrics collecting and reporting library
-- [rust-rocksdb](https://github.com/pingcap/rust-rocksdb): Our RocksDB binding and wrapper for Rust
-- [raft-rs](https://github.com/pingcap/raft-rs): The Raft distributed consensus algorithm implemented in Rust
-- [grpc-rs](https://github.com/pingcap/grpc-rs): The gRPC library for Rust built on the gRPC C Core library and Rust Futures
-- [fail-rs](https://github.com/pingcap/fail-rs): Fail points for Rust
+- [rust-prometheus](https://github.com/tikv/rust-prometheus): The Prometheus client for Rust, our metrics collecting and reporting library
+- [rust-rocksdb](https://github.com/tikv/rust-rocksdb): Our RocksDB binding and wrapper for Rust
+- [raft-rs](https://github.com/tikv/raft-rs): The Raft distributed consensus algorithm implemented in Rust
+- [grpc-rs](https://github.com/tikv/grpc-rs): The gRPC library for Rust built on the gRPC C Core library and Rust Futures
+- [fail-rs](https://github.com/tikv/fail-rs): Fail points for Rust
 
 
 ### Format of the commit message
