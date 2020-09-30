@@ -135,7 +135,7 @@ build: error-code
 # enabled (the "sse" option)
 release: export TIKV_PROFILE=release
 release: error-code
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
+	cargo build -p tikv-server -p tikv-ctl --release --no-default-features --features "${ENABLE_FEATURES}"
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
