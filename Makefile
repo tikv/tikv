@@ -269,39 +269,8 @@ doc:
 pre-clippy: unset-override
 	@rustup component add clippy
 
-ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cognitive_complexity \
-	-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
-	-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
-	-A clippy::neg_cmp_op_on_partial_ord -A clippy::too_many_arguments \
-	-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
-	-A clippy::needless_range_loop -A clippy::redundant_closure \
-	-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call \
-	-A clippy::useless_conversion -A clippy::new_ret_no_self -A clippy::unnecessary_sort_by
-
-# PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
-ifneq (,$(findstring prost-codec,"$(ENABLE_FEATURES)"))
 clippy: pre-clippy
-	@cargo clippy --workspace --all-targets --no-default-features \
-		--exclude cdc --exclude backup --exclude tests --exclude cmd \
-		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
-	@for pkg in "components/cdc" "components/backup" "cmd" "tests"; do \
-		cd $$pkg && \
-		cargo clippy --all-targets --no-default-features \
-			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
-		cd - >/dev/null;\
-	done
-	@for pkg in "fuzz"; do \
-		cd $$pkg && \
-		cargo clippy --all-targets -- $(ALLOWED_CLIPPY_LINTS) && \
-		cd - >/dev/null; \
-	done
-else
-clippy: pre-clippy
-	@cargo clippy --workspace \
-		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
-endif
+	@./scripts/clippy-all
 
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))
