@@ -1237,6 +1237,7 @@ version = "0.0.1"
 dependencies = [
  "engine_test",
  "engine_traits",
+ "tempfile",
  "tikv_alloc",
 ]
 

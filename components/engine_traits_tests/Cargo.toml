@@ -28,3 +28,4 @@ test-engines-panic = [
 engine_test = { path = "../engine_test", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
+tempfile = "3.0"
