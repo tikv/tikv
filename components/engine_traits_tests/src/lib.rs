@@ -24,14 +24,35 @@ fn tempdir() -> tempfile::TempDir {
         .unwrap()
 }
 
+struct TempDirEnginePair {
+    // NB engine must drop before tempdir
+    engine: engine_test::kv::KvTestEngine,
+    #[allow(unused)]
+    tempdir: tempfile::TempDir,
+}
+
+fn default_engine() -> TempDirEnginePair {
+    use engine_traits::CF_DEFAULT;
+    use engine_test::kv::KvTestEngine;
+    use engine_test::ctor::EngineConstructorExt;
+
+    let dir = tempdir();
+    let path = dir.path().to_str().unwrap();
+    let engine = KvTestEngine::new_engine(path, None, &[CF_DEFAULT], None).unwrap();
+    TempDirEnginePair {
+        engine, tempdir: dir,
+    }
+}
+
 
 mod ctor {
     //! Constructor tests
 
+    use super::tempdir;
+
     use engine_traits::ALL_CFS;
     use engine_test::kv::KvTestEngine;
     use engine_test::ctor::{EngineConstructorExt, DBOptions, CFOptions, ColumnFamilyOptions};
-    use super::tempdir;
 
     #[test]
     fn new_engine_basic() {
@@ -49,5 +70,19 @@ mod ctor {
             CFOptions::new(cf, ColumnFamilyOptions::new())
         }).collect();
         let _db = KvTestEngine::new_engine_opt(path, db_opts, cf_opts).unwrap();
+    }
+}
+
+mod basic_read_write {
+    //! Reading and writing
+
+    use super::default_engine;
+    use engine_traits::Peekable;
+
+    #[test]
+    fn get_value_none() {
+        let db = default_engine();
+        let value = db.engine.get_value(b"foo").unwrap();
+        assert!(value.is_none());
     }
 }
