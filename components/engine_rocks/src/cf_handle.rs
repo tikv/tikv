@@ -18,9 +18,9 @@ impl CFHandleExt for RocksEngine {
             .ok_or_else(|| Error::CFName(name.to_string()))
     }
 
-    fn get_options_cf(&self, cf: &str) -> Self::ColumnFamilyOptions {
-        let handle = self.cf_handle(cf).unwrap();
-        RocksColumnFamilyOptions::from_raw(self.as_inner().get_options_cf(handle.as_inner()))
+    fn get_options_cf(&self, cf: &str) -> Result<Self::ColumnFamilyOptions> {
+        let handle = self.cf_handle(cf)?;
+        Ok(RocksColumnFamilyOptions::from_raw(self.as_inner().get_options_cf(handle.as_inner())))
     }
 
     fn set_options_cf(&self, cf: &str, options: &[(&str, &str)]) -> Result<()> {

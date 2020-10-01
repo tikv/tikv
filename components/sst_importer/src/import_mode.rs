@@ -188,7 +188,7 @@ impl ImportModeCFOptions {
     }
 
     fn new_options(db: &impl KvEngine, cf_name: &str) -> ImportModeCFOptions {
-        let cf_opts = db.get_options_cf(cf_name);
+        let cf_opts = db.get_options_cf(cf_name).unwrap(); //FIXME unwrap
 
         ImportModeCFOptions {
             level0_stop_writes_trigger: cf_opts.get_level_zero_stop_writes_trigger(),
@@ -254,7 +254,7 @@ mod tests {
         );
 
         for cf_name in db.cf_names() {
-            let cf_opts = db.get_options_cf(cf_name);
+            let cf_opts = db.get_options_cf(cf_name).unwrap();
             assert_eq!(
                 cf_opts.get_level_zero_stop_writes_trigger(),
                 expected_cf_opts.level0_stop_writes_trigger
