@@ -1623,7 +1623,7 @@ pub mod tests {
             region_state.set_region(region);
             kv.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
-        Ok(Engines { kv: kv, raft: raft })
+        Ok(Engines { kv, raft })
     }
 
     pub fn get_kv_count(snap: &impl EngineSnapshot) -> usize {
