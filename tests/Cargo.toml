@@ -45,7 +45,7 @@ path = "benches/channel/mod.rs"
 test = true
 
 [features]
-default = ["failpoints", "testexport", "protobuf-codec"]
+default = ["failpoints", "testexport", "protobuf-codec", "test-engines-rocksdb"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
@@ -76,6 +76,8 @@ prost-codec = [
 jemalloc = ["tikv/jemalloc"]
 sse = ["tikv/sse"]
 portable = ["tikv/portable"]
+test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
+test-engines-panic = ["tikv/test-engines-panic"]
 
 [dependencies]
 fail = "0.4"
