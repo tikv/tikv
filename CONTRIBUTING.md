@@ -45,9 +45,9 @@ rustup component add clippy
 
 ### Building and testing
 
-TiKV includes a `Makefile` with common workflows, you can also use `cargo`, as you would in many other Rust projects.
+TiKV includes a `Makefile` that has common workflows and sets up a standard build environment. You can also use `cargo`, as you would in many other Rust projects. It can help to run a command in the same environment as the Makefile: this can avoid re-compilations due to environment changes. This is done by prefixing a command with `scripts/env`, for example: `./scripts/env cargo build`
 
-At this point, you can build TiKV:
+You can build TiKV:
 
 ```bash
 make build
