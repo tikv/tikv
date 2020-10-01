@@ -33,6 +33,7 @@ protobuf-codec = [
   "engine_rocks/protobuf-codec",
   "engine_test/protobuf-codec",
   "engine_traits/protobuf-codec",
+  "engine_traits_tests/protobuf-codec",
   "error_code/protobuf-codec",
   "grpcio/protobuf-codec",
   "into_other/protobuf-codec",
@@ -62,6 +63,7 @@ prost-codec = [
   "engine_rocks/prost-codec",
   "engine_test/prost-codec",
   "engine_traits/prost-codec",
+  "engine_traits_tests/prost-codec",
   "error_code/prost-codec",
   "grpcio/prost-codec",
   "into_other/prost-codec",
@@ -120,6 +122,7 @@ engine_panic = { path = "components/engine_panic", default-features = false }
 engine_rocks = { path = "components/engine_rocks", default-features = false }
 engine_test = { path = "components/engine_test", default-features = false }
 engine_traits = { path = "components/engine_traits", default-features = false }
+engine_traits_tests = { path = "components/engine_traits_tests", default-features = false }
 error_code = { path = "components/error_code", default-features = false }
 fail = "0.4"
 failure = "0.1"

@@ -1,0 +1,30 @@
+[package]
+name = "engine_traits_tests"
+version = "0.0.1"
+description = "Engine-agnostic tests for the engine_traits interface"
+edition = "2018"
+publish = false
+
+[features]
+default = ["protobuf-codec", "test-engines-rocksdb"]
+
+protobuf-codec = [
+  "engine_test/protobuf-codec",
+  "engine_traits/protobuf-codec",
+]
+prost-codec = [
+  "engine_test/prost-codec",
+  "engine_traits/prost-codec",
+]
+
+test-engines-rocksdb = [
+  "engine_test/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "engine_test/test-engines-panic",
+]
+
+[dependencies]
+engine_test = { path = "../engine_test", default-features = false }
+engine_traits = { path = "../engine_traits", default-features = false }
+tikv_alloc = { path = "../tikv_alloc" }
