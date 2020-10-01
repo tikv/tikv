@@ -110,9 +110,18 @@ export DOCKER_IMAGE_TAG ?= "latest"
 # https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199/68
 export CARGO_BUILD_PIPELINING=true
 
-default: release
+# Almost all the rules in this Makefile are PHONY
+# Declaring a rule as PHONY could improve correctness
+# But probably instead just improves performance by a little bit
+.PHONY: audit clippy format pre-format pre-clippy pre-audit unset-override
+.PHONY: all build clean dev check-udeps doc error-code fuzz run test
+.PHONY: docker docker-tag docker-tag-with-git-hash docker-tag-with-git-tag
+.PHONY: ctl dist_artifacts dist_tarballs x-build-dist
+.PHONY: build_dist_release dist_release dist_unportable_release
+.PHONY: fail_release prof_release release unportable_release
 
-.PHONY: all
+
+default: release
 
 clean:
 	cargo clean
@@ -197,12 +206,10 @@ dist_unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make dist_release
 
 # Create distributable artifacts. Binaries and Docker image tarballs.
-.PHONY: dist_artifacts
 dist_artifacts: dist_tarballs
 
 # Build gzipped tarballs of the binaries and docker images.
 # Used to build a `dist/` folder containing the release artifacts.
-.PHONY: dist_tarballs
 dist_tarballs: docker
 	docker rm -f tikv-binary-extraction-dummy || true
 	docker create --name tikv-binary-extraction-dummy pingcap/tikv
@@ -214,16 +221,13 @@ dist_tarballs: docker
 	docker rm tikv-binary-extraction-dummy
 
 # Create tags of the docker images
-.PHONY: docker-tag
 docker-tag: docker-tag-with-git-hash docker-tag-with-git-tag
 
 # Tag docker images with the git hash
-.PHONY: docker-tag-with-git-hash
 docker-tag-with-git-hash:
 	docker tag pingcap/tikv pingcap/tikv:${TIKV_BUILD_GIT_HASH}
 
 # Tag docker images with the git tag
-.PHONY: docker-tag-with-git-tag
 docker-tag-with-git-tag:
 	docker tag pingcap/tikv pingcap/tikv:${TIKV_BUILD_GIT_TAG}
 
@@ -234,7 +238,6 @@ docker-tag-with-git-tag:
 ##
 ##     COMMAND="echo" make run
 ##
-.PHONY: run
 run:
 	@env MAKEFILE_RUN=1 $(COMMAND)
 
@@ -243,7 +246,6 @@ run:
 
 # Run tests under a variety of conditions. This should pass before
 # submitting pull requests.
-.PHONY: test
 test:
 	./scripts/test-all
 
@@ -283,13 +285,11 @@ pre-audit:
 audit: pre-audit
 	cargo audit
 
-.PHONY: check-udeps
 check-udeps:
 	which cargo-udeps &>/dev/null || cargo install cargo-udeps && cargo udeps
 
 FUZZER ?= Honggfuzz
 
-.PHONY: fuzz
 fuzz:
 	@cargo run --package fuzz --no-default-features --features "${ENABLE_FEATURES}" -- run ${FUZZER} ${FUZZ_TARGET} \
 	|| echo "" && echo "Set the target for fuzzing using FUZZ_TARGET and the fuzzer using FUZZER (default is Honggfuzz)"
@@ -308,7 +308,6 @@ error-code:
 	cargo run --manifest-path components/error_code/Cargo.toml --features protobuf-codec
 
 # A special target for building TiKV docker image.
-.PHONY: docker
 docker:
 	bash ./scripts/gen-dockerfile.sh | docker build \
 		-t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
