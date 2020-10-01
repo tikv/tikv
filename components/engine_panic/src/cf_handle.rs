@@ -11,10 +11,10 @@ impl CFHandleExt for PanicEngine {
     fn cf_handle(&self, name: &str) -> Result<&Self::CFHandle> {
         panic!()
     }
-    fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::ColumnFamilyOptions {
+    fn get_options_cf(&self, cf: &str) -> Self::ColumnFamilyOptions {
         panic!()
     }
-    fn set_options_cf(&self, cf: &Self::CFHandle, options: &[(&str, &str)]) -> Result<()> {
+    fn set_options_cf(&self, cf: &str, options: &[(&str, &str)]) -> Result<()> {
         panic!()
     }
 }
