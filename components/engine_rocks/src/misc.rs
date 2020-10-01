@@ -315,9 +315,8 @@ impl MiscExt for RocksEngine {
         start: &[u8],
         end: &[u8],
     ) -> Result<Option<(u64, u64)>> {
-        let handle = self.cf_handle(cf)?;
         Ok(crate::properties::get_range_entries_and_versions(
-            self, handle, start, end,
+            self, cf, start, end,
         ))
     }
 
