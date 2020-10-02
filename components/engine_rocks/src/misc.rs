@@ -5,7 +5,7 @@ use crate::import::RocksIngestExternalFileOptions;
 use crate::sst::RocksSstWriterBuilder;
 use crate::{util, RocksSstWriter};
 use engine_traits::{
-    CFHandleExt, CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions,
+    CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions,
     Iterable, Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder,
     WriteBatchExt, ALL_CFS,
 };
@@ -81,10 +81,9 @@ impl RocksEngine {
 
         if let Some(writer) = writer_wrapper {
             writer.finish()?;
-            let handle = self.cf_handle(cf)?;
             let mut opt = RocksIngestExternalFileOptions::new();
             opt.move_files(true);
-            self.ingest_external_file_cf(handle, &opt, &[sst_path.as_str()])?;
+            self.ingest_external_file_cf(cf, &opt, &[sst_path.as_str()])?;
         } else {
             let mut wb = self.write_batch();
             for key in data.iter() {
