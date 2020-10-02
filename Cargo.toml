@@ -149,7 +149,6 @@ tikv_util = { path = "components/tikv_util" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio = { version = "0.2", features = ["full"] }
-tokio-threadpool = "0.1.13"
 tokio-timer = "0.2"
 tokio-openssl = "0.4"
 toml = "0.4"
