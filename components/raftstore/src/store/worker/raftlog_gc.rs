@@ -8,7 +8,6 @@ use crate::store::{CasualMessage, CasualRouter};
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
 use tikv_util::time::Duration;
-use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 const MAX_GC_REGION_BATCH: usize = 128;
@@ -134,10 +133,6 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
                 }
             }
         }
-    }
-
-    pub fn new_timer(&self) -> Duration {
-        COMPACT_LOG_INTERVAL
     }
 }
 

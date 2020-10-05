@@ -22,7 +22,9 @@ pub use self::future::dummy_scheduler as dummy_future_scheduler;
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
 pub use self::future::{Stopped, Worker as FutureWorker};
-pub use pool::{LazyWorker, Builder, Runnable, RunnableWithTimer, ScheduleError, Scheduler, Worker};
+pub use pool::{
+    Builder, LazyWorker, Runnable, RunnableWithTimer, ScheduleError, Scheduler, Worker,
+};
 
 #[cfg(test)]
 mod tests {

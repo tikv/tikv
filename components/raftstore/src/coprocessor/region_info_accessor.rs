@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use super::metrics::*;
@@ -461,13 +461,10 @@ impl RegionInfoAccessor {
     /// `RegionInfoAccessor` doesn't need, and should not be created more than once. If it's needed
     /// in different places, just clone it, and their contents are shared.
     pub fn new(host: &mut CoprocessorHost<impl KvEngine>, worker: Worker) -> Self {
-        let scheduler = worker
-            .start_with_timer(RegionCollector::new());
+        let scheduler = worker.start_with_timer(RegionCollector::new());
         register_region_event_listener(host, scheduler.clone());
 
-        Self {
-            scheduler,
-        }
+        Self { scheduler }
     }
 
     /// Stops the `RegionInfoAccessor`. It should be stopped after raftstore.

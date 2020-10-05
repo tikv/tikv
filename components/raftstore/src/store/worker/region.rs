@@ -610,10 +610,6 @@ where
         }
     }
 
-    pub fn new_timer(&self) -> std::time::Duration {
-        Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL)
-    }
-
     /// Tries to apply pending tasks if there is some.
     fn handle_pending_applies(&mut self) {
         fail_point!("apply_pending_snapshot", |_| {});
@@ -695,12 +691,6 @@ where
     }
 }
 
-/// Region related timeout event
-pub enum Event {
-    CheckStalePeer,
-    CheckApply,
-}
-
 impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
 where
     EK: KvEngine,
@@ -715,6 +705,7 @@ where
             self.clean_stale_tick = 0;
         }
     }
+
     fn get_interval(&self) -> Duration {
         Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL)
     }

@@ -117,7 +117,6 @@ impl<T: Display + Send> Scheduler<T> {
     pub fn stop(&self) {
         let _ = self.sender.unbounded_send(Msg::Stop);
     }
-
 }
 
 impl<T: Display + Send> Clone for Scheduler<T> {
@@ -137,7 +136,7 @@ pub struct LazyWorker<T: Display + Send + 'static> {
 }
 
 impl<T: Display + Send + 'static> LazyWorker<T> {
-    pub fn start<R: 'static + Runnable<Task=T>>(&mut self, runner: R) -> bool {
+    pub fn start<R: 'static + Runnable<Task = T>>(&mut self, runner: R) -> bool {
         if let Some(receiver) = self.receiver.take() {
             self.worker.start_impl(runner, receiver);
             return true;
@@ -145,9 +144,13 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
         false
     }
 
-    pub fn start_with_timer<R: 'static + RunnableWithTimer<Task=T>>(&mut self, runner: R) -> bool {
+    pub fn start_with_timer<R: 'static + RunnableWithTimer<Task = T>>(
+        &mut self,
+        runner: R,
+    ) -> bool {
         if let Some(receiver) = self.receiver.take() {
-            self.worker.start_with_timer_impl(runner, self.scheduler.sender.clone(), receiver);
+            self.worker
+                .start_with_timer_impl(runner, self.scheduler.sender.clone(), receiver);
             return true;
         }
         false
@@ -162,7 +165,6 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
         self.worker.stop();
     }
 }
-
 
 #[derive(Copy, Clone)]
 pub struct Builder<S: Into<String>> {
@@ -223,8 +225,11 @@ impl Worker {
         Scheduler::new(tx, self.counter.clone(), self.pending_capacity)
     }
 
-    pub fn start_with_timer<R: RunnableWithTimer + 'static>(&self, mut runner: R) -> Scheduler<R::Task> {
-        let (tx, mut rx) = unbounded();
+    pub fn start_with_timer<R: RunnableWithTimer + 'static>(
+        &self,
+        runner: R,
+    ) -> Scheduler<R::Task> {
+        let (tx, rx) = unbounded();
         self.start_with_timer_impl(runner, tx.clone(), rx);
         Scheduler::new(tx, self.counter.clone(), self.pending_capacity)
     }
@@ -249,14 +254,16 @@ impl Worker {
         }
     }
 
-
     /// Stops the worker thread.
     pub fn stop(&self) {
         self.pool.lock().unwrap().shutdown();
     }
 
-    fn start_impl<R: Runnable + 'static>(&self,
-                                         mut runner: R, mut receiver: UnboundedReceiver<Msg<R::Task>>) {
+    fn start_impl<R: Runnable + 'static>(
+        &self,
+        mut runner: R,
+        mut receiver: UnboundedReceiver<Msg<R::Task>>,
+    ) {
         let counter = self.counter.clone();
         self.remote.spawn(async move {
             while let Some(msg) = receiver.next().await {
@@ -273,11 +280,13 @@ impl Worker {
         });
     }
 
-    fn start_with_timer_impl<R>(&self, mut runner: R,
-                                tx: UnboundedSender<Msg<R::Task>>,
-                                mut receiver: UnboundedReceiver<Msg<R::Task>>)
-    where
-        R: RunnableWithTimer + 'static
+    fn start_with_timer_impl<R>(
+        &self,
+        mut runner: R,
+        tx: UnboundedSender<Msg<R::Task>>,
+        mut receiver: UnboundedReceiver<Msg<R::Task>>,
+    ) where
+        R: RunnableWithTimer + 'static,
     {
         let counter = self.counter.clone();
         let timeout = runner.get_interval();

@@ -28,7 +28,6 @@ use tikv::storage::txn::{
 };
 use tikv::storage::Statistics;
 use tikv_util::time::Limiter;
-use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use txn_types::{Key, Lock, TimeStamp};
 use yatp::task::callback::{Handle, TaskCell};

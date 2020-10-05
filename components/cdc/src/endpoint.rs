@@ -29,7 +29,7 @@ use tikv::storage::txn::TxnEntryScanner;
 use tikv_util::collections::HashMap;
 use tikv_util::lru::LruCache;
 use tikv_util::time::Instant;
-use tikv_util::timer::{SteadyTimer, Timer};
+use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{
