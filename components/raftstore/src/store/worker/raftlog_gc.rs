@@ -136,10 +136,8 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
         }
     }
 
-    pub fn new_timer(&self) -> Timer<()> {
-        let mut timer = Timer::new(1);
-        timer.add_task(COMPACT_LOG_INTERVAL, ());
-        timer
+    pub fn new_timer(&self) -> Duration {
+        COMPACT_LOG_INTERVAL
     }
 }
 
@@ -170,10 +168,12 @@ where
     ER: RaftEngine,
     R: CasualRouter<EK>,
 {
-    type TimeoutTask = ();
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+    fn on_timeout(&mut self) {
         self.flush();
-        timer.add_task(COMPACT_LOG_INTERVAL, ());
+    }
+
+    fn get_interval(&self) -> Duration {
+        COMPACT_LOG_INTERVAL
     }
 }
 

@@ -27,7 +27,6 @@ use crate::store::{
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
 
-use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
@@ -35,7 +34,7 @@ use super::metrics::*;
 const GENERATE_POOL_SIZE: usize = 2;
 
 // used to periodically check whether we should delete a stale peer's range in region runner
-pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // 10000 milliseconds
+pub const STALE_PEER_CHECK_TICK: usize = 10; // 10000 milliseconds
 
 // used to periodically check whether schedule pending applies in region runner
 pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
@@ -575,6 +574,7 @@ where
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task<EK::Snapshot>>,
+    clean_stale_tick: usize,
 }
 
 impl<EK, ER, R> Runner<EK, ER, R>
@@ -606,20 +606,12 @@ where
                 router,
             },
             pending_applies: VecDeque::new(),
+            clean_stale_tick: 0,
         }
     }
 
-    pub fn new_timer(&self) -> Timer<Event> {
-        let mut timer = Timer::new(2);
-        timer.add_task(
-            Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
-            Event::CheckApply,
-        );
-        timer.add_task(
-            Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
-            Event::CheckStalePeer,
-        );
-        timer
+    pub fn new_timer(&self) -> std::time::Duration {
+        Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL)
     }
 
     /// Tries to apply pending tasks if there is some.
@@ -715,25 +707,16 @@ where
     ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
-    type TimeoutTask = Event;
-
-    fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
-        match event {
-            Event::CheckApply => {
-                self.handle_pending_applies();
-                timer.add_task(
-                    Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
-                    Event::CheckApply,
-                );
-            }
-            Event::CheckStalePeer => {
-                self.ctx.clean_stale_ranges();
-                timer.add_task(
-                    Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
-                    Event::CheckStalePeer,
-                );
-            }
+    fn on_timeout(&mut self) {
+        self.handle_pending_applies();
+        self.clean_stale_tick += 1;
+        if self.clean_stale_tick >= STALE_PEER_CHECK_TICK {
+            self.ctx.clean_stale_ranges();
+            self.clean_stale_tick = 0;
         }
+    }
+    fn get_interval(&self) -> Duration {
+        Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL)
     }
 }
 

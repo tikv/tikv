@@ -24,6 +24,52 @@ pub enum ConfigValue {
     Skip,
 }
 
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum Module {
+    Readpool,
+    Server,
+    Metric,
+    Raftstore,
+    Coprocessor,
+    Pd,
+    Rocksdb,
+    Raftdb,
+    RaftEngine,
+    Storage,
+    Security,
+    Encryption,
+    Import,
+    Backup,
+    PessimisticTxn,
+    Gc,
+    Split,
+    Unknown(String),
+}
+
+impl From<&str> for Module {
+    fn from(m: &str) -> Module {
+        match m {
+            "readpool" => Module::Readpool,
+            "server" => Module::Server,
+            "metric" => Module::Metric,
+            "raft_store" => Module::Raftstore,
+            "coprocessor" => Module::Coprocessor,
+            "pd" => Module::Pd,
+            "split" => Module::Split,
+            "rocksdb" => Module::Rocksdb,
+            "raftdb" => Module::Raftdb,
+            "raft_engine" => Module::RaftEngine,
+            "storage" => Module::Storage,
+            "security" => Module::Security,
+            "import" => Module::Import,
+            "backup" => Module::Backup,
+            "pessimistic_txn" => Module::PessimisticTxn,
+            "gc" => Module::Gc,
+            n => Module::Unknown(n.to_owned()),
+        }
+    }
+}
+
 impl Display for ConfigValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -124,6 +170,10 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 pub trait ConfigManager: Send + Sync {
     fn dispatch(&mut self, _: ConfigChange) -> Result<()>;
+}
+
+pub trait ConfigManagerRegistry {
+    fn register(&self, mo: Module, cfg_mgr: Box<dyn ConfigManager>);
 }
 
 #[cfg(test)]

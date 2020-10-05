@@ -298,14 +298,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         ep
     }
 
-    pub fn new_timer(&self) -> Timer<()> {
-        // Currently there is only one timeout for CDC.
-        let cdc_timer_cap = 1;
-        let mut timer = Timer::new(cdc_timer_cap);
-        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
-        timer
-    }
-
     pub fn set_min_ts_interval(&mut self, dur: Duration) {
         self.min_ts_interval = dur;
     }
@@ -1021,9 +1013,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
 }
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T> {
-    type TimeoutTask = ();
-
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+    fn on_timeout(&mut self) {
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         if self.min_resolved_ts != TimeStamp::max() {
             CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
@@ -1043,8 +1033,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
         CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_cache.miss_count as i64);
         self.old_value_cache.access_count = 0;
         self.old_value_cache.miss_count = 0;
+    }
 
-        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
+    fn get_interval(&self) -> Duration {
+        // Currently there is only one timeout for CDC.
+        Duration::from_millis(METRICS_FLUSH_INTERVAL)
     }
 }
 

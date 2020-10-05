@@ -626,12 +626,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         }
     }
 
-    pub fn new_timer(&self) -> Timer<()> {
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(self.pool_idle_threshold), ());
-        timer
-    }
-
     pub fn get_config_manager(&self) -> ConfigManager {
         self.config_manager.clone()
     }
@@ -823,12 +817,13 @@ impl<E: Engine, R: RegionInfoProvider> Runnable for Endpoint<E, R> {
 }
 
 impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer for Endpoint<E, R> {
-    type TimeoutTask = ();
-
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+    fn on_timeout(&mut self) {
         let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
         self.pool.borrow_mut().check_active(pool_idle_duration);
-        timer.add_task(pool_idle_duration, ());
+    }
+
+    fn get_interval(&self) -> Duration {
+        Duration::from_millis(self.pool_idle_threshold)
     }
 }
 
