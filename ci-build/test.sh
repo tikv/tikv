@@ -8,15 +8,6 @@ panic() {
     exit 1
 }
 
-pushd /tmp;
-git clone https://github.com/curl/curl;
-pushd curl;
-./configure;
-make;
-make install;
-popd;
-popd;
-
 if [[ "$SKIP_FORMAT_CHECK" != "true" ]]; then
     make format
     git diff-index --quiet HEAD -- || (git diff; panic "\e[35mplease make format before creating a pr!!!\e[0m")
