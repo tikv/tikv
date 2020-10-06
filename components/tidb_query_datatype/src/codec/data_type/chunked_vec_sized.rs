@@ -32,11 +32,13 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
         }
     }
 
+    #[inline]
     pub fn push_data(&mut self, value: T) {
         self.bitmap.push(true);
         self.data.push(value);
     }
 
+    #[inline]
     pub fn push_null(&mut self) {
         self.bitmap.push(false);
         self.data.push(unsafe { std::mem::zeroed() });
@@ -60,6 +62,7 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
         self.bitmap.append(&mut other.bitmap);
     }
 
+    #[inline]
     pub fn get(&self, idx: usize) -> Option<&T> {
         assert!(idx < self.data.len());
         if self.bitmap.get(idx) {
@@ -82,12 +85,15 @@ impl<T: Clone> ChunkedVec<T> for ChunkedVecSized<T> {
     fn chunked_with_capacity(capacity: usize) -> Self {
         Self::with_capacity(capacity)
     }
+
+    #[inline]
     fn chunked_push(&mut self, value: Option<T>) {
         self.push(value)
     }
 }
 
 impl<'a, T: Evaluable + EvaluableRet> ChunkRef<'a, &'a T> for &'a ChunkedVecSized<T> {
+    #[inline]
     fn get_option_ref(self, idx: usize) -> Option<&'a T> {
         self.get(idx)
     }
@@ -96,6 +102,7 @@ impl<'a, T: Evaluable + EvaluableRet> ChunkRef<'a, &'a T> for &'a ChunkedVecSize
         &self.bitmap
     }
 
+    #[inline]
     fn phantom_data(self) -> Option<&'a T> {
         None
     }
@@ -114,7 +121,7 @@ impl<'a, T: Evaluable> UnsafeRefInto<&'static ChunkedVecSized<T>> for &'a Chunke
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use crate::codec::data_type::*;
 
@@ -257,5 +264,39 @@ mod test {
                 None,
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod benches {
+    use super::*;
+
+    #[bench]
+    fn bench_append(b: &mut test::Bencher) {
+        b.iter(|| {
+            let mut chunked_vec_int = ChunkedVecSized::with_capacity(10000);
+            for _i in 0..5000 {
+                chunked_vec_int.push(Some(233));
+                chunked_vec_int.push(None);
+            }
+        });
+    }
+
+    #[bench]
+    fn bench_iterate(b: &mut test::Bencher) {
+        let mut chunked_vec_int = ChunkedVecSized::with_capacity(10000);
+        for _i in 0..5000 {
+            chunked_vec_int.push(Some(233));
+            chunked_vec_int.push(None);
+        }
+        b.iter(|| {
+            let mut sum = 0;
+            for i in 0..10000 {
+                if let Some(x) = chunked_vec_int.get(i) {
+                    sum += *x
+                }
+            }
+            sum
+        });
     }
 }

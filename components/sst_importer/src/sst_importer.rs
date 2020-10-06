@@ -12,6 +12,10 @@ use std::time::{Duration, Instant};
 
 use futures_util::io::{AsyncRead, AsyncReadExt};
 use kvproto::backup::StorageBackend;
+#[cfg(feature = "prost-codec")]
+use kvproto::import_sstpb::pair::Op as PairOp;
+#[cfg(not(feature = "prost-codec"))]
+use kvproto::import_sstpb::PairOp;
 use kvproto::import_sstpb::*;
 use tokio::time::timeout;
 use uuid::{Builder as UuidBuilder, Uuid};
@@ -58,7 +62,7 @@ impl SSTImporter {
                 Ok(f)
             }
             Err(e) => {
-                error!("create failed"; "meta" => ?meta, "err" => %e);
+                error!(%e; "create failed"; "meta" => ?meta,);
                 Err(e)
             }
         }
@@ -71,7 +75,7 @@ impl SSTImporter {
                 Ok(())
             }
             Err(e) => {
-                error!("delete failed"; "meta" => ?meta, "err" => %e);
+                error!(%e; "delete failed"; "meta" => ?meta,);
                 Err(e)
             }
         }
@@ -84,7 +88,7 @@ impl SSTImporter {
                 Ok(())
             }
             Err(e) => {
-                error!("ingest failed"; "meta" => ?meta, "err" => %e);
+                error!(%e; "ingest failed"; "meta" => ?meta, );
                 Err(e)
             }
         }
@@ -128,7 +132,7 @@ impl SSTImporter {
                 Ok(r)
             }
             Err(e) => {
-                error!("download failed"; "meta" => ?meta, "name" => name, "err" => %e);
+                error!(%e; "download failed"; "meta" => ?meta, "name" => name,);
                 Err(e)
             }
         }
@@ -367,7 +371,7 @@ impl SSTImporter {
                     .map_err(|e| {
                         Error::BadFormat(format!(
                             "key {}: {}",
-                            hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
+                            log_wrappers::Value::key(keys::origin_key(iter.key())),
                             e
                         ))
                     })?
@@ -377,7 +381,7 @@ impl SSTImporter {
                     let mut write = WriteRef::parse(iter.value()).map_err(|e| {
                         Error::BadFormat(format!(
                             "write {}: {}",
-                            hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
+                            log_wrappers::Value::key(keys::origin_key(iter.key())),
                             e
                         ))
                     })?;
@@ -476,25 +480,25 @@ impl<E: KvEngine> SSTWriter<E> {
         let commit_ts = TimeStamp::new(batch.get_commit_ts());
         for m in batch.get_pairs().iter() {
             let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
-            self.put(k.as_encoded(), m.get_value())?;
+            self.put(k.as_encoded(), m.get_value(), m.get_op())?;
         }
         Ok(())
     }
 
-    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put(&mut self, key: &[u8], value: &[u8], op: PairOp) -> Result<()> {
         let k = keys::data_key(key);
         let (_, commit_ts) = Key::split_on_ts_for(key)?;
-        if is_short_value(value) {
-            let w = KvWrite::new(WriteType::Put, commit_ts, Some(value.to_vec()));
-            self.write.put(&k, &w.as_ref().to_bytes())?;
-            self.write_entries += 1;
-        } else {
-            let w = KvWrite::new(WriteType::Put, commit_ts, None);
-            self.write.put(&k, &w.as_ref().to_bytes())?;
-            self.write_entries += 1;
-            self.default.put(&k, value)?;
-            self.default_entries += 1;
-        }
+        let w = match (op, is_short_value(value)) {
+            (PairOp::Delete, _) => KvWrite::new(WriteType::Delete, commit_ts, None),
+            (PairOp::Put, true) => KvWrite::new(WriteType::Put, commit_ts, Some(value.to_vec())),
+            (PairOp::Put, false) => {
+                self.default.put(&k, value)?;
+                self.default_entries += 1;
+                KvWrite::new(WriteType::Put, commit_ts, None)
+            }
+        };
+        self.write.put(&k, &w.as_ref().to_bytes())?;
+        self.write_entries += 1;
         Ok(())
     }
 
@@ -588,7 +592,7 @@ impl ImportDir {
     fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
         let path = self.join(meta)?;
         if path.save.exists() {
-            return Err(Error::FileExists(path.save));
+            return Err(Error::FileExists(path.save, "create SST upload cache"));
         }
         ImportFile::create(meta.clone(), path)
     }
@@ -650,9 +654,7 @@ impl ImportDir {
             let path = e.path();
             match path_to_sst_meta(&path) {
                 Ok(sst) => ssts.push(sst),
-                Err(e) => {
-                    error!("path_to_sst_meta failed"; "path" => %path.to_str().unwrap(), "err" => %e)
-                }
+                Err(e) => error!(%e; "path_to_sst_meta failed"; "path" => %path.to_str().unwrap(),),
             }
         }
         Ok(ssts)
@@ -711,7 +713,10 @@ impl ImportFile {
         self.validate()?;
         self.file.take().unwrap().sync_all()?;
         if self.path.save.exists() {
-            return Err(Error::FileExists(self.path.save.clone()));
+            return Err(Error::FileExists(
+                self.path.save.clone(),
+                "finalize SST write cache",
+            ));
         }
         fs::rename(&self.path.temp, &self.path.save)?;
         Ok(())
@@ -1645,23 +1650,32 @@ mod tests {
         let mut batch = WriteBatch::default();
         let mut pairs = vec![];
 
-        // wirte cf
+        // put short value kv in wirte cf
         let mut pair = Pair::default();
         pair.set_key(b"k1".to_vec());
         pair.set_value(b"short_value".to_vec());
         pairs.push(pair);
 
-        // default cf
+        // put big value kv in default cf
         let big_value = vec![42; 256];
         let mut pair = Pair::default();
         pair.set_key(b"k2".to_vec());
         pair.set_value(big_value);
         pairs.push(pair);
 
+        // put delete type key in write cf
+        let mut pair = Pair::default();
+        pair.set_key(b"k3".to_vec());
+        pair.set_op(PairOp::Delete);
+        pairs.push(pair);
+
         // generate two cf metas
         batch.set_commit_ts(10);
         batch.set_pairs(pairs.into());
         w.write(batch).unwrap();
+        assert_eq!(w.write_entries, 3);
+        assert_eq!(w.default_entries, 1);
+
         let metas = w.finish().unwrap();
         assert_eq!(metas.len(), 2);
     }

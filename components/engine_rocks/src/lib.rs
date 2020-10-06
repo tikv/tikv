@@ -20,8 +20,6 @@
 extern crate tikv_alloc;
 #[macro_use]
 extern crate tikv_util;
-#[macro_use]
-extern crate slog_global;
 
 #[macro_use]
 extern crate serde_derive;
@@ -90,6 +88,8 @@ pub mod cloud;
 pub mod config;
 pub use config::*;
 pub mod encryption;
+
+mod raft_engine;
 
 pub use rocksdb::set_perf_level;
 pub use rocksdb::PerfContext;

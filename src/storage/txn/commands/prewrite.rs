@@ -8,8 +8,9 @@ use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
 };
+use crate::storage::txn::actions::prewrite::prewrite;
 use crate::storage::txn::commands::{WriteCommand, WriteContext, WriteResult};
-use crate::storage::txn::{Error, Result};
+use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{
     txn::commands::{Command, CommandExt, TypedCommand},
     types::PrewriteResult,
@@ -153,6 +154,24 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 self.skip_constraint_check = true;
             }
         }
+
+        // If async commit is disabled in TiKV, set the secondary_keys in the request to None
+        // so we won't do anything for async commit.
+        if !context.enable_async_commit {
+            self.secondary_keys = None;
+        }
+
+        // Async commit requires the max timestamp in the concurrency manager to be up-to-date.
+        // If it is possibly stale due to leader transfer or region merge, return an error.
+        // TODO: Fallback to non-async commit if not synced instead of returning an error.
+        if self.secondary_keys.is_some() && !snapshot.is_max_ts_synced() {
+            return Err(ErrorInner::MaxTimestampNotSynced {
+                region_id: self.get_ctx().get_region_id(),
+                start_ts: self.start_ts,
+            }
+            .into());
+        }
+
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
@@ -177,7 +196,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             if Some(m.key()) == async_commit_pk.as_ref() {
                 secondaries = &self.secondary_keys;
             }
-            match txn.prewrite(
+            match prewrite(
+                &mut txn,
                 m,
                 &self.primary,
                 secondaries,
@@ -187,7 +207,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 self.min_commit_ts,
             ) {
                 Ok(ts) => {
-                    if secondaries.is_some() {
+                    if secondaries.is_some() && async_commit_ts < ts {
                         async_commit_ts = ts;
                     }
                 }
@@ -242,6 +262,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
 mod tests {
     use kvproto::kvrpcpb::{Context, ExtraOp};
 
+    use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
     use txn_types::TimeStamp;
     use txn_types::{Key, Mutation};
@@ -254,8 +275,7 @@ mod tests {
     use crate::storage::txn::{Error, ErrorInner, Result};
     use crate::storage::DummyLockManager;
     use crate::storage::{
-        concurrency_manager::ConcurrencyManager, Engine, PrewriteResult, ProcessResult, Snapshot,
-        Statistics, TestEngineBuilder,
+        Engine, PrewriteResult, ProcessResult, Snapshot, Statistics, TestEngineBuilder,
     };
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
@@ -430,6 +450,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            enable_async_commit: true,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         if let ProcessResult::PrewriteResult {
@@ -471,6 +492,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            enable_async_commit: true,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -495,6 +517,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            enable_async_commit: true,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;

@@ -12,10 +12,14 @@ use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::*;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{
-    ChangePeer, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader,
+    ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
+    TransferLeader,
 };
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
-use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
+use kvproto::raft_cmdpb::{
+    AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest, RaftCmdResponse, Request,
+    StatusRequest,
+};
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::ConfChangeType;
@@ -26,12 +30,11 @@ use engine_rocks::encryption::get_env;
 use engine_rocks::raw::DB;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::{Iterable, KvEngines, Peekable};
+use engine_traits::{Engines, Iterable, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
 use tikv::config::*;
-use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::config::*;
 use tikv_util::{escape, HandyRwLock};
 
@@ -83,7 +86,7 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
-pub fn must_region_cleared(engine: &KvEngines<RocksEngine, RocksEngine>, region: &metapb::Region) {
+pub fn must_region_cleared(engine: &Engines<RocksEngine, RocksEngine>, region: &metapb::Region) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
     let state: RegionLocalState = engine.kv.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
@@ -119,10 +122,16 @@ pub fn must_region_cleared(engine: &KvEngines<RocksEngine, RocksEngine>, region:
     );
 }
 
+lazy_static! {
+    static ref TEST_CONFIG: TiKvConfig = {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let common_test_cfg = manifest_dir.join("src/common-test.toml");
+        TiKvConfig::from_file(&common_test_cfg, None)
+    };
+}
+
 pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let common_test_cfg = manifest_dir.join("src/common-test.toml");
-    let mut cfg = TiKvConfig::from_file(common_test_cfg);
+    let mut cfg = TEST_CONFIG.clone();
     cfg.server.cluster_id = cluster_id;
     cfg
 }
@@ -249,6 +258,15 @@ pub fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) 
     req
 }
 
+pub fn new_change_peer_v2_request(changes: Vec<ChangePeerRequest>) -> AdminRequest {
+    let mut cp = ChangePeerV2Request::default();
+    cp.set_changes(changes.into());
+    let mut req = AdminRequest::default();
+    req.set_cmd_type(AdminCmdType::ChangePeerV2);
+    req.set_change_peer_v2(cp);
+    req
+}
+
 pub fn new_compact_log_request(index: u64, term: u64) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::CompactLog);
@@ -298,6 +316,15 @@ pub fn new_pd_change_peer(
 
     let mut resp = RegionHeartbeatResponse::default();
     resp.set_change_peer(change_peer);
+    resp
+}
+
+pub fn new_pd_change_peer_v2(changes: Vec<ChangePeer>) -> RegionHeartbeatResponse {
+    let mut change_peer = ChangePeerV2::default();
+    change_peer.set_changes(changes.into());
+
+    let mut resp = RegionHeartbeatResponse::default();
+    resp.set_change_peer_v2(change_peer);
     resp
 }
 
@@ -500,6 +527,13 @@ pub fn must_error_read_on_peer<T: Simulator>(
     }
 }
 
+pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
+    let header = resp.get_header();
+    assert!(header.has_error());
+    let err_msg = header.get_error().get_message();
+    assert!(err_msg.contains(msg), "{:?}", resp);
+}
+
 fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
     true
 }
@@ -509,7 +543,7 @@ pub fn create_test_engine(
     router: Option<RaftRouter<RocksEngine, RocksEngine>>,
     cfg: &TiKvConfig,
 ) -> (
-    KvEngines<RocksEngine, RocksEngine>,
+    Engines<RocksEngine, RocksEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
 ) {
@@ -565,11 +599,12 @@ pub fn create_test_engine(
         engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
     );
 
-    let engines = KvEngines::new(
-        RocksEngine::from_db(engine),
-        RocksEngine::from_db(raft_engine),
-        cache.is_some(),
-    );
+    let mut engine = RocksEngine::from_db(engine);
+    let mut raft_engine = RocksEngine::from_db(raft_engine);
+    let shared_block_cache = cache.is_some();
+    engine.set_shared_block_cache(shared_block_cache);
+    raft_engine.set_shared_block_cache(shared_block_cache);
+    let engines = Engines::new(engine, raft_engine);
     (engines, key_manager, dir)
 }
 

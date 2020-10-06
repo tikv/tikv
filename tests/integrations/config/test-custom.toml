@@ -56,6 +56,7 @@ end-point-stream-batch-row-limit = 4096
 end-point-enable-batch-if-possible = true
 end-point-request-max-handle-duration = "12s"
 end-point-max-concurrency = 10
+end-point-check-memory-locks = false
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10
@@ -73,6 +74,7 @@ max-key-size = 8192
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
+enable-async-commit = false
 
 [storage.block-cache]
 shared = true
@@ -109,6 +111,8 @@ raft-log-gc-tick-interval = "12s"
 raft-log-gc-threshold = 12
 raft-log-gc-count-limit = 12
 raft-log-gc-size-limit = "1KB"
+raft-log-reserve-max-ticks = 100
+raft-engine-purge-interval = "20m"
 raft-entry-cache-life-time = "12s"
 raft-reject-transfer-leader-duration = "3s"
 split-region-check-tick-interval = "12s"
@@ -151,7 +155,7 @@ store-pool-size = 3
 store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
-hibernate-timeout = "10m"
+hibernate-timeout = "1h"
 early-apply = false
 dev-assert = true
 perf-level = 5
@@ -533,10 +537,15 @@ range-merge = true
 max-sorted-runs = 100
 gc-merge-rewrite = true
 
+[raft-engine]
+enable = true
+dir = "test-dir"
+
 [security]
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
+redact-info-log = true
 cert-allowed-cn = [
     "example.tikv.com",
 ]
@@ -572,3 +581,7 @@ enabled = false # test backward compatibility
 wait-for-lock-timeout = "10ms"
 wake-up-delay-duration = 100 # test backward compatibility
 pipelined = true
+
+[cdc]
+min-ts-interval = "4s"
+old-value-cache-size = 512

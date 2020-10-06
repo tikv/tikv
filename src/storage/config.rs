@@ -13,7 +13,6 @@ use tikv_util::config::{self, OptionReadableSize, ReadableSize};
 use tikv_util::sys::sys_quota::SysQuota;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
-pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 1024 * 512;
@@ -45,6 +44,12 @@ pub struct Config {
     #[config(skip)]
     // Reserve disk space to make tikv would have enough space to compact when disk is full.
     pub reserve_space: ReadableSize,
+    // If this option is enabled, prewrite will support async commit and locks in the in-memory
+    // lock table are checked for reading requests.
+    // CAUTION: This feature is not ready for production and this option may be removed in the
+    // future.
+    #[config(skip)]
+    pub enable_async_commit: bool,
     #[config(submodule)]
     pub block_cache: BlockCacheConfig,
 }
@@ -60,6 +65,7 @@ impl Default for Config {
             scheduler_worker_pool_size: if cpu_num >= 16.0 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVER_SPACE_SIZE),
+            enable_async_commit: true,
             block_cache: BlockCacheConfig::default(),
         }
     }

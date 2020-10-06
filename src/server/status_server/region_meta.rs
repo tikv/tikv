@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use kvproto::metapb::PeerRole;
 use raft::{Progress, ProgressState, StateRole};
 use raftstore::store::AbstractPeer;
 use std::collections::HashMap;
@@ -104,11 +105,12 @@ impl<'a> From<raft::Status<'a>> for RaftStatus {
         let mut voters = HashMap::new();
         let mut learners = HashMap::new();
         if let Some(progress) = status.progress {
-            for (id, voter) in progress.voters() {
-                voters.insert(*id, RaftProgress::new(voter));
-            }
-            for (id, learner) in progress.learners() {
-                learners.insert(*id, RaftProgress::new(learner));
+            for (id, pr) in progress.iter() {
+                if progress.conf().voters().contains(*id) {
+                    voters.insert(*id, RaftProgress::new(pr));
+                } else {
+                    learners.insert(*id, RaftProgress::new(pr));
+                }
             }
         }
         Self {
@@ -123,6 +125,25 @@ impl<'a> From<raft::Status<'a>> for RaftStatus {
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub enum RaftPeerRole {
+    Voter,
+    Learner,
+    IncomingVoter,
+    DemotingVoter,
+}
+
+impl From<PeerRole> for RaftPeerRole {
+    fn from(role: PeerRole) -> Self {
+        match role {
+            PeerRole::Voter => RaftPeerRole::Voter,
+            PeerRole::Learner => RaftPeerRole::Learner,
+            PeerRole::IncomingVoter => RaftPeerRole::IncomingVoter,
+            PeerRole::DemotingVoter => RaftPeerRole::DemotingVoter,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct Epoch {
     pub conf_ver: u64,
     pub version: u64,
@@ -132,7 +153,7 @@ pub struct Epoch {
 pub struct RegionPeer {
     pub id: u64,
     pub store_id: u64,
-    pub is_learner: bool,
+    pub role: RaftPeerRole,
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -182,7 +203,7 @@ impl RegionMeta {
             peers.push(RegionPeer {
                 id: peer.get_id(),
                 store_id: peer.get_store_id(),
-                is_learner: peer.get_is_learner(),
+                role: peer.get_role().into(),
             });
         }
 

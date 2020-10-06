@@ -20,7 +20,7 @@ pub trait SstReader: Iterable + Sized {
 }
 
 /// SstWriter is used to create sst files that can be added to database later.
-pub trait SstWriter {
+pub trait SstWriter: Send {
     type ExternalSstFileInfo: ExternalSstFileInfo;
     type ExternalSstFileReader: std::io::Read;
 
@@ -69,6 +69,8 @@ where
 
     /// set other config specified by writer
     fn set_compression_type(self, compression: Option<SstCompressionType>) -> Self;
+
+    fn set_compression_level(self, level: i32) -> Self;
 
     /// Builder a SstWriter.
     fn build(self, path: &str) -> Result<E::SstWriter>;
