@@ -77,12 +77,22 @@ mod basic_read_write {
     //! Reading and writing
 
     use super::default_engine;
-    use engine_traits::Peekable;
+    use engine_traits::{Peekable, SyncMutable};
 
     #[test]
     fn get_value_none() {
         let db = default_engine();
         let value = db.engine.get_value(b"foo").unwrap();
         assert!(value.is_none());
+    }
+
+    #[test]
+    fn put_value_get_value() {
+        let db = default_engine();
+        let expected = b"bar";
+        db.engine.put(b"foo", expected).unwrap();
+        let actual = db.engine.get_value(b"foo").unwrap();
+        let actual = actual.expect("value");
+        assert_eq!(expected, &*actual);
     }
 }
