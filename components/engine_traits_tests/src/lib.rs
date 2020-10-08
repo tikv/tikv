@@ -88,8 +88,9 @@ mod ctor {
 mod basic_read_write {
     //! Reading and writing
 
-    use super::default_engine;
+    use super::{default_engine, engine_cfs};
     use engine_traits::{Peekable, SyncMutable};
+    use engine_traits::{ALL_CFS, CF_DEFAULT};
 
     #[test]
     fn get_value_none() {
@@ -106,6 +107,17 @@ mod basic_read_write {
         let actual = db.engine.get_value(b"foo").unwrap();
         let actual = actual.expect("value");
         assert_eq!(expected, &*actual);
+    }
+
+    #[test]
+    fn non_cf_methods_are_default_cf() {
+        let db = engine_cfs(ALL_CFS);
+        // Use the non-cf put function
+        db.engine.put(b"foo", b"bar").unwrap();
+        // Retreive with the cf get function
+        let value = db.engine.get_value_cf(CF_DEFAULT, b"foo").unwrap();
+        let value = value.expect("value");
+        assert_eq!(b"bar", &*value);
     }
 }
 
