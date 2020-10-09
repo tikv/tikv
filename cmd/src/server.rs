@@ -952,6 +952,7 @@ impl TiKVServer<RaftLogEngine> {
             &self.config.raft_store.raftdb_path,
             &raft_engine,
             env.clone(),
+            8,
         );
 
         // Create kv engine.
