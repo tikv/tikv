@@ -662,10 +662,10 @@ async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: 
 ///
 /// The general progress of connection is:
 ///
-///     1. resolve address
-///     2. connect
-///     3. make batch call
-///     4. fallback to legacy API if incompatible
+/// 1. resolve address
+/// 2. connect
+/// 3. make batch call
+/// 4. fallback to legacy API if incompatible
 ///
 /// Every failure during the process should trigger retry automatically.
 async fn start<S, R>(
