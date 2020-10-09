@@ -12,3 +12,7 @@ codegen-units = 1
 panic = "unwind"
 incremental = false
 overflow-checks = false
+
+[profile.release.package.server]
+opt-level = 3
+codegen-units = 1
