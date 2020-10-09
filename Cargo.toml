@@ -227,6 +227,7 @@ members = [
   "components/encryption",
   "components/error_code",
   "components/concurrency_manager",
+  "components/server",
 ]
 default-members = ["cmd"]
 
@@ -251,6 +252,10 @@ panic = 'unwind'
 debug-assertions = false
 overflow-checks = false
 rpath = false
+
+[profile.release.package.server]
+opt-level = 1
+codegen-units = 4
 
 [profile.test]
 opt-level = 0
