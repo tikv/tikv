@@ -295,7 +295,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
     } else {
         error!(
             "default value not found";
-            "key" => log_wrappers::Key(&key),
+            "key" => log_wrappers::Value::key(&key),
             "hint" => hint,
         );
         Error::from(ErrorInner::DefaultNotFound { key })
@@ -583,7 +583,7 @@ pub mod tests {
             secondary_keys,
             ts.into(),
             false,
-            0,
+            100,
             TimeStamp::default(),
             0,
             min_commit_ts.into(),
@@ -611,7 +611,7 @@ pub mod tests {
             secondary_keys,
             ts.into(),
             is_pessimistic_lock,
-            0,
+            100,
             for_update_ts.into(),
             0,
             min_commit_ts.into(),
