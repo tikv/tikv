@@ -115,7 +115,7 @@ impl Write for RotatingFileLogger {
                 fs::rename(&self.path, &new_path)?;
                 self.file = open_log_file(&self.path)?;
 
-                // Updates all roators' states.
+                // Updates all rotators' states.
                 for rotator in self.rotators.iter_mut() {
                     rotator.on_rotate()?;
                 }
@@ -159,10 +159,15 @@ impl Rotator for RotateByTime {
     }
 
     fn prepare(&mut self, file: &File) -> io::Result<()> {
-        // Try to get the creation time first,
-        // if fail to acquire, try to acquire access time.
+        // Use the minimum of the created time and access time.
         let metadata = file.metadata()?;
-        let birth = metadata.created().or_else(|_| metadata.accessed())?;
+        let created = metadata.created();
+        let accessed = metadata.accessed();
+        let birth = match (created, accessed) {
+            (Err(_), a) => a?,
+            (Ok(c), Ok(a)) if a < c => a,
+            (Ok(c), _) => c,
+        };
         self.next_rotation_time = Some(Self::next_rotation_time(birth, self.rotation_timespan.0)?);
         Ok(())
     }
@@ -238,7 +243,7 @@ mod tests {
         path.exists() && path.is_file()
     }
 
-    fn rename_with_subffix(
+    fn rename_with_suffix(
         path: impl AsRef<Path>,
         suffix: impl AsRef<OsStr>,
     ) -> io::Result<PathBuf> {
@@ -274,7 +279,7 @@ mod tests {
         utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
 
         let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
-            rename_with_subffix(path, suffix)
+            rename_with_suffix(path, suffix)
         })
         .add_rotator(RotateByTime::new(ReadableDuration(Duration::from_secs(30))))
         .build()
@@ -311,7 +316,7 @@ mod tests {
         utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
 
         let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
-            rename_with_subffix(path, suffix)
+            rename_with_suffix(path, suffix)
         })
         .add_rotator(RotateByTime::new(ReadableDuration(Duration::from_secs(
             120,
@@ -335,7 +340,7 @@ mod tests {
         let suffix = ".backup";
 
         let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
-            rename_with_subffix(path, suffix)
+            rename_with_suffix(path, suffix)
         })
         .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
         .build()
@@ -377,7 +382,7 @@ mod tests {
         utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
 
         let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
-            rename_with_subffix(path, suffix)
+            rename_with_suffix(path, suffix)
         })
         .add_rotator(RotateByTime::new(ReadableDuration(Duration::from_secs(60))))
         .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
@@ -419,7 +424,7 @@ mod tests {
         utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
 
         let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
-            rename_with_subffix(path, suffix)
+            rename_with_suffix(path, suffix)
         })
         .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
         .add_rotator(RotateByTime::new(ReadableDuration(Duration::from_secs(60))))

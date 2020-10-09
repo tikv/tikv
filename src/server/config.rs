@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{i32, isize};
+use std::{cmp, i32, isize};
 
 use super::Result;
 use grpcio::CompressionAlgorithms;
@@ -32,7 +32,12 @@ const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // Number of rows in each chunk for streaming coprocessor.
 const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
+// At least 4 long coprocessor requests are allowed to run concurrently.
+const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
+
 const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
+
+const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -60,7 +65,14 @@ pub struct Config {
 
     // These are related to TiKV status.
     pub status_addr: String,
+
+    // Status server's advertise listening address for outer communication.
+    // If not set, the status server's listening address will be used.
+    pub advertise_status_addr: String,
+
     pub status_thread_pool_size: usize,
+
+    pub max_grpc_send_msg_len: i32,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     pub grpc_compression_type: GrpcCompressionType,
@@ -82,16 +94,21 @@ pub struct Config {
     pub end_point_enable_batch_if_possible: bool,
     pub end_point_request_max_handle_duration: ReadableDuration,
     pub end_point_max_concurrency: usize,
+    // Memory locks must be checked if async commit is enabled.
+    // CAUTION: The current lock table implementation doesn't have good performance. Enabling
+    // it may slow down TiKV. This option may be removed in the future.
+    pub end_point_check_memory_locks: bool,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
     pub stats_concurrency: usize,
     pub heavy_load_threshold: usize,
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
-    // Whether to collect batch across commands under heavy workload.
-    pub request_batch_enable_cross_command: bool,
-    // Wait duration before each request batch is processed.
-    pub request_batch_wait_duration: ReadableDuration,
+
+    // Test only.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub raft_client_backoff_step: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
@@ -121,7 +138,9 @@ impl Default for Config {
             labels: HashMap::default(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_addr: DEFAULT_STATUS_ADDR.to_owned(),
+            advertise_status_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_thread_pool_size: 1,
+            max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
@@ -145,7 +164,8 @@ impl Default for Config {
             end_point_request_max_handle_duration: ReadableDuration::secs(
                 DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
-            end_point_max_concurrency: cpu_num,
+            end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
+            end_point_check_memory_locks: true,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
@@ -155,8 +175,7 @@ impl Default for Config {
             // The resolution of timer in tokio is 1ms.
             heavy_load_wait_duration: ReadableDuration::millis(1),
             enable_request_batch: true,
-            request_batch_enable_cross_command: true,
-            request_batch_wait_duration: ReadableDuration::millis(1),
+            raft_client_backoff_step: ReadableDuration::secs(1),
         }
     }
 }
@@ -180,12 +199,30 @@ impl Config {
                 self.advertise_addr
             ));
         }
+        if self.status_addr.is_empty() && !self.advertise_status_addr.is_empty() {
+            return Err(box_err!("status-addr can not be empty"));
+        }
         if !self.status_addr.is_empty() {
             box_try!(config::check_addr(&self.status_addr));
+            if !self.advertise_status_addr.is_empty() {
+                box_try!(config::check_addr(&self.advertise_status_addr));
+                if self.advertise_status_addr.starts_with("0.0.0.0") {
+                    return Err(box_err!(
+                        "invalid advertise-status-addr: {:?}",
+                        self.advertise_status_addr
+                    ));
+                }
+            } else {
+                info!(
+                    "no advertise-status-addr is specified, falling back to status-addr";
+                    "status-addr" => %self.status_addr
+                );
+                self.advertise_status_addr = self.status_addr.clone();
+            }
         }
-        if self.status_addr == self.advertise_addr {
+        if self.advertise_status_addr == self.advertise_addr {
             return Err(box_err!(
-                "status-addr has already been used: {:?}",
+                "advertise-status-addr has already been used: {:?}",
                 self.advertise_addr
             ));
         }
@@ -281,8 +318,10 @@ mod tests {
     fn test_config_validate() {
         let mut cfg = Config::default();
         assert!(cfg.advertise_addr.is_empty());
+        assert!(cfg.advertise_status_addr.is_empty());
         cfg.validate().unwrap();
         assert_eq!(cfg.addr, cfg.advertise_addr);
+        assert_eq!(cfg.status_addr, cfg.advertise_status_addr);
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.concurrent_send_snap_limit = 0;
@@ -306,9 +345,15 @@ mod tests {
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.validate().unwrap();
 
+        invalid_cfg = Config::default();
+        invalid_cfg.status_addr = "0.0.0.0:1000".to_owned();
+        invalid_cfg.validate().unwrap();
+        invalid_cfg.advertise_status_addr = "0.0.0.0:1000".to_owned();
+        assert!(invalid_cfg.validate().is_err());
+
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
-        invalid_cfg.status_addr = "127.0.0.1:1000".to_owned();
+        invalid_cfg.advertise_status_addr = "127.0.0.1:1000".to_owned();
         assert!(invalid_cfg.validate().is_err());
 
         let mut invalid_cfg = cfg.clone();

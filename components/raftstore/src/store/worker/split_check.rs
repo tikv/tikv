@@ -5,8 +5,7 @@ use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 
-use engine_rocks::{RocksEngine, RocksEngineIterator};
-use engine_traits::{CfName, IterOptions, Iterable, Iterator, CF_WRITE, LARGE_CFS};
+use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -66,19 +65,22 @@ impl Ord for KeyEntry {
     }
 }
 
-struct MergedIterator {
-    iters: Vec<(CfName, RocksEngineIterator)>,
+struct MergedIterator<I> {
+    iters: Vec<(CfName, I)>,
     heap: BinaryHeap<KeyEntry>,
 }
 
-impl MergedIterator {
-    fn new(
-        db: &RocksEngine,
+impl<I> MergedIterator<I>
+where
+    I: Iterator,
+{
+    fn new<E: KvEngine>(
+        db: &E,
         cfs: &[CfName],
         start_key: &[u8],
         end_key: &[u8],
         fill_cache: bool,
-    ) -> Result<MergedIterator> {
+    ) -> Result<MergedIterator<E::Iterator>> {
         let mut iters = Vec::with_capacity(cfs.len());
         let mut heap = BinaryHeap::with_capacity(cfs.len());
         for (pos, cf) in cfs.iter().enumerate() {
@@ -159,20 +161,22 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<S> {
-    engine: RocksEngine,
+pub struct Runner<E, S>
+where
+    E: KvEngine,
+{
+    engine: E,
     router: S,
-    coprocessor: CoprocessorHost,
+    coprocessor: CoprocessorHost<E>,
     cfg: Config,
 }
 
-impl<S: CasualRouter<RocksEngine>> Runner<S> {
-    pub fn new(
-        engine: RocksEngine,
-        router: S,
-        coprocessor: CoprocessorHost,
-        cfg: Config,
-    ) -> Runner<S> {
+impl<E, S> Runner<E, S>
+where
+    E: KvEngine,
+    S: CasualRouter<E>,
+{
+    pub fn new(engine: E, router: S, coprocessor: CoprocessorHost<E>, cfg: Config) -> Runner<E, S> {
         Runner {
             engine,
             router,
@@ -189,8 +193,8 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
         debug!(
             "executing task";
             "region_id" => region_id,
-            "start_key" => log_wrappers::Key(&start_key),
-            "end_key" => log_wrappers::Key(&end_key),
+            "start_key" => log_wrappers::Value::key(&start_key),
+            "end_key" => log_wrappers::Value::key(&end_key),
         );
         CHECK_SPILT_COUNTER.all.inc();
 
@@ -211,7 +215,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
                 match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                     Ok(keys) => keys,
                     Err(e) => {
-                        error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
+                        error!(%e; "failed to scan split key"; "region_id" => region_id,);
                         return;
                     }
                 }
@@ -222,15 +226,14 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
                     .map(|k| keys::origin_key(&k).to_vec())
                     .collect(),
                 Err(e) => {
-                    error!(
+                    error!(%e;
                         "failed to get approximate split key, try scan way";
                         "region_id" => region_id,
-                        "err" => %e,
                     );
                     match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                         Ok(keys) => keys,
                         Err(e) => {
-                            error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
+                            error!(%e; "failed to scan split key"; "region_id" => region_id,);
                             return;
                         }
                     }
@@ -261,41 +264,46 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
     /// Gets the split keys by scanning the range.
     fn scan_split_keys(
         &self,
-        host: &mut SplitCheckerHost<'_, RocksEngine>,
+        host: &mut SplitCheckerHost<'_, E>,
         region: &Region,
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<Vec<Vec<u8>>> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-        MergedIterator::new(&self.engine, LARGE_CFS, start_key, end_key, false).map(
-            |mut iter| {
-                let mut size = 0;
-                let mut keys = 0;
-                while let Some(e) = iter.next() {
-                    if host.on_kv(region, &e) {
-                        return;
-                    }
-                    size += e.entry_size() as u64;
-                    keys += 1;
+        MergedIterator::<<E as Iterable>::Iterator>::new(
+            &self.engine,
+            LARGE_CFS,
+            start_key,
+            end_key,
+            false,
+        )
+        .map(|mut iter| {
+            let mut size = 0;
+            let mut keys = 0;
+            while let Some(e) = iter.next() {
+                if host.on_kv(region, &e) {
+                    return;
                 }
+                size += e.entry_size() as u64;
+                keys += 1;
+            }
 
-                // if we scan the whole range, we can update approximate size and keys with accurate value.
-                info!(
-                    "update approximate size and keys with accurate value";
-                    "region_id" => region.get_id(),
-                    "size" => size,
-                    "keys" => keys,
-                );
-                let _ = self.router.send(
-                    region.get_id(),
-                    CasualMessage::RegionApproximateSize { size },
-                );
-                let _ = self.router.send(
-                    region.get_id(),
-                    CasualMessage::RegionApproximateKeys { keys },
-                );
-            },
-        )?;
+            // if we scan the whole range, we can update approximate size and keys with accurate value.
+            info!(
+                "update approximate size and keys with accurate value";
+                "region_id" => region.get_id(),
+                "size" => size,
+                "keys" => keys,
+            );
+            let _ = self.router.send(
+                region.get_id(),
+                CasualMessage::RegionApproximateSize { size },
+            );
+            let _ = self.router.send(
+                region.get_id(),
+                CasualMessage::RegionApproximateKeys { keys },
+            );
+        })?;
         timer.observe_duration();
 
         Ok(host.split_keys())
@@ -310,7 +318,13 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
     }
 }
 
-impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
+impl<E, S> Runnable for Runner<E, S>
+where
+    E: KvEngine,
+    S: CasualRouter<E>,
+{
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::SplitCheckTask {
@@ -325,10 +339,10 @@ impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
     }
 }
 
-fn new_split_region(
-    region_epoch: RegionEpoch,
-    split_keys: Vec<Vec<u8>>,
-) -> CasualMessage<RocksEngine> {
+fn new_split_region<E>(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage<E>
+where
+    E: KvEngine,
+{
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,

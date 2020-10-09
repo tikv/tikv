@@ -29,6 +29,7 @@ pub struct ExecutorsRunner<SS> {
 /// Builds a normal executor pipeline.
 ///
 /// Normal executors iterate rows one by one.
+#[allow(clippy::explicit_counter_loop)]
 pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
     exec_descriptors: Vec<tipb::Executor>,
     storage: S,
@@ -311,9 +312,15 @@ impl<SS: 'static> ExecutorsRunner<SS> {
         Ok((None, true))
     }
 
+    #[inline]
     pub fn collect_storage_stats(&mut self, dest: &mut SS) {
         // TODO: A better way is to fill storage stats in `handle_request`, or
         // return SelectResponse in `handle_request`.
         self.executor.collect_storage_stats(dest);
+    }
+
+    #[inline]
+    pub fn can_be_cached(&self) -> bool {
+        self.executor.can_be_cached()
     }
 }

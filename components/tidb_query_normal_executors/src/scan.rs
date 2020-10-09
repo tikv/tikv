@@ -122,4 +122,9 @@ impl<S: Storage, T: InnerExecutor> Executor for ScanExecutor<S, T> {
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.scanner.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        self.scanner.can_be_cached()
+    }
 }

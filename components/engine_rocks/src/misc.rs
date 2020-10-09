@@ -2,14 +2,14 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
-use engine_traits::{MiscExt, Range, Result, ALL_CFS};
+use engine_traits::{
+    CFNamesExt, IterOptions, Iterable, Iterator, MiscExt, Mutable, Range, Result, WriteBatchExt,
+    ALL_CFS, CF_LOCK, MAX_DELETE_BATCH_COUNT,
+};
 use rocksdb::Range as RocksRange;
+use tikv_util::keybuilder::KeyBuilder;
 
 impl MiscExt for RocksEngine {
-    fn is_titan(&self) -> bool {
-        self.as_inner().is_titan()
-    }
-
     fn flush(&self, sync: bool) -> Result<()> {
         Ok(self.as_inner().flush(sync)?)
     }
@@ -30,6 +30,62 @@ impl MiscExt for RocksEngine {
         Ok(self
             .as_inner()
             .delete_files_in_range_cf(handle, start_key, end_key, include_end)?)
+    }
+
+    fn delete_blob_files_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        include_end: bool,
+    ) -> Result<()> {
+        if self.as_inner().is_titan() {
+            let handle = util::get_cf_handle(self.as_inner(), cf)?;
+            self.as_inner().delete_blob_files_in_range_cf(
+                handle,
+                start_key,
+                end_key,
+                include_end,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn delete_all_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        use_delete_range: bool,
+    ) -> Result<()> {
+        let mut wb = self.write_batch();
+        if use_delete_range && cf != CF_LOCK {
+            wb.delete_range_cf(cf, start_key, end_key)?;
+        } else {
+            let start = KeyBuilder::from_slice(start_key, 0, 0);
+            let end = KeyBuilder::from_slice(end_key, 0, 0);
+            let mut opts = IterOptions::new(Some(start), Some(end), false);
+            if self.as_inner().is_titan() {
+                // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
+                // to avoid referring to missing blob files.
+                opts.set_key_only(true);
+            }
+            let mut it = self.iterator_cf_opt(cf, opts)?;
+            let mut it_valid = it.seek(start_key.into())?;
+            while it_valid {
+                wb.delete_cf(cf, it.key())?;
+                if wb.count() >= MAX_DELETE_BATCH_COUNT {
+                    self.write(&wb)?;
+                    wb.clear();
+                }
+                it_valid = it.next()?;
+            }
+        }
+        if wb.count() > 0 {
+            self.write(&wb)?;
+        }
+        Ok(())
     }
 
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)> {
@@ -92,6 +148,53 @@ impl MiscExt for RocksEngine {
     fn sync_wal(&self) -> Result<()> {
         Ok(self.as_inner().sync_wal()?)
     }
+
+    fn exists(path: &str) -> bool {
+        crate::raw_util::db_exist(path)
+    }
+
+    fn dump_stats(&self) -> Result<String> {
+        const ROCKSDB_DB_STATS_KEY: &str = "rocksdb.dbstats";
+        const ROCKSDB_CF_STATS_KEY: &str = "rocksdb.cfstats";
+
+        let mut s = Vec::with_capacity(1024);
+        // common rocksdb stats.
+        for name in self.cf_names() {
+            let handler = util::get_cf_handle(self.as_inner(), name)?;
+            if let Some(v) = self
+                .as_inner()
+                .get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY)
+            {
+                s.extend_from_slice(v.as_bytes());
+            }
+        }
+
+        if let Some(v) = self.as_inner().get_property_value(ROCKSDB_DB_STATS_KEY) {
+            s.extend_from_slice(v.as_bytes());
+        }
+
+        // more stats if enable_statistics is true.
+        if let Some(v) = self.as_inner().get_statistics() {
+            s.extend_from_slice(v.as_bytes());
+        }
+
+        Ok(box_try!(String::from_utf8(s)))
+    }
+
+    fn get_latest_sequence_number(&self) -> u64 {
+        self.as_inner().get_latest_sequence_number()
+    }
+
+    fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
+        match self
+            .as_inner()
+            .get_property_int(crate::ROCKSDB_OLDEST_SNAPSHOT_SEQUENCE)
+        {
+            // Some(0) indicates that no snapshot is in use
+            Some(0) => None,
+            s => s,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -99,10 +202,9 @@ mod tests {
     use tempfile::Builder;
 
     use crate::engine::RocksEngine;
-    use engine::rocks;
-    use engine::rocks::util::{new_engine_opt, CFOptions};
-    use engine::rocks::{ColumnFamilyOptions, DBOptions};
-    use engine::DB;
+    use crate::raw::DB;
+    use crate::raw::{ColumnFamilyOptions, DBOptions};
+    use crate::raw_util::{new_engine_opt, CFOptions};
     use std::sync::Arc;
 
     use super::*;
@@ -219,6 +321,7 @@ mod tests {
         check_data(&db, ALL_CFS, kvs.as_slice());
 
         db.delete_all_files_in_range(b"k2", b"k4").unwrap();
+        db.delete_blob_files_in_range(b"k2", b"k4").unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
@@ -238,7 +341,7 @@ mod tests {
         cf_opts
             .set_prefix_extractor(
                 "FixedSuffixSliceTransform",
-                Box::new(rocks::util::FixedSuffixSliceTransform::new(8)),
+                Box::new(crate::util::FixedSuffixSliceTransform::new(8)),
             )
             .unwrap_or_else(|err| panic!("{:?}", err));
         // Create prefix bloom filter for memtable.

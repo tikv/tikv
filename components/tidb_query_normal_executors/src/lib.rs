@@ -284,6 +284,8 @@ pub trait Executor: Send {
 
     fn take_scanned_range(&mut self) -> IntervalRange;
 
+    fn can_be_cached(&self) -> bool;
+
     fn with_summary_collector<C: ExecSummaryCollector>(
         self,
         summary_collector: C,
@@ -337,6 +339,11 @@ impl<C: ExecSummaryCollector + Send, T: Executor> Executor for WithSummaryCollec
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.inner.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        self.inner.can_be_cached()
+    }
 }
 
 impl<T: Executor + ?Sized> Executor for Box<T> {
@@ -370,6 +377,11 @@ impl<T: Executor + ?Sized> Executor for Box<T> {
     #[inline]
     fn take_scanned_range(&mut self) -> IntervalRange {
         (**self).take_scanned_range()
+    }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        (**self).can_be_cached()
     }
 }
 

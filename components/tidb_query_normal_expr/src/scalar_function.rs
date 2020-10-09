@@ -130,14 +130,19 @@ impl ScalarFunc {
             | ScalarFuncSig::Substring2Args
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::DateDiff
+            | ScalarFuncSig::MakeDate
             | ScalarFuncSig::AddDatetimeAndDuration
             | ScalarFuncSig::AddDatetimeAndString
             | ScalarFuncSig::AddDurationAndDuration
             | ScalarFuncSig::AddDurationAndString
+            | ScalarFuncSig::AddDateAndDuration
+            | ScalarFuncSig::AddDateAndString
             | ScalarFuncSig::SubDatetimeAndDuration
             | ScalarFuncSig::SubDatetimeAndString
             | ScalarFuncSig::SubDurationAndDuration
             | ScalarFuncSig::SubDurationAndString
+            | ScalarFuncSig::SubDateAndDuration
+            | ScalarFuncSig::SubDateAndString
             | ScalarFuncSig::PeriodAdd
             | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Strcmp
@@ -218,13 +223,19 @@ impl ScalarFunc {
             | ScalarFuncSig::UnaryMinusReal
             | ScalarFuncSig::UnaryMinusDecimal
             | ScalarFuncSig::IntIsTrue
+            | ScalarFuncSig::IntIsTrueWithNull
             | ScalarFuncSig::IntIsFalse
-            | ScalarFuncSig::IntIsNull
+            | ScalarFuncSig::IntIsFalseWithNull
             | ScalarFuncSig::RealIsTrue
+            | ScalarFuncSig::RealIsTrueWithNull
             | ScalarFuncSig::RealIsFalse
-            | ScalarFuncSig::RealIsNull
+            | ScalarFuncSig::RealIsFalseWithNull
             | ScalarFuncSig::DecimalIsTrue
+            | ScalarFuncSig::DecimalIsTrueWithNull
             | ScalarFuncSig::DecimalIsFalse
+            | ScalarFuncSig::DecimalIsFalseWithNull
+            | ScalarFuncSig::IntIsNull
+            | ScalarFuncSig::RealIsNull
             | ScalarFuncSig::DecimalIsNull
             | ScalarFuncSig::StringIsNull
             | ScalarFuncSig::TimeIsNull
@@ -294,6 +305,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Degrees
             | ScalarFuncSig::Sha1
             | ScalarFuncSig::Md5
+            | ScalarFuncSig::Password
             | ScalarFuncSig::Radians
             | ScalarFuncSig::Exp
             | ScalarFuncSig::Trim1Arg
@@ -307,6 +319,7 @@ impl ScalarFunc {
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::ToSeconds
+            | ScalarFuncSig::TimeToSec
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
@@ -336,6 +349,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Locate3ArgsUtf8
             | ScalarFuncSig::Locate3Args
             | ScalarFuncSig::Replace => (3, 3),
+
+            ScalarFuncSig::Insert => (4, 4),
 
             ScalarFuncSig::JsonArraySig
             | ScalarFuncSig::IntAnyValue
@@ -389,6 +404,7 @@ impl ScalarFunc {
             | ScalarFuncSig::LeastTime
             | ScalarFuncSig::IntervalInt
             | ScalarFuncSig::Elt
+            | ScalarFuncSig::MakeSet
             | ScalarFuncSig::IntervalReal => (2, usize::MAX),
 
             ScalarFuncSig::JsonSetSig
@@ -665,6 +681,7 @@ dispatch_call! {
         Year => year,
         ToDays => to_days,
         ToSeconds => to_seconds,
+        TimeToSec => time_to_sec,
         DateDiff => date_diff,
         PeriodAdd => period_add,
         PeriodDiff => period_diff,
@@ -677,15 +694,21 @@ dispatch_call! {
         UnaryNotReal => unary_not_real,
         UnaryNotDecimal => unary_not_decimal,
         UnaryMinusInt => unary_minus_int,
+        IntIsTrue => int_is_true false,
+        IntIsTrueWithNull => int_is_true true,
+        IntIsFalse => int_is_false false,
+        IntIsFalseWithNull => int_is_false true,
+        RealIsTrue => real_is_true false,
+        RealIsTrueWithNull => real_is_true true,
+        RealIsFalse => real_is_false false,
+        RealIsFalseWithNull => real_is_false true,
+        DecimalIsTrue => decimal_is_true false,
+        DecimalIsTrueWithNull => decimal_is_true true,
+        DecimalIsFalse => decimal_is_false false,
+        DecimalIsFalseWithNull => decimal_is_false true,
         IntIsNull => int_is_null,
-        IntIsFalse => int_is_false,
-        IntIsTrue => int_is_true,
-        RealIsTrue => real_is_true,
-        RealIsFalse => real_is_false,
         RealIsNull => real_is_null,
         DecimalIsNull => decimal_is_null,
-        DecimalIsTrue => decimal_is_true,
-        DecimalIsFalse => decimal_is_false,
         StringIsNull => string_is_null,
         TimeIsNull => time_is_null,
         DurationIsNull => duration_is_null,
@@ -873,6 +896,7 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         MonthName => month_name,
+        MakeSet => make_set,
         DayName => day_name,
         Bin => bin,
         Concat => concat,
@@ -889,10 +913,12 @@ dispatch_call! {
         InetNtoa => inet_ntoa,
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
+        Insert => insert,
         Md5 => md5,
         Uuid => uuid,
         Sha1 => sha1,
         Sha2 => sha2,
+        Password => password,
         Elt => elt,
         FromBase64 => from_base64,
         ToBase64 => to_base64,
@@ -919,6 +945,12 @@ dispatch_call! {
 
         StringAnyValue => string_any_value,
         AddTimeStringNull => add_time_string_null,
+
+        AddDateAndDuration => add_date_and_duration,
+        AddDateAndString => add_date_and_string,
+
+        SubDateAndDuration => sub_date_and_duration,
+        SubDateAndString => sub_date_and_string,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -940,6 +972,7 @@ dispatch_call! {
         SubDatetimeAndString => sub_datetime_and_string,
         SubTimeDateTimeNull => sub_time_datetime_null,
         FromDays => from_days,
+        MakeDate => make_date,
 
         IfNullTime => if_null_time,
         IfTime => if_time,

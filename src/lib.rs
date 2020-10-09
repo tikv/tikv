@@ -21,12 +21,12 @@
 #![recursion_limit = "400"]
 #![feature(cell_update)]
 #![feature(proc_macro_hygiene)]
-#![feature(specialization)]
+#![feature(min_specialization)]
 #![feature(const_fn)]
 #![feature(box_patterns)]
 #![feature(shrink_to)]
 #![feature(drain_filter)]
-#![feature(str_strip)]
+#![feature(clamp)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -38,8 +38,6 @@ extern crate quick_error;
 extern crate serde_derive;
 #[macro_use]
 extern crate slog_derive;
-#[macro_use]
-extern crate slog_global;
 #[macro_use]
 extern crate derive_more;
 #[macro_use]
@@ -68,6 +66,7 @@ pub fn tikv_version_info() -> String {
     let fallback = "Unknown (env var does not exist when building)";
     format!(
         "\nRelease Version:   {}\
+         \nEdition:           {}\
          \nGit Commit Hash:   {}\
          \nGit Commit Branch: {}\
          \nUTC Build Time:    {}\
@@ -75,6 +74,7 @@ pub fn tikv_version_info() -> String {
          \nEnable Features:   {}\
          \nProfile:           {}",
         env!("CARGO_PKG_VERSION"),
+        option_env!("TIKV_EDITION").unwrap_or("Community"),
         option_env!("TIKV_BUILD_GIT_HASH").unwrap_or(fallback),
         option_env!("TIKV_BUILD_GIT_BRANCH").unwrap_or(fallback),
         option_env!("TIKV_BUILD_TIME").unwrap_or(fallback),
@@ -89,7 +89,7 @@ pub fn tikv_version_info() -> String {
 /// Prints the tikv version information to the standard output.
 pub fn log_tikv_info() {
     info!("Welcome to TiKV");
-    for line in tikv_version_info().lines() {
+    for line in tikv_version_info().lines().filter(|s| !s.is_empty()) {
         info!("{}", line);
     }
 }

@@ -5,11 +5,11 @@ use std::io::Error as IoError;
 use std::net::AddrParseError;
 use std::result;
 
+use futures::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
 use hyper::Error as HttpError;
 use openssl::error::ErrorStack as OpenSSLError;
 use protobuf::ProtobufError;
-use tokio_sync::oneshot::error::RecvError;
 
 use super::snap::Task as SnapTask;
 use crate::storage::kv::Error as EngineError;
@@ -26,7 +26,6 @@ quick_error! {
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("{:?}", err)
         }
         // Following is for From other errors.
@@ -34,85 +33,73 @@ quick_error! {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         Protobuf(err: ProtobufError) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Grpc(err: GrpcError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         Codec(err: CodecError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         AddrParse(err: AddrParseError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         RaftServer(err: RaftServerError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         Engine(err: EngineError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         EngineTrait(err: EngineTraitError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         Storage(err: StorageError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         Pd(err: PdError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         SnapWorkerStopped(err: ScheduleError<SnapTask>) {
             from()
             display("{:?}", err)
         }
         Sink {
-            description("failed to poll from mpsc receiver")
+            display("failed to poll from mpsc receiver")
         }
-        RecvError(err: RecvError) {
+        RecvError(err: Canceled) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         Http(err: HttpError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         OpenSSL(err: OpenSSLError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
     }
 }

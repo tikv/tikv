@@ -1,5 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! There are multiple [`Engine`](kv::Engine) implementations, [`RaftKv`](crate::server::raftkv::RaftKv)
+//! is used by the [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
+//! [`RocksEngine`](RocksEngine) are used for testing only.
+
 mod btree_engine;
 mod cursor;
 mod perf_context;
@@ -12,20 +16,23 @@ use std::time::Duration;
 use std::{error, ptr, result};
 
 use engine_rocks::RocksTablePropertiesCollection;
-use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT};
+use engine_traits::{IterOptions, KvEngine as LocalEngine, ReadOptions};
+use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::Context;
-use txn_types::{Key, Value};
+use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
+use txn_types::{Key, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
+pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot, TestEngineBuilder};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
+use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -36,11 +43,15 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(Debug)]
 pub struct CbContext {
     pub term: Option<u64>,
+    pub txn_extra_op: TxnExtraOp,
 }
 
 impl CbContext {
     pub fn new() -> CbContext {
-        CbContext { term: None }
+        CbContext {
+            term: None,
+            txn_extra_op: TxnExtraOp::Noop,
+        }
     }
 }
 
@@ -69,13 +80,44 @@ impl Modify {
     }
 }
 
+#[derive(Default)]
+pub struct WriteData {
+    pub modifies: Vec<Modify>,
+    pub extra: TxnExtra,
+}
+
+impl WriteData {
+    pub fn new(modifies: Vec<Modify>, extra: TxnExtra) -> Self {
+        Self { modifies, extra }
+    }
+
+    pub fn from_modifies(modifies: Vec<Modify>) -> Self {
+        Self::new(modifies, TxnExtra::default())
+    }
+}
+
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
+    type Local: LocalEngine;
 
-    fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
-    fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
+    /// Local storage engine.
+    fn kv_engine(&self) -> Self::Local;
 
-    fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
+    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap>;
+
+    /// Write modifications into internal local engine directly.
+    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
+
+    fn async_snapshot(
+        &self,
+        ctx: &Context,
+        read_id: Option<ThreadReadId>,
+        cb: Callback<Self::Snap>,
+    ) -> Result<()>;
+
+    fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
+
+    fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {
             Some((_, res)) => res,
@@ -83,9 +125,11 @@ pub trait Engine: Send + Clone + 'static {
         }
     }
 
+    fn release_snapshot(&self) {}
+
     fn snapshot(&self, ctx: &Context) -> Result<Self::Snap> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
+        match wait_op!(|cb| self.async_snapshot(ctx, None, cb), timeout) {
             Some((_, res)) => res,
             None => Err(Error::from(ErrorInner::Timeout(timeout))),
         }
@@ -96,7 +140,10 @@ pub trait Engine: Send + Clone + 'static {
     }
 
     fn put_cf(&self, ctx: &Context, cf: CfName, key: Key, value: Value) -> Result<()> {
-        self.write(ctx, vec![Modify::Put(cf, key, value)])
+        self.write(
+            ctx,
+            WriteData::from_modifies(vec![Modify::Put(cf, key, value)]),
+        )
     }
 
     fn delete(&self, ctx: &Context, key: Key) -> Result<()> {
@@ -104,7 +151,7 @@ pub trait Engine: Send + Clone + 'static {
     }
 
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
-        self.write(ctx, vec![Modify::Delete(cf, key)])
+        self.write(ctx, WriteData::from_modifies(vec![Modify::Delete(cf, key)]))
     }
 
     fn get_properties(&self, start: &[u8], end: &[u8]) -> Result<RocksTablePropertiesCollection> {
@@ -121,11 +168,12 @@ pub trait Engine: Send + Clone + 'static {
     }
 }
 
-pub trait Snapshot: Send + Clone {
+pub trait Snapshot: Sync + Send + Clone {
     type Iter: Iterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>>;
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     fn iter_cf(
         &self,
@@ -151,6 +199,12 @@ pub trait Snapshot: Send + Clone {
     #[inline]
     fn get_data_version(&self) -> Option<u64> {
         None
+    }
+
+    fn is_max_ts_synced(&self) -> bool {
+        // If the snapshot does not come from a multi-raft engine, max ts
+        // needn't be updated.
+        true
     }
 }
 
@@ -185,21 +239,17 @@ quick_error! {
     pub enum ErrorInner {
         Request(err: ErrorHeader) {
             from()
-            description("request to underhook engine failed")
             display("{:?}", err)
         }
         Timeout(d: Duration) {
-            description("request timeout")
             display("timeout after {:?}", d)
         }
         EmptyRequest {
-            description("an empty request")
             display("an empty request")
         }
         Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("unknown error {:?}", err)
         }
     }
@@ -243,10 +293,6 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        std::error::Error::description(&self.0)
-    }
-
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         std::error::Error::source(&self.0)
     }
@@ -264,6 +310,17 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     default fn from(err: T) -> Self {
         let err = err.into();
         err.into()
+    }
+}
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Request(e) => e.error_code(),
+            ErrorInner::Timeout(_) => error_code::storage::TIMEOUT,
+            ErrorInner::EmptyRequest => error_code::storage::EMPTY_REQUEST,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
+        }
     }
 }
 
@@ -319,6 +376,34 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
             *e.get() = ptr::null_mut();
         }
     });
+}
+
+/// Get a snapshot of `engine`.
+pub fn snapshot<E: Engine>(
+    engine: &E,
+    read_id: Option<ThreadReadId>,
+    ctx: &Context,
+) -> impl std::future::Future<Output = Result<E::Snap>> {
+    let (callback, future) =
+        tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
+    let val = engine.async_snapshot(ctx, read_id, callback);
+    // make engine not cross yield point
+    async move {
+        val?; // propagate error
+        let (_ctx, result) = future
+            .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
+            .await?;
+        fail_point!("after-snapshot");
+        result
+    }
+}
+
+pub fn drop_snapshot_callback<E: Engine>() -> (CbContext, Result<E::Snap>) {
+    let bt = backtrace::Backtrace::new();
+    warn!("async snapshot callback is dropped"; "backtrace" => ?bt);
+    let mut err = ErrorHeader::default();
+    err.set_message("async snapshot callback is dropped".to_string());
+    (CbContext::new(), Err(Error::from(ErrorInner::Request(err))))
 }
 
 #[cfg(test)]
@@ -449,10 +534,10 @@ pub mod tests {
         engine
             .write(
                 &Context::default(),
-                vec![
+                WriteData::from_modifies(vec![
                     Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
                     Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
-                ],
+                ]),
             )
             .unwrap();
         assert_has(engine, b"x", b"1");
@@ -461,10 +546,10 @@ pub mod tests {
         engine
             .write(
                 &Context::default(),
-                vec![
+                WriteData::from_modifies(vec![
                     Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
                     Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
-                ],
+                ]),
             )
             .unwrap();
         assert_none(engine, b"y");
@@ -712,7 +797,9 @@ pub mod tests {
     }
 
     fn test_empty_write<E: Engine>(engine: &E) {
-        engine.write(&Context::default(), vec![]).unwrap_err();
+        engine
+            .write(&Context::default(), WriteData::default())
+            .unwrap_err();
     }
 
     pub fn test_cfs_statistics<E: Engine>(engine: &E) {

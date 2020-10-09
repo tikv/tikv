@@ -21,6 +21,7 @@ make_auto_flush_static_metric! {
         kv_batch_rollback,
         kv_txn_heart_beat,
         kv_check_txn_status,
+        kv_check_secondary_locks,
         kv_scan_lock,
         kv_resolve_lock,
         kv_gc,
@@ -35,6 +36,12 @@ make_auto_flush_static_metric! {
         raw_delete,
         raw_delete_range,
         raw_batch_delete,
+        ver_get,
+        ver_batch_get,
+        ver_mut,
+        ver_batch_mut,
+        ver_scan,
+        ver_delete_range,
         unsafe_destroy_range,
         physical_scan_lock,
         register_lock_observer,
@@ -75,14 +82,17 @@ make_auto_flush_static_metric! {
     }
 
     pub label_enum GcKeysDetail {
-        total,
-        processed,
+        processed_keys,
         get,
         next,
         prev,
         seek,
         seek_for_prev,
         over_seek_bound,
+        next_tombstone,
+        prev_tombstone,
+        seek_tombstone,
+        seek_for_prev_tombstone,
     }
 
     pub struct GcCommandCounterVec: LocalIntCounter {
@@ -124,8 +134,22 @@ make_static_metric! {
         kv_get,
     }
 
+    pub label_enum BatchableRequestKind {
+        point_get,
+        prewrite,
+        commit,
+    }
+
     pub struct GrpcMsgHistogramGlobal: Histogram {
         "type" => GlobalGrpcTypeKind,
+    }
+
+    pub struct RequestBatchSizeHistogramVec: Histogram {
+        "type" => BatchableRequestKind,
+    }
+
+    pub struct RequestBatchRatioHistogramVec: Histogram {
+        "type" => BatchableRequestKind,
     }
 }
 
@@ -293,18 +317,27 @@ lazy_static! {
         &["cf", "name"]
     )
     .unwrap();
-    pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_server_request_batch_size",
-        "Size of request batch input",
-        &["type"],
-        exponential_buckets(1f64, 5f64, 10).unwrap()
-    )
-    .unwrap();
-    pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_server_request_batch_ratio",
-        "Ratio of request batch output to input",
-        &["type"],
-        exponential_buckets(1f64, 5f64, 10).unwrap()
+    pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: RequestBatchSizeHistogramVec =
+        register_static_histogram_vec!(
+            RequestBatchSizeHistogramVec,
+            "tikv_server_request_batch_size",
+            "Size of request batch input",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
+        .unwrap();
+    pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: RequestBatchRatioHistogramVec =
+        register_static_histogram_vec!(
+            RequestBatchRatioHistogramVec,
+            "tikv_server_request_batch_ratio",
+            "Ratio of request batch output to input",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
+        .unwrap();
+    pub static ref CPU_CORES_QUOTA_GAUGE: Gauge = register_gauge!(
+        "tikv_server_cpu_cores_quota",
+        "Total CPU cores quota for TiKV server"
     )
     .unwrap();
 }

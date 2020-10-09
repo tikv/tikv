@@ -14,7 +14,7 @@ If you're interested in contributing to TiKV, or want to build it from source, s
 
 ![cncf_logo](images/cncf.png)
 
-TiKV is an incubating project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/blog/2019/05/21/toc-votes-to-move-tikv-into-cncf-incubator/).
+TiKV is a graduated project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/announcements/2020/09/02/cloud-native-computing-foundation-announces-tikv-graduation/).
 
 ---
 
@@ -48,7 +48,7 @@ See [Governance](https://github.com/tikv/community/blob/master/GOVERNANCE.md).
 
 ## Documentation
 
-For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/3.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/docs/deep-dive/introduction/).
+For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/4.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/deep-dive/introduction/).
 
 > **Note:**
 >
@@ -77,25 +77,25 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 TiKV was originally a component of [TiDB](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage a TiKV cluster. You can use TiKV together with TiDB or separately on its own.
 
-We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's website](https://tikv.org/docs/3.0/concepts/overview/).
+We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's website](https://tikv.org/docs/4.0/concepts/overview/).
 
 ### Testing deployment
 
-- [Try TiKV and TiDB](https://tikv.org/docs/3.0/tasks/try/)
+- [Try TiKV and TiDB](https://tikv.org/docs/4.0/tasks/try/introduction/)
 
     You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://pingcap.com/docs/).
 
 - Try TiKV separately
-    - [Deploy TiKV Using Docker Compose/Swarm](https://tikv.org/docs/3.0/tasks/deploy/docker-compose/): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
-    - [Deploy TiKV Using Docker](https://tikv.org/docs/3.0/tasks/deploy/docker/): To deploy a multi-node TiKV testing cluster using Docker
-    - [Deploy TiKV Using Binary Files](https://tikv.org/docs/3.0/tasks/deploy/binary/): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
+    - [Deploy TiKV Using Docker Stack](https://tikv.org/docs/4.0/tasks/try/docker-stack/): To quickly test TiKV separately without TiDB on a single machine
+    - [Deploy TiKV Using Docker](https://tikv.org/docs/4.0/tasks/deploy/docker/): To deploy a multi-node TiKV testing cluster using Docker
+    - [Deploy TiKV Using Binary Files](https://tikv.org/docs/4.0/tasks/deploy/binary/): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
 
 ### Production deployment
 
 For the production environment, use [Ansible](https://github.com/pingcap/tidb-ansible) to deploy the cluster.
 
-- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/orchestrated/ansible.md)
-- [Deploy TiKV separately Using Ansible](https://tikv.org/docs/3.0/tasks/deploy/ansible/)
+- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/how-to/deploy/orchestrated/ansible.md)
+- [Deploy TiKV separately Using Ansible](https://tikv.org/docs/4.0/tasks/deploy/ansible/)
 
 ## Client drivers
 
@@ -108,23 +108,29 @@ These are the clients for TiKV:
 - [Rust](https://github.com/tikv/client-rust)
 - [C](https://github.com/tikv/client-c)
 
-If you want to try the Go client, see [Go Client](https://tikv.org/docs/3.0/reference/clients/go/).
+If you want to try the Go client, see [Go Client](https://tikv.org/docs/4.0/reference/clients/go/).
 
 ## Community Meeting
 
-The TiKV team meets on the 4th Wednesday of every month (unless otherwise specified) at 06.00 p.m. PST ([Time zone converter](https://www.google.com/search?sxsrf=ALeKk02SmvBBaYBXqhMbPnrJ05YKvGfBzQ%3A1584965273869&ei=maZ4XtXbNI61mAXs4oSIBQ&q=6pm+PST&oq=6pm+PST&gs_l=psy-ab.3..0l2j0i20i263j0l7.27953.27953..28837...0.2..0.261.261.2-1......0....1..gws-wiz.......0i71.FHU-fAZ7FLU&ved=0ahUKEwiVjIXhx7DoAhWOGqYKHWwxAVEQ4dUDCAs&uact=5)).
+The TiKV team meets on the 4th Wednesday of every month (unless otherwise specified) at 07.00 p.m. PST ([Time zone converter](https://www.google.com/search?sxsrf=ALeKk01UVqm3BLWjN2AJxMSG73KiUqUdDw%3A1589771998935&ei=3v7BXuDQOJSl-QaKq62ICQ&q=7pm+PST&oq=7pm+PST&gs_lcp=CgZwc3ktYWIQAzIECAAQQzIECAAQQzIECAAQQzIECAAQQzIECAAQQzIECAAQQzICCAAyAggAMgYIABAHEB4yAggAOgQIABBHOggIABAHEAoQHlDQWFicXGC-ZWgAcAF4AIABmwGIAa4CkgEDMC4ymAEAoAEBqgEHZ3dzLXdpeg&sclient=psy-ab&ved=0ahUKEwjgt5SaurzpAhWUUt4KHYpVC5EQ4dUDCAw&uact=5)).
 
 Quick links:
 
 *   [Meeting notes](https://docs.google.com/document/d/1CWUAkBrcm9KPclAu8fWHZzByZ0yhsQdRggnEdqtRMQ8/edit)
 *   [Zoom meeting link](https://zoom.us/my/cncftikvproject)
+*   [Recorded videos](https://www.youtube.com/playlist?list=PLR6NVnaTxyL2B2ZyKw5XDzkGN72YF7vuN)
 
 ## Security
-
 
 ### Security Audit
 
 A third-party security auditing was performed by Cure53. See the full report [here](./docs/Security-Audit.pdf).
+
+### Reporting Security Vulnerabilities
+
+To report a security vulnerability, please send an email to [TiKV-security](tikv-security@lists.cncf.io) group.
+
+See [Security](./SECURITY.md) for the process and policy followed by the TiKV project. 
 
 ## Communication
 

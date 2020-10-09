@@ -8,18 +8,21 @@ use std::fmt;
 use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::thread;
 
 use log::{self, SetLoggerError};
-use slog::{self, Drain, Key, OwnedKVList, Record, KV};
+use slog::{self, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
 use slog_async::{Async, OverflowStrategy};
-use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
+use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 
 use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
 use crate::config::{ReadableDuration, ReadableSize};
 
 pub use slog::{FilterFn, Level};
 
-/// The suffix appended to the end of rotated log files by datetime log rotator
+// The suffix appended to the end of rotated log files by datetime log rotator
+// Warning: Diagnostics service parses log files by file name format.
+//          Remember to update the corresponding code when suffix layout is changed.
 pub const DATETIME_ROTATE_SUFFIX: &str = "%Y-%m-%d-%H:%M:%S%.f";
 
 // Default is 128.
@@ -59,7 +62,7 @@ where
             //  ...
             // ```
             // Here get the highest level module name to check.
-            let module = record.module().splitn(2, "::").nth(0).unwrap();
+            let module = record.module().splitn(2, "::").next().unwrap();
             disabled_targets.iter().all(|target| target != module)
         } else {
             true
@@ -107,18 +110,14 @@ pub fn set_global_logger(
     Ok(())
 }
 
-/// A simple alias to `PlainDecorator<BufWriter<RotatingFileLogger>>`.
-// Avoid clippy type_complexity lint.
-pub type RotatingFileDecorator = PlainDecorator<BufWriter<RotatingFileLogger>>;
-
-/// Constructs a new file drainer which outputs log to a file at the specified
-/// path. The file drainer rotates for the specified timespan.
-pub fn file_drainer<N>(
+/// Constructs a new file writer which outputs log to a file at the specified
+/// path. The file writer rotates for the specified timespan.
+pub fn file_writer<N>(
     path: impl AsRef<Path>,
     rotation_timespan: ReadableDuration,
     rotation_size: ReadableSize,
     rename: N,
-) -> io::Result<TikvFormat<RotatingFileDecorator>>
+) -> io::Result<BufWriter<RotatingFileLogger>>
 where
     N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
 {
@@ -128,15 +127,54 @@ where
             .add_rotator(RotateBySize::new(rotation_size))
             .build()?,
     );
-    let decorator = PlainDecorator::new(logger);
-    let drain = TikvFormat::new(decorator);
-    Ok(drain)
+    Ok(logger)
 }
 
-/// Constructs a new terminal drainer which outputs logs to stderr.
-pub fn term_drainer() -> TikvFormat<TermDecorator> {
-    let decorator = TermDecorator::new().stderr().build();
+/// Constructs a new terminal writer which outputs logs to stderr.
+pub fn term_writer() -> io::Stderr {
+    io::stderr()
+}
+
+/// Formats output logs to "TiDB Log Format".
+pub fn text_format<W>(io: W) -> TikvFormat<PlainDecorator<W>>
+where
+    W: io::Write,
+{
+    let decorator = PlainDecorator::new(io);
     TikvFormat::new(decorator)
+}
+
+/// Same as text_format, but is adjusted to be closer to vanilla RocksDB logger format.
+pub fn rocks_text_format<W>(io: W) -> RocksFormat<PlainDecorator<W>>
+where
+    W: io::Write,
+{
+    let decorator = PlainDecorator::new(io);
+    RocksFormat::new(decorator)
+}
+
+/// Formats output logs to JSON format.
+pub fn json_format<W>(io: W) -> slog_json::Json<W>
+where
+    W: io::Write,
+{
+    slog_json::Json::new(io)
+        .set_newlines(true)
+        .set_flush(true)
+        .add_key_value(slog_o!(
+            "message" => PushFnValue(|record, ser| ser.emit(record.msg())),
+            "caller" => PushFnValue(|record, ser| ser.emit(format_args!(
+                "{}:{}",
+                Path::new(record.file())
+                    .file_name()
+                    .and_then(|path| path.to_str())
+                    .unwrap_or("<unknown>"),
+                record.line(),
+            ))),
+            "level" => FnValue(|record| get_unified_log_level(record.level())),
+            "time" => FnValue(|_| chrono::Local::now().format(TIMESTAMP_FORMAT).to_string()),
+        ))
+        .build()
 }
 
 pub fn get_level_by_string(lv: &str) -> Option<Level> {
@@ -236,6 +274,57 @@ where
     }
 }
 
+pub struct RocksFormat<D>
+where
+    D: Decorator,
+{
+    decorator: D,
+}
+
+impl<D> RocksFormat<D>
+where
+    D: Decorator,
+{
+    pub fn new(decorator: D) -> Self {
+        Self { decorator }
+    }
+}
+
+impl<D> Drain for RocksFormat<D>
+where
+    D: Decorator,
+{
+    type Ok = ();
+    type Err = io::Error;
+
+    fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        self.decorator.with_record(record, values, |decorator| {
+            if !record.tag().ends_with("_header") {
+                decorator.start_timestamp()?;
+                write!(
+                    decorator,
+                    "[{}][{}]",
+                    chrono::Local::now().format(TIMESTAMP_FORMAT),
+                    thread::current().id().as_u64(),
+                )?;
+                decorator.start_level()?;
+                write!(decorator, "[{}]", get_unified_log_level(record.level()))?;
+                decorator.start_whitespace()?;
+                write!(decorator, " ")?;
+            }
+            decorator.start_msg()?;
+            let msg = format!("{}", record.msg());
+            write!(decorator, "{}", msg)?;
+            if !msg.ends_with('\n') {
+                writeln!(decorator)?;
+            }
+            decorator.flush()?;
+
+            Ok(())
+        })
+    }
+}
+
 struct LogAndFuse<D>(D);
 
 impl<D> Drain for LogAndFuse<D>
@@ -248,7 +337,7 @@ where
 
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         if let Err(e) = self.0.log(record, values) {
-            let fatal_drainer = Mutex::new(term_drainer()).ignore_res();
+            let fatal_drainer = Mutex::new(text_format(term_writer())).ignore_res();
             fatal_drainer.log(record, values).unwrap();
             let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
             slog::slog_crit!(
@@ -323,28 +412,42 @@ impl slog::Value for LogCost {
 }
 
 /// Dispatches logs to a normal `Drain` or a slow-log specialized `Drain` by tag
-pub struct LogDispatcher<N: Drain, S: Drain> {
+pub struct LogDispatcher<N: Drain, R: Drain, S: Drain, T: Drain> {
     normal: N,
-    slow: S,
+    rocksdb: R,
+    raftdb: T,
+    slow: Option<S>,
 }
 
-impl<N: Drain, S: Drain> LogDispatcher<N, S> {
-    pub fn new(normal: N, slow: S) -> Self {
-        Self { normal, slow }
+impl<N: Drain, R: Drain, S: Drain, T: Drain> LogDispatcher<N, R, S, T> {
+    pub fn new(normal: N, rocksdb: R, raftdb: T, slow: Option<S>) -> Self {
+        Self {
+            normal,
+            rocksdb,
+            raftdb,
+            slow,
+        }
     }
 }
 
-impl<N, S> Drain for LogDispatcher<N, S>
+impl<N, R, S, T> Drain for LogDispatcher<N, R, S, T>
 where
     N: Drain<Ok = (), Err = io::Error>,
+    R: Drain<Ok = (), Err = io::Error>,
     S: Drain<Ok = (), Err = io::Error>,
+    T: Drain<Ok = (), Err = io::Error>,
 {
     type Ok = ();
     type Err = io::Error;
 
     fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
-        if record.tag().starts_with("slow_log") {
-            self.slow.log(record, values)
+        let tag = record.tag();
+        if self.slow.is_some() && tag.starts_with("slow_log") {
+            self.slow.as_ref().unwrap().log(record, values)
+        } else if tag.starts_with("rocksdb_log") {
+            self.rocksdb.log(record, values)
+        } else if tag.starts_with("raftdb_log") {
+            self.raftdb.log(record, values)
         } else {
             self.normal.log(record, values)
         }
@@ -495,12 +598,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_log_format() {
+    fn log_format_cases(logger: slog::Logger) {
         use std::time::Duration;
-        let decorator = PlainSyncDecorator::new(TestWriter);
-        let drain = TikvFormat::new(decorator).fuse();
-        let logger = slog::Logger::root_typed(drain, slog_o!());
 
         // Empty message is not recommend, just for test purpose here.
         slog_info!(logger, "");
@@ -510,9 +609,9 @@ mod tests {
         slog_info!(logger, "欢迎 TiKV");
 
         slog_info!(logger, "failed to fetch URL";
-                    "url" => "http://example.com",
-                    "attempt" => 3,
-                    "backoff" => ?Duration::new(3, 0),
+            "url" => "http://example.com",
+            "attempt" => 3,
+            "backoff" => ?Duration::new(3, 0),
         );
 
         slog_info!(
@@ -552,6 +651,15 @@ mod tests {
                 "\\x80\\x80\\x80\\x80",
                 "<car><mirror>XML</mirror></car>"]
         );
+    }
+
+    #[test]
+    fn test_log_format_text() {
+        let decorator = PlainSyncDecorator::new(TestWriter);
+        let drain = TikvFormat::new(decorator).fuse();
+        let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
+
+        log_format_cases(logger);
 
         let expect = r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] []
 [2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome]
@@ -566,7 +674,7 @@ mod tests {
 "#;
 
         BUFFER.with(|buffer| {
-            let buffer = buffer.borrow_mut();
+            let mut buffer = buffer.borrow_mut();
             let output = from_utf8(&*buffer).unwrap();
             assert_eq!(output.lines().count(), expect.lines().count());
 
@@ -576,7 +684,7 @@ mod tests {
                 let expect_segments = re.captures(expect_line).unwrap();
                 let output_segments = re.captures(output_line).unwrap();
 
-                validate_log_datetime(peel(&expect_segments["datetime"]));
+                validate_log_datetime(peel(&output_segments["datetime"]));
 
                 assert!(validate_log_source_file(
                     peel(&expect_segments["source_file"]),
@@ -589,6 +697,51 @@ mod tests {
                     output_segments.name("kvs").map(|s| s.as_str())
                 );
             }
+            buffer.clear();
+        });
+    }
+
+    #[test]
+    fn test_log_format_json() {
+        use serde_json::{from_str, Value};
+        let drain = Mutex::new(json_format(TestWriter)).map(slog::Fuse);
+        let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
+
+        log_format_cases(logger);
+
+        let expect = r#"{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs:469","message":""}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:469","message":"Welcome"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:470","message":"Welcome TiKV"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:471","message":"欢迎"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:472","message":"欢迎 TiKV"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:455","message":"failed to fetch URL","backoff":"3s","attempt":3,"url":"http://example.com"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:460","message":"failed to \"fetch\" [URL]: http://example.com"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"DEBUG","caller":"mod.rs:463","message":"Slow query","process keys":1500,"duration":"123ns","sql":"SELECT * FROM TABLE WHERE ID=\"abc\""}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"WARN","caller":"mod.rs:473","message":"Type","Other":null,"Score":null,"Counter":null}
+{"time":"2020/05/16 15:49:52.451 +08:00","level":"INFO","caller":"mod.rs:391","message":"more type tests","str_array":"[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]","u8":34,"is_None":null,"is_false":false,"is_true":true,"store ids":"[1, 2, 3]","url-peers":"[\"peer1\", \"peer 2\"]","urls":"[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]","field2":"in quote","field1":"no_quote"}
+"#;
+
+        BUFFER.with(|buffer| {
+            let mut buffer = buffer.borrow_mut();
+            let output = from_utf8(&*buffer).unwrap();
+            assert_eq!(output.lines().count(), expect.lines().count());
+
+            for (output_line, expect_line) in output.lines().zip(expect.lines()) {
+                let mut expect_json = from_str::<Value>(expect_line).unwrap();
+                let mut output_json = from_str::<Value>(output_line).unwrap();
+
+                validate_log_datetime(output_json["time"].take().as_str().unwrap());
+                // Remove time field to bypass timestamp mismatch.
+                let _ = expect_json["time"].take();
+
+                validate_log_source_file(
+                    output_json["caller"].take().as_str().unwrap(),
+                    expect_json["caller"].take().as_str().unwrap(),
+                );
+
+                assert_eq!(expect_json, output_json);
+            }
+            buffer.clear();
         });
     }
 
@@ -687,7 +840,9 @@ mod tests {
 
     thread_local! {
         static NORMAL_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+        static ROCKSDB_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
         static SLOW_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+        static RAFTDB_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
     }
 
     struct NormalWriter;
@@ -697,6 +852,16 @@ mod tests {
         }
         fn flush(&mut self) -> io::Result<()> {
             NORMAL_BUFFER.with(|buffer| buffer.borrow_mut().flush())
+        }
+    }
+
+    struct RocksdbLogWriter;
+    impl Write for RocksdbLogWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            ROCKSDB_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            ROCKSDB_BUFFER.with(|buffer| buffer.borrow_mut().flush())
         }
     }
 
@@ -710,11 +875,23 @@ mod tests {
         }
     }
 
+    struct RaftDBWriter;
+    impl Write for RaftDBWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            RAFTDB_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            RAFTDB_BUFFER.with(|buffer| buffer.borrow_mut().flush())
+        }
+    }
+
     #[test]
     fn test_slow_log_dispatcher() {
         let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter));
         let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter));
-        let drain = LogDispatcher::new(normal, slow).fuse();
+        let rocksdb = TikvFormat::new(PlainSyncDecorator::new(RocksdbLogWriter));
+        let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDBWriter));
+        let drain = LogDispatcher::new(normal, rocksdb, raftdb, Some(slow)).fuse();
         let drain = SlowLogFilter {
             threshold: 200,
             inner: drain,

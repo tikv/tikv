@@ -50,6 +50,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.0.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        self.0.can_be_cached()
+    }
 }
 
 // We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
@@ -399,12 +404,13 @@ fn update_current_states(
             match aggr_fn_input {
                 RpnStackNode::Scalar { value, .. } => {
                     match_template_evaluable! {
-                        TT, match value {
-                            ScalarValue::TT(scalar_value) => {
-                                state.update_repeat(
+                        TT, match value.as_scalar_value_ref() {
+                            ScalarValueRef::TT(scalar_value) => {
+                                update_repeat!(
+                                    state,
                                     ctx,
                                     scalar_value,
-                                    end_logical_row - start_logical_row,
+                                    end_logical_row - start_logical_row
                                 )?;
                             },
                         }
@@ -416,10 +422,11 @@ fn update_current_states(
                     match_template_evaluable! {
                         TT, match physical_vec {
                             VectorValue::TT(vec) => {
-                                state.update_vector(
+                                update_vector!(
+                                    state,
                                     ctx,
                                     vec,
-                                    &logical_rows[start_logical_row..end_logical_row],
+                                    &logical_rows[start_logical_row..end_logical_row]
                                 )?;
                             },
                         }
@@ -495,27 +502,27 @@ mod tests {
         assert!(!r.is_drained.unwrap());
         // COUNT
         assert_eq!(
-            r.physical_columns[0].decoded().as_int_slice(),
+            r.physical_columns[0].decoded().to_int_vec(),
             &[Some(1), Some(2)]
         );
         // AVG_COUNT
         assert_eq!(
-            r.physical_columns[1].decoded().as_int_slice(),
+            r.physical_columns[1].decoded().to_int_vec(),
             &[Some(0), Some(2)]
         );
         // AVG_SUM
         assert_eq!(
-            r.physical_columns[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().to_real_vec(),
             &[None, Real::new(5.0).ok()]
         );
         // col_0
         assert_eq!(
-            r.physical_columns[3].decoded().as_bytes_slice(),
+            r.physical_columns[3].decoded().to_bytes_vec(),
             &[None, None]
         );
         // col_1
         assert_eq!(
-            r.physical_columns[4].decoded().as_real_slice(),
+            r.physical_columns[4].decoded().to_real_vec(),
             &[None, Real::new(3.5).ok()]
         );
 
@@ -530,22 +537,22 @@ mod tests {
         assert_eq!(r.physical_columns.columns_len(), 5);
         assert!(r.is_drained.unwrap());
         // COUNT
-        assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(5)]);
         // AVG_COUNT
-        assert_eq!(r.physical_columns[1].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[1].decoded().to_int_vec(), &[Some(5)]);
         // AVG_SUM
         assert_eq!(
-            r.physical_columns[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().to_real_vec(),
             &[Real::new(-20.0).ok()]
         );
         // col_0
         assert_eq!(
-            r.physical_columns[3].decoded().as_bytes_slice(),
+            r.physical_columns[3].decoded().to_bytes_vec(),
             &[Some(b"ABC".to_vec())]
         );
         // col_1
         assert_eq!(
-            r.physical_columns[4].decoded().as_real_slice(),
+            r.physical_columns[4].decoded().to_real_vec(),
             &[Real::new(-3.0).ok()]
         );
     }
@@ -579,12 +586,12 @@ mod tests {
         assert!(!r.is_drained.unwrap());
         // col_0
         assert_eq!(
-            r.physical_columns[0].decoded().as_bytes_slice(),
+            r.physical_columns[0].decoded().to_bytes_vec(),
             &[None, None]
         );
         // col_1
         assert_eq!(
-            r.physical_columns[1].decoded().as_real_slice(),
+            r.physical_columns[1].decoded().to_real_vec(),
             &[None, Real::new(1.5).ok()]
         );
 
@@ -600,12 +607,12 @@ mod tests {
         assert!(r.is_drained.unwrap());
         // col_0
         assert_eq!(
-            r.physical_columns[0].decoded().as_bytes_slice(),
+            r.physical_columns[0].decoded().to_bytes_vec(),
             &[Some(b"ABC".to_vec())]
         );
         // col_1
         assert_eq!(
-            r.physical_columns[1].decoded().as_real_slice(),
+            r.physical_columns[1].decoded().to_real_vec(),
             &[Real::new(-5.0).ok()]
         );
     }
@@ -638,24 +645,30 @@ mod tests {
             vec![
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Bytes(vec![
-                            Some(b"foo".to_vec()),
-                            None,
-                            Some(b"ABC".to_vec()),
-                            None,
-                            None,
-                            None,
-                            Some(b"ABC".to_vec()),
-                        ]),
-                        VectorValue::Real(vec![
-                            Real::new(100.0).ok(),
-                            Real::new(1.5).ok(),
-                            Real::new(-5.0).ok(),
-                            None,
-                            Real::new(1.5).ok(),
-                            None,
-                            Real::new(-5.0).ok(),
-                        ]),
+                        VectorValue::Bytes(
+                            vec![
+                                Some(b"foo".to_vec()),
+                                None,
+                                Some(b"ABC".to_vec()),
+                                None,
+                                None,
+                                None,
+                                Some(b"ABC".to_vec()),
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Real(
+                            vec![
+                                Real::new(100.0).ok(),
+                                Real::new(1.5).ok(),
+                                Real::new(-5.0).ok(),
+                                None,
+                                Real::new(1.5).ok(),
+                                None,
+                                Real::new(-5.0).ok(),
+                            ]
+                            .into(),
+                        ),
                     ]),
                     logical_rows: vec![3, 1, 4, 2, 6],
                     warnings: EvalWarnings::default(),
@@ -663,8 +676,10 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Bytes(vec![None, None, Some(b"ABC".to_vec())]),
-                        VectorValue::Real(vec![None, Real::new(100.0).ok(), Real::new(-5.0).ok()]),
+                        VectorValue::Bytes(vec![None, None, Some(b"ABC".to_vec())].into()),
+                        VectorValue::Real(
+                            vec![None, Real::new(100.0).ok(), Real::new(-5.0).ok()].into(),
+                        ),
                     ]),
                     logical_rows: vec![2],
                     warnings: EvalWarnings::default(),
@@ -672,8 +687,10 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Bytes(vec![Some(b"abc".to_vec()), Some(b"abc".to_vec())]),
-                        VectorValue::Real(vec![Real::new(-5.0).ok(), Real::new(-5.0).ok()]),
+                        VectorValue::Bytes(
+                            vec![Some(b"abc".to_vec()), Some(b"abc".to_vec())].into(),
+                        ),
+                        VectorValue::Real(vec![Real::new(-5.0).ok(), Real::new(-5.0).ok()].into()),
                     ]),
                     logical_rows: (0..2).collect(),
                     warnings: EvalWarnings::default(),

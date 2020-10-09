@@ -1,5 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[macro_use]
+extern crate tikv_util;
+
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::sync::Arc;
@@ -68,19 +71,18 @@ fn create_kms_backend(
     let mut config = KmsConfig::default();
 
     if let Some(credential_file) = credential_file {
-        let ini = Ini::load_from_file(credential_file).map_err(|e| {
-            Error::Other(format!("Failed to parse credential file as ini: {}", e).into())
-        })?;
+        let ini = Ini::load_from_file(credential_file)
+            .map_err(|e| Error::Other(box_err!("Failed to parse credential file as ini: {}", e)))?;
         let props = ini
             .section(Some("default"))
-            .ok_or_else(|| Error::Other("fail to parse section".to_owned().into()))?;
+            .ok_or_else(|| Error::Other(box_err!("fail to parse section")))?;
         config.access_key = props
             .get("aws_access_key_id")
-            .ok_or_else(|| Error::Other("fail to parse credential".to_owned().into()))?
+            .ok_or_else(|| Error::Other(box_err!("fail to parse credential")))?
             .clone();
         config.secret_access_key = props
             .get("aws_secret_access_key")
-            .ok_or_else(|| Error::Other("fail to parse credential".to_owned().into()))?
+            .ok_or_else(|| Error::Other(box_err!("fail to parse credential")))?
             .clone();
     }
     if let Some(ref region) = cmd.region {

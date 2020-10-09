@@ -8,22 +8,26 @@ use crate::master_key::Backend;
 #[cfg(test)]
 use std::sync::Arc;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct EncryptionConfig {
     // Encryption configs.
     #[serde(with = "encryption_method_serde")]
-    pub method: EncryptionMethod,
+    #[config(skip)]
+    pub data_encryption_method: EncryptionMethod,
+    #[config(skip)]
     pub data_key_rotation_period: ReadableDuration,
+    #[config(skip)]
     pub master_key: MasterKeyConfig,
+    #[config(skip)]
     pub previous_master_key: MasterKeyConfig,
 }
 
 impl Default for EncryptionConfig {
     fn default() -> EncryptionConfig {
         EncryptionConfig {
-            method: EncryptionMethod::Plaintext,
+            data_encryption_method: EncryptionMethod::Plaintext,
             data_key_rotation_period: ReadableDuration::days(7),
             master_key: MasterKeyConfig::default(),
             previous_master_key: MasterKeyConfig::default(),
@@ -34,10 +38,27 @@ impl Default for EncryptionConfig {
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct FileConfig {
+    pub path: String,
+}
+
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct KmsConfig {
     pub key_id: String,
 
+    // Providing access_key and secret_access_key is recommended as it has
+    // security risk.
+    #[doc(hidden)]
+    // We don's want to write access_key and secret_access_key to config file
+    // accidentally.
+    #[serde(skip_serializing)]
+    #[config(skip)]
     pub access_key: String,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[config(skip)]
     pub secret_access_key: String,
 
     pub region: String,
@@ -67,9 +88,8 @@ pub enum MasterKeyConfig {
     // with newline.
     #[serde(rename_all = "kebab-case")]
     File {
-        #[serde(with = "encryption_method_serde")]
-        method: EncryptionMethod,
-        path: String,
+        #[serde(flatten)]
+        config: FileConfig,
     },
 
     #[serde(rename_all = "kebab-case")]
@@ -155,7 +175,7 @@ mod tests {
     #[test]
     fn test_kms_config() {
         let kms_cfg = EncryptionConfig {
-            method: EncryptionMethod::Aes128Ctr,
+            data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),
             master_key: MasterKeyConfig::Kms {
                 config: KmsConfig {
@@ -169,7 +189,7 @@ mod tests {
             previous_master_key: MasterKeyConfig::Plaintext,
         };
         let kms_str = r#"
-        method = "aes128-ctr"
+        data-encryption-method = "aes128-ctr"
         data-key-rotation-period = "14d"
         [previous-master-key]
         type = "plaintext"

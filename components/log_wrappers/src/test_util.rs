@@ -6,14 +6,13 @@ use std::io;
 use std::sync;
 
 /// A buffer which can be served as a logging destination while being able to access its content.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct SyncLoggerBuffer(sync::Arc<sync::Mutex<Vec<u8>>>);
 
 impl SyncLoggerBuffer {
     /// Creates a new instance.
     pub fn new() -> SyncLoggerBuffer {
-        let inner = Vec::new();
-        SyncLoggerBuffer(sync::Arc::new(sync::Mutex::new(inner)))
+        Self::default()
     }
 
     /// Builds a `slog::Logger` over this buffer which uses compact format and always output `TIME`

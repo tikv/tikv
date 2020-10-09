@@ -2,7 +2,7 @@
 
 use super::deadlock::Scheduler as DeadlockScheduler;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
-use configuration::{rollback_or, ConfigChange, ConfigManager, Configuration, RollbackCollector};
+use configuration::{ConfigChange, ConfigManager, Configuration};
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
 
 use std::error::Error;
@@ -12,8 +12,6 @@ use tikv_util::config::ReadableDuration;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[config(skip)]
-    pub enabled: bool,
     #[serde(deserialize_with = "readable_duration_or_u64")]
     pub wait_for_lock_timeout: ReadableDuration,
     #[serde(deserialize_with = "readable_duration_or_u64")]
@@ -46,7 +44,6 @@ where
 impl Default for Config {
     fn default() -> Self {
         Self {
-            enabled: true,
             wait_for_lock_timeout: ReadableDuration::millis(1000),
             wake_up_delay_duration: ReadableDuration::millis(20),
             pipelined: false,
@@ -56,17 +53,8 @@ impl Default for Config {
 
 impl Config {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        self.validate_or_rollback(None)
-    }
-
-    pub fn validate_or_rollback(
-        &self,
-        mut rb_collector: Option<RollbackCollector<Config>>,
-    ) -> Result<(), Box<dyn Error>> {
         if self.wait_for_lock_timeout.as_millis() == 0 {
-            rollback_or!(rb_collector, wait_for_lock_timeout, {
-                Err("pessimistic-txn.wait-for-lock-timeout can not be 0".into())
-            })
+            return Err("pessimistic-txn.wait-for-lock-timeout can not be 0".into());
         }
         Ok(())
     }
@@ -109,7 +97,6 @@ impl ConfigManager for LockManagerConfigManager {
 #[cfg(test)]
 mod tests {
     use super::Config;
-    use toml;
 
     #[test]
     fn test_config_deserialize() {
@@ -121,7 +108,6 @@ mod tests {
         "#;
 
         let config: Config = toml::from_str(conf).unwrap();
-        assert_eq!(config.enabled, false);
         assert_eq!(config.wait_for_lock_timeout.as_millis(), 10);
         assert_eq!(config.wake_up_delay_duration.as_millis(), 100);
         assert_eq!(config.pipelined, true);

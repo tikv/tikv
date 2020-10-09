@@ -3,7 +3,7 @@
 use super::Result;
 use crate::store::SplitCheckTask;
 
-use configuration::{rollback_or, ConfigChange, ConfigManager, Configuration, RollbackCollector};
+use configuration::{ConfigChange, ConfigManager, Configuration};
 use tikv_util::config::ReadableSize;
 use tikv_util::worker::Scheduler;
 
@@ -30,6 +30,21 @@ pub struct Config {
     /// And the number of keys in [a,b), [b,c), [c,d) will be region_split_keys.
     pub region_max_keys: u64,
     pub region_split_keys: u64,
+
+    /// ConsistencyCheckMethod can not be chanaged dynamically.
+    #[config(skip)]
+    pub consistency_check_method: ConsistencyCheckMethod,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConsistencyCheckMethod {
+    /// Does consistency check for regions based on raw data. Only used when
+    /// raw APIs are enabled and MVCC-GC is disabled.
+    Raw = 0,
+
+    /// Does consistency check for regions based on MVCC.
+    Mvcc = 1,
 }
 
 /// Default region split size.
@@ -49,36 +64,26 @@ impl Default for Config {
             region_max_size: split_size / 2 * 3,
             region_split_keys: SPLIT_KEYS,
             region_max_keys: SPLIT_KEYS / 2 * 3,
+            consistency_check_method: ConsistencyCheckMethod::Raw,
         }
     }
 }
 
 impl Config {
     pub fn validate(&self) -> Result<()> {
-        self.validate_or_rollback(None)
-    }
-
-    pub fn validate_or_rollback(
-        &self,
-        mut rb_collector: Option<RollbackCollector<Config>>,
-    ) -> Result<()> {
         if self.region_max_size.0 < self.region_split_size.0 {
-            rollback_or!(rb_collector, region_max_size, region_split_size, {
-                Err(box_err!(
-                    "region max size {} must >= split size {}",
-                    self.region_max_size.0,
-                    self.region_split_size.0
-                ))
-            })
+            return Err(box_err!(
+                "region max size {} must >= split size {}",
+                self.region_max_size.0,
+                self.region_split_size.0
+            ));
         }
         if self.region_max_keys < self.region_split_keys {
-            rollback_or!(rb_collector, region_max_keys, region_split_keys, {
-                Err(box_err!(
-                    "region max keys {} must >= split keys {}",
-                    self.region_max_keys,
-                    self.region_split_keys
-                ))
-            })
+            return Err(box_err!(
+                "region max keys {} must >= split keys {}",
+                self.region_max_keys,
+                self.region_split_keys
+            ));
         }
         Ok(())
     }

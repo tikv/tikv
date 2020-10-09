@@ -1,21 +1,20 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![cfg_attr(test, feature(test))]
+#![feature(thread_id_value)]
+#![feature(min_specialization)]
+#![feature(box_patterns)]
 
 #[macro_use(fail_point)]
 extern crate fail;
 #[macro_use]
-extern crate futures;
-#[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
 #[macro_use(slog_o)]
 extern crate slog;
 #[macro_use]
-extern crate slog_global;
+extern crate derive_more;
 #[cfg(test)]
 extern crate test;
 
@@ -31,29 +30,31 @@ use std::time::Duration;
 use std::{env, thread, u64};
 
 use fs2::FileExt;
-use rand;
 use rand::rngs::ThreadRng;
 
+#[macro_use]
+pub mod log;
 pub mod buffer_vec;
 pub mod codec;
 pub mod collections;
 pub mod config;
 pub mod file;
 pub mod future;
-pub mod future_pool;
 #[macro_use]
 pub mod macros;
+pub mod callback;
 pub mod deadline;
 pub mod keybuilder;
 pub mod logger;
+pub mod lru;
 pub mod metrics;
 pub mod mpsc;
-pub mod security;
 pub mod sys;
-pub mod threadpool;
 pub mod time;
 pub mod timer;
+pub mod trace;
 pub mod worker;
+pub mod yatp_pool;
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
@@ -489,8 +490,8 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
-        if let Some(level) = log::max_level().to_level() {
-            let drainer = logger::term_drainer();
+        if let Some(level) = ::log::max_level().to_level() {
+            let drainer = logger::text_format(logger::term_writer());
             let _ = logger::init_log(
                 drainer,
                 logger::convert_log_level_to_slog_level(level),

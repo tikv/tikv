@@ -48,7 +48,10 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
             black_box(req),
             black_box(EvalContext::default()),
             black_box(ranges.to_vec()),
-            black_box(TiKVStorage::from(ToTxnStore::<Self::T>::to_store(store))),
+            black_box(TiKVStorage::new(
+                ToTxnStore::<Self::T>::to_store(store),
+                false,
+            )),
             black_box(false),
         )
         .unwrap();
@@ -75,10 +78,15 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
         _: (),
     ) -> Self::E {
         let mut executor = BatchTableScanExecutor::new(
-            black_box(TiKVStorage::from(ToTxnStore::<Self::T>::to_store(store))),
+            black_box(TiKVStorage::new(
+                ToTxnStore::<Self::T>::to_store(store),
+                false,
+            )),
             black_box(Arc::new(EvalConfig::default())),
             black_box(columns.to_vec()),
             black_box(ranges.to_vec()),
+            black_box(vec![]),
+            black_box(false),
             black_box(false),
         )
         .unwrap();
@@ -100,14 +108,14 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
     type P = TableScanParam;
 
     fn build(
-        batch: bool,
+        _batch: bool,
         columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
         _: (),
     ) -> Box<dyn RequestHandler> {
         let exec = table_scan(columns);
-        crate::util::build_dag_handler::<T>(&[exec], ranges, store, batch)
+        crate::util::build_dag_handler::<T>(&[exec], ranges, store)
     }
 }
 

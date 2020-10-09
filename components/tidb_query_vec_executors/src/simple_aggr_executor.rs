@@ -49,6 +49,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.0.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        self.0.can_be_cached()
+    }
 }
 
 // We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
@@ -150,12 +155,13 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
             match aggr_fn_input {
                 RpnStackNode::Scalar { value, .. } => {
                     match_template_evaluable! {
-                        TT, match value {
-                            ScalarValue::TT(scalar_value) => {
-                                aggr_state.update_repeat(
+                        TT, match value.as_scalar_value_ref() {
+                            ScalarValueRef::TT(scalar_value) => {
+                                update_repeat!(
+                                    aggr_state,
                                     &mut entities.context,
                                     scalar_value,
-                                    rows_len,
+                                    rows_len
                                 )?;
                             },
                         }
@@ -167,10 +173,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
                     match_template_evaluable! {
                         TT, match physical_vec {
                             VectorValue::TT(vec) => {
-                                aggr_state.update_vector(
+                                update_vector!(
+                                    aggr_state,
                                     &mut entities.context,
                                     vec,
-                                    logical_rows,
+                                    logical_rows
                                 )?;
                             },
                         }
@@ -239,12 +246,12 @@ mod tests {
         }
 
         impl ConcreteAggrFunctionState for AggrFnFooState {
-            type ParameterType = Bytes;
+            type ParameterType = BytesRef<'static>;
 
-            fn update_concrete(
+            unsafe fn update_concrete_unsafe(
                 &mut self,
                 _ctx: &mut EvalContext,
-                value: &Option<Self::ParameterType>,
+                value: Option<Self::ParameterType>,
             ) -> Result<()> {
                 if let Some(value) = value {
                     self.len += value.len();
@@ -292,12 +299,12 @@ mod tests {
         }
 
         impl ConcreteAggrFunctionState for AggrFnBarState {
-            type ParameterType = Real;
+            type ParameterType = &'static Real;
 
-            fn update_concrete(
+            unsafe fn update_concrete_unsafe(
                 &mut self,
                 _ctx: &mut EvalContext,
-                value: &Option<Self::ParameterType>,
+                value: Option<Self::ParameterType>,
             ) -> Result<()> {
                 self.rows_with_null += 1;
                 if let Some(value) = value {
@@ -446,30 +453,30 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert_eq!(r.physical_columns.columns_len(), 12);
         // Foo("abc") for 5 rows, so it is 5*3.
-        assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(15)]);
+        assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(15)]);
         // Foo(NULL) for 5 rows, so it is 0.
-        assert_eq!(r.physical_columns[1].decoded().as_int_slice(), &[Some(0)]);
+        assert_eq!(r.physical_columns[1].decoded().to_int_vec(), &[Some(0)]);
         // Bar(42.5) for 5 rows, so it is (5, 5, 42.5*5).
-        assert_eq!(r.physical_columns[2].decoded().as_int_slice(), &[Some(5)]);
-        assert_eq!(r.physical_columns[3].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[2].decoded().to_int_vec(), &[Some(5)]);
+        assert_eq!(r.physical_columns[3].decoded().to_int_vec(), &[Some(5)]);
         assert_eq!(
-            r.physical_columns[4].decoded().as_real_slice(),
+            r.physical_columns[4].decoded().to_real_vec(),
             &[Real::new(212.5).ok()]
         );
         // Bar(NULL) for 5 rows, so it is (5, 0, 0).
-        assert_eq!(r.physical_columns[5].decoded().as_int_slice(), &[Some(5)]);
-        assert_eq!(r.physical_columns[6].decoded().as_int_slice(), &[Some(0)]);
+        assert_eq!(r.physical_columns[5].decoded().to_int_vec(), &[Some(5)]);
+        assert_eq!(r.physical_columns[6].decoded().to_int_vec(), &[Some(0)]);
         assert_eq!(
-            r.physical_columns[7].decoded().as_real_slice(),
+            r.physical_columns[7].decoded().to_real_vec(),
             &[Real::new(0.0).ok()]
         );
         // Foo([abc, NULL, "", HelloWorld, aaaaa]) => 3+0+0+10+5
-        assert_eq!(r.physical_columns[8].decoded().as_int_slice(), &[Some(18)]);
+        assert_eq!(r.physical_columns[8].decoded().to_int_vec(), &[Some(18)]);
         // Bar([1.0, 2.0, NULL, 4.5, 4.5]) => (5, 4, 12.0)
-        assert_eq!(r.physical_columns[9].decoded().as_int_slice(), &[Some(5)]);
-        assert_eq!(r.physical_columns[10].decoded().as_int_slice(), &[Some(4)]);
+        assert_eq!(r.physical_columns[9].decoded().to_int_vec(), &[Some(5)]);
+        assert_eq!(r.physical_columns[10].decoded().to_int_vec(), &[Some(4)]);
         assert_eq!(
-            r.physical_columns[11].decoded().as_real_slice(),
+            r.physical_columns[11].decoded().to_real_vec(),
             &[Real::new(12.0).ok()]
         );
         assert!(r.is_drained.unwrap());
@@ -533,26 +540,26 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert_eq!(r.physical_columns.columns_len(), 10);
         // COUNT(1) for 5 rows, so it is 5.
-        assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(5)]);
         // COUNT(4.5) for 5 rows, so it is 5.
-        assert_eq!(r.physical_columns[1].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[1].decoded().to_int_vec(), &[Some(5)]);
         // COUNT(NULL) for 5 rows, so it is 0.
-        assert_eq!(r.physical_columns[2].decoded().as_int_slice(), &[Some(0)]);
+        assert_eq!(r.physical_columns[2].decoded().to_int_vec(), &[Some(0)]);
         // COUNT([1.0, 2.0, NULL, 4.5, 4.5]) => 4
-        assert_eq!(r.physical_columns[3].decoded().as_int_slice(), &[Some(4)]);
+        assert_eq!(r.physical_columns[3].decoded().to_int_vec(), &[Some(4)]);
         // AVG(42.5) for 5 rows, so it is (5, 212.5). Notice that AVG returns sum.
-        assert_eq!(r.physical_columns[4].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[4].decoded().to_int_vec(), &[Some(5)]);
         assert_eq!(
-            r.physical_columns[5].decoded().as_real_slice(),
+            r.physical_columns[5].decoded().to_real_vec(),
             &[Real::new(212.5).ok()]
         );
         // AVG(NULL) for 5 rows, so it is (0, NULL).
-        assert_eq!(r.physical_columns[6].decoded().as_int_slice(), &[Some(0)]);
-        assert_eq!(r.physical_columns[7].decoded().as_decimal_slice(), &[None]);
+        assert_eq!(r.physical_columns[6].decoded().to_int_vec(), &[Some(0)]);
+        assert_eq!(r.physical_columns[7].decoded().to_decimal_vec(), &[None]);
         // Foo([NULL, 7.0, NULL, NULL, 1.5]) => (2, 8.5)
-        assert_eq!(r.physical_columns[8].decoded().as_int_slice(), &[Some(2)]);
+        assert_eq!(r.physical_columns[8].decoded().to_int_vec(), &[Some(2)]);
         assert_eq!(
-            r.physical_columns[9].decoded().as_real_slice(),
+            r.physical_columns[9].decoded().to_real_vec(),
             &[Real::new(8.5).ok()]
         );
         assert!(r.is_drained.unwrap());
@@ -568,12 +575,12 @@ mod tests {
         struct AggrFnFooState;
 
         impl ConcreteAggrFunctionState for AggrFnFooState {
-            type ParameterType = Real;
+            type ParameterType = &'static Real;
 
-            fn update_concrete(
+            unsafe fn update_concrete_unsafe(
                 &mut self,
                 _ctx: &mut EvalContext,
-                _value: &Option<Self::ParameterType>,
+                _value: Option<Self::ParameterType>,
             ) -> Result<()> {
                 // Update should never be called since we are testing aggregate for no row.
                 unreachable!()
@@ -593,9 +600,9 @@ mod tests {
             vec![FieldTypeTp::LongLong.into()],
             vec![
                 BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![Some(
-                        5,
-                    )])]),
+                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
+                        vec![Some(5)].into(),
+                    )]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
@@ -646,7 +653,7 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert_eq!(r.physical_columns.columns_len(), 1);
         assert!(r.physical_columns[0].is_decoded());
-        assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(42)]);
+        assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(42)]);
         assert!(r.is_drained.unwrap());
     }
 }

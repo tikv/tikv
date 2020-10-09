@@ -3,46 +3,38 @@
 use std::fmt::{self, Display, Formatter};
 
 use byteorder::{BigEndian, WriteBytesExt};
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::metapb::Region;
-
-use crate::store::{CasualMessage, CasualRouter};
-use engine_rocks::RocksEngine;
-use engine_traits::CF_RAFT;
-use engine_traits::{Iterable, KvEngine, Peekable, Snapshot};
 use tikv_util::worker::Runnable;
 
-use super::metrics::*;
+use crate::coprocessor::{ConsistencyCheckMethod, CoprocessorHost};
 use crate::store::metrics::*;
+use crate::store::{CasualMessage, CasualRouter};
+
+use super::metrics::*;
 
 /// Consistency checking task.
-pub enum Task<E>
-where
-    E: KvEngine,
-{
+pub enum Task<S> {
     ComputeHash {
         index: u64,
+        context: Vec<u8>,
         region: Region,
-        snap: E::Snapshot,
+        snap: S,
     },
 }
 
-impl<E> Task<E>
-where
-    E: KvEngine,
-{
-    pub fn compute_hash(region: Region, index: u64, snap: E::Snapshot) -> Task<E> {
+impl<S: Snapshot> Task<S> {
+    pub fn compute_hash(region: Region, index: u64, context: Vec<u8>, snap: S) -> Task<S> {
         Task::ComputeHash {
-            region,
             index,
+            context,
+            region,
             snap,
         }
     }
 }
 
-impl<E> Display for Task<E>
-where
-    E: KvEngine,
-{
+impl<S: Snapshot> Display for Task<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::ComputeHash {
@@ -52,100 +44,85 @@ where
     }
 }
 
-pub struct Runner<C: CasualRouter<RocksEngine>> {
+pub struct Runner<EK: KvEngine, C: CasualRouter<EK>> {
     router: C,
+    coprocessor_host: CoprocessorHost<EK>,
 }
 
-impl<C: CasualRouter<RocksEngine>> Runner<C> {
-    pub fn new(router: C) -> Runner<C> {
-        Runner { router }
+impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
+    pub fn new(router: C, cop_host: CoprocessorHost<EK>) -> Runner<EK, C> {
+        Runner {
+            router,
+            coprocessor_host: cop_host,
+        }
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash<E>(&mut self, region: Region, index: u64, snap: E::Snapshot)
-    where
-        E: KvEngine,
-    {
-        let region_id = region.get_id();
-        info!(
-            "computing hash";
-            "region_id" => region_id,
-            "index" => index,
-        );
+    fn compute_hash(
+        &mut self,
+        region: Region,
+        index: u64,
+        mut context: Vec<u8>,
+        snap: EK::Snapshot,
+    ) {
+        if context.is_empty() {
+            // For backward compatibility.
+            context.push(ConsistencyCheckMethod::Raw as u8);
+        }
+
+        info!("computing hash"; "region_id" => region.get_id(), "index" => index);
         REGION_HASH_COUNTER.compute.all.inc();
 
         let timer = REGION_HASH_HISTOGRAM.start_coarse_timer();
-        let mut digest = crc32fast::Hasher::new();
-        let mut cf_names = snap.cf_names();
-        cf_names.sort();
 
-        // Computes the hash from all the keys and values in the range of the Region.
-        let start_key = keys::enc_start_key(&region);
-        let end_key = keys::enc_end_key(&region);
-        for cf in cf_names {
-            let res = snap.scan_cf(cf, &start_key, &end_key, false, |k, v| {
-                digest.update(k);
-                digest.update(v);
-                Ok(true)
-            });
-            if let Err(e) = res {
-                REGION_HASH_COUNTER.compute.failed.inc();
-                error!(
-                    "failed to calculate hash";
-                    "region_id" => region_id,
-                    "err" => %e,
-                );
-                return;
-            }
-        }
-
-        // Computes the hash from the Region state too.
-        let region_state_key = keys::region_state_key(region_id);
-        digest.update(&region_state_key);
-        match snap.get_value_cf(CF_RAFT, &region_state_key) {
+        let hashes = match self
+            .coprocessor_host
+            .on_compute_hash(&region, &context, snap)
+        {
+            Ok(hashes) => hashes,
             Err(e) => {
+                error!("calculate hash"; "region_id" => region.get_id(), "err" => ?e);
                 REGION_HASH_COUNTER.compute.failed.inc();
-                error!(
-                    "failed to get region state";
-                    "region_id" => region_id,
-                    "err" => %e,
-                );
                 return;
             }
-            Ok(Some(v)) => digest.update(&v),
-            Ok(None) => {}
-        }
-        let sum = digest.finalize();
-        timer.observe_duration();
-
-        let mut checksum = Vec::with_capacity(4);
-        checksum.write_u32::<BigEndian>(sum).unwrap();
-        let msg = CasualMessage::ComputeHashResult {
-            index,
-            hash: checksum,
         };
-        if let Err(e) = self.router.send(region_id, msg) {
-            warn!(
-                "failed to send hash compute result";
-                "region_id" => region_id,
-                "err" => %e,
-            );
+
+        for (ctx, sum) in hashes {
+            let mut checksum = Vec::with_capacity(4);
+            checksum.write_u32::<BigEndian>(sum).unwrap();
+            let msg = CasualMessage::ComputeHashResult {
+                index,
+                context: ctx,
+                hash: checksum,
+            };
+            if let Err(e) = self.router.send(region.get_id(), msg) {
+                warn!(
+                    "failed to send hash compute result";
+                    "region_id" => region.get_id(),
+                    "err" => %e,
+                );
+            }
         }
+
+        timer.observe_duration();
     }
 }
 
-impl<C, E> Runnable<Task<E>> for Runner<C>
+impl<EK, C> Runnable for Runner<EK, C>
 where
-    C: CasualRouter<RocksEngine>,
-    E: KvEngine,
+    EK: KvEngine,
+    C: CasualRouter<EK>,
 {
-    fn run(&mut self, task: Task<E>) {
+    type Task = Task<EK::Snapshot>;
+
+    fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
             Task::ComputeHash {
-                region,
                 index,
+                context,
+                region,
                 snap,
-            } => self.compute_hash::<E>(region, index, snap),
+            } => self.compute_hash(region, index, context, snap),
         }
     }
 }
@@ -153,13 +130,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coprocessor::{BoxConsistencyCheckObserver, RawConsistencyCheckObserver};
     use byteorder::{BigEndian, WriteBytesExt};
-    use engine::rocks::util::new_engine;
-    use engine::rocks::Writable;
+    use engine_rocks::util::new_engine;
     use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_traits::{CF_DEFAULT, CF_RAFT};
+    use engine_traits::{KvEngine, SyncMutable, CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
-    use std::sync::{mpsc, Arc};
+    use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
     use tikv_util::worker::Runnable;
@@ -174,13 +151,17 @@ mod tests {
             None,
         )
         .unwrap();
-        let db = Arc::new(db);
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut runner = Runner::new(tx);
+        let mut host = CoprocessorHost::<RocksEngine>::new(tx.clone());
+        host.registry.register_consistency_check_observer(
+            100,
+            BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
+        );
+        let mut runner = Runner::new(tx, host);
         let mut digest = crc32fast::Hasher::new();
         let kvs = vec![(b"k1", b"v1"), (b"k2", b"v2")];
         for (k, v) in kvs {
@@ -194,19 +175,28 @@ mod tests {
         // hash should also contains region state key.
         digest.update(&keys::region_state_key(region.get_id()));
         let sum = digest.finalize();
-        runner.run(Task::<RocksEngine>::ComputeHash {
+        runner.run(Task::<RocksSnapshot>::ComputeHash {
             index: 10,
+            context: vec![],
             region: region.clone(),
-            snap: RocksSnapshot::new(Arc::clone(&db)),
+            snap: db.snapshot(),
         });
         let mut checksum_bytes = vec![];
         checksum_bytes.write_u32::<BigEndian>(sum).unwrap();
 
         let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         match res {
-            (region_id, CasualMessage::ComputeHashResult { index, hash }) => {
+            (
+                region_id,
+                CasualMessage::ComputeHashResult {
+                    index,
+                    hash,
+                    context,
+                },
+            ) => {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(index, 10);
+                assert_eq!(context, vec![0]);
                 assert_eq!(hash, checksum_bytes);
             }
             e => panic!("unexpected {:?}", e),

@@ -6,6 +6,7 @@ extern crate test;
 #[macro_use]
 extern crate slog_global;
 
+pub mod encryption;
 mod kv_generator;
 mod logging;
 mod macros;

@@ -132,6 +132,7 @@ fn test_read_index_on_replica() {
 fn test_read_on_replica() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.hibernate_regions = false;
     cluster.run();
 
     let k1 = b"k1";
@@ -192,7 +193,7 @@ fn test_read_on_replica() {
 fn test_invalid_read_index_when_no_leader() {
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_lease_read(&mut cluster, Some(50), Some(3));
+    configure_for_lease_read(&mut cluster, Some(10), Some(6));
     cluster.cfg.raft_store.raft_heartbeat_ticks = 1;
     cluster.cfg.raft_store.hibernate_regions = false;
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -209,26 +210,17 @@ fn test_invalid_read_index_when_no_leader() {
     let follower = follower_peers.pop().unwrap();
 
     // Delay all raft messages on follower.
-    let heartbeat_filter = Box::new(
-        RegionPacketFilter::new(region.get_id(), follower.get_store_id())
-            .direction(Direction::Recv)
-            .msg_type(MessageType::MsgHeartbeat)
-            .when(Arc::new(AtomicBool::new(true))),
+    cluster.sim.wl().add_recv_filter(
+        follower.get_store_id(),
+        Box::new(
+            RegionPacketFilter::new(region.get_id(), follower.get_store_id())
+                .direction(Direction::Recv)
+                .msg_type(MessageType::MsgHeartbeat)
+                .msg_type(MessageType::MsgAppend)
+                .msg_type(MessageType::MsgRequestVoteResponse)
+                .when(Arc::new(AtomicBool::new(true))),
+        ),
     );
-    cluster
-        .sim
-        .wl()
-        .add_recv_filter(follower.get_store_id(), heartbeat_filter);
-    let vote_resp_filter = Box::new(
-        RegionPacketFilter::new(region.get_id(), follower.get_store_id())
-            .direction(Direction::Recv)
-            .msg_type(MessageType::MsgRequestVoteResponse)
-            .when(Arc::new(AtomicBool::new(true))),
-    );
-    cluster
-        .sim
-        .wl()
-        .add_recv_filter(follower.get_store_id(), vote_resp_filter);
 
     // wait for election timeout
     thread::sleep(time::Duration::from_millis(300));
@@ -371,10 +363,10 @@ fn batch<E: Engine>(ctx: &Context, engine: &E) {
     engine
         .write(
             ctx,
-            vec![
+            WriteData::from_modifies(vec![
                 Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
                 Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
-            ],
+            ]),
         )
         .unwrap();
     assert_has(ctx, engine, b"x", b"1");
@@ -383,10 +375,10 @@ fn batch<E: Engine>(ctx: &Context, engine: &E) {
     engine
         .write(
             ctx,
-            vec![
+            WriteData::from_modifies(vec![
                 Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
                 Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
-            ],
+            ]),
         )
         .unwrap();
     assert_none(ctx, engine, b"y");
@@ -443,12 +435,12 @@ fn cf<E: Engine>(ctx: &Context, engine: &E) {
 }
 
 fn empty_write<E: Engine>(ctx: &Context, engine: &E) {
-    engine.write(ctx, vec![]).unwrap_err();
+    engine.write(ctx, WriteData::default()).unwrap_err();
 }
 
 fn wrong_context<E: Engine>(ctx: &Context, engine: &E) {
     let region_id = ctx.get_region_id();
     let mut ctx = ctx.to_owned();
     ctx.set_region_id(region_id + 1);
-    assert!(engine.write(&ctx, vec![]).is_err());
+    assert!(engine.write(&ctx, WriteData::default()).is_err());
 }

@@ -11,6 +11,7 @@ use super::{
     BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
     RegionChangeEvent, RegionChangeObserver, Result, RoleObserver,
 };
+use engine_traits::KvEngine;
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
@@ -35,7 +36,7 @@ use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, S
 
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
 #[derive(Debug)]
-enum RaftStoreEvent {
+pub enum RaftStoreEvent {
     CreateRegion { region: Region, role: StateRole },
     UpdateRegion { region: Region, role: StateRole },
     DestroyRegion { region: Region },
@@ -73,7 +74,7 @@ pub type SeekRegionCallback = Box<dyn FnOnce(&mut dyn Iterator<Item = &RegionInf
 
 /// `RegionInfoAccessor` has its own thread. Queries and updates are done by sending commands to the
 /// thread.
-enum RegionInfoQuery {
+pub enum RegionInfoQuery {
     RaftStoreEvent(RaftStoreEvent),
     SeekRegion {
         from: Vec<u8>,
@@ -92,7 +93,7 @@ impl Display for RegionInfoQuery {
         match self {
             RegionInfoQuery::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
             RegionInfoQuery::SeekRegion { from, .. } => {
-                write!(f, "SeekRegion(from: {})", hex::encode_upper(from))
+                write!(f, "SeekRegion(from: {})", log_wrappers::Value::key(&from))
             }
             RegionInfoQuery::FindRegionById { region_id, .. } => {
                 write!(f, "FindRegionById(region_id: {})", region_id)
@@ -142,7 +143,7 @@ impl RoleObserver for RegionEventListener {
 
 /// Creates an `RegionEventListener` and register it to given coprocessor host.
 fn register_region_event_listener(
-    host: &mut CoprocessorHost,
+    host: &mut CoprocessorHost<impl KvEngine>,
     scheduler: Scheduler<RegionInfoQuery>,
 ) {
     let listener = RegionEventListener { scheduler };
@@ -401,7 +402,9 @@ impl RegionCollector {
     }
 }
 
-impl Runnable<RegionInfoQuery> for RegionCollector {
+impl Runnable for RegionCollector {
+    type Task = RegionInfoQuery;
+
     fn run(&mut self, task: RegionInfoQuery) {
         match task {
             RegionInfoQuery::RaftStoreEvent(event) => {
@@ -426,7 +429,9 @@ impl Runnable<RegionInfoQuery> for RegionCollector {
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
-impl RunnableWithTimer<RegionInfoQuery, ()> for RegionCollector {
+impl RunnableWithTimer for RegionCollector {
+    type TimeoutTask = ();
+
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         let mut count = 0;
         let mut leader = 0;
@@ -457,7 +462,7 @@ impl RegionInfoAccessor {
     /// Creates a new `RegionInfoAccessor` and register to `host`.
     /// `RegionInfoAccessor` doesn't need, and should not be created more than once. If it's needed
     /// in different places, just clone it, and their contents are shared.
-    pub fn new(host: &mut CoprocessorHost) -> Self {
+    pub fn new(host: &mut CoprocessorHost<impl KvEngine>) -> Self {
         let worker = WorkerBuilder::new("region-collector-worker").create();
         let scheduler = worker.scheduler();
 

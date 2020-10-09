@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::{EvalType, FieldTypeAccessor};
-use tipb::FieldType;
 
 use super::scalar::ScalarValueRef;
 use super::*;
@@ -14,14 +13,14 @@ use crate::codec::Result;
 /// this vector container.
 #[derive(Debug, PartialEq, Clone)]
 pub enum VectorValue {
-    Int(Vec<Option<Int>>),
-    Real(Vec<Option<Real>>),
-    Decimal(Vec<Option<Decimal>>),
+    Int(ChunkedVecSized<Int>),
+    Real(ChunkedVecSized<Real>),
+    Decimal(ChunkedVecSized<Decimal>),
     // TODO: We need to improve its performance, i.e. store strings in adjacent memory places
-    Bytes(Vec<Option<Bytes>>),
-    DateTime(Vec<Option<DateTime>>),
-    Duration(Vec<Option<Duration>>),
-    Json(Vec<Option<Json>>),
+    Bytes(ChunkedVecBytes),
+    DateTime(ChunkedVecSized<DateTime>),
+    Duration(ChunkedVecSized<Duration>),
+    Json(ChunkedVecJson),
 }
 
 impl VectorValue {
@@ -29,9 +28,12 @@ impl VectorValue {
     /// to `capacity`.
     #[inline]
     pub fn with_capacity(capacity: usize, eval_tp: EvalType) -> Self {
-        match_template_evaluable! {
-            TT, match eval_tp {
-                EvalType::TT => VectorValue::TT(Vec::with_capacity(capacity)),
+        match_template::match_template! {
+            TT = [Int, Real, Duration, Decimal, DateTime],
+            match eval_tp {
+                EvalType::TT => VectorValue::TT(ChunkedVecSized::with_capacity(capacity)),
+                EvalType::Json => VectorValue::Json(ChunkedVecJson::with_capacity(capacity)),
+                EvalType::Bytes => VectorValue::Bytes(ChunkedVecBytes::with_capacity(capacity))
             }
         }
     }
@@ -39,9 +41,12 @@ impl VectorValue {
     /// Creates a new empty `VectorValue` with the same eval type.
     #[inline]
     pub fn clone_empty(&self, capacity: usize) -> Self {
-        match_template_evaluable! {
-            TT, match self {
-                VectorValue::TT(_) => VectorValue::TT(Vec::with_capacity(capacity)),
+        match_template::match_template! {
+            TT = [Int, Real, Duration, Decimal, DateTime],
+            match self {
+                VectorValue::TT(_) => VectorValue::TT(ChunkedVecSized::with_capacity(capacity)),
+                VectorValue::Json(_) => VectorValue::Json(ChunkedVecJson::with_capacity(capacity)),
+                VectorValue::Bytes(_) => VectorValue::Bytes(ChunkedVecBytes::with_capacity(capacity))
             }
         }
     }
@@ -135,7 +140,7 @@ impl VectorValue {
                 VectorValue::TT(v) => {
                     let l = self.len();
                     for i in 0..l {
-                        outputs[i] = v[i].as_mysql_bool(ctx)?;
+                        outputs[i] = v.get_option_ref(i).as_mysql_bool(ctx)?;
                     }
                 },
             }
@@ -152,7 +157,7 @@ impl VectorValue {
     pub fn get_scalar_ref(&self, index: usize) -> ScalarValueRef<'_> {
         match_template_evaluable! {
             TT, match self {
-                VectorValue::TT(v) => ScalarValueRef::TT(&v[index]),
+                VectorValue::TT(v) => ScalarValueRef::TT(v.get_option_ref(index)),
             }
         }
     }
@@ -169,7 +174,7 @@ impl VectorValue {
             VectorValue::Decimal(vec) => {
                 let mut size = 0;
                 for idx in logical_rows {
-                    let el = &vec[*idx];
+                    let el = vec.get_option_ref(*idx);
                     match el {
                         Some(v) => {
                             // FIXME: We don't need approximate size. Maximum size is enough (so
@@ -186,7 +191,7 @@ impl VectorValue {
             VectorValue::Bytes(vec) => {
                 let mut size = 0;
                 for idx in logical_rows {
-                    let el = &vec[*idx];
+                    let el = vec.get_option_ref(*idx);
                     match el {
                         Some(v) => {
                             size += 1 /* FLAG */ + 10 /* MAX VARINT LEN */ + v.len();
@@ -203,10 +208,10 @@ impl VectorValue {
             VectorValue::Json(vec) => {
                 let mut size = 0;
                 for idx in logical_rows {
-                    let el = &vec[*idx];
+                    let el = vec.get_option_ref(*idx);
                     match el {
                         Some(v) => {
-                            size += 1 /* FLAG */ + v.as_ref().binary_len();
+                            size += 1 /* FLAG */ + v.binary_len();
                         }
                         None => {
                             size += 1;
@@ -229,7 +234,7 @@ impl VectorValue {
             VectorValue::Bytes(vec) => {
                 let mut size = logical_rows.len() + 10;
                 for idx in logical_rows {
-                    let el = &vec[*idx];
+                    let el = vec.get_option_ref(*idx);
                     match el {
                         Some(v) => {
                             size += 8 /* Offset */ + v.len();
@@ -244,10 +249,10 @@ impl VectorValue {
             VectorValue::Json(vec) => {
                 let mut size = logical_rows.len() + 10;
                 for idx in logical_rows {
-                    let el = &vec[*idx];
+                    let el = vec.get_option_ref(*idx);
                     match el {
                         Some(v) => {
-                            size += 8 /* Offset */ + v.as_ref().binary_len();
+                            size += 8 /* Offset */ + v.binary_len();
                         }
                         None => {
                             size += 8 /* Offset */;
@@ -263,7 +268,7 @@ impl VectorValue {
     pub fn encode(
         &self,
         row_index: usize,
-        field_type: &FieldType,
+        field_type: &impl FieldTypeAccessor,
         ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {
@@ -271,20 +276,20 @@ impl VectorValue {
 
         match self {
             VectorValue::Int(ref vec) => {
-                match vec[row_index] {
+                match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
                         // Always encode to INT / UINT instead of VAR INT to be efficient.
-                        let is_unsigned = field_type.as_accessor().is_unsigned();
-                        output.write_evaluable_datum_int(val, is_unsigned)?;
+                        let is_unsigned = field_type.is_unsigned();
+                        output.write_evaluable_datum_int(*val, is_unsigned)?;
                     }
                 }
                 Ok(())
             }
             VectorValue::Real(ref vec) => {
-                match vec[row_index] {
+                match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
@@ -295,56 +300,56 @@ impl VectorValue {
                 Ok(())
             }
             VectorValue::Decimal(ref vec) => {
-                match &vec[row_index] {
+                match &vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.write_evaluable_datum_decimal(val)?;
+                        output.write_evaluable_datum_decimal(*val)?;
                     }
                 }
                 Ok(())
             }
             VectorValue::Bytes(ref vec) => {
-                match &vec[row_index] {
+                match &vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(ref val) => {
-                        output.write_evaluable_datum_bytes(val)?;
+                        output.write_evaluable_datum_bytes(*val)?;
                     }
                 }
                 Ok(())
             }
             VectorValue::DateTime(ref vec) => {
-                match vec[row_index] {
+                match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.write_evaluable_datum_date_time(val, ctx)?;
+                        output.write_evaluable_datum_date_time(*val, ctx)?;
                     }
                 }
                 Ok(())
             }
             VectorValue::Duration(ref vec) => {
-                match vec[row_index] {
+                match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.write_evaluable_datum_duration(val)?;
+                        output.write_evaluable_datum_duration(*val)?;
                     }
                 }
                 Ok(())
             }
             VectorValue::Json(ref vec) => {
-                match &vec[row_index] {
+                match &vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(ref val) => {
-                        output.write_evaluable_datum_json(val)?;
+                        output.write_evaluable_datum_json(*val)?;
                     }
                 }
                 Ok(())
@@ -355,7 +360,7 @@ impl VectorValue {
     pub fn encode_sort_key(
         &self,
         row_index: usize,
-        field_type: &FieldType,
+        field_type: &impl FieldTypeAccessor,
         ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {
@@ -365,7 +370,7 @@ impl VectorValue {
 
         match self {
             VectorValue::Bytes(ref vec) => {
-                match vec[row_index] {
+                match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
@@ -394,9 +399,9 @@ macro_rules! impl_as_slice {
             ///
             /// Panics if the current column does not match the type.
             #[inline]
-            pub fn $name(&self) -> &[Option<$ty>] {
+            pub fn $name(&self) -> Vec<Option<$ty>> {
                 match self {
-                    VectorValue::$ty(vec) => vec.as_slice(),
+                    VectorValue::$ty(vec) => vec.to_vec(),
                     other => panic!(
                         "Cannot call `{}` over a {} column",
                         stringify!($name),
@@ -405,42 +410,20 @@ macro_rules! impl_as_slice {
                 }
             }
         }
-
-        impl AsRef<[Option<$ty>]> for VectorValue {
-            #[inline]
-            fn as_ref(&self) -> &[Option<$ty>] {
-                self.$name()
-            }
-        }
-
-        // TODO: We should only expose interface for push value, not the entire Vec.
-        impl AsMut<Vec<Option<$ty>>> for VectorValue {
-            #[inline]
-            fn as_mut(&mut self) -> &mut Vec<Option<$ty>> {
-                match self {
-                    VectorValue::$ty(ref mut vec) => vec,
-                    other => panic!(
-                        "Cannot retrieve a mutable `{}` vector over a {} column",
-                        stringify!($ty),
-                        other.eval_type()
-                    ),
-                }
-            }
-        }
     };
 }
 
-impl_as_slice! { Int, as_int_slice }
-impl_as_slice! { Real, as_real_slice }
-impl_as_slice! { Decimal, as_decimal_slice }
-impl_as_slice! { Bytes, as_bytes_slice }
-impl_as_slice! { DateTime, as_date_time_slice }
-impl_as_slice! { Duration, as_duration_slice }
-impl_as_slice! { Json, as_json_slice }
+impl_as_slice! { Int, to_int_vec }
+impl_as_slice! { Real, to_real_vec }
+impl_as_slice! { Decimal, to_decimal_vec }
+impl_as_slice! { Bytes, to_bytes_vec }
+impl_as_slice! { DateTime, to_date_time_vec }
+impl_as_slice! { Duration, to_duration_vec }
+impl_as_slice! { Json, to_json_vec }
 
 /// Additional `VectorValue` methods available via generics. These methods support different
 /// concrete types but have same names and should be specified via the generic parameter type.
-pub trait VectorValueExt<T: Evaluable> {
+pub trait VectorValueExt<T: EvaluableRet> {
     /// The generic version for `VectorValue::push_xxx()`.
     fn push(&mut self, v: Option<T>);
 }
@@ -488,23 +471,23 @@ impl_ext! { Duration, push_duration }
 impl_ext! { Json, push_json }
 
 macro_rules! impl_from {
-    ($ty:tt) => {
-        impl From<Vec<Option<$ty>>> for VectorValue {
+    ($ty:tt, $chunk:ty) => {
+        impl From<$chunk> for VectorValue {
             #[inline]
-            fn from(s: Vec<Option<$ty>>) -> VectorValue {
+            fn from(s: $chunk) -> VectorValue {
                 VectorValue::$ty(s)
             }
         }
     };
 }
 
-impl_from! { Int }
-impl_from! { Real }
-impl_from! { Decimal }
-impl_from! { Bytes }
-impl_from! { DateTime }
-impl_from! { Duration }
-impl_from! { Json }
+impl_from! { Int, ChunkedVecSized<Int> }
+impl_from! { Real, ChunkedVecSized<Real> }
+impl_from! { Decimal, ChunkedVecSized<Decimal> }
+impl_from! { Bytes, ChunkedVecBytes }
+impl_from! { DateTime, ChunkedVecSized<DateTime> }
+impl_from! { Duration, ChunkedVecSized<Duration> }
+impl_from! { Json, ChunkedVecJson }
 
 #[cfg(test)]
 mod tests {
@@ -517,83 +500,84 @@ mod tests {
         assert_eq!(column.len(), 0);
         assert_eq!(column.capacity(), 0);
         assert!(column.is_empty());
-        assert_eq!(column.as_bytes_slice(), &[]);
+        assert_eq!(column.to_bytes_vec(), &[]);
 
         column.push_bytes(None);
         assert_eq!(column.len(), 1);
         assert!(column.capacity() > 0);
         assert!(!column.is_empty());
-        assert_eq!(column.as_bytes_slice(), &[None]);
+        assert_eq!(column.to_bytes_vec(), &[None]);
 
         column.push_bytes(Some(vec![1, 2, 3]));
         assert_eq!(column.len(), 2);
         assert!(column.capacity() > 0);
         assert!(!column.is_empty());
-        assert_eq!(column.as_bytes_slice(), &[None, Some(vec![1, 2, 3])]);
+        assert_eq!(column.to_bytes_vec(), &[None, Some(vec![1, 2, 3])]);
 
         let mut column = VectorValue::with_capacity(3, EvalType::Real);
         assert_eq!(column.eval_type(), EvalType::Real);
         assert_eq!(column.len(), 0);
         assert_eq!(column.capacity(), 3);
         assert!(column.is_empty());
-        assert_eq!(column.as_real_slice(), &[]);
-        assert_eq!(column.clone().capacity(), 0);
-        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
+        assert_eq!(column.to_real_vec(), &[]);
+        let column_cloned = column.clone();
+        assert_eq!(column_cloned.capacity(), 0);
+        assert_eq!(column_cloned.to_real_vec(), column.to_real_vec());
 
         column.push_real(Real::new(1.0).ok());
         assert_eq!(column.len(), 1);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok()]);
-        assert_eq!(column.clone().capacity(), 1);
-        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
+        assert_eq!(column.to_real_vec(), &[Real::new(1.0).ok()]);
+        let column_cloned = column.clone();
+        assert_eq!(column_cloned.capacity(), 1);
+        assert_eq!(column_cloned.to_real_vec(), column.to_real_vec());
 
         column.push_real(None);
         assert_eq!(column.len(), 2);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok(), None]);
-        assert_eq!(column.clone().capacity(), 2);
-        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
+        assert_eq!(column.to_real_vec(), &[Real::new(1.0).ok(), None]);
+        let column_cloned = column.clone();
+        assert_eq!(column_cloned.capacity(), 2);
+        assert_eq!(column_cloned.to_real_vec(), column.to_real_vec());
 
         column.push_real(Real::new(4.5).ok());
         assert_eq!(column.len(), 3);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
         assert_eq!(
-            column.as_real_slice(),
+            column.to_real_vec(),
             &[Real::new(1.0).ok(), None, Real::new(4.5).ok()]
         );
-        assert_eq!(column.clone().capacity(), 3);
-        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
+        let column_cloned = column.clone();
+        assert_eq!(column_cloned.capacity(), 3);
+        assert_eq!(column_cloned.to_real_vec(), column.to_real_vec());
 
         column.push_real(None);
         assert_eq!(column.len(), 4);
         assert!(column.capacity() > 3);
         assert!(!column.is_empty());
         assert_eq!(
-            column.as_real_slice(),
+            column.to_real_vec(),
             &[Real::new(1.0).ok(), None, Real::new(4.5).ok(), None]
         );
-        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
+        assert_eq!(column.to_real_vec(), column.to_real_vec());
 
         column.truncate(2);
         assert_eq!(column.len(), 2);
         assert!(column.capacity() > 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok(), None]);
-        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
+        assert_eq!(column.to_real_vec(), &[Real::new(1.0).ok(), None]);
+        assert_eq!(column.to_real_vec(), column.to_real_vec());
 
         let column = VectorValue::with_capacity(10, EvalType::DateTime);
         assert_eq!(column.eval_type(), EvalType::DateTime);
         assert_eq!(column.len(), 0);
         assert_eq!(column.capacity(), 10);
         assert!(column.is_empty());
-        assert_eq!(column.as_date_time_slice(), &[]);
-        assert_eq!(
-            column.clone().as_date_time_slice(),
-            column.as_date_time_slice()
-        );
+        assert_eq!(column.to_date_time_vec(), &[]);
+        assert_eq!(column.to_date_time_vec(), column.to_date_time_vec());
     }
 
     #[test]
@@ -611,20 +595,20 @@ mod tests {
         column2.append(&mut column1);
         assert_eq!(column1.len(), 0);
         assert_eq!(column1.capacity(), 0);
-        assert_eq!(column1.as_real_slice(), &[]);
+        assert_eq!(column1.to_real_vec(), &[]);
         assert_eq!(column2.len(), 1);
         assert_eq!(column2.capacity(), 3);
-        assert_eq!(column2.as_real_slice(), &[Real::new(1.0).ok()]);
+        assert_eq!(column2.to_real_vec(), &[Real::new(1.0).ok()]);
 
         column1.push_real(None);
         column1.push_real(None);
         column1.append(&mut column2);
         assert_eq!(column1.len(), 3);
         assert!(column1.capacity() > 0);
-        assert_eq!(column1.as_real_slice(), &[None, None, Real::new(1.0).ok()]);
+        assert_eq!(column1.to_real_vec(), &[None, None, Real::new(1.0).ok()]);
         assert_eq!(column2.len(), 0);
         assert_eq!(column2.capacity(), 3);
-        assert_eq!(column2.as_real_slice(), &[]);
+        assert_eq!(column2.to_real_vec(), &[]);
 
         column1.push_real(Real::new(1.1).ok());
         column2.push_real(Real::new(3.5).ok());
@@ -633,11 +617,11 @@ mod tests {
         column2.append(&mut column1);
         assert_eq!(column1.len(), 0);
         assert!(column1.capacity() > 0);
-        assert_eq!(column1.as_real_slice(), &[]);
+        assert_eq!(column1.to_real_vec(), &[]);
         assert_eq!(column2.len(), 5);
         assert!(column2.capacity() > 3);
         assert_eq!(
-            column2.as_real_slice(),
+            column2.to_real_vec(),
             &[
                 Real::new(3.5).ok(),
                 None,
@@ -651,9 +635,9 @@ mod tests {
     #[test]
     fn test_from() {
         let slice: &[_] = &[None, Real::new(1.0).ok()];
-        let vec = slice.to_vec();
-        let column = VectorValue::from(vec);
+        let chunked_vec = ChunkedVecSized::from_slice(slice);
+        let column = VectorValue::from(chunked_vec);
         assert_eq!(column.len(), 2);
-        assert_eq!(column.as_real_slice(), slice);
+        assert_eq!(column.to_real_vec(), slice);
     }
 }

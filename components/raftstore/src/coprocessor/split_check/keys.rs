@@ -1,8 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine_traits::CF_WRITE;
-use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection};
+use engine_traits::{KvEngine, Range};
+use error_code::ErrorCodeExt;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::marker::PhantomData;
 use std::mem;
@@ -12,7 +12,6 @@ use super::super::error::Result;
 use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
-use engine_rocks::properties::{get_range_entries_and_versions, RangeProperties};
 
 pub struct Checker {
     max_keys_count: u64,
@@ -116,13 +115,18 @@ where
     ) {
         let region = ctx.region();
         let region_id = region.get_id();
-        let region_keys = match get_region_approximate_keys(engine, region) {
+        let region_keys = match get_region_approximate_keys(
+            engine,
+            region,
+            host.cfg.region_max_keys * host.cfg.batch_split_limit,
+        ) {
             Ok(keys) => keys,
             Err(e) => {
                 warn!(
                     "failed to get approximate keys";
                     "region_id" => region_id,
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 // Need to check keys.
                 host.add_checker(Box::new(Checker::new(
@@ -141,6 +145,7 @@ where
                 "failed to send approximate region keys";
                 "region_id" => region_id,
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
         }
 
@@ -172,41 +177,36 @@ where
 }
 
 /// Get the approximate number of keys in the range.
-pub fn get_region_approximate_keys(db: &impl KvEngine, region: &Region) -> Result<u64> {
-    // try to get from RangeProperties first.
-    match get_region_approximate_keys_cf(db, CF_WRITE, region) {
-        Ok(v) => {
-            return Ok(v);
-        }
-        Err(e) => debug!(
-            "failed to get keys from RangeProperties";
-            "err" => ?e,
-        ),
-    }
-
+pub fn get_region_approximate_keys(
+    db: &impl KvEngine,
+    region: &Region,
+    large_threshold: u64,
+) -> Result<u64> {
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
-    let cf = box_try!(db.cf_handle(CF_WRITE));
-    let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
-    Ok(keys)
+    let range = Range::new(&start, &end);
+    Ok(box_try!(db.get_range_approximate_keys(
+        range,
+        region.get_id(),
+        large_threshold
+    )))
 }
 
 pub fn get_region_approximate_keys_cf(
     db: &impl KvEngine,
     cfname: &str,
     region: &Region,
+    large_threshold: u64,
 ) -> Result<u64> {
-    let start_key = keys::enc_start_key(region);
-    let end_key = keys::enc_end_key(region);
-    let range = Range::new(&start_key, &end_key);
-    let (mut keys, _) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
-
-    let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
-    for (_, v) in collection.iter() {
-        let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
-        keys += props.get_approximate_keys_in_range(&start_key, &end_key);
-    }
-    Ok(keys)
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let range = Range::new(&start, &end);
+    Ok(box_try!(db.get_range_approximate_keys_cf(
+        cfname,
+        range,
+        region.get_id(),
+        large_threshold
+    )))
 }
 
 #[cfg(test)]
@@ -214,13 +214,12 @@ mod tests {
     use super::super::size::tests::must_split_at;
     use crate::coprocessor::{Config, CoprocessorHost};
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use engine::rocks;
-    use engine::rocks::util::{new_engine_opt, CFOptions};
-    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
-    use engine::DB;
     use engine_rocks::properties::{
         MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
     };
+    use engine_rocks::raw::DB;
+    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine_rocks::Compat;
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};
@@ -386,7 +385,8 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         for &(key, vlen) in &cases {
@@ -410,7 +410,7 @@ mod tests {
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let range_keys = get_region_approximate_keys(db.c(), &region).unwrap();
+        let range_keys = get_region_approximate_keys(db.c(), &region, 0).unwrap();
         assert_eq!(range_keys, cases.len() as u64);
     }
 
@@ -432,7 +432,8 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let write_cf = db.cf_handle(CF_WRITE).unwrap();
         let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
@@ -463,13 +464,13 @@ mod tests {
         region.set_start_key(b"b1".to_vec());
         region.set_end_key(b"b2".to_vec());
         region.mut_peers().push(Peer::default());
-        let range_keys = get_region_approximate_keys(db.c(), &region).unwrap();
+        let range_keys = get_region_approximate_keys(db.c(), &region, 0).unwrap();
         assert_eq!(range_keys, 0);
 
         // range properties get 1, mvcc properties get 3
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"c".to_vec());
-        let range_keys = get_region_approximate_keys(db.c(), &region).unwrap();
+        let range_keys = get_region_approximate_keys(db.c(), &region, 0).unwrap();
         assert_eq!(range_keys, 1);
     }
 }

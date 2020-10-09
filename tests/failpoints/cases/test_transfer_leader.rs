@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use fail;
 use test_raftstore::*;
 
 /// When a follower applies log slowly, leader should not transfer leader

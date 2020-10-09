@@ -103,6 +103,10 @@ impl super::Storage for FixtureStorage {
     }
 
     fn collect_statistics(&mut self, _dest: &mut Self::Statistics) {}
+
+    fn met_uncacheable_data(&self) -> Option<bool> {
+        None
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use smallvec::SmallVec;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
@@ -16,7 +17,6 @@ use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::row;
-use tidb_query_datatype::codec::table::check_record_key;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
 pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
@@ -39,7 +39,9 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
+        primary_column_ids: Vec<i64>,
         is_backward: bool,
+        is_scanned_range_aware: bool,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
@@ -48,6 +50,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         let mut columns_default_value = Vec::with_capacity(columns_info.len());
         let mut column_id_index = HashMap::default();
 
+        let primary_column_ids_set = primary_column_ids.iter().collect::<HashSet<_>>();
         for (index, mut ci) in columns_info.into_iter().enumerate() {
             // For each column info, we need to extract the following info:
             // - Corresponding field type (push into `schema`).
@@ -61,7 +64,9 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             if ci.get_pk_handle() {
                 handle_indices.push(index);
             } else {
-                is_key_only = false;
+                if !primary_column_ids_set.contains(&ci.get_column_id()) {
+                    is_key_only = false;
+                }
                 column_id_index.insert(ci.get_column_id(), index);
             }
 
@@ -69,12 +74,14 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             // columns with the same column id are given, we will only preserve the *last* one.
         }
 
+        let no_common_handle = primary_column_ids.is_empty();
         let imp = TableScanExecutorImpl {
             context: EvalContext::new(config),
             schema,
             columns_default_value,
             column_id_index,
             handle_indices,
+            primary_column_ids,
             is_column_filled,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
@@ -83,7 +90,8 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             key_ranges,
             is_backward,
             is_key_only,
-            accept_point_range: true,
+            accept_point_range: no_common_handle,
+            is_scanned_range_aware,
         })?;
         Ok(Self(wrapper))
     }
@@ -116,6 +124,11 @@ impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.0.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        self.0.can_be_cached()
+    }
 }
 
 struct TableScanExecutorImpl {
@@ -136,6 +149,9 @@ struct TableScanExecutorImpl {
 
     /// Vec of indices in output row to put the handle. The indices must be sorted in the vec.
     handle_indices: HandleIndicesVec,
+
+    /// Vec of Primary key column's IDs.
+    primary_column_ids: Vec<i64>,
 
     /// A vector of flags indicating whether corresponding column is filled in `next_batch`.
     /// It is a struct level field in order to prevent repeated memory allocations since its length
@@ -286,22 +302,8 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
     ) -> Result<()> {
         use tidb_query_datatype::codec::{datum, table};
 
-        check_record_key(&key)?;
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
-
-        if !self.handle_indices.is_empty() {
-            let handle_id = table::decode_handle(key)?;
-            for handle_index in &self.handle_indices {
-                // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
-                // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
-                columns[*handle_index]
-                    .mut_decoded()
-                    .push_int(Some(handle_id));
-                decoded_columns += 1;
-                self.is_column_filled[*handle_index] = true;
-            }
-        }
 
         if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
             // Do nothing
@@ -310,6 +312,40 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 row::v2::CODEC_VERSION => self.process_v2(value, columns, &mut decoded_columns)?,
                 _ => self.process_v1(key, value, columns, &mut decoded_columns)?,
             }
+        }
+
+        if !self.handle_indices.is_empty() {
+            // In this case, An int handle is expected.
+            let handle = table::decode_int_handle(key)?;
+
+            for handle_index in &self.handle_indices {
+                // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
+                // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
+                if !self.is_column_filled[*handle_index] {
+                    columns[*handle_index].mut_decoded().push_int(Some(handle));
+                    decoded_columns += 1;
+                    self.is_column_filled[*handle_index] = true;
+                }
+            }
+        } else if !self.primary_column_ids.is_empty() {
+            // Otherwise, if `primary_column_ids` is not empty, we try to extract the values of the columns from the common handle.
+            let mut handle = table::decode_common_handle(key)?;
+            for primary_id in self.primary_column_ids.iter() {
+                let index = self.column_id_index.get(primary_id);
+                let (datum, remain) = datum::split_datum(handle, false)?;
+                handle = remain;
+
+                // If the column info of the coresponding primary column id is missing, we ignore this slice of the datum.
+                if let Some(&index) = index {
+                    if !self.is_column_filled[index] {
+                        columns[index].mut_raw().push(datum);
+                        decoded_columns += 1;
+                        self.is_column_filled[index] = true;
+                    }
+                }
+            }
+        } else {
+            table::check_record_key(key)?;
         }
 
         // Some fields may be missing in the row, we push corresponding default value to make all
@@ -619,6 +655,8 @@ mod tests {
             Arc::new(EvalConfig::default()),
             columns_info,
             ranges,
+            vec![],
+            false,
             false,
         )
         .unwrap();
@@ -700,6 +738,8 @@ mod tests {
             Arc::new(EvalConfig::default()),
             helper.columns_info_by_idx(&[0]),
             vec![helper.whole_table_range()],
+            vec![],
+            false,
             false,
         )
         .unwrap()
@@ -837,6 +877,8 @@ mod tests {
                     key_range_point[1].clone(),
                     key_range_point[corrupted_row_index].clone(),
                 ],
+                vec![],
+                false,
                 false,
             )
             .unwrap();
@@ -847,7 +889,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(0), Some(1)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -855,7 +897,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(5), None]
             );
             assert!(result.physical_columns[2].is_raw());
@@ -863,7 +905,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[2])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[2].decoded().as_int_slice(),
+                result.physical_columns[2].decoded().to_int_vec(),
                 &[Some(7), None]
             );
         }
@@ -941,6 +983,8 @@ mod tests {
                     key_range_point[1].clone(),
                     key_range_point[2].clone(),
                 ],
+                vec![],
+                false,
                 false,
             )
             .unwrap();
@@ -951,7 +995,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(0)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -959,7 +1003,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(7)]
             );
         }
@@ -975,6 +1019,8 @@ mod tests {
                     key_range_point[1].clone(),
                     key_range_point[2].clone(),
                 ],
+                vec![],
+                false,
                 false,
             )
             .unwrap();
@@ -985,7 +1031,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(0)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -993,7 +1039,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(7)]
             );
 
@@ -1011,6 +1057,8 @@ mod tests {
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
                 vec![key_range_point[1].clone(), key_range_point[2].clone()],
+                vec![],
+                false,
                 false,
             )
             .unwrap();
@@ -1029,6 +1077,8 @@ mod tests {
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
                 vec![key_range_point[2].clone(), key_range_point[0].clone()],
+                vec![],
+                false,
                 false,
             )
             .unwrap();
@@ -1039,7 +1089,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(2), Some(0)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -1047,7 +1097,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(5), Some(7)]
             );
         }
@@ -1060,6 +1110,8 @@ mod tests {
                 Arc::new(EvalConfig::default()),
                 columns_info,
                 vec![key_range_point[1].clone()],
+                vec![],
+                false,
                 false,
             )
             .unwrap();
@@ -1107,6 +1159,8 @@ mod tests {
             Arc::new(EvalConfig::default()),
             columns_info,
             vec![key_range],
+            vec![],
+            false,
             false,
         )
         .unwrap();
@@ -1121,12 +1175,12 @@ mod tests {
                 .unwrap();
             if columns_is_pk[i] {
                 assert_eq!(
-                    result.physical_columns[i].decoded().as_int_slice(),
+                    result.physical_columns[i].decoded().to_int_vec(),
                     &[Some(1)]
                 );
             } else {
                 assert_eq!(
-                    result.physical_columns[i].decoded().as_int_slice(),
+                    result.physical_columns[i].decoded().to_int_vec(),
                     &[Some(i as i64 + 10)]
                 );
             }
@@ -1143,6 +1197,185 @@ mod tests {
         test_multi_handle_column_impl(&[true, false, true]);
         test_multi_handle_column_impl(&[
             false, false, false, true, false, false, true, true, false, false,
+        ]);
+    }
+
+    #[derive(Copy, Clone)]
+    struct Column {
+        is_primary_column: bool,
+        has_column_info: bool,
+    }
+
+    fn test_common_handle_impl(columns: &[Column]) {
+        const TABLE_ID: i64 = 2333;
+
+        // Prepare some table meta data
+        let mut columns_info = vec![];
+        let mut schema = vec![];
+        let mut handle = vec![];
+        let mut primary_column_ids = vec![];
+        let mut missed_columns_info = vec![];
+        let column_ids = (0..columns.len() as i64).collect::<Vec<_>>();
+        let mut row = vec![];
+
+        for (i, &column) in columns.iter().enumerate() {
+            let Column {
+                is_primary_column,
+                has_column_info,
+            } = column;
+
+            if has_column_info {
+                let mut ci = ColumnInfo::default();
+
+                ci.set_column_id(i as i64);
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+
+                columns_info.push(ci);
+                schema.push(FieldTypeTp::LongLong.into());
+            } else {
+                missed_columns_info.push(i as i64);
+            }
+
+            if is_primary_column {
+                handle.push(Datum::I64(i as i64));
+                primary_column_ids.push(i as i64);
+            }
+
+            row.push(Datum::I64(i as i64));
+        }
+
+        let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
+
+        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
+
+        // Constructs a range that includes the constructed key.
+        let mut key_range = KeyRange::default();
+        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        key_range.set_start(begin);
+        key_range.set_end(end);
+
+        let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
+
+        let mut executor = BatchTableScanExecutor::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info.clone(),
+            vec![key_range],
+            primary_column_ids,
+            false,
+            false,
+        )
+        .unwrap();
+
+        let mut result = executor.next_batch(10);
+        assert_eq!(result.is_drained.unwrap(), true);
+        assert_eq!(result.logical_rows.len(), 1);
+        assert_eq!(
+            result.physical_columns.columns_len(),
+            columns.len() - missed_columns_info.len()
+        );
+        // We expect we fill the primary column with the value embedded in the common handle.
+        for i in 0..result.physical_columns.columns_len() {
+            result.physical_columns[i]
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[i])
+                .unwrap();
+
+            assert_eq!(
+                result.physical_columns[i].decoded().to_int_vec(),
+                &[Some(columns_info[i].get_column_id())]
+            );
+        }
+    }
+    #[test]
+    fn test_common_handle() {
+        test_common_handle_impl(&[Column {
+            is_primary_column: true,
+            has_column_info: true,
+        }]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: false,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+            },
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+            },
         ]);
     }
 }

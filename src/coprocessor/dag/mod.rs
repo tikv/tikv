@@ -22,7 +22,7 @@ pub struct DagHandlerBuilder<S: Store + 'static> {
     deadline: Deadline,
     batch_row_limit: usize,
     is_streaming: bool,
-    enable_batch_if_possible: bool,
+    is_cache_enabled: bool,
 }
 
 impl<S: Store + 'static> DagHandlerBuilder<S> {
@@ -33,6 +33,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
         deadline: Deadline,
         batch_row_limit: usize,
         is_streaming: bool,
+        is_cache_enabled: bool,
     ) -> Self {
         DagHandlerBuilder {
             req,
@@ -42,7 +43,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
             deadline,
             batch_row_limit,
             is_streaming,
-            enable_batch_if_possible: true,
+            is_cache_enabled,
         }
     }
 
@@ -51,40 +52,19 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
         self
     }
 
-    pub fn enable_batch_if_possible(mut self, enable_batch_if_possible: bool) -> Self {
-        self.enable_batch_if_possible = enable_batch_if_possible;
-        self
-    }
-
     pub fn build(self) -> Result<Box<dyn RequestHandler>> {
-        // TODO: support batch executor while handling server-side streaming requests
-        // https://github.com/tikv/tikv/pull/5945
-        if self.enable_batch_if_possible && !self.is_streaming {
-            tidb_query_vec_executors::runner::BatchExecutorsRunner::check_supported(
-                self.req.get_executors(),
-            )?;
-            COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-            Ok(BatchDAGHandler::new(
-                self.req,
-                self.ranges,
-                self.store,
-                self.data_version,
-                self.deadline,
-            )?
-            .into_boxed())
-        } else {
-            COPR_DAG_REQ_COUNT.with_label_values(&["normal"]).inc();
-            Ok(DAGHandler::new(
-                self.req,
-                self.ranges,
-                self.store,
-                self.data_version,
-                self.deadline,
-                self.batch_row_limit,
-                self.is_streaming,
-            )?
-            .into_boxed())
-        }
+        COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
+        Ok(BatchDAGHandler::new(
+            self.req,
+            self.ranges,
+            self.store,
+            self.data_version,
+            self.deadline,
+            self.is_cache_enabled,
+            self.batch_row_limit,
+            self.is_streaming,
+        )?
+        .into_boxed())
     }
 }
 
@@ -102,12 +82,13 @@ impl DAGHandler {
         deadline: Deadline,
         batch_row_limit: usize,
         is_streaming: bool,
+        is_cache_enabled: bool,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query_normal_executors::ExecutorsRunner::from_request(
                 req,
                 ranges,
-                TiKVStorage::from(store),
+                TiKVStorage::new(store, is_cache_enabled),
                 deadline,
                 batch_row_limit,
                 is_streaming,
@@ -119,8 +100,10 @@ impl DAGHandler {
 
 #[async_trait]
 impl RequestHandler for DAGHandler {
+    #[minitrace::trace_async(tipb::Event::TiKvCoprExecuteDagRunner as u32)]
     async fn handle_request(&mut self) -> Result<Response> {
-        handle_qe_response(self.runner.handle_request(), self.data_version)
+        let result = self.runner.handle_request();
+        handle_qe_response(result, self.runner.can_be_cached(), self.data_version)
     }
 
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
@@ -144,13 +127,18 @@ impl BatchDAGHandler {
         store: S,
         data_version: Option<u64>,
         deadline: Deadline,
+        is_cache_enabled: bool,
+        streaming_batch_limit: usize,
+        is_streaming: bool,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query_vec_executors::runner::BatchExecutorsRunner::from_request(
                 req,
                 ranges,
-                TiKVStorage::from(store),
+                TiKVStorage::new(store, is_cache_enabled),
                 deadline,
+                streaming_batch_limit,
+                is_streaming,
             )?,
             data_version,
         })
@@ -159,8 +147,14 @@ impl BatchDAGHandler {
 
 #[async_trait]
 impl RequestHandler for BatchDAGHandler {
+    #[minitrace::trace_async(tipb::Event::TiKvCoprExecuteBatchDagRunner as u32)]
     async fn handle_request(&mut self) -> Result<Response> {
-        handle_qe_response(self.runner.handle_request().await, self.data_version)
+        let result = self.runner.handle_request().await;
+        handle_qe_response(result, self.runner.can_be_cached(), self.data_version)
+    }
+
+    fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
+        handle_qe_stream_response(self.runner.handle_streaming_request())
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
@@ -170,6 +164,7 @@ impl RequestHandler for BatchDAGHandler {
 
 fn handle_qe_response(
     result: tidb_query_common::Result<SelectResponse>,
+    can_be_cached: bool,
     data_version: Option<u64>,
 ) -> Result<Response> {
     use tidb_query_common::error::ErrorInner;
@@ -178,6 +173,7 @@ fn handle_qe_response(
         Ok(sel_resp) => {
             let mut resp = Response::default();
             resp.set_data(box_try!(sel_resp.write_to_bytes()));
+            resp.set_can_be_cached(can_be_cached);
             resp.set_is_cache_hit(false);
             if let Some(v) = data_version {
                 resp.set_cache_last_version(v);
@@ -192,6 +188,7 @@ fn handle_qe_response(
                 sel_resp.mut_error().set_code(err.code());
                 sel_resp.mut_error().set_msg(err.to_string());
                 resp.set_data(box_try!(sel_resp.write_to_bytes()));
+                resp.set_can_be_cached(can_be_cached);
                 resp.set_is_cache_hit(false);
                 Ok(resp)
             }

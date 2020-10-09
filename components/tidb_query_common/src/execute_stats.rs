@@ -71,7 +71,7 @@ impl ExecSummaryCollector for ExecSummaryCollectorEnabled {
 
     #[inline]
     fn collect(&mut self, target: &mut [ExecSummary]) {
-        let current_summary = std::mem::replace(&mut self.counts, ExecSummary::default());
+        let current_summary = std::mem::take(&mut self.counts);
         target[self.output_index] += current_summary;
     }
 }

@@ -1,12 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
+use std::path::Path;
 use std::process;
 
 use clap::{crate_authors, App, Arg};
-use cmd::setup::validate_and_persist_config;
+use cmd::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use tikv::config::TiKvConfig;
 
 fn main() {
@@ -74,6 +74,13 @@ fn main() {
                 .takes_value(true)
                 .value_name("IP:PORT")
                 .help("Set the HTTP listening address for the status report service"),
+        )
+        .arg(
+            Arg::with_name("advertise-status-addr")
+                .long("advertise-status-addr")
+                .takes_value(true)
+                .value_name("IP:PORT")
+                .help("Set the advertise listening address for the client communication of status report service"),
         )
         .arg(
             Arg::with_name("data-dir")
@@ -144,14 +151,27 @@ fn main() {
         process::exit(0);
     }
 
+    let mut unrecognized_keys = Vec::new();
+    let is_config_check = matches.is_present("config-check");
+
     let mut config = matches
-        .value_of("config")
-        .map_or_else(TiKvConfig::default, |path| TiKvConfig::from_file(&path));
+        .value_of_os("config")
+        .map_or_else(TiKvConfig::default, |path| {
+            TiKvConfig::from_file(
+                Path::new(path),
+                if is_config_check {
+                    Some(&mut unrecognized_keys)
+                } else {
+                    None
+                },
+            )
+        });
 
     cmd::setup::overwrite_config_with_cmd_args(&mut config, &matches);
 
-    if matches.is_present("config-check") {
+    if is_config_check {
         validate_and_persist_config(&mut config, false);
+        ensure_no_unrecognized_config(&unrecognized_keys);
         println!("config check successful");
         process::exit(0)
     }

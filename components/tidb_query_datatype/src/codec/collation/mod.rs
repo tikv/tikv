@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod unicode_ci_data;
 mod utf8mb4;
 
 pub use self::utf8mb4::*;
@@ -20,6 +21,7 @@ pub macro match_template_collator($t:tt, $($tail:tt)*) {
             Utf8Mb4Bin => CollatorUtf8Mb4Bin,
             Utf8Mb4BinNoPadding => CollatorUtf8Mb4BinNoPadding,
             Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
+            Utf8Mb4UnicodeCi => CollatorUtf8Mb4UnicodeCi,
         ],
         $($tail)*
     }
@@ -46,7 +48,7 @@ impl Charset for CharsetBinary {
     }
 }
 
-pub trait Collator: 'static + std::marker::Send + std::marker::Sync {
+pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {
     type Charset: Charset;
 
     fn validate(bstr: &[u8]) -> Result<()>;
@@ -71,6 +73,7 @@ pub trait Collator: 'static + std::marker::Send + std::marker::Sync {
 }
 
 /// Collator for binary collation without padding.
+#[derive(Debug)]
 pub struct CollatorBinary;
 
 impl Collator for CollatorBinary {
@@ -150,6 +153,16 @@ where
             C::validate(inner.as_ref())?;
         }
         Ok(unsafe { std::mem::transmute(inner) })
+    }
+
+    #[inline]
+    #[allow(clippy::transmute_ptr_to_ptr)]
+    pub fn map_option_owned(inner: Option<T>) -> Result<Option<Self>> {
+        if let Some(inner) = inner {
+            C::validate(inner.as_ref())?;
+            return Self::new(inner).map(|x| Some(x));
+        }
+        Ok(None)
     }
 
     #[inline]

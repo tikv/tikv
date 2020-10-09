@@ -1,59 +1,37 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Deref;
-use std::result;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
-use tikv_util::collections::HashSet;
 
-use futures::future::{loop_fn, ok, Loop};
-use futures::sync::mpsc::UnboundedSender;
-use futures::task::Task;
-use futures::{task, Async, Future, Poll, Stream};
+use futures::channel::mpsc::UnboundedSender;
+use futures::compat::Future01CompatExt;
+use futures::executor::block_on;
+use futures::future;
+use futures::future::TryFutureExt;
+use futures::stream::Stream;
+use futures::stream::TryStreamExt;
+use futures::task::Context;
+use futures::task::Poll;
+use futures::task::Waker;
+
 use grpcio::{
-    CallOption, Channel, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
+    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
 };
-use kvproto::configpb::ConfigClient;
 use kvproto::pdpb::{
-    ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient, RegionHeartbeatRequest,
-    RegionHeartbeatResponse, ResponseHeader,
+    ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
+    RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
 };
-use tokio_timer::timer::Handle;
-
-use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
-use tikv_util::security::SecurityManager;
+use security::SecurityManager;
+use tikv_util::collections::HashSet;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
+use tokio_timer::timer::Handle;
 
-pub struct PdClientStub {
-    pd_client: PdClient,
-    config_client: ConfigClient,
-}
-
-impl PdClientStub {
-    fn new(ch: Channel) -> Self {
-        // reuse the same channel for tow different client
-        PdClientStub {
-            pd_client: PdClient::new(ch.clone()),
-            config_client: ConfigClient::new(ch),
-        }
-    }
-
-    pub fn config(&self) -> &ConfigClient {
-        &self.config_client
-    }
-}
-
-impl Deref for PdClientStub {
-    type Target = PdClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.pd_client
-    }
-}
+use super::{ClusterVersion, Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -61,13 +39,15 @@ pub struct Inner {
         Option<ClientDuplexSender<RegionHeartbeatRequest>>,
         UnboundedSender<RegionHeartbeatRequest>,
     >,
-    pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Task>,
+    pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Waker>,
     pub client_stub: PdClientStub,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
 
     last_update: Instant,
+
+    pub cluster_version: ClusterVersion,
 }
 
 pub struct HeartbeatReceiver {
@@ -76,15 +56,14 @@ pub struct HeartbeatReceiver {
 }
 
 impl Stream for HeartbeatReceiver {
-    type Item = RegionHeartbeatResponse;
-    type Error = Error;
+    type Item = Result<RegionHeartbeatResponse>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Error> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
             if let Some(ref mut receiver) = self.receiver {
-                match receiver.poll() {
-                    Ok(Async::Ready(Some(item))) => return Ok(Async::Ready(Some(item))),
-                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                match Pin::new(receiver).poll_next(cx) {
+                    Poll::Ready(Some(Ok(item))) => return Poll::Ready(Some(Ok(item))),
+                    Poll::Pending => return Poll::Pending,
                     // If it's None or there's error, we need to update receiver.
                     _ => {}
                 }
@@ -99,10 +78,11 @@ impl Stream for HeartbeatReceiver {
             }
             if receiver.is_some() {
                 debug!("heartbeat receiver is refreshed");
+                drop(inner);
                 self.receiver = receiver;
             } else {
-                inner.hb_receiver = Either::Right(task::current());
-                return Ok(Async::NotReady);
+                inner.hb_receiver = Either::Right(cx.waker().clone());
+                return Poll::Pending;
             }
         }
     }
@@ -121,7 +101,10 @@ impl LeaderClient {
         client_stub: PdClientStub,
         members: GetMembersResponse,
     ) -> LeaderClient {
-        let (tx, rx) = client_stub.region_heartbeat().unwrap();
+        let (tx, rx) = client_stub
+            .region_heartbeat()
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
+
         LeaderClient {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: Arc::new(RwLock::new(Inner {
@@ -134,6 +117,7 @@ impl LeaderClient {
                 on_reconnect: None,
 
                 last_update: Instant::now(),
+                cluster_version: ClusterVersion::default(),
             })),
         }
     }
@@ -146,10 +130,10 @@ impl LeaderClient {
             receiver: None,
             inner: Arc::clone(&self.inner),
         };
-        Box::new(
-            recv.for_each(move |resp| {
+        Box::pin(
+            recv.try_for_each(move |resp| {
                 f(resp);
-                Ok(())
+                future::ready(Ok(()))
             })
             .map_err(|e| panic!("unexpected error: {:?}", e)),
         )
@@ -160,7 +144,7 @@ impl LeaderClient {
         inner.on_reconnect = Some(f);
     }
 
-    pub fn request<Req, Resp, F>(&self, req: Req, func: F, retry: usize) -> Request<Req, Resp, F>
+    pub fn request<Req, Resp, F>(&self, req: Req, func: F, retry: usize) -> Request<Req, F>
     where
         Req: Clone + 'static,
         F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
@@ -173,7 +157,6 @@ impl LeaderClient {
                 inner: Arc::clone(&self.inner),
             },
             req,
-            resp: None,
             func,
         }
     }
@@ -182,9 +165,9 @@ impl LeaderClient {
         self.inner.rl().members.get_leader().clone()
     }
 
-    /// Re-establishes connection with PD leader in synchronized fashion.
-    pub fn reconnect(&self) -> Result<()> {
-        let ((client, members), start) = {
+    /// Re-establishes connection with PD leader in asynchronized fashion.
+    pub async fn reconnect(&self) -> Result<()> {
+        let (future, start) = {
             let inner = self.inner.rl();
             if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
                 // Avoid unnecessary updating.
@@ -192,15 +175,25 @@ impl LeaderClient {
             }
 
             let start = Instant::now();
+
             (
-                try_connect_leader(Arc::clone(&inner.env), &inner.security_mgr, &inner.members)?,
+                try_connect_leader(
+                    Arc::clone(&inner.env),
+                    Arc::clone(&inner.security_mgr),
+                    inner.members.clone(),
+                ),
                 start,
             )
         };
 
+        let (client, members) = future.await?;
+        fail_point!("leader_client_reconnect");
+
         {
             let mut inner = self.inner.wl();
-            let (tx, rx) = client.region_heartbeat().unwrap();
+            let (tx, rx) = client.region_heartbeat().unwrap_or_else(|e| {
+                panic!("fail to request PD {} err {:?}", "region_heartbeat", e)
+            });
             info!("heartbeat sender and receiver are stale, refreshing ...");
 
             // Try to cancel an unused heartbeat sender.
@@ -209,10 +202,8 @@ impl LeaderClient {
                 r.cancel();
             }
             inner.hb_sender = Either::Left(Some(tx));
-            if let Either::Right(ref mut task) = inner.hb_receiver {
-                task.notify();
-            }
-            inner.hb_receiver = Either::Left(Some(rx));
+            let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(rx)));
+            let _ = prev_receiver.right().map(|t| t.wake());
             inner.client_stub = client;
             inner.members = members;
             inner.last_update = Instant::now();
@@ -228,30 +219,26 @@ impl LeaderClient {
 pub const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
 
 /// The context of sending requets.
-pub struct Request<Req, Resp, F> {
+pub struct Request<Req, F> {
     reconnect_count: usize,
     request_sent: usize,
-
     client: LeaderClient,
-
     req: Req,
-    resp: Option<Result<Resp>>,
     func: F,
 }
 
 const MAX_REQUEST_COUNT: usize = 3;
 
-impl<Req, Resp, F> Request<Req, Resp, F>
+impl<Req, Resp, F> Request<Req, F>
 where
     Req: Clone + Send + 'static,
-    Resp: Send + 'static,
     F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
 {
-    fn reconnect_if_needed(mut self) -> Box<dyn Future<Item = Self, Error = Self> + Send> {
+    async fn reconnect_if_needed(&mut self) -> bool {
         debug!("reconnecting ..."; "remain" => self.reconnect_count);
 
         if self.request_sent < MAX_REQUEST_COUNT {
-            return Box::new(ok(self));
+            return true;
         }
 
         // Updating client.
@@ -259,51 +246,29 @@ where
 
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
-        match self.client.reconnect() {
+        match self.client.reconnect().await {
             Ok(_) => {
                 self.request_sent = 0;
-                Box::new(ok(self))
+                true
             }
-            Err(_) => Box::new(
-                self.client
+            Err(_) => {
+                let _ = self
+                    .client
                     .timer
                     .delay(Instant::now() + Duration::from_secs(RECONNECT_INTERVAL_SEC))
-                    .then(|_| Err(self)),
-            ),
+                    .compat()
+                    .await;
+                false
+            }
         }
     }
 
-    fn send_and_receive(mut self) -> Box<dyn Future<Item = Self, Error = Self> + Send> {
+    async fn send_and_receive(&mut self) -> Result<Resp> {
         self.request_sent += 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
 
-        Box::new(ok(self).and_then(|mut ctx| {
-            let req = (ctx.func)(&ctx.client.inner, r);
-            req.then(|resp| match resp {
-                Ok(resp) => {
-                    ctx.resp = Some(Ok(resp));
-                    Ok(ctx)
-                }
-                Err(err) => {
-                    ctx.resp = Some(Err(err));
-                    Err(ctx)
-                }
-            })
-        }))
-    }
-
-    fn break_or_continue(ctx: result::Result<Self, Self>) -> Result<Loop<Self, Self>> {
-        let ctx = match ctx {
-            Ok(ctx) | Err(ctx) => ctx,
-        };
-        let done = ctx.reconnect_count == 0
-            || (ctx.resp.is_some() && Self::should_not_retry(ctx.resp.as_ref().unwrap()));
-        if done {
-            Ok(Loop::Break(ctx))
-        } else {
-            Ok(Loop::Continue(ctx))
-        }
+        (self.func)(&self.client.inner, r).await
     }
 
     fn should_not_retry(resp: &Result<Resp>) -> bool {
@@ -312,30 +277,26 @@ where
             // Error::Incompatible is returned by response header from PD, no need to retry
             Err(Error::Incompatible) => true,
             Err(err) => {
-                error!("request failed, retry"; "err" => ?err);
+                error!(?err; "request failed, retry");
                 false
             }
         }
     }
 
-    fn post_loop(ctx: Result<Self>) -> Result<Resp> {
-        let ctx = ctx.expect("end loop with Ok(_)");
-        ctx.resp
-            .unwrap_or_else(|| Err(box_err!("response is empty")))
-    }
-
     /// Returns a Future, it is resolves once a future returned by the closure
     /// is resolved successfully, otherwise it repeats `retry` times.
-    pub fn execute(self) -> PdFuture<Resp> {
-        let ctx = self;
-        Box::new(
-            loop_fn(ctx, |ctx| {
-                ctx.reconnect_if_needed()
-                    .and_then(Self::send_and_receive)
-                    .then(Self::break_or_continue)
-            })
-            .then(Self::post_loop),
-        )
+    pub fn execute(mut self) -> PdFuture<Resp> {
+        Box::pin(async move {
+            while self.reconnect_count != 0 {
+                if self.reconnect_if_needed().await {
+                    let resp = self.send_and_receive().await;
+                    if Self::should_not_retry(&resp) {
+                        return resp;
+                    }
+                }
+            }
+            Err(box_err!("request retry exceeds limit"))
+        })
     }
 }
 
@@ -346,16 +307,21 @@ where
 {
     let mut err = None;
     for _ in 0..retry {
-        // DO NOT put any lock operation in match statement, or it will cause dead lock!
-        let ret = { func(&client.inner.rl().client_stub).map_err(Error::Grpc) };
+        let ret = {
+            // Drop the read lock immediately to prevent the deadlock between the caller thread
+            // which may hold the read lock and wait for PD client thread completing the request
+            // and the PD client thread which may block on acquiring the write lock.
+            let client_stub = client.inner.rl().client_stub.clone();
+            func(&client_stub).map_err(Error::Grpc)
+        };
         match ret {
             Ok(r) => {
                 return Ok(r);
             }
             Err(e) => {
-                error!("request failed"; "err" => ?e);
-                if let Err(e) = client.reconnect() {
-                    error!("reconnect failed"; "err" => ?e);
+                error!(?e; "request failed");
+                if let Err(e) = block_on(client.reconnect()) {
+                    error!(?e; "reconnect failed");
                 }
                 err.replace(e);
             }
@@ -368,7 +334,7 @@ where
 pub fn validate_endpoints(
     env: Arc<Environment>,
     cfg: &Config,
-    security_mgr: &SecurityManager,
+    security_mgr: Arc<SecurityManager>,
 ) -> Result<(PdClientStub, GetMembersResponse)> {
     let len = cfg.endpoints.len();
     let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
@@ -380,7 +346,7 @@ pub fn validate_endpoints(
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let (_, resp) = match connect(Arc::clone(&env), security_mgr, ep) {
+        let (_, resp) = match block_on(connect(Arc::clone(&env), &security_mgr, ep)) {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -411,7 +377,8 @@ pub fn validate_endpoints(
 
     match members {
         Some(members) => {
-            let (client, members) = try_connect_leader(Arc::clone(&env), security_mgr, &members)?;
+            let (client, members) =
+                block_on(try_connect_leader(Arc::clone(&env), security_mgr, members))?;
             info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
             Ok((client, members))
         }
@@ -419,7 +386,7 @@ pub fn validate_endpoints(
     }
 }
 
-fn connect(
+async fn connect(
     env: Arc<Environment>,
     security_mgr: &SecurityManager,
     addr: &str,
@@ -428,23 +395,28 @@ fn connect(
     let addr = addr
         .trim_start_matches("http://")
         .trim_start_matches("https://");
-    let cb = ChannelBuilder::new(env)
-        .keepalive_time(Duration::from_secs(10))
-        .keepalive_timeout(Duration::from_secs(3));
-
-    let channel = security_mgr.connect(cb, addr);
+    let channel = {
+        let cb = ChannelBuilder::new(env)
+            .keepalive_time(Duration::from_secs(10))
+            .keepalive_timeout(Duration::from_secs(3));
+        security_mgr.connect(cb, addr)
+    };
     let client = PdClientStub::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-    match client.get_members_opt(&GetMembersRequest::default(), option) {
+    let response = client
+        .get_members_async_opt(&GetMembersRequest::default(), option)
+        .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
+        .await;
+    match response {
         Ok(resp) => Ok((client, resp)),
         Err(e) => Err(Error::Grpc(e)),
     }
 }
 
-pub fn try_connect_leader(
+pub async fn try_connect_leader(
     env: Arc<Environment>,
-    security_mgr: &SecurityManager,
-    previous: &GetMembersResponse,
+    security_mgr: Arc<SecurityManager>,
+    previous: GetMembersResponse,
 ) -> Result<(PdClientStub, GetMembersResponse)> {
     let previous_leader = previous.get_leader();
     let members = previous.get_members();
@@ -457,7 +429,7 @@ pub fn try_connect_leader(
         .chain(&[previous_leader.clone()])
     {
         for ep in m.get_client_urls() {
-            match connect(Arc::clone(&env), security_mgr, ep.as_str()) {
+            match connect(Arc::clone(&env), &security_mgr, ep.as_str()).await {
                 Ok((_, r)) => {
                     let new_cluster_id = r.get_header().get_cluster_id();
                     if new_cluster_id == cluster_id {
@@ -471,7 +443,7 @@ pub fn try_connect_leader(
                     }
                 }
                 Err(e) => {
-                    error!("connect failed"; "endpoints" => ep, "err" => ?e);
+                    error!(?e; "connect failed"; "endpoints" => ep,);
                     continue;
                 }
             }
@@ -482,7 +454,7 @@ pub fn try_connect_leader(
     if let Some(resp) = resp {
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
-            if let Ok((client, _)) = connect(Arc::clone(&env), security_mgr, ep.as_str()) {
+            if let Ok((client, _)) = connect(Arc::clone(&env), &security_mgr, ep.as_str()).await {
                 info!("connected to PD leader"; "endpoints" => ep);
                 return Ok((client, resp));
             }

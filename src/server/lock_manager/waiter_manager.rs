@@ -14,6 +14,7 @@ use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -21,14 +22,18 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use futures::{Async, Future, Poll};
+use futures::compat::Compat01As03;
+use futures::compat::Future01CompatExt;
+use futures::future::Future;
+use futures::task::{Context, Poll};
 use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
 use tikv_util::config::ReadableDuration;
-use tokio_core::reactor::Handle;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tokio::task::spawn_local;
 
 struct DelayInner {
-    timer: tokio_timer::Delay,
+    timer: Compat01As03<tokio_timer::Delay>,
     cancelled: bool,
 }
 
@@ -48,7 +53,7 @@ impl Delay {
     /// Create a new `Delay` instance that elapses at `deadline`.
     fn new(deadline: Instant) -> Self {
         let inner = DelayInner {
-            timer: tokio_timer::Delay::new(deadline),
+            timer: GLOBAL_TIMER_HANDLE.delay(deadline).compat(),
             cancelled: false,
         };
         Self {
@@ -60,7 +65,7 @@ impl Delay {
     /// Resets the instance to an earlier deadline.
     fn reset(&self, deadline: Instant) {
         if deadline < self.deadline {
-            self.inner.borrow_mut().timer.reset(deadline);
+            self.inner.borrow_mut().timer.get_mut().reset(deadline);
         }
     }
 
@@ -76,18 +81,15 @@ impl Delay {
 
 impl Future for Delay {
     // Whether the instance is triggered normally(true) or cancelled(false).
-    type Item = bool;
-    type Error = tokio_timer::Error;
+    type Output = bool;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
         if self.is_cancelled() {
-            return Ok(Async::Ready(false));
+            return Poll::Ready(false);
         }
-        self.inner
-            .borrow_mut()
-            .timer
-            .poll()
-            .map(|ready| ready.map(|_| true))
+        Pin::new(&mut self.inner.borrow_mut().timer)
+            .poll(cx)
+            .map(|_| true)
     }
 }
 
@@ -192,20 +194,16 @@ impl Waiter {
     }
 
     /// The `F` will be invoked if the `Waiter` times out normally.
-    fn on_timeout<F: FnOnce()>(&self, f: F) -> impl Future<Item = (), Error = ()> {
+    fn on_timeout<F: FnOnce()>(&self, f: F) -> impl Future<Output = ()> {
         let timer = self.delay.clone();
-        timer
-            .map_err(|e| warn!("waiter delay timer errored"; "err" => ?e))
-            .then(move |res| {
-                match res {
-                    // The timer is cancelled. Don't call timeout handler.
-                    Ok(false) => (),
-                    // Timer times out or error occurs.
-                    // It should call timeout handler to prevent starvation.
-                    _ => f(),
-                };
-                Ok(())
-            })
+        async move {
+            if timer.await {
+                // Timer times out or error occurs.
+                // It should call timeout handler to prevent starvation.
+                f();
+            }
+            // The timer is cancelled. Don't call timeout handler.
+        }
     }
 
     fn reset_timeout(&self, deadline: Instant) {
@@ -481,29 +479,21 @@ impl WaiterManager {
             + timeout.into_duration_with_ceiling(self.default_wait_for_lock_timeout.as_millis())
     }
 
-    fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter) {
+    fn handle_wait_for(&mut self, waiter: Waiter) {
         let (waiter_ts, lock) = (waiter.start_ts, waiter.lock);
         let wait_table = self.wait_table.clone();
         let detector_scheduler = self.detector_scheduler.clone();
         // Remove the waiter from wait table when it times out.
         let f = waiter.on_timeout(move || {
-            wait_table
-                .borrow_mut()
-                .remove_waiter(lock, waiter_ts)
-                .and_then(|waiter| {
-                    detector_scheduler.clean_up_wait_for(waiter.start_ts, waiter.lock);
-                    waiter.notify();
-                    Some(())
-                });
+            if let Some(waiter) = wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
+                detector_scheduler.clean_up_wait_for(waiter.start_ts, waiter.lock);
+                waiter.notify();
+            }
         });
-        self.wait_table
-            .borrow_mut()
-            .add_waiter(waiter)
-            .and_then(|old| {
-                old.notify();
-                Some(())
-            });
-        handle.spawn(f);
+        if let Some(old) = self.wait_table.borrow_mut().add_waiter(waiter) {
+            old.notify();
+        };
+        spawn_local(f);
     }
 
     fn handle_wake_up(&mut self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
@@ -543,14 +533,10 @@ impl WaiterManager {
     }
 
     fn handle_deadlock(&mut self, waiter_ts: TimeStamp, lock: Lock, deadlock_key_hash: u64) {
-        self.wait_table
-            .borrow_mut()
-            .remove_waiter(lock, waiter_ts)
-            .and_then(|mut waiter| {
-                waiter.deadlock_with(deadlock_key_hash);
-                waiter.notify();
-                Some(())
-            });
+        if let Some(mut waiter) = self.wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
+            waiter.deadlock_with(deadlock_key_hash);
+            waiter.notify();
+        }
     }
 
     fn handle_config_change(
@@ -573,7 +559,7 @@ impl WaiterManager {
 }
 
 impl FutureRunnable<Task> for WaiterManager {
-    fn run(&mut self, task: Task, handle: &Handle) {
+    fn run(&mut self, task: Task) {
         match task {
             Task::WaitFor {
                 start_ts,
@@ -583,11 +569,8 @@ impl FutureRunnable<Task> for WaiterManager {
                 timeout,
             } => {
                 let waiter = Waiter::new(start_ts, cb, pr, lock, self.normalize_deadline(timeout));
-                self.handle_wait_for(handle, waiter);
-                TASK_COUNTER_METRICS.with(|m| {
-                    m.wait_for.inc();
-                    m.may_flush_all()
-                });
+                self.handle_wait_for(waiter);
+                TASK_COUNTER_METRICS.wait_for.inc();
             }
             Task::WakeUp {
                 lock_ts,
@@ -595,17 +578,11 @@ impl FutureRunnable<Task> for WaiterManager {
                 commit_ts,
             } => {
                 self.handle_wake_up(lock_ts, hashes, commit_ts);
-                TASK_COUNTER_METRICS.with(|m| {
-                    m.wake_up.inc();
-                    m.may_flush_all()
-                });
+                TASK_COUNTER_METRICS.wake_up.inc();
             }
             Task::Dump { cb } => {
                 self.handle_dump(cb);
-                TASK_COUNTER_METRICS.with(|m| {
-                    m.dump.inc();
-                    m.may_flush_all()
-                });
+                TASK_COUNTER_METRICS.dump.inc();
             }
             Task::Deadlock {
                 start_ts,
@@ -634,10 +611,11 @@ pub mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    use futures::executor::block_on;
+    use futures::future::FutureExt;
     use kvproto::kvrpcpb::LockInfo;
     use rand::prelude::*;
     use tikv_util::config::ReadableDuration;
-    use tokio_core::reactor::Core;
 
     fn dummy_waiter(start_ts: TimeStamp, lock_ts: TimeStamp, hash: u64) -> Waiter {
         Waiter {
@@ -663,13 +641,10 @@ pub mod tests {
 
     #[test]
     fn test_delay() {
-        // tokio_timer can only run with tokio executor.
-        let mut core = Core::new().unwrap();
         let delay = Delay::new(Instant::now() + Duration::from_millis(100));
         assert_elapsed(
             || {
-                core.run(delay.map(|not_cancelled| assert!(not_cancelled)))
-                    .unwrap()
+                block_on(delay.map(|not_cancelled| assert!(not_cancelled)));
             },
             50,
             200,
@@ -681,8 +656,7 @@ pub mod tests {
         delay_clone.reset(Instant::now() + Duration::from_millis(50));
         assert_elapsed(
             || {
-                core.run(delay.map(|not_cancelled| assert!(not_cancelled)))
-                    .unwrap()
+                block_on(delay.map(|not_cancelled| assert!(not_cancelled)));
             },
             20,
             100,
@@ -694,8 +668,7 @@ pub mod tests {
         delay_clone.reset(Instant::now() + Duration::from_millis(300));
         assert_elapsed(
             || {
-                core.run(delay.map(|not_cancelled| assert!(not_cancelled)))
-                    .unwrap()
+                block_on(delay.map(|not_cancelled| assert!(not_cancelled)));
             },
             50,
             200,
@@ -707,8 +680,7 @@ pub mod tests {
         delay_clone.cancel();
         assert_elapsed(
             || {
-                core.run(delay.map(|not_cancelled| assert!(!not_cancelled)))
-                    .unwrap()
+                block_on(delay.map(|not_cancelled| assert!(!not_cancelled)));
             },
             0,
             200,
@@ -719,7 +691,7 @@ pub mod tests {
     pub(crate) type WaiterCtx = (
         Waiter,
         LockInfo,
-        tokio_sync::oneshot::Receiver<
+        futures::channel::oneshot::Receiver<
             Result<Result<PessimisticLockRes, StorageError>, StorageError>,
         >,
     );
@@ -839,7 +811,7 @@ pub mod tests {
     fn test_waiter_notify() {
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
         waiter.notify();
-        expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info);
+        expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info);
 
         // A waiter can conflict with other transactions more than once.
         for conflict_times in 1..=3 {
@@ -852,7 +824,12 @@ pub mod tests {
                 lock_info.set_lock_version(lock_ts.into_inner());
             }
             waiter.notify();
-            expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, conflict_commit_ts);
+            expect_write_conflict(
+                block_on(f).unwrap(),
+                waiter_ts,
+                lock_info,
+                conflict_commit_ts,
+            );
         }
 
         // Deadlock
@@ -860,7 +837,7 @@ pub mod tests {
         let (mut waiter, lock_info, f) = new_test_waiter(waiter_ts, 20.into(), 20);
         waiter.deadlock_with(111);
         waiter.notify();
-        expect_deadlock(f.wait().unwrap(), waiter_ts, lock_info, 111);
+        expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111);
 
         // Conflict then deadlock.
         let waiter_ts = TimeStamp::new(10);
@@ -868,19 +845,17 @@ pub mod tests {
         waiter.conflict_with(20.into(), 30.into());
         waiter.deadlock_with(111);
         waiter.notify();
-        expect_deadlock(f.wait().unwrap(), waiter_ts, lock_info, 111);
+        expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111);
     }
 
     #[test]
     fn test_waiter_on_timeout() {
-        let mut core = Core::new().unwrap();
-
         // The timeout handler should be invoked after timeout.
         let (waiter, _, _) = new_test_waiter(10.into(), 20.into(), 20);
         waiter.reset_timeout(Instant::now() + Duration::from_millis(100));
         let (tx, rx) = mpsc::sync_channel(1);
         let f = waiter.on_timeout(move || tx.send(1).unwrap());
-        assert_elapsed(|| core.run(f).unwrap(), 50, 200);
+        assert_elapsed(|| block_on(f), 50, 200);
         rx.try_recv().unwrap();
 
         // The timeout handler shouldn't be invoked after waiter has been notified.
@@ -889,7 +864,7 @@ pub mod tests {
         let (tx, rx) = mpsc::sync_channel(1);
         let f = waiter.on_timeout(move || tx.send(1).unwrap());
         waiter.notify();
-        assert_elapsed(|| core.run(f).unwrap(), 0, 200);
+        assert_elapsed(|| block_on(f), 0, 200);
         rx.try_recv().unwrap_err();
     }
 
@@ -1071,7 +1046,7 @@ pub mod tests {
             WaitTimeout::Millis(1000),
         );
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
+            || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
             900,
             1200,
         );
@@ -1086,7 +1061,7 @@ pub mod tests {
             WaitTimeout::Millis(100),
         );
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
+            || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
             50,
             300,
         );
@@ -1101,7 +1076,7 @@ pub mod tests {
             WaitTimeout::Millis(3000),
         );
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
+            || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
             900,
             1200,
         );
@@ -1135,7 +1110,7 @@ pub mod tests {
         scheduler.wake_up(lock_ts, lock_hashes, commit_ts);
         for (waiter_ts, lock_info, f) in waiters_info {
             assert_elapsed(
-                || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, commit_ts),
+                || expect_write_conflict(block_on(f).unwrap(), waiter_ts, lock_info, commit_ts),
                 0,
                 200,
             );
@@ -1168,7 +1143,7 @@ pub mod tests {
             scheduler.wake_up(lock.ts, vec![lock.hash], commit_ts);
             lock_info.set_lock_version(lock.ts.into_inner());
             assert_elapsed(
-                || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, commit_ts),
+                || expect_write_conflict(block_on(f).unwrap(), waiter_ts, lock_info, commit_ts),
                 0,
                 200,
             );
@@ -1182,7 +1157,14 @@ pub mod tests {
         // It conflicts with the last transaction.
         lock_info.set_lock_version(lock.ts.into_inner() - 1);
         assert_elapsed(
-            || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, *commit_ts.decr()),
+            || {
+                expect_write_conflict(
+                    block_on(f).unwrap(),
+                    waiter_ts,
+                    lock_info,
+                    *commit_ts.decr(),
+                )
+            },
             wake_up_delay_duration - 50,
             wake_up_delay_duration + 200,
         );
@@ -1214,7 +1196,7 @@ pub mod tests {
         std::thread::spawn(move || {
             // Waiters2's lifetime can't exceed it timeout.
             assert_elapsed(
-                || expect_write_conflict(f2.wait().unwrap(), 30.into(), lock_info2, 15.into()),
+                || expect_write_conflict(block_on(f2).unwrap(), 30.into(), lock_info2, 15.into()),
                 30,
                 100,
             );
@@ -1223,7 +1205,7 @@ pub mod tests {
         // It will increase waiter2's timeout to wake_up_delay_duration.
         scheduler.wake_up(lock.ts, vec![lock.hash], commit_ts);
         assert_elapsed(
-            || expect_write_conflict(f1.wait().unwrap(), 20.into(), lock_info1, commit_ts),
+            || expect_write_conflict(block_on(f1).unwrap(), 20.into(), lock_info1, commit_ts),
             0,
             200,
         );
@@ -1252,7 +1234,7 @@ pub mod tests {
         );
         scheduler.deadlock(waiter_ts, lock, 30);
         assert_elapsed(
-            || expect_deadlock(f.wait().unwrap(), waiter_ts, lock_info, 30),
+            || expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 30),
             0,
             200,
         );
@@ -1287,13 +1269,13 @@ pub mod tests {
         );
         // Should notify duplicated waiter immediately.
         assert_elapsed(
-            || expect_key_is_locked(f1.wait().unwrap().unwrap(), lock_info1),
+            || expect_key_is_locked(block_on(f1).unwrap().unwrap(), lock_info1),
             0,
             200,
         );
         // The new waiter will be wake up after timeout.
         assert_elapsed(
-            || expect_key_is_locked(f2.wait().unwrap().unwrap(), lock_info2),
+            || expect_key_is_locked(block_on(f2).unwrap().unwrap(), lock_info2),
             900,
             1200,
         );

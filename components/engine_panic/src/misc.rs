@@ -22,6 +22,26 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn delete_blob_files_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        include_end: bool,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn delete_all_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        use_delete_range: bool,
+    ) -> Result<()> {
+        panic!()
+    }
+
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)> {
         panic!()
     }
@@ -43,6 +63,22 @@ impl MiscExt for PanicEngine {
     }
 
     fn sync_wal(&self) -> Result<()> {
+        panic!()
+    }
+
+    fn exists(path: &str) -> bool {
+        panic!()
+    }
+
+    fn dump_stats(&self) -> Result<String> {
+        panic!()
+    }
+
+    fn get_latest_sequence_number(&self) -> u64 {
+        panic!()
+    }
+
+    fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
         panic!()
     }
 }

@@ -59,6 +59,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.src.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        self.src.can_be_cached()
+    }
 }
 
 #[cfg(test)]
@@ -77,11 +82,9 @@ mod tests {
         let src_exec = MockExecutor::new(
             vec![FieldTypeTp::LongLong.into()],
             vec![BatchExecuteResult {
-                physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![
-                    None,
-                    Some(50),
-                    None,
-                ])]),
+                physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
+                    vec![None, Some(50), None].into(),
+                )]),
                 logical_rows: vec![1, 2],
                 warnings: EvalWarnings::default(),
                 is_drained: Ok(true),
@@ -101,11 +104,9 @@ mod tests {
         let src_exec = MockExecutor::new(
             vec![FieldTypeTp::LongLong.into()],
             vec![BatchExecuteResult {
-                physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![
-                    None,
-                    Some(50),
-                    None,
-                ])]),
+                physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
+                    vec![None, Some(50), None].into(),
+                )]),
                 logical_rows: vec![1, 2],
                 warnings: EvalWarnings::default(),
                 is_drained: Err(other_err!("foo")),
@@ -126,21 +127,17 @@ mod tests {
             vec![FieldTypeTp::LongLong.into()],
             vec![
                 BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![
-                        Some(-5),
-                        None,
-                        None,
-                    ])]),
+                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
+                        vec![Some(-5), None, None].into(),
+                    )]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![
-                        None,
-                        Some(50),
-                        None,
-                    ])]),
+                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
+                        vec![None, Some(50), None].into(),
+                    )]),
                     logical_rows: vec![1, 2],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(true),
@@ -167,21 +164,17 @@ mod tests {
             vec![FieldTypeTp::LongLong.into()],
             vec![
                 BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![
-                        Some(-5),
-                        Some(-1),
-                        None,
-                    ])]),
+                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
+                        vec![Some(-5), Some(-1), None].into(),
+                    )]),
                     logical_rows: vec![1, 2],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![
-                        None,
-                        Some(50),
-                        None,
-                    ])]),
+                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
+                        vec![None, Some(50), None].into(),
+                    )]),
                     logical_rows: vec![0, 2],
                     warnings: EvalWarnings::default(),
                     is_drained: Err(other_err!("foo")),
@@ -208,11 +201,9 @@ mod tests {
             vec![FieldTypeTp::LongLong.into()],
             vec![
                 BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![
-                        Some(-5),
-                        Some(-1),
-                        None,
-                    ])]),
+                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
+                        vec![Some(-5), Some(-1), None].into(),
+                    )]),
                     logical_rows: vec![1, 2],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
@@ -224,13 +215,9 @@ mod tests {
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![
-                        None,
-                        Some(50),
-                        None,
-                        None,
-                        Some(1),
-                    ])]),
+                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
+                        vec![None, Some(50), None, None, Some(1)].into(),
+                    )]),
                     logical_rows: vec![0, 4, 1, 3],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(true),

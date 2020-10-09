@@ -13,6 +13,9 @@
 ## If it is not set, logs will be appended to stderr.
 # log-file = ""
 
+## Log format, one of json, text. Default to text.
+# log-format = "text"
+
 ## File to store slow logs.
 ## If "log-file" is set, but this is not set, the slow logs will be appeneded
 ## to "log-file". If both "log-file" and "slow-log-file" are not set, all logs
@@ -31,10 +34,6 @@
 ## Once the size of log file exceeds the threshold value, the log file will be rotated
 ## and place the old log file in a new file named by orginal file name subbfixed by a timestamp.
 # log-rotation-size = "300MB"
-
-## The interval at which to refresh the local config
-## Set it small are good to debug and tuning.
-# refresh-config-interval = "30s"
 
 # Configurations for the single thread pool serving read requests.
 [readpool.unified]
@@ -155,6 +154,11 @@
 ## Max time to handle Coprocessor requests before timeout.
 # end-point-request-max-handle-duration = "60s"
 
+## Whether to check memory locks before handling coprocessor requests.
+## This option must be enabled if async commit is enable.
+## DO NOT use it in production. This option may be removed in the future.
+# end-point-check-memory-locks = true
+
 ## Max bytes that snapshot can be written to disk in one second.
 ## It should be set based on your disk performance.
 # snap-max-write-bytes-per-sec = "100MB"
@@ -191,6 +195,10 @@
 
 ## When the pending write bytes exceeds this threshold, the "scheduler too busy" error is displayed.
 # scheduler-pending-write-threshold = "100MB"
+
+## Whether to enable the async commit feature.
+## DO NOT use it in production. This option may be removed in the future.
+# enable-async-commit = true
 
 [storage.block-cache]
 ## Whether to create a shared block cache for all RocksDB column families.
@@ -235,11 +243,6 @@
 # retry-max-count = -1
 
 [raftstore]
-## Whether to force to flush logs.
-## Set to `true` (default) for best reliability, which prevents data loss when there is a power
-## failure. Set to `false` for higher performance (ensure that you run multiple TiKV nodes!).
-# sync-log = true
-
 ## Whether to enable Raft prevote.
 ## Prevote minimizes disruption when a partitioned node rejoins the cluster by using a two phase
 ## election.
@@ -293,6 +296,10 @@
 ## It's recommanded to set it to 3/4 of `region-split-size`.
 # raft-log-gc-size-limit = "72MB"
 
+## Raft engine is a replaceable component. For some implementations, it's necessary to purge
+## old log files to recycle disk space ASAP.
+# raft-engine-purge-interval = "10s"
+
 ## How long the peer will be considered down and reported to PD when it hasn't been active for this
 ## time.
 # max-peer-down-duration = "5m"
@@ -320,9 +327,6 @@
 
 ## Interval (s) to check Region whether the data are consistent.
 # consistency-check-interval = 0
-
-## Delay time before deleting a stale peer.
-# clean-stale-peer-delay = "10m"
 
 ## Interval to clean up import SST files.
 # cleanup-import-sst-interval = "10m"
@@ -354,6 +358,9 @@
 ## `region_split_keys`.
 # region-max-keys = 1440000
 # region-split-keys = 960000
+
+## Currently only "raw" is supported, which means the check is based raw data.
+# consistency-check-method = "raw"
 
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
@@ -449,13 +456,16 @@
 ## 1. rate-bytes-per-sec is the only parameter you want to set most of the time. It controls the
 ##    total write rate of compaction and flush in bytes per second. Currently, RocksDB does not
 ##    enforce rate limit for anything other than flush and compaction, e.g. write to WAL.
-## 2. rate-limiter-mode indicates which types of operations count against the limit.
+## 2. rate-limiter-refill-period controls how often IO tokens are refilled. Smaller value will flatten
+##    IO bursts while introducing more CPU overhead.
+## 3. rate-limiter-mode indicates which types of operations count against the limit.
 ##    1 : ReadOnly
 ##    2 : WriteOnly
 ##    3 : AllIo
-## 3. auto_tuned enables dynamic adjustment of rate limit within the range
+## 4. auto_tuned enables dynamic adjustment of rate limit within the range
 ##    [rate_bytes_per_sec / 20, rate_bytes_per_sec], according to the recent demand for background I/O.
 # rate-bytes-per-sec = 0
+# rate-limiter-refill-period = "100ms"
 # rate-limiter-mode = 2
 # auto-tuned = false
 
@@ -478,7 +488,7 @@
 ## Time for the RocksDB info log file to roll (in seconds).
 ## If the log file has been active longer than this config, it will be rolled.
 ## If it is set to 0, rolling will be disabled.
-# info-log-roll-time = "0"
+# info-log-roll-time = "0s"
 
 ## Maximal RocksDB info log files to be kept.
 # info-log-keep-log-file-num = 10
@@ -488,6 +498,9 @@
 ## If it is not empty, the log files will be in the specified directory, and the DB data directory's
 ## absolute path will be used as the log file name's prefix.
 # info-log-dir = ""
+
+# RocksDB log levels
+# info-log-level = "info"
 
 ## Options for `Titan`.
 [rocksdb.titan]
@@ -747,9 +760,10 @@
 # wal-bytes-per-sync = "512KB"
 
 # info-log-max-size = "1GB"
-# info-log-roll-time = "0"
+# info-log-roll-time = "0s"
 # info-log-keep-log-file-num = 10
 # info-log-dir = ""
+# info-log-level = "info"
 # optimize-filters-for-hits = true
 
 [raftdb.defaultcf]
@@ -776,12 +790,85 @@
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
 
+[raft-engine]
+## Enable raft-engine will ignore all settings about `raftdb`.
+# enable = false
+## Recovery mode. Candidates are `tolerate-corrupted-tail-records` and `absolute-consistency`.
+# recovery_mode = "tolerate-corrupted-tail-records"
+# bytes-per-sync = "256KB"
+# target-file-size = "128MB"
+# purge-threshold = "10GB"
+## Raft engine has builtin entry cache. `cache-limit` limits the memory usage of the cache.
+# cache-limit = "1GB"
+
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
 # ca-path = ""
 # cert-path = ""
 # key-path = ""
 # cert-allowed-cn = []
+#
+## Avoid outputing data (e.g. user keys) to info log. It currently does not avoid printing
+## user data altogether, but greatly reduce those logs.
+## Default is false.
+# redact-info-log = false
+
+# Configurations for encryption at rest. Experimental.
+[security.encryption]
+## Encryption method to use for data files.
+## Possible values are "plaintext", "aes128-ctr", "aes192-ctr" and "aes256-ctr". Value other than
+## "plaintext" means encryption is enabled, in which case master key must be specified.
+# data-encryption-method = "plaintext"
+
+## Specifies how often TiKV rotates data encryption key.
+# data-key-rotation-period = "7d"
+
+## Specifies master key if encryption is enabled. There are three types of master key:
+##
+##   * "plaintext":
+##
+##     Plaintext as master key means no master key is given and only applicable when
+##     encryption is not enabled, i.e. data-encryption-method = "plaintext". This type doesn't
+##     have sub-config items. Example:
+##     
+##     [security.encryption.master-key]
+##     type = "plaintext"
+##
+##   * "kms":
+##
+##     Use a KMS service to supply master key. Currently only AWS KMS is supported. This type of
+##     master key is recommended for production use. Example:
+##
+##     [security.encryption.master-key]
+##     type = "kms"
+##     ## KMS CMK key id. Must be a valid KMS CMK where the TiKV process has access to.
+##     ## In production is recommended to grant access of the CMK to TiKV using IAM.
+##     key-id = "1234abcd-12ab-34cd-56ef-1234567890ab"
+##     ## AWS region of the KMS CMK.
+##     region = "us-west-2"
+##     ## (Optional) AWS KMS service endpoint. Only required when non-default KMS endpoint is
+##     ## desired.
+##     endpoint = "https://kms.us-west-2.amazonaws.com"
+##
+##   * "file":
+##
+##     Supply a custom encryption key stored in a file. It is recommended NOT to use in production,
+##     as it breaks the purpose of encryption at rest, unless the file is stored in tempfs.
+##     The file must contain a 256-bits (32 bytes, regardless of key length implied by 
+##     data-encryption-method) key encoded as hex string and end with newline ("\n"). Example:
+##
+##     [security.encryption.master-key]
+##     type = "file"
+##     path = "/path/to/master/key/file"
+##
+# [security.encryption.master-key]
+# type = "plaintext"
+
+## Specifies the old master key when rotating master key. Same config format as master-key.
+## The key is only access once during TiKV startup, after that TiKV do not need access to the key.
+## And it is okay to leave the stale previous-master-key config after master key rotation.
+# [security.encryption.previous-master-key]
+# type = "plaintext"
 
 [import]
 ## Number of threads to handle RPC requests.
@@ -789,6 +876,11 @@
 
 ## Stream channel window size, stream will be blocked on channel full.
 # stream-channel-window = 128
+
+[backup]
+## Number of threads to perform backup tasks.
+## The default value is set to min(CPU_NUM * 0.75, 32).
+# num-threads = 24
 
 [pessimistic-txn]
 ## Enable pessimistic transaction
@@ -815,3 +907,9 @@
 ## Max bytes that GC worker can write to rocksdb in one second.
 ## If it is set to 0, there is no limit.
 # max-write-bytes-per-sec = "0"
+
+## Enable GC by compaction filter or not.
+# enable-compaction-filter = false
+
+## Garbage ratio threshold to trigger a GC.
+# ratio-threshold = 1.1

@@ -2,12 +2,15 @@
 
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::*;
 
+use crossbeam::channel;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
+use raft::eraftpb::MessageType;
+use tikv_util::config::*;
 
-use engine::rocks::Writable;
+use engine_rocks::raw::Writable;
 use engine_rocks::Compat;
 use engine_traits::{Iterable, Peekable};
 use engine_traits::{SyncMutable, CF_RAFT};
@@ -156,13 +159,6 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
-fn test_node_fast_destroy() {
-    let count = 3;
-    let mut cluster = new_node_cluster(0, count);
-    test_fast_destroy(&mut cluster);
-}
-
-#[test]
 fn test_server_fast_destroy() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
@@ -272,4 +268,71 @@ fn test_server_stale_meta() {
 
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&engine_3, b"k1", b"v1");
+}
+
+/// Tests a tombstone peer won't trigger wrong gc message.
+///
+/// An uninitialized peer's peer list is empty. If a message from a healthy peer passes
+/// all the other checks accidentally, it may trigger a tombstone message which will
+/// make the healthy peer destroy all its data.
+#[test]
+fn test_safe_tombstone_gc() {
+    let mut cluster = new_node_cluster(0, 5);
+
+    let tick = cluster.cfg.raft_store.raft_election_timeout_ticks;
+    let base_tick_interval = cluster.cfg.raft_store.raft_base_tick_interval.0;
+    let check_interval = base_tick_interval * (tick as u32 * 2 + 1);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(check_interval);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration(check_interval * 2);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(check_interval * 2);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+
+    let r = cluster.run_conf_change();
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    pd_client.must_add_peer(r, new_peer(3, 3));
+
+    cluster.add_send_filter(IsolationFilterFactory::new(4));
+
+    pd_client.must_add_peer(r, new_peer(4, 4));
+    pd_client.must_add_peer(r, new_peer(5, 5));
+    cluster.must_transfer_leader(r, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(5), b"k1", b"v1");
+
+    let (tx, rx) = channel::unbounded();
+    cluster.clear_send_filters();
+    cluster.add_send_filter(IsolationFilterFactory::new(5));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r, 4)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend)
+            .set_msg_callback(Arc::new(move |msg| {
+                let _ = tx.send(msg.clone());
+            })),
+    ));
+
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    pd_client.must_remove_peer(r, new_peer(4, 4));
+    let key = keys::region_state_key(r);
+    let mut state: Option<RegionLocalState> = None;
+    let timer = Instant::now();
+    while timer.elapsed() < Duration::from_secs(5) {
+        state = cluster.get_engine(4).c().get_msg_cf(CF_RAFT, &key).unwrap();
+        if state.is_some() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(30));
+    }
+    if state.is_none() {
+        panic!("region on store 4 has not been tombstone after 5 seconds.");
+    }
+    cluster.clear_send_filters();
+    cluster.add_send_filter(PartitionFilterFactory::new(vec![1, 2, 3], vec![4, 5]));
+
+    thread::sleep(base_tick_interval * tick as u32 * 3);
+    must_get_equal(&cluster.get_engine(5), b"k1", b"v1");
 }

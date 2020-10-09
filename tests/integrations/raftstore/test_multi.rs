@@ -34,7 +34,11 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.must_get(key), Some(value.to_vec()));
 
     let region_id = cluster.get_region_id(b"");
-    let prev_last_index = cluster.raft_local_state(region_id, 1).get_last_index();
+    let prev_committed_index = cluster
+        .raft_local_state(region_id, 1)
+        .get_hard_state()
+        .get_commit();
+    let prev_apply_state = cluster.apply_state(region_id, 1);
 
     // sleep 200ms in case the commit packet is dropped by simulated transport.
     thread::sleep(Duration::from_millis(200));
@@ -62,8 +66,24 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let last_index = cluster.raft_local_state(region_id, 1).get_last_index();
     let apply_state = cluster.apply_state(region_id, 1);
-    assert!(apply_state.get_last_commit_index() < last_index);
-    assert!(apply_state.get_last_commit_index() >= prev_last_index);
+    assert_lt!(apply_state.get_last_commit_index(), last_index);
+    if apply_state != prev_apply_state {
+        // Ensures last commit index is advanced.
+        assert_ge!(
+            apply_state.get_last_commit_index(),
+            prev_committed_index,
+            "{:?} {:?}",
+            apply_state,
+            prev_apply_state
+        );
+        assert_gt!(
+            apply_state.get_last_commit_index(),
+            prev_apply_state.get_last_commit_index(),
+            "{:?} {:?}",
+            apply_state,
+            prev_apply_state
+        );
+    }
     // TODO add epoch not match test cases.
 }
 
@@ -90,9 +110,12 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put(key2, value2);
     cluster.must_delete(key1);
-    must_get_none(&cluster.engines[&last_leader.get_store_id()].kv, key2);
+    must_get_none(
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
+        key2,
+    );
     must_get_equal(
-        &cluster.engines[&last_leader.get_store_id()].kv,
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
         key1,
         value1,
     );
@@ -101,11 +124,14 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run_node(last_leader.get_store_id()).unwrap();
 
     must_get_equal(
-        &cluster.engines[&last_leader.get_store_id()].kv,
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
         key2,
         value2,
     );
-    must_get_none(&cluster.engines[&last_leader.get_store_id()].kv, key1);
+    must_get_none(
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
+        key1,
+    );
 }
 
 fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {

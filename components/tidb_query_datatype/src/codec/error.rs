@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error as StdError;
 use std::fmt::Display;
 use std::io;
 use std::num::ParseFloatError;
@@ -8,6 +7,7 @@ use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{error, str};
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use quick_error::quick_error;
 use regex::Error as RegexpError;
 use serde_json::error::Error as SerdeError;
@@ -31,30 +31,25 @@ quick_error! {
     #[derive(Debug)]
     pub enum Error {
         InvalidDataType(reason: String) {
-            description("invalid data type")
-            display("{}", reason)
+            display("invalid data type: {}", reason)
         }
         Encoding(err: Utf8Error) {
             from()
             cause(err)
-            description("encoding failed")
+            display("encoding failed")
         }
         ColumnOffset(offset: usize) {
-            description("column offset not found")
             display("illegal column offset: {}", offset)
         }
         UnknownSignature(sig: ScalarFuncSig) {
-            description("Unknown signature")
             display("Unknown signature: {:?}", sig)
         }
         Eval(s: String, code:i32) {
-            description("evaluation failed")
-            display("{}", s)
+            display("evaluation failed: {}", s)
         }
         Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("{}", err)
         }
     }
@@ -197,7 +192,7 @@ impl From<io::Error> for Error {
 
 impl From<RegexpError> for Error {
     fn from(err: RegexpError) -> Error {
-        let msg = format!("Got error '{:.64}' from regexp", err.description());
+        let msg = format!("Got error '{:.64}' from regexp", err);
         Error::Eval(msg, ERR_REGEXP)
     }
 }
@@ -226,3 +221,16 @@ impl From<Error> for EvaluateError {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::InvalidDataType(_) => error_code::coprocessor::INVALID_DATA_TYPE,
+            Error::Encoding(_) => error_code::coprocessor::ENCODING,
+            Error::ColumnOffset(_) => error_code::coprocessor::COLUMN_OFFSET,
+            Error::UnknownSignature(_) => error_code::coprocessor::UNKNOWN_SIGNATURE,
+            Error::Eval(_, _) => error_code::coprocessor::EVAL,
+            Error::Other(_) => error_code::UNKNOWN,
+        }
+    }
+}

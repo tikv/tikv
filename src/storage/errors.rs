@@ -10,6 +10,7 @@ use crate::storage::{
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb};
 use txn_types::{KvPair, TimeStamp};
 
@@ -19,47 +20,42 @@ quick_error! {
         Engine(err: kv::Error) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Txn(err: txn::Error) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Mvcc(err: mvcc::Error) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Closed {
-            description("storage is closed.")
+            display("storage is closed.")
         }
         Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
-            description(err.description())
+            display("{}", err)
         }
         Io(err: IoError) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         SchedTooBusy {
-            description("scheduler is too busy")
+            display("scheduler is too busy")
         }
         GcWorkerTooBusy {
-            description("gc worker is too busy")
+            display("gc worker is too busy")
         }
         KeyTooLarge(size: usize, limit: usize) {
-            description("max key size exceeded")
             display("max key size exceeded, size: {}, limit: {}", size, limit)
         }
         InvalidCf (cf_name: String) {
-            description("invalid cf name")
             display("invalid cf name: {}", cf_name)
-        }
-        PessimisticTxnNotEnabled {
-            description("pessimistic transaction is not enabled")
         }
     }
 }
@@ -79,10 +75,6 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        std::error::Error::description(&self.0)
-    }
-
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         std::error::Error::source(&self.0)
     }
@@ -100,6 +92,23 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     default fn from(err: T) -> Self {
         let err = err.into();
         err.into()
+    }
+}
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Engine(e) => e.error_code(),
+            ErrorInner::Txn(e) => e.error_code(),
+            ErrorInner::Mvcc(e) => e.error_code(),
+            ErrorInner::Closed => error_code::storage::CLOSED,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
+            ErrorInner::Io(_) => error_code::storage::IO,
+            ErrorInner::SchedTooBusy => error_code::storage::SCHED_TOO_BUSY,
+            ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,
+            ErrorInner::KeyTooLarge(_, _) => error_code::storage::KEY_TOO_LARGE,
+            ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
+        }
     }
 }
 
@@ -178,6 +187,13 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
         | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e))),
         )))))) => Some(e.to_owned()),
+        Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::MaxTimestampNotSynced {
+            ..
+        })))) => {
+            let mut err = errorpb::Error::default();
+            err.set_max_timestamp_not_synced(Default::default());
+            Some(err)
+        }
         Err(Error(box ErrorInner::SchedTooBusy)) => {
             let mut err = errorpb::Error::default();
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
@@ -217,7 +233,8 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
     match err {
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
-        ))))) => {
+        )))))
+        | Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info)))) => {
             key_error.set_locked(info.clone());
         }
         // failed in prewrite or pessimistic lock
@@ -294,7 +311,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_commit_ts_expired(commit_ts_expired);
         }
         _ => {
-            error!("txn aborts"; "err" => ?err);
+            error!(?err; "txn aborts");
             key_error.set_abort(format!("{:?}", err));
         }
     }

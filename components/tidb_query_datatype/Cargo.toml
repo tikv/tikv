@@ -22,6 +22,7 @@ boolinator = "2.4.0"
 chrono = "0.4"
 chrono-tz = "0.5.1"
 codec = { path = "../codec" }
+error_code = { path = "../error_code" }
 failure = "0.1"
 hex = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
@@ -33,7 +34,7 @@ num-traits = "0.2"
 num-derive = "0.3"
 ordered-float = "1.0"
 protobuf = "2"
-quick-error = "1.2.2"
+quick-error = "1.2.3"
 regex = "1.1"
 serde = "1.0"
 serde_json = "1.0"

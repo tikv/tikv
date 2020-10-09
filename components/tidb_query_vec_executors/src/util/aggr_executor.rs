@@ -320,6 +320,11 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.entities.src.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        self.entities.src.can_be_cached()
+    }
 }
 
 /// Shared test facilities for different aggregation executors.
@@ -345,12 +350,12 @@ pub mod tests {
     pub struct AggrFnUnreachableState;
 
     impl ConcreteAggrFunctionState for AggrFnUnreachableState {
-        type ParameterType = Real;
+        type ParameterType = &'static Real;
 
-        fn update_concrete(
+        unsafe fn update_concrete_unsafe(
             &mut self,
             _ctx: &mut EvalContext,
-            _value: &Option<Self::ParameterType>,
+            _value: Option<Self::ParameterType>,
         ) -> Result<()> {
             unreachable!()
         }
@@ -388,35 +393,41 @@ pub mod tests {
             vec![
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![
-                            None,
-                            None,
-                            None,
-                            Real::new(-5.0).ok(),
-                            Real::new(7.0).ok(),
-                        ]),
-                        VectorValue::Real(vec![
-                            None,
-                            Real::new(4.5).ok(),
-                            Real::new(1.0).ok(),
-                            None,
-                            Real::new(2.0).ok(),
-                        ]),
-                        VectorValue::Bytes(vec![
-                            Some(vec![]),
-                            Some(b"HelloWorld".to_vec()),
-                            Some(b"abc".to_vec()),
-                            None,
-                            None,
-                        ]),
-                        VectorValue::Int(vec![None, None, Some(1), Some(10), None]),
-                        VectorValue::Bytes(vec![
-                            Some("áá".as_bytes().to_vec()),
-                            None,
-                            Some(b"aa".to_vec()),
-                            Some("ááá".as_bytes().to_vec()),
-                            Some(b"aaa".to_vec()),
-                        ]),
+                        VectorValue::Real(
+                            vec![None, None, None, Real::new(-5.0).ok(), Real::new(7.0).ok()]
+                                .into(),
+                        ),
+                        VectorValue::Real(
+                            vec![
+                                None,
+                                Real::new(4.5).ok(),
+                                Real::new(1.0).ok(),
+                                None,
+                                Real::new(2.0).ok(),
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Bytes(
+                            vec![
+                                Some(vec![]),
+                                Some(b"HelloWorld".to_vec()),
+                                Some(b"abc".to_vec()),
+                                None,
+                                None,
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Int(vec![None, None, Some(1), Some(10), None].into()),
+                        VectorValue::Bytes(
+                            vec![
+                                Some("áá".as_bytes().to_vec()),
+                                None,
+                                Some(b"aa".to_vec()),
+                                Some("ááá".as_bytes().to_vec()),
+                                Some(b"aaa".to_vec()),
+                            ]
+                            .into(),
+                        ),
                     ]),
                     logical_rows: vec![2, 4, 0, 1],
                     warnings: EvalWarnings::default(),
@@ -424,11 +435,11 @@ pub mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![None]),
-                        VectorValue::Real(vec![Real::new(-10.0).ok()]),
-                        VectorValue::Bytes(vec![Some(b"foo".to_vec())]),
-                        VectorValue::Int(vec![None]),
-                        VectorValue::Bytes(vec![None]),
+                        VectorValue::Real(vec![None].into()),
+                        VectorValue::Real(vec![Real::new(-10.0).ok()].into()),
+                        VectorValue::Bytes(vec![Some(b"foo".to_vec())].into()),
+                        VectorValue::Int(vec![None].into()),
+                        VectorValue::Bytes(vec![None].into()),
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
@@ -436,14 +447,17 @@ pub mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![Real::new(5.5).ok(), Real::new(1.5).ok()]),
-                        VectorValue::Real(vec![None, Real::new(4.5).ok()]),
-                        VectorValue::Bytes(vec![None, Some(b"aaaaa".to_vec())]),
-                        VectorValue::Int(vec![None, Some(5)]),
-                        VectorValue::Bytes(vec![
-                            Some("áá".as_bytes().to_vec()),
-                            Some("ááá".as_bytes().to_vec()),
-                        ]),
+                        VectorValue::Real(vec![Real::new(5.5).ok(), Real::new(1.5).ok()].into()),
+                        VectorValue::Real(vec![None, Real::new(4.5).ok()].into()),
+                        VectorValue::Bytes(vec![None, Some(b"aaaaa".to_vec())].into()),
+                        VectorValue::Int(vec![None, Some(5)].into()),
+                        VectorValue::Bytes(
+                            vec![
+                                Some("áá".as_bytes().to_vec()),
+                                Some("ááá".as_bytes().to_vec()),
+                            ]
+                            .into(),
+                        ),
                     ]),
                     logical_rows: vec![1],
                     warnings: EvalWarnings::default(),

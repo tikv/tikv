@@ -6,7 +6,6 @@ use std::{i64, mem, u64};
 
 use super::{Error, Result};
 use crate::codec::mysql::Tz;
-use tipb;
 use tipb::DagRequest;
 
 bitflags! {

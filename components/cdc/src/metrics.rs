@@ -13,7 +13,7 @@ lazy_static! {
     pub static ref CDC_SCAN_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_cdc_scan_duration_seconds",
         "Bucketed histogram of cdc async scan duration",
-        exponential_buckets(0.0001, 2.0, 20).unwrap()
+        exponential_buckets(0.005, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref CDC_MIN_RESOLVED_TS_REGION: IntGauge = register_int_gauge!(
@@ -26,11 +26,26 @@ lazy_static! {
         "The minimal resolved ts for current regions"
     )
     .unwrap();
-    pub static ref CDC_PENDING_CMD_BYTES_GAUGE: IntGauge =
-        register_int_gauge!("tikv_cdc_pending_cmd_bytes", "Bytes of pending cdc cmds").unwrap();
+    pub static ref CDC_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_cdc_pending_bytes",
+        "Bytes in memory of a pending region"
+    )
+    .unwrap();
     pub static ref CDC_CAPTURED_REGION_COUNT: IntGauge = register_int_gauge!(
         "tikv_cdc_captured_region_total",
         "Total number of CDC captured regions"
     )
     .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_MISS: IntGauge = register_int_gauge!(
+        "tikv_cdc_old_value_cache_miss",
+        "Count of old value cache missing"
+    )
+    .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_ACCESS: IntGauge = register_int_gauge!(
+        "tikv_cdc_old_value_cache_access",
+        "Count of old value cache accessing"
+    )
+    .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_BYTES: IntGauge =
+        register_int_gauge!("tikv_cdc_old_value_cache_bytes", "Bytes of old value cache").unwrap();
 }

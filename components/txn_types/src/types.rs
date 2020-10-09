@@ -6,6 +6,7 @@ use tikv_util::codec;
 use tikv_util::codec::bytes;
 use tikv_util::codec::bytes::BytesEncoder;
 use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::collections::HashMap;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 255;
@@ -47,6 +48,16 @@ impl Key {
         let mut encoded = Vec::with_capacity(len);
         encoded.encode_bytes(key, false).unwrap();
         Key(encoded)
+    }
+
+    /// Creates a key from raw bytes but returns None if the key is an empty slice.
+    #[inline]
+    pub fn from_raw_maybe_unbounded(key: &[u8]) -> Option<Key> {
+        if key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(key))
+        }
     }
 
     /// Gets and moves the raw representation of this key.
@@ -91,10 +102,9 @@ impl Key {
 
     /// Creates a new key by appending a `u64` timestamp to this key.
     #[inline]
-    pub fn append_ts(self, ts: TimeStamp) -> Key {
-        let mut encoded = self.0;
-        encoded.encode_u64_desc(ts.into_inner()).unwrap();
-        Key(encoded)
+    pub fn append_ts(mut self, ts: TimeStamp) -> Key {
+        self.0.encode_u64_desc(ts.into_inner()).unwrap();
+        self
     }
 
     /// Gets the timestamp contained in this key.
@@ -225,6 +235,15 @@ impl Display for Key {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum MutationType {
+    Put,
+    Delete,
+    Lock,
+    Insert,
+    Other,
+}
+
 /// A row mutation.
 #[derive(Debug, Clone)]
 pub enum Mutation {
@@ -236,11 +255,11 @@ pub enum Mutation {
     Lock(Key),
     /// Put `Value` into `Key` if `Key` does not yet exist.
     ///
-    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
+    /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
     Insert((Key, Value)),
     /// Check `key` must be not exist.
     ///
-    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
+    /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
     CheckNotExists(Key),
 }
 
@@ -252,6 +271,16 @@ impl Mutation {
             Mutation::Lock(ref key) => key,
             Mutation::Insert((ref key, _)) => key,
             Mutation::CheckNotExists(ref key) => key,
+        }
+    }
+
+    pub fn mutation_type(&self) -> MutationType {
+        match self {
+            Mutation::Put(_) => MutationType::Put,
+            Mutation::Delete(_) => MutationType::Delete,
+            Mutation::Lock(_) => MutationType::Lock,
+            Mutation::Insert(_) => MutationType::Insert,
+            _ => MutationType::Other,
         }
     }
 
@@ -291,6 +320,58 @@ impl From<kvrpcpb::Mutation> for Mutation {
             _ => panic!("mismatch Op in prewrite mutations"),
         }
     }
+}
+
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct OldValue {
+    pub short_value: Option<Value>,
+    pub start_ts: TimeStamp,
+}
+
+impl OldValue {
+    pub fn size(&self) -> usize {
+        let value_size = match self.short_value {
+            Some(ref v) => v.len(),
+            None => 0,
+        };
+        value_size + std::mem::size_of::<TimeStamp>()
+    }
+}
+
+// Returned by MvccTxn when extra_op is set to kvrpcpb::ExtraOp::ReadOldValue.
+// key with current ts -> (short value of the prev txn, start ts of the prev txn).
+// The value of the map will be None when the mutation is `Insert`.
+// MutationType is the type of mutation of the current write.
+pub type OldValues = HashMap<Key, (Option<OldValue>, MutationType)>;
+
+// Extra data fields filled by kvrpcpb::ExtraOp.
+#[derive(Default, Debug, Clone)]
+pub struct TxnExtra {
+    pub old_values: OldValues,
+}
+
+impl TxnExtra {
+    pub fn add_old_value(
+        &mut self,
+        key: Key,
+        value: Option<OldValue>,
+        mutation_type: MutationType,
+    ) {
+        self.old_values.insert(key, (value, mutation_type));
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.old_values.is_empty()
+    }
+
+    pub fn extend(&mut self, other: &mut Self) {
+        self.old_values
+            .extend(std::mem::take(&mut other.old_values))
+    }
+}
+
+pub trait TxnExtraScheduler: Send + Sync {
+    fn schedule(&self, txn_extra: TxnExtra);
 }
 
 #[cfg(test)]

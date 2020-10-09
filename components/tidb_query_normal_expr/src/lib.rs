@@ -12,9 +12,7 @@
 
 #[macro_use]
 extern crate failure;
-#[macro_use(debug)]
-extern crate slog_global;
-#[macro_use(box_err, box_try, try_opt)]
+#[macro_use(box_err, box_try, try_opt, debug)]
 extern crate tikv_util;
 
 #[cfg(test)]
@@ -515,7 +513,7 @@ mod tests {
     /// }).unwrap();
     /// assert_eq!(got, exp);
     /// ```
-    pub fn eval_func_with<F: FnOnce(&mut Expression, &[Expr]) -> ()>(
+    pub fn eval_func_with<F: FnOnce(&mut Expression, &[Expr])>(
         sig: ScalarFuncSig,
         args: &[Datum],
         f: F,

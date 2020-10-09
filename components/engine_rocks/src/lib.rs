@@ -20,8 +20,9 @@
 extern crate tikv_alloc;
 #[macro_use]
 extern crate tikv_util;
+
 #[macro_use]
-extern crate slog_global;
+extern crate serde_derive;
 
 #[cfg(test)]
 extern crate test;
@@ -42,6 +43,8 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use crate::import::*;
+mod logger;
+pub use crate::logger::*;
 mod misc;
 pub use crate::misc::*;
 mod snapshot;
@@ -52,11 +55,14 @@ mod table_properties;
 pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
+pub mod range_properties;
+pub use crate::range_properties::*;
 
 mod engine_iterator;
 pub use crate::engine_iterator::*;
 
 mod options;
+pub mod raw_util;
 pub mod util;
 
 mod compat;
@@ -77,4 +83,13 @@ pub use rocks_metrics_defs::*;
 pub mod event_listener;
 pub use event_listener::*;
 
+pub mod config;
+pub use config::*;
 pub mod encryption;
+
+mod raft_engine;
+
+pub use rocksdb::set_perf_level;
+pub use rocksdb::PerfContext;
+
+pub mod raw;
