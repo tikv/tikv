@@ -2188,10 +2188,10 @@ mod tests {
             let cfg_rocksdb = db_config;
             let cache = BlockCacheConfig::default().build_shared_cache();
             let cfs_opts = vec![
-                CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
-                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
-                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None)),
+                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache, None)),
+                CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache, None)),
             ];
             RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
         }
