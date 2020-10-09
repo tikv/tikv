@@ -1006,7 +1006,7 @@ pub fn cast_decimal_as_duration(
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
-
+#[inline]
 pub fn cast_json_as_duration(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
