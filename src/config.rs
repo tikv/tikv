@@ -435,8 +435,8 @@ macro_rules! build_cf_opt {
         if $opt.enable_doubly_skiplist {
             cf_opts.set_doubly_skiplist();
         }
-        if let Some(accessor) = $region_info_accessor {
-            if $opt.enable_compaction_guard {
+        if $opt.enable_compaction_guard {
+            if let Some(accessor) = $region_info_accessor {
                 cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(
                     CompactionGuardGeneratorFactory::new(
                         accessor.clone(),
@@ -444,6 +444,8 @@ macro_rules! build_cf_opt {
                         $opt.compaction_guard_max_output_file_size.0,
                     ),
                 ));
+            } else {
+                warn!("compaction guard is disabled due to region info accessor not available")
             }
         }
         cf_opts
