@@ -162,6 +162,7 @@ pub mod tests {
     use codec::prelude::NumberEncoder;
     use tidb_query_datatype::FieldTypeTp;
     use tikv_util::collections::HashMap;
+    use tikv_util::empty_shared_slice;
     use tipb::{Expr, ExprType};
 
     use crate::OriginCols;
@@ -281,7 +282,7 @@ pub mod tests {
             let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
             topn_heap
                 .try_add_row(
-                    OriginCols::new(i64::from(handle), row_data, Arc::new(Vec::default())),
+                    OriginCols::new(i64::from(handle), row_data, empty_shared_slice()),
                     ob_values,
                     Arc::clone(&order_cols),
                 )
@@ -309,7 +310,7 @@ pub mod tests {
         let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
         topn_heap
             .try_add_row(
-                OriginCols::new(0 as i64, row_data, Arc::new(Vec::default())),
+                OriginCols::new(0 as i64, row_data, empty_shared_slice()),
                 ob_values1,
                 Arc::clone(&order_cols),
             )
@@ -319,7 +320,7 @@ pub mod tests {
         let row_data2 = RowColsDict::new(HashMap::default(), b"name:2".to_vec());
         topn_heap
             .try_add_row(
-                OriginCols::new(0 as i64, row_data2, Default::default()),
+                OriginCols::new(0 as i64, row_data2, empty_shared_slice()),
                 ob_values2,
                 Arc::clone(&order_cols),
             )
@@ -330,7 +331,7 @@ pub mod tests {
 
         assert!(topn_heap
             .try_add_row(
-                OriginCols::new(0 as i64, row_data3, Arc::default()),
+                OriginCols::new(0 as i64, row_data3, empty_shared_slice()),
                 bad_key1,
                 Arc::clone(&order_cols)
             )

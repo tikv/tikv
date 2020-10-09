@@ -939,52 +939,82 @@ fn cast_duration_as_duration(
     }
 }
 
-macro_rules! cast_as_duration {
-    ($ty:ty, $as_uint_fn:ident, $extra:expr) => {
-        #[rpn_fn(nullable, capture = [ctx, extra])]
-        #[inline]
-        fn $as_uint_fn(
-            ctx: &mut EvalContext,
-            extra: &RpnFnCallExtra,
-            val: Option<$ty>,
-        ) -> Result<Option<Duration>> {
-            match val {
-                None => Ok(None),
-                Some(val) => {
-                    let result =
-                        Duration::parse(ctx, $extra, extra.ret_field_type.get_decimal() as i8);
-                    match result {
-                        Ok(dur) => Ok(Some(dur)),
-                        Err(e) => match e.code() {
-                            ERR_DATA_OUT_OF_RANGE => {
-                                ctx.handle_overflow_err(e)?;
-                                Ok(None)
-                            }
-                            ERR_TRUNCATE_WRONG_VALUE => {
-                                ctx.handle_truncate_err(e)?;
-                                Ok(None)
-                            }
-                            _ => Err(e.into()),
-                        },
-                    }
-                }
-            }
+// TODO: use this macro to simplify all other place
+macro_rules! skip_none {
+    ($val:expr) => {
+        match $val {
+            None => return Ok(None),
+            Some(v) => v,
         }
     };
 }
 
-cast_as_duration!(
-    &Real,
-    cast_real_as_duration,
-    val.into_inner().to_string().as_bytes()
-);
-cast_as_duration!(BytesRef, cast_bytes_as_duration, val);
-cast_as_duration!(
-    &Decimal,
-    cast_decimal_as_duration,
-    val.to_string().as_bytes()
-);
-cast_as_duration!(JsonRef, cast_json_as_duration, val.unquote()?.as_bytes());
+#[inline]
+fn cast_bytes_like_as_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &[u8],
+) -> Result<Option<Duration>> {
+    let result = Duration::parse(ctx, val, extra.ret_field_type.get_decimal() as i8);
+    match result {
+        Ok(dur) => Ok(Some(dur)),
+        Err(e) => match e.code() {
+            ERR_DATA_OUT_OF_RANGE => {
+                ctx.handle_overflow_err(e)?;
+                Ok(None)
+            }
+            ERR_TRUNCATE_WRONG_VALUE => {
+                ctx.handle_truncate_err(e)?;
+                Ok(None)
+            }
+            _ => Err(e.into()),
+        },
+    }
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+pub fn cast_real_as_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<&Real>,
+) -> Result<Option<Duration>> {
+    let v = skip_none!(val).into_inner().to_string();
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+pub fn cast_bytes_as_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<BytesRef>,
+) -> Result<Option<Duration>> {
+    let v = skip_none!(val);
+    cast_bytes_like_as_duration(ctx, extra, v)
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+pub fn cast_decimal_as_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<&Decimal>,
+) -> Result<Option<Duration>> {
+    let v = skip_none!(val).to_string();
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+
+pub fn cast_json_as_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<JsonRef>,
+) -> Result<Option<Duration>> {
+    let v = skip_none!(val).unquote()?;
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+}
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
 fn cast_int_as_time(

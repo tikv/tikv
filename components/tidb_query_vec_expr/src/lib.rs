@@ -13,7 +13,8 @@
 #![feature(const_fn)]
 #![feature(test)]
 #![feature(int_error_matching)]
-#![feature(ptr_offset_from)]
+#![feature(const_fn_fn_ptr_basics)]
+#![feature(const_mut_refs)]
 
 #[macro_use(box_err, box_try, try_opt)]
 extern crate tikv_util;

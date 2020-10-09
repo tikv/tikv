@@ -40,24 +40,15 @@ impl<T> Res<T> {
     }
 
     pub fn is_ok(&self) -> bool {
-        match *self {
-            Res::Ok(_) => true,
-            _ => false,
-        }
+        matches!(*self, Res::Ok(_))
     }
 
     pub fn is_overflow(&self) -> bool {
-        match *self {
-            Res::Overflow(_) => true,
-            _ => false,
-        }
+        matches!(*self, Res::Overflow(_))
     }
 
     pub fn is_truncated(&self) -> bool {
-        match *self {
-            Res::Truncated(_) => true,
-            _ => false,
-        }
+        matches!(*self, Res::Truncated(_))
     }
 
     /// Convert `Res` into `Result` with an `EvalContext` that handling the errors

@@ -56,7 +56,7 @@ pub struct LockManager {
     waiter_count: Arc<AtomicUsize>,
 
     /// Record transactions which have sent requests to detect deadlock.
-    detected: Arc<Vec<Mutex<HashSet<TimeStamp>>>>,
+    detected: Arc<[Mutex<HashSet<TimeStamp>>]>,
 }
 
 impl Clone for LockManager {
@@ -85,7 +85,7 @@ impl LockManager {
             detector_scheduler: DetectorScheduler::new(detector_worker.scheduler()),
             detector_worker: Some(detector_worker),
             waiter_count: Arc::new(AtomicUsize::new(0)),
-            detected: Arc::new(detected),
+            detected: detected.into(),
         }
     }
 

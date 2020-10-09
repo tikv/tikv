@@ -222,7 +222,8 @@ use std::fmt::{Display, Formatter};
 
 impl Display for Json {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
+        let s = serde_json::to_string(&self.as_ref()).unwrap();
+        write!(f, "{}", s)
     }
 }
 

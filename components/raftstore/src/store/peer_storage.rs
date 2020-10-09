@@ -1219,19 +1219,13 @@ where
     /// Check whether the storage has finished applying snapshot.
     #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
-        match *self.snap_state.borrow() {
-            SnapState::Applying(_) => true,
-            _ => false,
-        }
+        matches!(*self.snap_state.borrow(), SnapState::Applying(_))
     }
 
     #[inline]
     pub fn is_generating_snapshot(&self) -> bool {
         fail_point!("is_generating_snapshot", |_| { true });
-        match *self.snap_state.borrow() {
-            SnapState::Generating(_) => true,
-            _ => false,
-        }
+        matches!(*self.snap_state.borrow(), SnapState::Generating(_))
     }
 
     /// Check if the storage is applying a snapshot.
