@@ -840,8 +840,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                     fail_point!(
                         "pause_on_peer_destroy_res",
                         peer.peer_id() == 1
-                            && matches!(msg,
-                            PeerMsg::ApplyRes {
+                            && matches!(msg, PeerMsg::ApplyRes {
                                 res: ApplyTaskRes::Destroy { .. },
                             }),
                         |_| unreachable!()

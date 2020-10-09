@@ -16,7 +16,7 @@ const HEAP_MAX_CAPACITY: usize = 1024;
 pub struct SortRow {
     pub data: OriginCols,
     pub key: Vec<Datum>,
-    order_cols: Arc<Vec<ByItem>>,
+    order_cols: Arc<[ByItem]>,
     eval_ctx: Arc<RefCell<EvalContext>>,
     err: Arc<RefCell<Option<String>>>,
 }
@@ -25,7 +25,7 @@ impl SortRow {
     fn new(
         data: OriginCols,
         key: Vec<Datum>,
-        order_cols: Arc<Vec<ByItem>>,
+        order_cols: Arc<[ByItem]>,
         ctx: Arc<RefCell<EvalContext>>,
         err: Arc<RefCell<Option<String>>>,
     ) -> SortRow {
@@ -109,7 +109,7 @@ impl TopNHeap {
         &mut self,
         data: OriginCols,
         values: Vec<Datum>,
-        order_cols: Arc<Vec<ByItem>>,
+        order_cols: Arc<[ByItem]>,
     ) -> Result<()> {
         if self.limit == 0 {
             return Ok(());
@@ -200,7 +200,7 @@ mod tests {
         let mut order_cols = Vec::new();
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
-        let order_cols = Arc::new(order_cols);
+        let order_cols: Arc<[ByItem]> = order_cols.into();
         let mut topn_heap =
             TopNHeap::new(5, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
         let test_data = vec![
@@ -295,7 +295,7 @@ mod tests {
                 .try_add_row(
                     OriginCols::new(i64::from(handle), row_data, empty_shared_slice()),
                     cur_key,
-                    Arc::clone(&order_cols),
+                    order_cols.clone(),
                 )
                 .unwrap();
         }
@@ -313,7 +313,7 @@ mod tests {
         let mut order_cols = Vec::new();
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
-        let order_cols = Arc::new(order_cols);
+        let order_cols: Arc<[ByItem]> = order_cols.into();
         let mut topn_heap =
             TopNHeap::new(5, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
 
@@ -323,7 +323,7 @@ mod tests {
             .try_add_row(
                 OriginCols::new(0 as i64, row_data, empty_shared_slice()),
                 std_key,
-                Arc::clone(&order_cols),
+                order_cols.clone(),
             )
             .unwrap();
 
@@ -333,7 +333,7 @@ mod tests {
             .try_add_row(
                 OriginCols::new(0 as i64, row_data2, empty_shared_slice()),
                 std_key2,
-                Arc::clone(&order_cols),
+                order_cols.clone(),
             )
             .unwrap();
 
@@ -344,7 +344,7 @@ mod tests {
             .try_add_row(
                 OriginCols::new(0 as i64, row_data3, empty_shared_slice()),
                 bad_key1,
-                Arc::clone(&order_cols)
+                order_cols.clone(),
             )
             .is_err());
 
@@ -356,7 +356,7 @@ mod tests {
         let mut order_cols = Vec::new();
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
-        let order_cols = Arc::new(order_cols);
+        let order_cols: Arc<[ByItem]> = order_cols.into();
         let mut topn_heap =
             TopNHeap::new(10, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
         let test_data = vec![
@@ -432,7 +432,7 @@ mod tests {
                 .try_add_row(
                     OriginCols::new(i64::from(handle), row_data, empty_shared_slice()),
                     cur_key,
-                    Arc::clone(&order_cols),
+                    order_cols.clone(),
                 )
                 .unwrap();
         }
@@ -467,7 +467,7 @@ mod tests {
             .try_add_row(
                 OriginCols::new(i64::from(1), row_data, empty_shared_slice()),
                 cur_key,
-                Arc::new(Vec::default()),
+                empty_shared_slice(),
             )
             .unwrap();
 

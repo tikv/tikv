@@ -1871,9 +1871,8 @@ impl ToString for Decimal {
         if self.negative {
             buf.push(b'-');
         }
-        for _ in 0..int_len - cmp::max(int_cnt, 1) {
-            buf.push(b'0');
-        }
+        let padding = int_len - cmp::max(int_cnt, 1);
+        buf.resize(padding as usize + buf.len(), b'0');
         if int_cnt > 0 {
             let base_idx = buf.len();
             let mut idx = base_idx + int_cnt as usize;

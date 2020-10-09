@@ -18,7 +18,7 @@ use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
 use tidb_query_normal_expr::Expression;
 
 struct OrderBy {
-    items: Arc<Vec<ByItem>>,
+    items: Arc<[ByItem]>,
     exprs: Vec<Expression>,
 }
 
@@ -29,7 +29,7 @@ impl OrderBy {
             exprs.push(Expression::build(ctx, v.take_expr())?);
         }
         Ok(OrderBy {
-            items: Arc::new(order_by),
+            items: order_by.into(),
             exprs,
         })
     }
@@ -93,7 +93,7 @@ impl<Src: Executor> TopNExecutor<Src> {
             let cols =
                 row.inflate_cols_with_offsets(&mut ctx.borrow_mut(), &self.related_cols_offset)?;
             let ob_values = self.order_by.eval(&mut ctx.borrow_mut(), &cols)?;
-            heap.try_add_row(row, ob_values, Arc::clone(&self.order_by.items))?;
+            heap.try_add_row(row, ob_values, self.order_by.items.clone())?;
         }
         let sort_rows = heap.into_sorted_vec()?;
         let data: Vec<Row> = sort_rows
@@ -187,7 +187,7 @@ pub mod tests {
         let mut order_cols = Vec::new();
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
-        let order_cols = Arc::new(order_cols);
+        let order_cols: Arc<[ByItem]> = order_cols.into();
 
         let mut topn_heap =
             TopNHeap::new(5, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
@@ -284,7 +284,7 @@ pub mod tests {
                 .try_add_row(
                     OriginCols::new(i64::from(handle), row_data, empty_shared_slice()),
                     ob_values,
-                    Arc::clone(&order_cols),
+                    order_cols.clone(),
                 )
                 .unwrap();
         }
@@ -302,7 +302,7 @@ pub mod tests {
         let mut order_cols = Vec::new();
         order_cols.push(new_order_by(0, false));
         order_cols.push(new_order_by(1, true));
-        let order_cols = Arc::new(order_cols);
+        let order_cols: Arc<[ByItem]> = order_cols.into();
         let mut topn_heap =
             TopNHeap::new(5, Arc::new(RefCell::new(EvalContext::default()))).unwrap();
 
@@ -312,7 +312,7 @@ pub mod tests {
             .try_add_row(
                 OriginCols::new(0 as i64, row_data, empty_shared_slice()),
                 ob_values1,
-                Arc::clone(&order_cols),
+                order_cols.clone(),
             )
             .unwrap();
 
@@ -322,7 +322,7 @@ pub mod tests {
             .try_add_row(
                 OriginCols::new(0 as i64, row_data2, empty_shared_slice()),
                 ob_values2,
-                Arc::clone(&order_cols),
+                order_cols.clone(),
             )
             .unwrap();
 
@@ -333,7 +333,7 @@ pub mod tests {
             .try_add_row(
                 OriginCols::new(0 as i64, row_data3, empty_shared_slice()),
                 bad_key1,
-                Arc::clone(&order_cols)
+                order_cols.clone(),
             )
             .is_err());
         assert!(topn_heap.into_sorted_vec().is_err());
