@@ -944,6 +944,14 @@ impl TiKVServer<RaftLogEngine> {
         let raft_config = self.config.raft_engine.config();
         let raft_engine = RaftLogEngine::new(raft_config);
 
+        // Try to dump and recover raft data.
+        crate::dump::check_and_dump_raft_db(
+            &self.config.raft_store.raftdb_path,
+            &raft_engine,
+            env.clone(),
+            8,
+        );
+
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);

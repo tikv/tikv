@@ -4407,7 +4407,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 90, Context::default()),
-                expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(100))),
+                expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(100), false)),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4417,7 +4417,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 110, Context::default()),
-                expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(110))),
+                expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(110), false)),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4555,6 +4555,7 @@ mod tests {
                             ts(10, 1),
                         )
                         .use_async_commit(vec![b"k1".to_vec(), b"k2".to_vec()]),
+                        false,
                     ),
                 ),
             )
@@ -5374,16 +5375,19 @@ mod tests {
                 expect_value_callback(
                     tx.clone(),
                     0,
-                    TxnStatus::uncommitted(txn_types::Lock::new(
-                        LockType::Put,
-                        b"k".to_vec(),
-                        start_ts,
-                        100,
-                        Some(b"v".to_vec()),
-                        0.into(),
-                        0,
-                        0.into(),
-                    )),
+                    TxnStatus::uncommitted(
+                        txn_types::Lock::new(
+                            LockType::Put,
+                            b"k".to_vec(),
+                            start_ts,
+                            100,
+                            Some(b"v".to_vec()),
+                            0.into(),
+                            0,
+                            0.into(),
+                        ),
+                        false,
+                    ),
                 ),
             )
             .unwrap();
