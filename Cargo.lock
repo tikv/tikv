@@ -638,8 +638,12 @@ dependencies = [
 name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
+ "criterion",
  "crossbeam-skiplist",
+ "futures 0.3.5",
  "parking_lot",
+ "rand 0.7.3",
+ "tikv_alloc",
  "tokio",
  "txn_types",
 ]
@@ -2002,7 +2006,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9d62f85259f3dc819dc5e00a3b5cb11efa092dc4"
+source = "git+https://github.com/tikv/rust-rocksdb.git#95f66baeec7f28cf30aca7874f30115e04e98b8f"
 dependencies = [
  "cc",
  "cmake",
@@ -2011,7 +2015,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9d62f85259f3dc819dc5e00a3b5cb11efa092dc4"
+source = "git+https://github.com/tikv/rust-rocksdb.git#95f66baeec7f28cf30aca7874f30115e04e98b8f"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2031,7 +2035,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9d62f85259f3dc819dc5e00a3b5cb11efa092dc4"
+source = "git+https://github.com/tikv/rust-rocksdb.git#95f66baeec7f28cf30aca7874f30115e04e98b8f"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3546,7 +3550,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9d62f85259f3dc819dc5e00a3b5cb11efa092dc4"
+source = "git+https://github.com/tikv/rust-rocksdb.git#95f66baeec7f28cf30aca7874f30115e04e98b8f"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4270,9 +4274,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.14.4"
+version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cf74492539712b190e4b3234cf6a4a026812e880fe45e8001807cc0044a7f21"
+checksum = "67330cbee3b2a819e3365a773f05e884a136603687f812bf24db5b6c3d76b696"
 dependencies = [
  "cfg-if",
  "doc-comment",
