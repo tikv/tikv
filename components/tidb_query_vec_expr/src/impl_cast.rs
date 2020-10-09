@@ -1722,17 +1722,11 @@ mod tests {
         }
         impl Cond {
             fn in_union(&self) -> bool {
-                if let Cond::InUnionAndUnsigned = self {
-                    true
-                } else {
-                    false
-                }
+                matches!(self, Cond::InUnionAndUnsigned)
             }
+
             fn is_unsigned(&self) -> bool {
-                match self {
-                    Cond::InUnionAndUnsigned | Cond::Unsigned => true,
-                    _ => false,
-                }
+                matches!(self, Cond::InUnionAndUnsigned | Cond::Unsigned)
             }
         }
 
@@ -1863,8 +1857,8 @@ mod tests {
                 .iter()
                 .map(|w| w.get_code())
                 .collect::<Vec<i32>>();
-            got_warnings.sort();
-            err_code.sort();
+            got_warnings.sort_unstable();
+            err_code.sort_unstable();
             assert_eq!(
                 ctx.warnings.warning_cnt,
                 err_code.len(),
@@ -2681,7 +2675,7 @@ mod tests {
                 .iter()
                 .map(|w| w.get_code())
                 .collect::<Vec<i32>>();
-            got_warnings.sort();
+            got_warnings.sort_unstable();
             assert_eq!(got_warnings, warnings);
         }
 
@@ -2863,7 +2857,7 @@ mod tests {
                 .iter()
                 .map(|w| w.get_code())
                 .collect::<Vec<i32>>();
-            got_warnings.sort();
+            got_warnings.sort_unstable();
             assert_eq!(
                 ctx.warnings.warning_cnt, warning_cnt,
                 "input:{:?}, expected:{:?}, flen:{:?}, decimal:{:?}, truncated:{:?}, overflow:{:?}, in_union:{:?}, warnings:{:?}",

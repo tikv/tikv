@@ -291,7 +291,7 @@ impl FixtureBuilder {
                 ci
             })
             .collect();
-        let columns_info = Arc::new(columns_info);
+        let columns_info: Arc<[_]> = Arc::from(columns_info);
 
         let rows_len = self.columns[0].len();
         let mut rows = Vec::with_capacity(rows_len);
@@ -311,7 +311,7 @@ impl FixtureBuilder {
             rows.push(Row::origin(
                 row_index as i64,
                 data,
-                Arc::clone(&columns_info),
+                columns_info.clone(),
             ));
         }
 

@@ -344,7 +344,7 @@ mod tests {
             .try_add_row(
                 OriginCols::new(0 as i64, row_data3, empty_shared_slice()),
                 bad_key1,
-                order_cols.clone(),
+                order_cols,
             )
             .is_err());
 

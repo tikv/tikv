@@ -83,7 +83,7 @@ mod tests {
                 vals[i] = row[j].saturating_sub(noise);
                 min_counter = min(min_counter, row[j])
             }
-            vals.sort();
+            vals.sort_unstable();
             min(
                 min_counter,
                 vals[(self.depth - 1) / 2]
