@@ -199,7 +199,7 @@ mod tests {
             max_output_file_size: 128 << 20, // 128MB
             pos: Cell::new(0),
         };
-        // Binary search meet excat match.
+        // Binary search meet exact match.
         guard.pos.set(0);
         let mut req = SstPartitionerRequest {
             prev_user_key: b"aaa12",
