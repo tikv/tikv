@@ -192,7 +192,6 @@ members = [
   "fuzz/fuzzer-libfuzzer",
   "fuzz/fuzzer-honggfuzz",
   "tests",
-  "cmd",
   "components/test_raftstore",
   "components/test_storage",
   "components/test_coprocessor",
@@ -233,7 +232,7 @@ members = [
   "tikv-server",
   "tikv-ctl",
 ]
-default-members = ["cmd"]
+default-members = ["tikv-server"]
 
 [profile.dev]
 opt-level = 0
@@ -257,8 +256,8 @@ debug-assertions = false
 overflow-checks = false
 rpath = false
 
-[profile.release.package.cmd]
-opt-level = 0
+[profile.release.package.tikv-server]
+opt-level = 1
 codegen-units = 4
 
 [profile.test]

@@ -43,7 +43,6 @@ prost-codec = [
 [dependencies]
 backup = { path = "../components/backup", default-features = false }
 cdc = { path = "../components/cdc" }
-cmd = { path = "../cmd" }
 chrono = "0.4"
 crossbeam = "0.7"
 tempfile = "3.0"

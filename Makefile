@@ -289,7 +289,7 @@ ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_val
 ifneq (,$(findstring prost-codec,"$(ENABLE_FEATURES)"))
 clippy: pre-clippy
 	@cargo clippy --workspace --all-targets --no-default-features \
-		--exclude cdc --exclude backup --exclude tests --exclude cmd \
+		--exclude cdc --exclude backup --exclude tests \
 		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
 		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
 	@for pkg in "components/cdc" "components/backup" "cmd" "tests"; do \
