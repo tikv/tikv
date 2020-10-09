@@ -638,8 +638,12 @@ dependencies = [
 name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
+ "criterion",
  "crossbeam-skiplist",
+ "futures 0.3.5",
  "parking_lot",
+ "rand 0.7.3",
+ "tikv_alloc",
  "tokio",
  "txn_types",
 ]
@@ -4270,9 +4274,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.14.4"
+version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cf74492539712b190e4b3234cf6a4a026812e880fe45e8001807cc0044a7f21"
+checksum = "67330cbee3b2a819e3365a773f05e884a136603687f812bf24db5b6c3d76b696"
 dependencies = [
  "cfg-if",
  "doc-comment",
