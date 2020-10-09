@@ -638,8 +638,12 @@ dependencies = [
 name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
+ "criterion",
  "crossbeam-skiplist",
+ "futures 0.3.5",
  "parking_lot",
+ "rand 0.7.3",
+ "tikv_alloc",
  "tokio",
  "txn_types",
 ]

@@ -13,3 +13,14 @@ txn_types = { path = "../txn_types" }
 git = "https://github.com/crossbeam-rs/crossbeam.git"
 tag = "crossbeam-0.7.3"
 package = "crossbeam-skiplist" 
+
+[dev-dependencies]
+rand = "0.7.3"
+futures = "0.3"
+criterion = "0.3"
+tikv_alloc = { path = "../tikv_alloc", features = ["jemalloc"] }
+
+[[bench]]
+name = "lock_table"
+path = "benches/lock_table.rs"
+harness = false
