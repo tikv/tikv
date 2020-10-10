@@ -127,14 +127,17 @@ impl ProvideAwsCredentials for DefaultCredentialsProvider {
     async fn credentials(&self) -> Result<AwsCredentials, CredentialsError> {
         // Need to use web identity provider first to prevent default provider takes precedence in
         // kubernetes environment.
-        if let Ok(creds) = self.web_identity_provider.credentials().await {
-            return Ok(creds);
-        }
-        if let Ok(creds) = self.default_provider.credentials().await {
-            return Ok(creds);
-        }
-        Err(CredentialsError::new(
-            "Couldn't find AWS credentials in default sources or k8s environment.",
-        ))
+        let k8s_error = match self.web_identity_provider.credentials().await {
+            res @ Ok(_) => return res,
+            Err(e) => e,
+        };
+        let def_error = match self.default_provider.credentials().await {
+            res @ Ok(_) => return res,
+            Err(e) => e,
+        };
+        Err(CredentialsError::new(format_args!(
+            "Couldn't find AWS credentials in default sources ({}) or k8s environment ({}).",
+            def_error.message, k8s_error.message,
+        )))
     }
 }
