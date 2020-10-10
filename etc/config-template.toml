@@ -359,8 +359,8 @@
 # region-max-keys = 1440000
 # region-split-keys = 960000
 
-## Currently only "raw" is supported, which means the check is based raw data.
-# consistency-check-method = "raw"
+## Set to "mvcc" to do consistency check for MVCC data, or "raw" for raw data.
+# consistency-check-method = "mvcc"
 
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
