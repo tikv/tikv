@@ -401,7 +401,7 @@ impl MvccInfoObserver for MvccChecksum {
         }
 
         if !self.committed_txns_sorted {
-            self.committed_txns.sort();
+            self.committed_txns.sort_unstable();
             self.committed_txns_sorted = true;
         }
 
