@@ -208,7 +208,6 @@ dependencies = [
  "error_code",
  "external_storage",
  "failure",
- "futures 0.1.29",
  "futures 0.3.5",
  "futures-executor",
  "futures-util",
@@ -609,16 +608,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "coarsetime"
-version = "0.1.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bac87404ed1c708d9cdd0094449e70aadc1ab73c291d2cf536e946a413594e5"
-dependencies = [
- "lazy_static",
- "libc",
-]
-
-[[package]]
 name = "codec"
 version = "0.0.1"
 dependencies = [
@@ -802,9 +791,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.4.2"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cced8691919c02aac3cb0a1bc2e9b73d89e832bf9a06fc579d4e71b68a2da061"
+checksum = "b153fe7cbef478c567df0f972e02e6d736db11affe43dfc9c56a9374d1adfb87"
 dependencies = [
  "crossbeam-utils 0.7.2",
  "maybe-uninit",
@@ -1108,7 +1097,6 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
- "coarsetime",
  "configuration",
  "encryption",
  "engine_traits",
@@ -2097,7 +2085,6 @@ name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
- "kvproto",
  "protobuf",
  "slog",
  "slog-term",
@@ -3111,10 +3098,8 @@ dependencies = [
 name = "raft_log_engine"
 version = "0.0.1"
 dependencies = [
- "coarsetime",
  "configuration",
  "engine_traits",
- "keys",
  "kvproto",
  "lazy_static",
  "num_cpus",
@@ -3125,7 +3110,6 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
- "tempfile",
  "tikv_util",
  "time 0.1.42",
 ]
@@ -4630,7 +4614,6 @@ dependencies = [
  "prometheus-static-metric",
  "tikv_util",
  "time 0.1.42",
- "tipb",
 ]
 
 [[package]]
@@ -4995,7 +4978,6 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "time 0.1.42",
- "tipb",
  "tokio",
  "tokio-executor",
  "tokio-timer",
@@ -5235,7 +5217,6 @@ version = "0.1.0"
 dependencies = [
  "byteorder",
  "codec",
- "derive-new",
  "error_code",
  "farmhash",
  "hex 0.4.2",

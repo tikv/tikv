@@ -75,10 +75,6 @@ txn_types = { path = "../txn_types" }
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
 
-[dependencies.futures_01]
-version = "0.1"
-package = "futures"
-
 [dev-dependencies]
 futures-executor = "0.3"
 rand = "0.7"
