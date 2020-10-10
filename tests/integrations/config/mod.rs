@@ -125,8 +125,8 @@ fn test_serde_custom_tikv_config() {
         },
     };
     value.metric = MetricConfig {
-        interval: ReadableDuration::secs(12),
-        address: "example.com:443".to_owned(),
+        interval: ReadableDuration::secs(15),
+        address: "".to_string(),
         job: "tikv_1".to_owned(),
     };
     let mut apply_batch_system = BatchSystemConfig::default();
