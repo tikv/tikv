@@ -3,7 +3,7 @@
 use std::cell::Cell;
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam::atomic::AtomicCell;
@@ -260,7 +260,7 @@ where
     E: KvEngine,
 {
     store_id: Cell<Option<u64>>,
-    store_meta: Arc<RwLock<StoreMeta>>,
+    store_meta: Arc<Mutex<StoreMeta>>,
     kv_engine: E,
     metrics: ReadMetrics,
     // region id -> ReadDelegate
@@ -303,7 +303,7 @@ where
     C: ProposalRouter<E::Snapshot>,
     E: KvEngine,
 {
-    pub fn new(kv_engine: E, store_meta: Arc<RwLock<StoreMeta>>, router: C) -> Self {
+    pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
@@ -352,7 +352,7 @@ where
     fn pre_propose_raft_command(&mut self, req: &RaftCmdRequest) -> Result<Option<ReadDelegate>> {
         // Check store id.
         if self.store_id.get().is_none() {
-            let store_id = self.store_meta.read().unwrap().store_id;
+            let store_id = self.store_meta.lock().unwrap().store_id;
             self.store_id.set(store_id);
         }
         let store_id = self.store_id.get().unwrap();
@@ -462,7 +462,7 @@ where
                     if self.delegates.get(&region_id).is_some() {
                         break;
                     }
-                    let meta = self.store_meta.read().unwrap();
+                    let meta = self.store_meta.lock().unwrap();
                     match meta.readers.get(&region_id).cloned() {
                         Some(reader) => {
                             self.delegates.insert(region_id, Some(reader));
@@ -704,7 +704,7 @@ mod tests {
     fn new_reader(
         path: &str,
         store_id: u64,
-        store_meta: Arc<RwLock<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta>>,
     ) -> (
         TempDir,
         LocalReader<SyncSender<RaftCommand<RocksSnapshot>>, RocksEngine>,
@@ -763,7 +763,7 @@ mod tests {
     #[test]
     fn test_read() {
         let store_id = 2;
-        let store_meta = Arc::new(RwLock::new(StoreMeta::new(0)));
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
         let (_tmp, mut reader, rx) = new_reader("test-local-reader", store_id, store_meta.clone());
 
         // region: 1,
@@ -808,7 +808,7 @@ mod tests {
         let remote = lease.maybe_new_remote_lease(term6).unwrap();
         // But the applied_index_term is stale.
         {
-            let mut meta = store_meta.write().unwrap();
+            let mut meta = store_meta.lock().unwrap();
             let read_delegate = ReadDelegate {
                 tag: String::new(),
                 region: Arc::new(region1.clone()),
@@ -833,7 +833,7 @@ mod tests {
         // Make the applied_index_term matches current term.
         let pg = Progress::applied_index_term(term6);
         {
-            let mut meta = store_meta.write().unwrap();
+            let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
         let task =
@@ -960,7 +960,7 @@ mod tests {
         let mut cmd9 = cmd;
         cmd9.mut_header().set_term(term6 + 3);
         {
-            let mut meta = store_meta.write().unwrap();
+            let mut meta = store_meta.lock().unwrap();
             meta.readers
                 .get_mut(&1)
                 .unwrap()

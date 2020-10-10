@@ -1078,7 +1078,7 @@ where
                 } else {
                     // Wait for its target peer to apply snapshot and then send `MergeResult` back
                     // to destroy itself
-                    let mut meta = self.ctx.store_meta.write().unwrap();
+                    let mut meta = self.ctx.store_meta.lock().unwrap();
                     // The `need_atomic` flag must be true
                     assert!(*meta.destroyed_region_for_snap.get(&region_id).unwrap());
 
@@ -1172,7 +1172,7 @@ where
         if is_snapshot {
             if !self.fsm.peer.has_pending_snapshot() {
                 // This snapshot is rejected by raft-rs.
-                let mut meta = self.ctx.store_meta.write().unwrap();
+                let mut meta = self.ctx.store_meta.lock().unwrap();
                 meta.pending_snapshot_regions
                     .retain(|r| self.fsm.region_id() != r.get_id());
             } else {
@@ -1369,7 +1369,7 @@ where
         // is the state of target peer at the time when source peer is merged. So here we record the
         // merge target epoch version to let the target peer on this store to decide whether to
         // destroy the source peer.
-        let mut meta = self.ctx.store_meta.write().unwrap();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.targets_map.insert(self.region_id(), target_region_id);
         let v = meta
             .pending_merge_targets
@@ -1507,7 +1507,7 @@ where
             return Ok(Either::Left(key));
         }
 
-        let mut meta = self.ctx.store_meta.write().unwrap();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         if meta.regions[&self.region_id()] != *self.region() {
             if !self.fsm.peer.is_initialized() {
                 info!(
@@ -1646,7 +1646,7 @@ where
         if regions_to_destroy.is_empty() {
             return;
         }
-        let mut meta = self.ctx.store_meta.write().unwrap();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         assert!(!meta.atomic_snap_regions.contains_key(&self.fsm.region_id()));
         for (source_region_id, merge_to_this_peer) in regions_to_destroy {
             if !meta.regions.contains_key(&source_region_id) {
@@ -1738,7 +1738,7 @@ where
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
 
-        let mut meta = self.ctx.store_meta.write().unwrap();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
 
         if meta.atomic_snap_regions.contains_key(&self.region_id()) {
             drop(meta);
@@ -1854,7 +1854,7 @@ where
     // Update some region infos
     fn update_region(&mut self, mut region: metapb::Region) {
         {
-            let mut meta = self.ctx.store_meta.write().unwrap();
+            let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
                 &self.ctx.coprocessor_host,
                 region.clone(),
@@ -2022,7 +2022,7 @@ where
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
     ) {
         self.register_split_region_check_tick();
-        let mut meta = self.ctx.store_meta.write().unwrap();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         let region_id = derived.get_id();
         meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
         self.fsm.peer.post_split();
@@ -2278,7 +2278,7 @@ where
     fn validate_merge_peer(&self, target_region: &metapb::Region) -> Result<bool> {
         let target_region_id = target_region.get_id();
         let exist_region = {
-            let meta = self.ctx.store_meta.read().unwrap();
+            let meta = self.ctx.store_meta.lock().unwrap();
             meta.regions.get(&target_region_id).cloned()
         };
         if let Some(r) = exist_region {
@@ -2473,7 +2473,7 @@ where
 
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
         {
-            let mut meta = self.ctx.store_meta.write().unwrap();
+            let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
         }
 
@@ -2561,7 +2561,7 @@ where
 
     fn on_ready_commit_merge(&mut self, region: metapb::Region, source: metapb::Region) {
         self.register_split_region_check_tick();
-        let mut meta = self.ctx.store_meta.write().unwrap();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
 
         let prev = meta.region_ranges.remove(&enc_end_key(&source));
         assert_eq!(prev, Some(source.get_id()));
@@ -2649,7 +2649,7 @@ where
         self.fsm.peer.want_rollback_merge_peers.clear();
 
         if let Some(r) = region {
-            let mut meta = self.ctx.store_meta.write().unwrap();
+            let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(&self.ctx.coprocessor_host, r, &mut self.fsm.peer);
         }
         if self.fsm.peer.is_leader() {
@@ -2686,7 +2686,7 @@ where
         // If the merge succeed, all source peers are impossible in apply snapshot state
         // and must be initialized.
         {
-            let meta = self.ctx.store_meta.read().unwrap();
+            let meta = self.ctx.store_meta.lock().unwrap();
             if meta.atomic_snap_regions.contains_key(&self.region_id()) {
                 panic!(
                     "{} is applying atomic snapshot on getting merge result, target region id {}, target peer {:?}, merge result type {:?}",
@@ -2781,7 +2781,7 @@ where
             self.fsm.peer.raft_group.raft.assign_commit_groups(gb);
         }
 
-        let mut meta = self.ctx.store_meta.write().unwrap();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         debug!(
             "check snapshot range";
             "region_id" => self.fsm.region_id(),
@@ -2931,7 +2931,7 @@ where
         if msg.get_admin_request().has_prepare_merge() {
             let target_region = msg.get_admin_request().get_prepare_merge().get_target();
             {
-                let meta = self.ctx.store_meta.read().unwrap();
+                let meta = self.ctx.store_meta.lock().unwrap();
                 match meta.regions.get(&target_region.get_id()) {
                     Some(r) => {
                         if r != target_region {

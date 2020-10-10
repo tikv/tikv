@@ -3,7 +3,7 @@
 use std::collections::Bound::{Excluded, Unbounded};
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 use std::{fmt, u64};
 
 use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
@@ -293,12 +293,12 @@ pub fn compare_region_epoch(
 }
 
 pub fn find_sibling_regions(
-    store_meta: &Arc<RwLock<StoreMeta>>,
+    store_meta: &Arc<Mutex<StoreMeta>>,
     cfg: &Config,
     cop_cfg: &CopConfig,
     region: &Region,
 ) -> Vec<Region> {
-    let meta = store_meta.read().unwrap();
+    let meta = store_meta.lock().unwrap();
     if cfg.right_derive_when_split {
         meta.region_ranges
             .range((Unbounded::<Vec<u8>>, Excluded(enc_end_key(region))))

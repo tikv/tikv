@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error as StdError;
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::*;
 use std::{result, thread};
 
@@ -52,7 +52,7 @@ pub trait Simulator {
         node_id: u64,
         cfg: TiKvConfig,
         engines: Engines<RocksEngine, RocksEngine>,
-        store_meta: Arc<RwLock<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RocksEngine>,
         system: RaftBatchSystem<RocksEngine, RocksEngine>,
@@ -127,7 +127,7 @@ pub struct Cluster<T: Simulator> {
 
     pub paths: Vec<TempDir>,
     pub dbs: Vec<Engines<RocksEngine, RocksEngine>>,
-    pub store_metas: HashMap<u64, Arc<RwLock<StoreMeta>>>,
+    pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
@@ -213,7 +213,7 @@ impl<T: Simulator> Cluster<T> {
 
             let engines = self.dbs.last().unwrap().clone();
             let key_mgr = self.key_managers.last().unwrap().clone();
-            let store_meta = Arc::new(RwLock::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
 
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
@@ -269,7 +269,7 @@ impl<T: Simulator> Cluster<T> {
         if let Some(labels) = self.labels.get(&node_id) {
             cfg.server.labels = labels.to_owned();
         }
-        let store_meta = Arc::new(RwLock::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         self.store_metas.insert(node_id, store_meta.clone());
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
@@ -528,7 +528,7 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
-            let store_meta = Arc::new(RwLock::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
@@ -561,7 +561,7 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
-            let store_meta = Arc::new(RwLock::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());

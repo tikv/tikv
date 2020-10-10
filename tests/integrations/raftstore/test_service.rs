@@ -763,7 +763,7 @@ fn test_double_run_node() {
         Arc::new(SSTImporter::new(dir, None).unwrap())
     };
 
-    let store_meta = Arc::new(RwLock::new(StoreMeta::new(20)));
+    let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
     let e = node
         .start(
             engines,

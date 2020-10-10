@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use engine_rocks::RocksEngine;
@@ -84,7 +84,7 @@ fn start_raftstore(
             .to_string();
         SnapManager::new(p)
     };
-    let store_meta = Arc::new(RwLock::new(StoreMeta::new(0)));
+    let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
     let cop_cfg = cfg.coprocessor.clone();
     let cfg_controller = ConfigController::new(cfg);

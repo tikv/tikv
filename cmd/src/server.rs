@@ -14,7 +14,7 @@ use std::{
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
     thread::JoinHandle,
 };
 
@@ -149,7 +149,7 @@ struct TiKVServer<ER: RaftEngine> {
 
 struct TiKVEngines<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
-    store_meta: Arc<RwLock<StoreMeta>>,
+    store_meta: Arc<Mutex<StoreMeta>>,
     engine: RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
 }
 
@@ -411,7 +411,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
-        let store_meta = Arc::new(RwLock::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
                 self.router.clone(),

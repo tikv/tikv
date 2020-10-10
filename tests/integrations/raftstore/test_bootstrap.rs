@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 
 use tempfile::Builder;
 
@@ -102,7 +102,7 @@ fn test_node_bootstrap_with_prepared_data() {
         simulate_trans,
         snap_mgr,
         pd_worker,
-        Arc::new(RwLock::new(StoreMeta::new(0))),
+        Arc::new(Mutex::new(StoreMeta::new(0))),
         coprocessor_host,
         importer,
         Worker::new("split"),

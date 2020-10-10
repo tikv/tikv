@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use concurrency_manager::ConcurrencyManager;
@@ -242,7 +242,7 @@ pub struct Endpoint<T> {
     min_ts_interval: Duration,
     scan_batch_size: usize,
     tso_worker: Runtime,
-    store_meta: Arc<RwLock<StoreMeta>>,
+    store_meta: Arc<Mutex<StoreMeta>>,
     /// The concurrency manager for transactions. It's needed for CDC to check locks when
     /// calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
@@ -261,7 +261,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         scheduler: Scheduler<Task>,
         raft_router: T,
         observer: CdcObserver,
-        store_meta: Arc<RwLock<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         concurrency_manager: ConcurrencyManager,
     ) -> Endpoint<T> {
         let workers = Builder::new()
@@ -337,7 +337,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 }
                 if is_last {
                     let delegate = self.capture_regions.remove(&region_id).unwrap();
-                    if let Some(reader) = self.store_meta.read().unwrap().readers.get(&region_id) {
+                    if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
                         reader
                             .txn_extra_op
                             .compare_and_swap(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop);
@@ -368,7 +368,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
                         delegate.stop(err);
                     }
-                    if let Some(reader) = self.store_meta.read().unwrap().readers.get(&region_id) {
+                    if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
                         reader.txn_extra_op.store(TxnExtraOp::Noop);
                     }
                     self.connections
@@ -496,7 +496,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let txn_extra_op = request.get_extra_op();
         if txn_extra_op != TxnExtraOp::Noop {
             delegate.txn_extra_op = request.get_extra_op();
-            if let Some(reader) = self.store_meta.read().unwrap().readers.get(&region_id) {
+            if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
                 reader.txn_extra_op.store(txn_extra_op);
             }
         }
@@ -1234,7 +1234,7 @@ mod tests {
             task_sched,
             raft_router.clone(),
             observer,
-            Arc::new(RwLock::new(StoreMeta::new(0))),
+            Arc::new(Mutex::new(StoreMeta::new(0))),
             ConcurrencyManager::new(1.into()),
         );
         let (tx, _rx) = batch::unbounded(1);
@@ -1297,7 +1297,7 @@ mod tests {
             task_sched,
             raft_router,
             observer,
-            Arc::new(RwLock::new(StoreMeta::new(0))),
+            Arc::new(Mutex::new(StoreMeta::new(0))),
             ConcurrencyManager::new(1.into()),
         );
         let (tx, rx) = batch::unbounded(1);
@@ -1384,7 +1384,7 @@ mod tests {
             task_sched,
             raft_router,
             observer,
-            Arc::new(RwLock::new(StoreMeta::new(0))),
+            Arc::new(Mutex::new(StoreMeta::new(0))),
             ConcurrencyManager::new(1.into()),
         );
 
@@ -1512,7 +1512,7 @@ mod tests {
             task_sched,
             raft_router,
             observer,
-            Arc::new(RwLock::new(StoreMeta::new(0))),
+            Arc::new(Mutex::new(StoreMeta::new(0))),
             ConcurrencyManager::new(1.into()),
         );
         let (tx, rx) = batch::unbounded(1);

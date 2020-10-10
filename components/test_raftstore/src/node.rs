@@ -179,7 +179,7 @@ impl Simulator for NodeCluster {
         node_id: u64,
         cfg: TiKvConfig,
         engines: Engines<RocksEngine, RocksEngine>,
-        store_meta: Arc<RwLock<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RocksEngine>,
         system: RaftBatchSystem<RocksEngine, RocksEngine>,
