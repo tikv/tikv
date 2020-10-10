@@ -634,7 +634,7 @@ fn test_serde_custom_tikv_config() {
         region_split_size: ReadableSize::mb(12),
         region_max_keys: 100000,
         region_split_keys: 100000,
-        consistency_check_method: ConsistencyCheckMethod::Mvcc,
+        consistency_check_method: ConsistencyCheckMethod::Raw,
     };
     let mut cert_allowed_cn = HashSet::default();
     cert_allowed_cn.insert("example.tikv.com".to_owned());
