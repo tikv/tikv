@@ -4,6 +4,7 @@ version = "0.0.1"
 license = "Apache-2.0"
 edition = "2018"
 publish = false
+
 [features]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
@@ -46,6 +47,7 @@ chrono = "0.4"
 tempfile = "3.0"
 clap = "2.32"
 concurrency_manager = { path = "../concurrency_manager" }
+crossbeam = "0.7"
 encryption = { path = "../encryption" }
 engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }
