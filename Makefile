@@ -8,6 +8,12 @@ else ifeq ($(SYSTEM_ALLOC),1)
 # no feature needed for system allocator
 else
 ENABLE_FEATURES += jemalloc
+
+# Only tested on Linux
+ifeq ($(shell uname -s),Linux)
+ENABLE_FEATURES += mem-profiling
+export JEMALLOC_SYS_WITH_MALLOC_CONF = prof:true,prof_active:false
+endif
 endif
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
@@ -145,11 +151,28 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
+<<<<<<< HEAD
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
+=======
+	cargo -Zpackage-features test --workspace \
+		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		--features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	if [[ "`uname`" == "Linux" ]]; then \
+		cargo -Zpackage-features test --workspace \
+			--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+			--features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -p tikv -p tikv_alloc --lib -- --nocapture --ignored; \
+	fi
+
+.PHONY: test
+test: run-test
+	@if [[ "`uname`" = "Linux" ]]; then \
+		env EXTRA_CARGO_ARGS="--message-format=json-render-diagnostics -q --no-run" make run-test |\
+                python scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-tests; \
+>>>>>>> 52c8492ed... tikv-server: enable mem profiling features by default (#8794)
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
 

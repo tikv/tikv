@@ -124,7 +124,7 @@ mod profiling {
         use jemallocator;
         use std::fs;
 
-        const OPT_PROF: &'static [u8] = b"opt.prof\0";
+        const OPT_PROF: &[u8] = b"opt.prof\0";
 
         fn is_profiling_on() -> bool {
             let mut prof = false;
