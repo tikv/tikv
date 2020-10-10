@@ -243,7 +243,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             let cmd_type = req.get_admin_request().get_cmd_type();
             // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
             let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
-            (epoch_state.check_ver, epoch_state.check_ver)
+            (epoch_state.check_ver, epoch_state.check_conf_ver)
         };
         self.last_conflict_index(check_ver, check_conf_ver)
     }
@@ -3738,6 +3738,11 @@ mod tests {
         epoch_checker.post_propose(AdminCmdType::ChangePeer, 6, 10);
         assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
 
+        // Conflict with the change peer admin cmd
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&change_peer_admin, 10),
+            Some(6)
+        );
         // Conflict with the split admin cmd
         assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
         // Conflict with the change peer admin cmd
@@ -3757,7 +3762,7 @@ mod tests {
         assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), None);
 
         assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), Some(6));
-        // Change term to 6
+        // Change term to 11
         assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 11), None);
         assert_eq!(epoch_checker.term, 11);
         // Should be empty
