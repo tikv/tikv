@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::db_options::PanicTitanDBOptions;
-use engine_traits::ColumnFamilyOptions;
+use engine_traits::{ColumnFamilyOptions, SstPartitionerFactory};
 
 pub struct PanicColumnFamilyOptions;
 
@@ -36,6 +36,9 @@ impl ColumnFamilyOptions for PanicColumnFamilyOptions {
         panic!()
     }
     fn get_disable_auto_compactions(&self) -> bool {
+        panic!()
+    }
+    fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, factory: F) {
         panic!()
     }
 }
