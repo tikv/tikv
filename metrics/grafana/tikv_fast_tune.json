@@ -2758,7 +2758,7 @@
               "refId": "A"
             },
             {
-              "expr": "sum(rate(tikv_raftstore_proposal_total{instance=~\"$instance\", type=~\"local_read|read_index\"}[1m])) / sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_get|kv_batch_get|kv_batch_get_command\"}[1m]))",
+              "expr": "sum(rate(tikv_raftstore_proposal_total{instance=~\"$instance\", type=~\"local_read|read_index\"}[1m])) / sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_get|kv_scan|kv_batch_get|kv_batch_get_command|coprocessor\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "fall-to-raft-rate",
