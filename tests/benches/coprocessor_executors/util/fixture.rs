@@ -308,11 +308,7 @@ impl FixtureBuilder {
                 .unwrap();
                 data.append(col_index as i64, &mut v);
             }
-            rows.push(Row::origin(
-                row_index as i64,
-                data,
-                columns_info.clone(),
-            ));
+            rows.push(Row::origin(row_index as i64, data, columns_info.clone()));
         }
 
         NormalFixtureExecutor {
