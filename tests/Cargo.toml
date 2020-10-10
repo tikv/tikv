@@ -76,6 +76,7 @@ prost-codec = [
   "cdc/prost-codec",
 ]
 jemalloc = ["tikv/jemalloc"]
+mem-profiling = ["tikv/mem-profiling"]
 sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 
