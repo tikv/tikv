@@ -296,6 +296,9 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: false,
+            enable_compaction_guard: true,
+            compaction_guard_min_output_file_size: ReadableSize::mb(12),
+            compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -354,6 +357,9 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: true,
+            compaction_guard_min_output_file_size: ReadableSize::mb(12),
+            compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -412,6 +418,9 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: true,
+            compaction_guard_min_output_file_size: ReadableSize::mb(12),
+            compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -470,6 +479,9 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: true,
+            compaction_guard_min_output_file_size: ReadableSize::mb(12),
+            compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
         ver_defaultcf: VersionCfConfig {
             block_size: ReadableSize::kb(12),
@@ -514,6 +526,9 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: false,
+            enable_compaction_guard: true,
+            compaction_guard_min_output_file_size: ReadableSize::mb(12),
+            compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
         titan: titan_db_config.clone(),
     };
@@ -586,6 +601,9 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: true,
+            compaction_guard_min_output_file_size: ReadableSize::mb(12),
+            compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
         titan: titan_db_config,
     };
@@ -616,7 +634,7 @@ fn test_serde_custom_tikv_config() {
         region_split_size: ReadableSize::mb(12),
         region_max_keys: 100000,
         region_split_keys: 100000,
-        consistency_check_method: ConsistencyCheckMethod::Mvcc,
+        consistency_check_method: ConsistencyCheckMethod::Raw,
     };
     let mut cert_allowed_cn = HashSet::default();
     cert_allowed_cn.insert("example.tikv.com".to_owned());
@@ -626,6 +644,7 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn,
+        redact_info_log: Some(true),
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),

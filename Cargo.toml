@@ -34,6 +34,7 @@ prost-codec = [
   "txn_types/prost-codec",
   "encryption/prost-codec",
   "tikv_util/prost-codec",
+  "log_wrappers/prost-codec"
 ]
 protobuf-codec = [
   "engine_rocks/protobuf-codec",
@@ -49,6 +50,7 @@ protobuf-codec = [
   "txn_types/protobuf-codec",
   "encryption/protobuf-codec",
   "tikv_util/protobuf-codec",
+  "log_wrappers/protobuf-codec"
 ]
 testexport = ["raftstore/testexport"]
 
@@ -130,7 +132,7 @@ slog_derive = "0.2"
 parking_lot = "0.10"
 prometheus = { version = "0.8", features = ["nightly", "push"] }
 sst_importer = { path = "components/sst_importer" }
-sysinfo = "0.14"
+sysinfo = "0.15"
 semver = "0.10"
 tempfile = "3.0"
 match_template = { path = "components/match_template" }
@@ -176,7 +178,7 @@ zipf = "6.1.0"
 # TODO: remove this when new raft-rs is published.
 raft = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
 raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
-protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
+protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6" }
 

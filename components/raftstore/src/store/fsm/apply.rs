@@ -40,7 +40,7 @@ use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
-use tikv_util::{escape, Either, MustConsumeVec};
+use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
@@ -182,11 +182,22 @@ pub struct ChangePeer {
     pub region: Region,
 }
 
-#[derive(Debug)]
 pub struct Range {
     pub cf: String,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
+}
+
+impl Debug for Range {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{{ cf: {:?}, start_key: {:?}, end_key: {:?} }}",
+            self.cf,
+            log_wrappers::Value::key(&self.start_key),
+            log_wrappers::Value::key(&self.end_key)
+        )
+    }
 }
 
 impl Range {
@@ -1242,7 +1253,7 @@ where
                 "peer_id" => self.id(),
                 "term" => ctx.exec_ctx.as_ref().unwrap().term,
                 "index" => ctx.exec_ctx.as_ref().unwrap().index,
-                "command" => ?request
+                "command" => ?request,
             );
         }
 
@@ -1310,7 +1321,7 @@ where
                         "skip readonly command";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "command" => ?req
+                        "command" => ?req,
                     );
                     continue;
                 }
@@ -1370,8 +1381,8 @@ where
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
-                    hex::encode_upper(&key),
-                    escape(value),
+                    log_wrappers::Value::key(&key),
+                    log_wrappers::Value::value(&value),
                     cf,
                     e
                 )
@@ -1381,8 +1392,8 @@ where
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
-                    hex::encode_upper(&key),
-                    escape(value),
+                    log_wrappers::Value::key(&key),
+                    log_wrappers::Value::value(&value),
                     e
                 );
             });
@@ -1406,7 +1417,7 @@ where
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    hex::encode_upper(&key),
+                    log_wrappers::Value::key(&key),
                     e
                 )
             });
@@ -1422,7 +1433,7 @@ where
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    hex::encode_upper(&key),
+                    log_wrappers::Value::key(&key),
                     e
                 )
             });
@@ -1476,8 +1487,8 @@ where
                     panic!(
                         "{} failed to delete files in range [{}, {}): {:?}",
                         self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
+                        log_wrappers::Value::key(&start_key),
+                        log_wrappers::Value::key(&end_key),
                         e
                     )
                 });
@@ -1489,8 +1500,8 @@ where
                     panic!(
                         "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
                         self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
+                        log_wrappers::Value::key(&start_key),
+                        log_wrappers::Value::key(&end_key),
                         cf,
                         e
                     );
@@ -1700,7 +1711,7 @@ where
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
-                        "region" => ?&self.region,
+                        "region" => ?&self.region
                     );
                     return Err(box_err!(
                         "remove missing peer {:?} from region {:?}",
@@ -1749,7 +1760,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => ?&self.region,
+                    "region" => ?&self.region
                 );
             }
         }
