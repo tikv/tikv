@@ -635,6 +635,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 }
             }
         }
+        info!("broadcast resolved ts"; "regions" => ?resolved_regions, "resolved_ts" => %self.min_resolved_ts);
         self.broadcast_resolved_ts(resolved_regions);
     }
 

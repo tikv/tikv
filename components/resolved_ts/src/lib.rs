@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[macro_use(debug)]
+#[macro_use]
 extern crate tikv_util;
 
 use std::cmp;
@@ -44,7 +44,7 @@ impl Resolver {
     }
 
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
-        debug!(
+        info!(
             "track lock {}@{}, region {}",
             hex::encode_upper(key.clone()),
             start_ts,
@@ -59,7 +59,7 @@ impl Resolver {
         commit_ts: Option<TimeStamp>,
         key: Vec<u8>,
     ) {
-        debug!(
+        info!(
             "untrack lock {}@{}, commit@{}, region {}",
             hex::encode_upper(key.clone()),
             start_ts,
