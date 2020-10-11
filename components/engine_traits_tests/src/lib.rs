@@ -149,6 +149,7 @@ mod engine_iter {
     use super::{default_engine};
     use engine_traits::{Iterable, Iterator};
     use engine_traits::SeekKey;
+    use engine_traits::SyncMutable;
     use std::panic::{self, AssertUnwindSafe};
 
     #[test]
@@ -177,6 +178,48 @@ mod engine_iter {
         assert_eq!(iter.seek_for_prev(SeekKey::Start).unwrap(), false);
         assert_eq!(iter.seek_for_prev(SeekKey::End).unwrap(), false);
         assert_eq!(iter.seek_for_prev(SeekKey::Key(b"foo")).unwrap(), false);
+    }
+
+    #[test]
+    fn iter_forward() {
+        let db = default_engine();
+
+        db.engine.put(b"a", b"a").unwrap();
+        db.engine.put(b"b", b"b").unwrap();
+        db.engine.put(b"c", b"c").unwrap();
+
+        let mut iter = db.engine.iterator().unwrap();
+
+        assert!(!iter.valid().unwrap());
+
+        assert!(iter.seek(SeekKey::Start).unwrap());
+
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"a");
+
+        assert_eq!(iter.next().unwrap(), true);
+
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"b");
+
+        assert_eq!(iter.next().unwrap(), true);
+
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"c");
+
+        assert_eq!(iter.next().unwrap(), false);
+
+        assert!(!iter.valid().unwrap());
+
+        assert!(panic::catch_unwind(AssertUnwindSafe(|| {
+            iter.key();
+        })).is_err());
+        assert!(panic::catch_unwind(AssertUnwindSafe(|| {
+            iter.value();
+        })).is_err());
     }
 }
 
