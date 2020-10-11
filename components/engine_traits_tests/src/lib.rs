@@ -264,5 +264,31 @@ mod engine_iter {
         })).is_err());
     }
 
+    #[test]
+    fn seek_to_key_then_forward() {
+        let db = default_engine();
+
+        db.engine.put(b"a", b"a").unwrap();
+        db.engine.put(b"b", b"b").unwrap();
+        db.engine.put(b"c", b"c").unwrap();
+
+        let mut iter = db.engine.iterator().unwrap();
+
+        assert!(iter.seek(SeekKey::Key(b"b")).unwrap());
+
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"b");
+
+        assert_eq!(iter.next().unwrap(), true);
+
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"c");
+
+        assert_eq!(iter.next().unwrap(), false);
+
+        assert!(!iter.valid().unwrap());
+    }
 }
 
