@@ -20,7 +20,7 @@ impl MiscExt for SkiplistEngine {
         end_key: &[u8],
         include_end: bool,
     ) -> Result<()> {
-        self.delete_all_in_range_cf(cf, start_key, end_key, false)
+        self.delete_range_cf(cf, start_key, end_key)
     }
 
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)> {
@@ -73,7 +73,7 @@ impl MiscExt for SkiplistEngine {
         end_key: &[u8],
         include_end: bool,
     ) -> Result<()> {
-        Ok(())
+        self.delete_range_cf(cf, start_key, end_key)
     }
 
     fn delete_all_in_range_cf(
@@ -83,6 +83,6 @@ impl MiscExt for SkiplistEngine {
         end_key: &[u8],
         use_delete_range: bool,
     ) -> Result<()> {
-        self.delete_files_in_range_cf(cf, start_key, end_key, false)
+        self.delete_range_cf(cf, start_key, end_key)
     }
 }
