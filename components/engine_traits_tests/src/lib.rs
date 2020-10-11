@@ -290,5 +290,32 @@ mod engine_iter {
 
         assert!(!iter.valid().unwrap());
     }
+
+    #[test]
+    fn seek_to_key_then_backward() {
+        let db = default_engine();
+
+        db.engine.put(b"a", b"a").unwrap();
+        db.engine.put(b"b", b"b").unwrap();
+        db.engine.put(b"c", b"c").unwrap();
+
+        let mut iter = db.engine.iterator().unwrap();
+
+        assert!(iter.seek(SeekKey::Key(b"b")).unwrap());
+
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"b");
+
+        assert_eq!(iter.prev().unwrap(), true);
+
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"a");
+
+        assert_eq!(iter.prev().unwrap(), false);
+
+        assert!(!iter.valid().unwrap());
+    }
 }
 
