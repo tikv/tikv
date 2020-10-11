@@ -221,5 +221,48 @@ mod engine_iter {
             iter.value();
         })).is_err());
     }
+
+    #[test]
+    fn iter_reverse() {
+        let db = default_engine();
+
+        db.engine.put(b"a", b"a").unwrap();
+        db.engine.put(b"b", b"b").unwrap();
+        db.engine.put(b"c", b"c").unwrap();
+
+        let mut iter = db.engine.iterator().unwrap();
+
+        assert!(!iter.valid().unwrap());
+
+        assert!(iter.seek(SeekKey::End).unwrap());
+
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"c");
+
+        assert_eq!(iter.prev().unwrap(), true);
+
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"b");
+
+        assert_eq!(iter.prev().unwrap(), true);
+
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"a");
+
+        assert_eq!(iter.prev().unwrap(), false);
+
+        assert!(!iter.valid().unwrap());
+
+        assert!(panic::catch_unwind(AssertUnwindSafe(|| {
+            iter.key();
+        })).is_err());
+        assert!(panic::catch_unwind(AssertUnwindSafe(|| {
+            iter.value();
+        })).is_err());
+    }
+
 }
 
