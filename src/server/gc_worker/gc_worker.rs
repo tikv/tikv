@@ -648,7 +648,7 @@ where
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider>(
         &self,
         cfg: AutoGcConfig<S, R>,
-    ) -> Result<()> {
+    ) -> Result<Arc<AtomicU64>> {
         let safe_point = Arc::new(AtomicU64::new(0));
 
         let kvdb = self.engine.kv_engine();
@@ -660,14 +660,14 @@ where
         assert!(handle.is_none());
         let new_handle = GcManager::new(
             cfg,
-            safe_point,
+            safe_point.clone(),
             self.worker_scheduler.clone(),
             self.config_manager.clone(),
             self.cluster_version.clone(),
         )
         .start()?;
         *handle = Some(new_handle);
-        Ok(())
+        Ok(safe_point)
     }
 
     pub fn start(&mut self) -> Result<()> {
