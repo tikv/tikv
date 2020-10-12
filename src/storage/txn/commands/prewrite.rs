@@ -267,7 +267,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 // commit them.
                 let (ts, released_locks) =
                     handle_1pc(&mut txn, final_min_commit_ts, self.one_pc_max_commit_ts);
-                assert!(released_locks.is_none());
+                if let Some(released_locks) = released_locks {
+                    assert!(released_locks.is_empty());
+                }
                 ts
             } else {
                 assert!(txn.locks_for_1pc.is_empty());
@@ -312,23 +314,16 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
 
 #[cfg(test)]
 mod tests {
-    use kvproto::kvrpcpb::{Context, ExtraOp};
+    use kvproto::kvrpcpb::Context;
 
-    use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
-    use txn_types::TimeStamp;
     use txn_types::{Key, Mutation};
 
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-    use crate::storage::txn::commands::{
-        Commit, Prewrite, Rollback, WriteContext, FORWARD_MIN_MUTATIONS_NUM,
-    };
-    use crate::storage::txn::LockInfo;
-    use crate::storage::txn::{Error, ErrorInner, Result};
-    use crate::storage::DummyLockManager;
-    use crate::storage::{
-        Engine, PrewriteResult, ProcessResult, Snapshot, Statistics, TestEngineBuilder,
-    };
+    use crate::storage::txn::commands::test_util::{commit, prewrite, rollback};
+    use crate::storage::txn::commands::FORWARD_MIN_MUTATIONS_NUM;
+    use crate::storage::txn::{Error, ErrorInner};
+    use crate::storage::{Engine, Snapshot, Statistics, TestEngineBuilder};
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
         let mut mutations = Vec::default();
@@ -513,108 +508,5 @@ mod tests {
         must_unlocked(&engine, key);
         must_get(&engine, key, 12, value);
         must_get_commit_ts(&engine, key, 10, 11);
-    }
-
-    fn prewrite<E: Engine>(
-        engine: &E,
-        statistics: &mut Statistics,
-        mutations: Vec<Mutation>,
-        primary: Vec<u8>,
-        start_ts: u64,
-        try_one_pc: bool,
-    ) -> Result<()> {
-        let ctx = Context::default();
-        let snap = engine.snapshot(&ctx)?;
-        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
-        let cmd = if try_one_pc {
-            Prewrite::with_1pc(
-                mutations,
-                primary,
-                TimeStamp::from(start_ts),
-                TimeStamp::max(),
-            )
-        } else {
-            Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts))
-        };
-        let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
-            concurrency_manager,
-            extra_op: ExtraOp::Noop,
-            statistics,
-            pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
-        };
-        let ret = cmd.cmd.process_write(snap, context)?;
-        if let ProcessResult::PrewriteResult {
-            result: PrewriteResult { locks, .. },
-        } = ret.pr
-        {
-            if !locks.is_empty() {
-                let info = LockInfo::default();
-                return Err(Error::from(ErrorInner::Mvcc(MvccError::from(
-                    MvccErrorInner::KeyIsLocked(info),
-                ))));
-            }
-        }
-        let ctx = Context::default();
-        engine.write(&ctx, ret.to_be_write).unwrap();
-        Ok(())
-    }
-
-    fn commit<E: Engine>(
-        engine: &E,
-        statistics: &mut Statistics,
-        keys: Vec<Key>,
-        lock_ts: u64,
-        commit_ts: u64,
-    ) -> Result<()> {
-        let ctx = Context::default();
-        let snap = engine.snapshot(&ctx)?;
-        let concurrency_manager = ConcurrencyManager::new(lock_ts.into());
-        let cmd = Commit::new(
-            keys,
-            TimeStamp::from(lock_ts),
-            TimeStamp::from(commit_ts),
-            ctx,
-        );
-
-        let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
-            concurrency_manager,
-            extra_op: ExtraOp::Noop,
-            statistics,
-            pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
-        };
-
-        let ret = cmd.cmd.process_write(snap, context)?;
-        let ctx = Context::default();
-        engine.write(&ctx, ret.to_be_write).unwrap();
-        Ok(())
-    }
-
-    fn rollback<E: Engine>(
-        engine: &E,
-        statistics: &mut Statistics,
-        keys: Vec<Key>,
-        start_ts: u64,
-    ) -> Result<()> {
-        let ctx = Context::default();
-        let snap = engine.snapshot(&ctx)?;
-        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
-        let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
-        let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
-            concurrency_manager,
-            extra_op: ExtraOp::Noop,
-            statistics,
-            pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
-        };
-
-        let ret = cmd.cmd.process_write(snap, context)?;
-        let ctx = Context::default();
-        engine.write(&ctx, ret.to_be_write).unwrap();
-        Ok(())
     }
 }

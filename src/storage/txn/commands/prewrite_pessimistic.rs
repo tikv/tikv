@@ -71,6 +71,55 @@ impl CommandExt for PrewritePessimistic {
     gen_lock!(mutations: multiple(|(x, _)| x.key()));
 }
 
+impl PrewritePessimistic {
+    #[cfg(test)]
+    pub fn with_defaults(
+        mutations: Vec<(Mutation, bool)>,
+        primary: Vec<u8>,
+        start_ts: TimeStamp,
+        for_update_ts: TimeStamp,
+    ) -> TypedCommand<PrewriteResult> {
+        use crate::storage::Context;
+        PrewritePessimistic::new(
+            mutations,
+            primary,
+            start_ts,
+            0,
+            for_update_ts,
+            0,
+            TimeStamp::default(),
+            None,
+            false,
+            TimeStamp::zero(),
+            Context::default(),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn with_1pc(
+        mutations: Vec<(Mutation, bool)>,
+        primary: Vec<u8>,
+        start_ts: TimeStamp,
+        for_update_ts: TimeStamp,
+        one_pc_max_commit_ts: TimeStamp,
+    ) -> TypedCommand<PrewriteResult> {
+        use crate::storage::Context;
+        PrewritePessimistic::new(
+            mutations,
+            primary,
+            start_ts,
+            0,
+            for_update_ts,
+            0,
+            TimeStamp::default(),
+            None,
+            true,
+            one_pc_max_commit_ts,
+            Context::default(),
+        )
+    }
+}
+
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
@@ -147,6 +196,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
         let (pr, to_be_write, rows, ctx, lock_info, lock_guards) = if locks.is_empty() {
             let one_pc_commit_ts = if self.try_one_pc {
                 assert_eq!(txn.locks_for_1pc.len(), rows);
+                assert_ne!(final_min_commit_ts, TimeStamp::zero());
                 // All keys can be successfully locked and `try_one_pc` is set. Try to directly
                 // commit them.
                 let (ts, released_locks) =
@@ -195,3 +245,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
         })
     }
 }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use crate::storage::txn::commands::test_util::*;
+// }
