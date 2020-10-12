@@ -155,12 +155,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             }
         }
 
-        // If async commit is disabled in TiKV, set the secondary_keys in the request to None
-        // so we won't do anything for async commit.
-        if !context.enable_async_commit {
-            self.secondary_keys = None;
-        }
-
         // Async commit requires the max timestamp in the concurrency manager to be up-to-date.
         // If it is possibly stale due to leader transfer or region merge, return an error.
         // TODO: Fallback to non-async commit if not synced instead of returning an error.
@@ -450,7 +444,6 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         if let ProcessResult::PrewriteResult {
@@ -492,7 +485,6 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -517,7 +509,6 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
