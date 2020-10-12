@@ -138,13 +138,13 @@ build:
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
 release:
-	@export BUILD_TYPE=release; export PROXY_PROFILE=release; \
+	./release.sh
+
+upload:
 	if [[ $(shell uname -s) == "Darwin" ]]; then \
-		echo "Kernel is Darwin, change build type to debug"; \
-		unset BUILD_TYPE; \
-		export PROXY_PROFILE=debug; \
-	fi; \
-	make build_by_type;
+		export PROXY_GIT_HASH=$(shell git log -1 --format="%H"); \
+		curl -F builds/pingcap/tiflash-proxy/$${PROXY_GIT_HASH}/libtiflash_proxy.dylib=@target/debug/libtiflash_proxy.dylib http://fileserver.pingcap.net/upload; \
+	fi;
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
