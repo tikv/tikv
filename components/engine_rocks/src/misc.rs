@@ -28,8 +28,13 @@ impl RocksEngine {
         ranges: &[Range],
     ) -> Result<()> {
         let mut ranges = ranges.to_owned();
-        ranges.sort_by(|a, b| a.start_key.cmp(b.end_key));
-        let mut opts = IterOptions::new(None, None, false);
+        ranges.sort_by(|a, b| a.start_key.cmp(b.start_key));
+        let max_end_key = ranges
+            .iter()
+            .fold(ranges[0].end_key, |x, y| std::cmp::max(x, y.end_key));
+        let start = KeyBuilder::from_slice(ranges[0].start_key, 0, 0);
+        let end = KeyBuilder::from_slice(max_end_key, 0, 0);
+        let mut opts = IterOptions::new(Some(start), Some(end), false);
         if self.is_titan() {
             // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
             // to avoid referring to missing blob files.
@@ -135,6 +140,9 @@ impl MiscExt for RocksEngine {
     }
 
     fn delete_ranges_cf(&self, cf: &str, strategy: DeleteStrategy, ranges: &[Range]) -> Result<()> {
+        if ranges.is_empty() {
+            return Ok(());
+        }
         match strategy {
             DeleteStrategy::DeleteFiles => {
                 let handle = util::get_cf_handle(self.as_inner(), cf)?;
