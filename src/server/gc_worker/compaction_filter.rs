@@ -20,6 +20,7 @@ use txn_types::{Key, WriteRef, WriteType};
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
+const NEAR_SEEK_LIMIT: usize = 20;
 
 // The default version that can enable compaction filter for GC. This is necessary because after
 // compaction filter is enabled, it's impossible to fallback to ealier version which modifications
@@ -110,15 +111,14 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
 struct WriteCompactionFilter {
     safe_point: u64,
     engine: RocksEngine,
-
     write_batch: RocksWriteBatch,
+
     key_prefix: Vec<u8>,
     remove_older: bool,
 
-    // Indicates whether the target is the bottommost level or not.
-    bottommost_level: bool,
     // To handle delete marks at the bottommost level.
     write_iter: Option<RocksEngineIterator>,
+    near_seek_distance: usize,
 
     // For metrics about (versions, deleted_versions) for every MVCC key.
     versions: usize,
@@ -129,19 +129,16 @@ struct WriteCompactionFilter {
 }
 
 impl WriteCompactionFilter {
-    fn new(db: Arc<DB>, safe_point: u64, context: &CompactionFilterContext) -> Self {
+    fn new(db: Arc<DB>, safe_point: u64, _context: &CompactionFilterContext) -> Self {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
 
         let engine = RocksEngine::from_db(db.clone());
         let write_batch = RocksWriteBatch::with_capacity(db, DEFAULT_DELETE_BATCH_SIZE);
-        let bottommost_level = context.is_bottommost_level();
-        let write_iter = if context.is_bottommost_level() {
+        let write_iter = {
             // TODO: give lower bound and upper bound to the iterator.
             let opts = IterOptions::default();
             Some(engine.iterator_cf_opt(CF_WRITE, opts).unwrap())
-        } else {
-            None
         };
 
         WriteCompactionFilter {
@@ -150,8 +147,8 @@ impl WriteCompactionFilter {
             write_batch,
             key_prefix: vec![],
             remove_older: false,
-            bottommost_level,
             write_iter,
+            near_seek_distance: NEAR_SEEK_LIMIT,
             versions: 0,
             deleted: 0,
             total_versions: 0,
@@ -161,27 +158,33 @@ impl WriteCompactionFilter {
 
     // Do gc before a delete mark.
     fn gc_before_delete_mark(&mut self, delete: &[u8], prefix: &[u8]) {
-        let mut iter = self.write_iter.take().unwrap();
-        let mut valid = iter.seek(SeekKey::Key(delete)).unwrap()
-            && (iter.key() != delete || iter.next().unwrap());
+        let mut write_iter = self.write_iter.take().unwrap();
+
+        let mut valid = write_iter.valid().unwrap();
+        if self.near_seek_distance >= NEAR_SEEK_LIMIT {
+            valid = write_iter.seek(SeekKey::Key(delete)).unwrap();
+        } else {
+            while valid && write_iter.key() < delete {
+                valid = write_iter.next().unwrap();
+            }
+        };
+        self.near_seek_distance = 0;
+
         while valid {
-            let (key, value) = (iter.key(), iter.value());
-            let key_prefix = match Key::split_on_ts_for(key) {
-                Ok((key, _)) => key,
-                Err(_) => continue,
-            };
-            if key_prefix != prefix {
+            let (key, value) = (write_iter.key(), write_iter.value());
+            if !key.starts_with(prefix) {
                 break;
             }
             let write = WriteRef::parse(value).unwrap();
             if write.short_value.is_none() && write.write_type == WriteType::Put {
-                let def_key = Key::from_encoded_slice(key_prefix).append_ts(write.start_ts);
+                let def_key = Key::from_encoded_slice(prefix).append_ts(write.start_ts);
                 self.delete_default_key(def_key.as_encoded());
             }
             self.delete_write_key(key);
-            valid = iter.next().unwrap();
+            valid = write_iter.next().unwrap();
         }
-        self.write_iter = Some(iter);
+
+        self.write_iter = Some(write_iter);
     }
 
     fn delete_default_key(&mut self, key: &[u8]) {
@@ -231,7 +234,6 @@ impl Drop for WriteCompactionFilter {
         self.switch_key_metrics();
         debug!(
             "WriteCompactionFilter has filtered all key/value pairs";
-            "bottommost_level" => self.bottommost_level,
             "versions" => self.total_versions,
             "deleted" => self.total_deleted,
         );
@@ -247,6 +249,8 @@ impl CompactionFilter for WriteCompactionFilter {
         _: &mut Vec<u8>,
         _: &mut bool,
     ) -> bool {
+        self.near_seek_distance += 1;
+
         let (key_prefix, commit_ts) = match Key::split_on_ts_for(key) {
             Ok((key, ts)) => (key, ts.into_inner()),
             // Invalid MVCC keys, don't touch them.
@@ -279,10 +283,8 @@ impl CompactionFilter for WriteCompactionFilter {
                 WriteType::Put => self.remove_older = true,
                 WriteType::Delete => {
                     self.remove_older = true;
-                    if self.bottommost_level {
-                        filtered = true;
-                        self.gc_before_delete_mark(key, key_prefix);
-                    }
+                    filtered = true;
+                    self.gc_before_delete_mark(key, key_prefix);
                 }
             }
         }
