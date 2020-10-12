@@ -246,8 +246,69 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::storage::txn::commands::test_util::*;
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::txn::commands::test_util::*;
+    use crate::storage::{Statistics, TestEngineBuilder};
+
+    #[test]
+    fn test_prewrite_pessimsitic_one_pc() {
+        use crate::storage::mvcc::tests::{
+            must_acquire_pessimistic_lock, must_get, must_get_commit_ts, must_unlocked,
+        };
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"k";
+        let value = b"v";
+
+        must_acquire_pessimistic_lock(&engine, key, key, 10, 10);
+
+        let mutations = vec![(Mutation::Put((Key::from_raw(key), value.to_vec())), true)];
+        let mut statistics = Statistics::default();
+        pessimsitic_prewrite(
+            &engine,
+            &mut statistics,
+            mutations,
+            key.to_vec(),
+            10,
+            10,
+            true,
+        )
+        .unwrap();
+
+        must_unlocked(&engine, key);
+        must_get(&engine, key, 12, value);
+        must_get_commit_ts(&engine, key, 10, 11);
+
+        let (k1, v1) = (b"k", b"v");
+        let (k2, v2) = (b"k2", b"v2");
+
+        must_acquire_pessimistic_lock(&engine, k1, k1, 8, 15);
+
+        let mutations = vec![
+            (Mutation::Put((Key::from_raw(k1), v1.to_vec())), true),
+            (Mutation::Put((Key::from_raw(k2), v2.to_vec())), false),
+        ];
+        statistics = Statistics::default();
+        pessimsitic_prewrite(
+            &engine,
+            &mut statistics,
+            mutations,
+            k1.to_vec(),
+            8,
+            12,
+            true,
+        )
+        .unwrap();
+
+        must_unlocked(&engine, k1);
+        must_unlocked(&engine, k2);
+        must_get(&engine, k1, 16, v1);
+        must_get(&engine, k2, 16, v2);
+        // Note that we didn't keep only one `ConcurrencyManager` instance in the unit test, so the
+        // final commit ts is just `for_update_ts + 1`.
+        must_get_commit_ts(&engine, k1, 8, 13);
+        must_get_commit_ts(&engine, k2, 8, 13);
+    }
+}
