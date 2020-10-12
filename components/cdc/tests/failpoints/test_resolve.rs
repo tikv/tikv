@@ -80,9 +80,9 @@ fn test_stale_resolver() {
     // Unblock all scans
     fail::remove(fp1);
     // Receive events
-    let mut events = receive_event(false);
+    let mut events = receive_event(false).events.to_vec();
     while events.len() < 2 {
-        events.extend(receive_event(false).into_iter());
+        events.extend(receive_event(false).events.into_iter());
     }
     assert_eq!(events.len(), 2);
     for event in events {
@@ -107,7 +107,7 @@ fn test_stale_resolver() {
     event_feed_wrap.as_ref().replace(Some(resp_rx1));
     // Receive events
     for _ in 0..2 {
-        let mut events = receive_event(false);
+        let mut events = receive_event(false).events.to_vec();
         match events.pop().unwrap().event.unwrap() {
             Event_oneof_event::Entries(es) => match es.entries.len() {
                 1 => {
