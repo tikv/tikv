@@ -160,8 +160,6 @@ struct SchedulerInner<L: LockManager> {
     concurrency_manager: ConcurrencyManager,
 
     pipelined_pessimistic_lock: bool,
-
-    enable_async_commit: bool,
 }
 
 #[inline]
@@ -261,7 +259,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
         pipelined_pessimistic_lock: bool,
-        enable_async_commit: bool,
     ) -> Self {
         // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
         // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
@@ -286,7 +283,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock_mgr,
             concurrency_manager,
             pipelined_pessimistic_lock,
-            enable_async_commit,
         });
 
         slow_log!(t.elapsed(), "initialized the transaction scheduler");
@@ -605,7 +601,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             extra_op: task.extra_op,
             statistics,
             pipelined_pessimistic_lock: self.inner.pipelined_pessimistic_lock,
-            enable_async_commit: self.inner.enable_async_commit,
         };
 
         match task.cmd.process_write(snapshot, context) {
