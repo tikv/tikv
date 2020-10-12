@@ -77,6 +77,7 @@ pub struct Scheduler<T: Display + Send> {
     counter: Arc<AtomicUsize>,
     sender: UnboundedSender<Msg<T>>,
     pending_capacity: usize,
+    metrics_pending_task_count: IntGauge,
 }
 
 impl<T: Display + Send> Scheduler<T> {
@@ -84,11 +85,13 @@ impl<T: Display + Send> Scheduler<T> {
         sender: UnboundedSender<Msg<T>>,
         counter: Arc<AtomicUsize>,
         pending_capacity: usize,
+        metrics_pending_task_count: IntGauge,
     ) -> Scheduler<T> {
         Scheduler {
             counter,
             sender,
             pending_capacity,
+            metrics_pending_task_count,
         }
     }
 
@@ -105,6 +108,7 @@ impl<T: Display + Send> Scheduler<T> {
                 return Err(ScheduleError::Stopped(t));
             }
         }
+        self.metrics_pending_task_count.inc();
         self.counter.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -125,6 +129,7 @@ impl<T: Display + Send> Clone for Scheduler<T> {
             counter: Arc::clone(&self.counter),
             sender: self.sender.clone(),
             pending_capacity: self.pending_capacity,
+            metrics_pending_task_count: self.metrics_pending_task_count.clone(),
         }
     }
 }
@@ -133,12 +138,14 @@ pub struct LazyWorker<T: Display + Send + 'static> {
     scheduler: Scheduler<T>,
     worker: Worker,
     receiver: Option<UnboundedReceiver<Msg<T>>>,
+    metrics_pending_task_count: IntGauge,
 }
 
 impl<T: Display + Send + 'static> LazyWorker<T> {
     pub fn start<R: 'static + Runnable<Task = T>>(&mut self, runner: R) -> bool {
         if let Some(receiver) = self.receiver.take() {
-            self.worker.start_impl(runner, receiver);
+            self.worker
+                .start_impl(runner, receiver, self.metrics_pending_task_count.clone());
             return true;
         }
         false
@@ -149,8 +156,12 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
         runner: R,
     ) -> bool {
         if let Some(receiver) = self.receiver.take() {
-            self.worker
-                .start_with_timer_impl(runner, self.scheduler.sender.clone(), receiver);
+            self.worker.start_with_timer_impl(
+                runner,
+                self.scheduler.sender.clone(),
+                receiver,
+                self.metrics_pending_task_count.clone(),
+            );
             return true;
         }
         false
@@ -188,6 +199,11 @@ impl<S: Into<String>> Builder<S> {
         self
     }
 
+    pub fn thread_count(mut self, thread_count: usize) -> Self {
+        self.thread_count = thread_count;
+        self
+    }
+
     pub fn create(self) -> Worker {
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .name_prefix(self.name)
@@ -219,19 +235,36 @@ impl Worker {
     pub fn new<S: Into<String>>(name: S) -> Worker {
         Builder::new(name).create()
     }
-    pub fn start<R: Runnable + 'static>(&self, runner: R) -> Scheduler<R::Task> {
-        let (tx, rx) = unbounded();
-        self.start_impl(runner, rx);
-        Scheduler::new(tx, self.counter.clone(), self.pending_capacity)
-    }
-
-    pub fn start_with_timer<R: RunnableWithTimer + 'static>(
+    pub fn start<R: Runnable + 'static, S: Into<String>>(
         &self,
+        name: S,
         runner: R,
     ) -> Scheduler<R::Task> {
         let (tx, rx) = unbounded();
-        self.start_with_timer_impl(runner, tx.clone(), rx);
-        Scheduler::new(tx, self.counter.clone(), self.pending_capacity)
+        let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name.into()]);
+        self.start_impl(runner, rx, metrics_pending_task_count.clone());
+        Scheduler::new(
+            tx,
+            self.counter.clone(),
+            self.pending_capacity,
+            metrics_pending_task_count,
+        )
+    }
+
+    pub fn start_with_timer<R: RunnableWithTimer + 'static, S: Into<String>>(
+        &self,
+        name: S,
+        runner: R,
+    ) -> Scheduler<R::Task> {
+        let (tx, rx) = unbounded();
+        let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name.into()]);
+        self.start_with_timer_impl(runner, tx.clone(), rx, metrics_pending_task_count.clone());
+        Scheduler::new(
+            tx,
+            self.counter.clone(),
+            self.pending_capacity,
+            metrics_pending_task_count,
+        )
     }
 
     fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {
@@ -245,12 +278,22 @@ impl Worker {
         poll_future_notify(f);
     }
 
-    pub fn lazy_build<T: Display + Send + 'static>(&self) -> LazyWorker<T> {
+    pub fn lazy_build<T: Display + Send + 'static, S: Into<String>>(
+        &self,
+        name: S,
+    ) -> LazyWorker<T> {
         let (rx, receiver) = unbounded();
+        let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name.into()]);
         LazyWorker {
             receiver: Some(receiver),
             worker: self.clone(),
-            scheduler: Scheduler::new(rx, self.counter.clone(), self.pending_capacity),
+            scheduler: Scheduler::new(
+                rx,
+                self.counter.clone(),
+                self.pending_capacity,
+                metrics_pending_task_count.clone(),
+            ),
+            metrics_pending_task_count,
         }
     }
 
@@ -263,6 +306,7 @@ impl Worker {
         &self,
         mut runner: R,
         mut receiver: UnboundedReceiver<Msg<R::Task>>,
+        metrics_pending_task_count: IntGauge,
     ) {
         let counter = self.counter.clone();
         self.remote.spawn(async move {
@@ -271,6 +315,7 @@ impl Worker {
                     Msg::Task(task) => {
                         runner.run(task);
                         counter.fetch_sub(1, Ordering::Relaxed);
+                        metrics_pending_task_count.dec();
                     }
                     Msg::Timeout => (),
                     Msg::Stop => break,
@@ -285,6 +330,7 @@ impl Worker {
         mut runner: R,
         tx: UnboundedSender<Msg<R::Task>>,
         mut receiver: UnboundedReceiver<Msg<R::Task>>,
+        metrics_pending_task_count: IntGauge,
     ) where
         R: RunnableWithTimer + 'static,
     {
@@ -297,6 +343,7 @@ impl Worker {
                     Msg::Task(task) => {
                         runner.run(task);
                         counter.fetch_sub(1, Ordering::Relaxed);
+                        metrics_pending_task_count.dec();
                     }
                     Msg::Timeout => {
                         runner.on_timeout();

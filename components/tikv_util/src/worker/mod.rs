@@ -89,7 +89,7 @@ mod tests {
     fn test_worker() {
         let mut worker = Worker::new("test-worker");
         let (tx, rx) = mpsc::channel();
-        worker.start(StepRunner { ch: tx }).unwrap();
+        worker.start("test-worker", StepRunner { ch: tx }).unwrap();
         assert!(!worker.is_busy());
         worker.schedule(60).unwrap();
         worker.schedule(40).unwrap();
@@ -112,7 +112,7 @@ mod tests {
     fn test_threaded() {
         let mut worker = Worker::new("test-worker-threaded");
         let (tx, rx) = mpsc::channel();
-        worker.start(StepRunner { ch: tx }).unwrap();
+        worker.start("test-worker", StepRunner { ch: tx }).unwrap();
         let scheduler = worker.scheduler();
         thread::spawn(move || {
             scheduler.schedule(90).unwrap();

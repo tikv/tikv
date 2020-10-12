@@ -34,16 +34,17 @@ use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv_util::collections::HashMap;
 use tikv_util::file::calc_crc32_bytes;
-use tikv_util::worker::Worker;
+use tikv_util::worker::{LazyWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
 struct TestSuite {
     cluster: Cluster<ServerCluster>,
-    endpoints: HashMap<u64, Worker<Task>>,
+    endpoints: HashMap<u64, LazyWorker<Task>>,
     tikv_cli: TikvClient,
     context: Context,
     ts: TimeStamp,
+    bg_worker: Worker,
 
     _env: Arc<Environment>,
 }
@@ -78,6 +79,7 @@ impl TestSuite {
         let concurrency_manager =
             ConcurrencyManager::new(block_on(cluster.pd_client.get_tso()).unwrap());
         let mut endpoints = HashMap::default();
+        let mut bg_worker = Worker::new(format!("backup-test"));
         for (id, engines) in &cluster.engines {
             // Create and run backup endpoints.
             let sim = cluster.sim.rl();
@@ -89,8 +91,8 @@ impl TestSuite {
                 BackupConfig { num_threads: 4 },
                 concurrency_manager.clone(),
             );
-            let mut worker = Worker::new(format!("backup-{}", id));
-            worker.start(backup_endpoint).unwrap();
+            let mut worker = bg_worker.lazy_build(format!("backup-{}", id));
+            worker.start(backup_endpoint);
             endpoints.insert(*id, worker);
         }
 

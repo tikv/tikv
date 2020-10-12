@@ -53,7 +53,7 @@ use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
-use tikv_util::worker::{FutureWorker, Worker};
+use tikv_util::worker::{FutureWorker, LazyWorker, Worker};
 use tikv_util::HandyRwLock;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
@@ -103,7 +103,7 @@ struct ServerMeta {
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
-    worker: Worker<ResolveTask>,
+    worker: LazyWorker<ResolveTask>,
     gc_worker: GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport>,
 }
 
@@ -122,6 +122,7 @@ pub struct ServerCluster {
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
+    bg_worker: Worker,
 }
 
 impl ServerCluster {
@@ -157,6 +158,7 @@ impl ServerCluster {
             coprocessor_hooks: HashMap::default(),
             raft_client,
             concurrency_managers: HashMap::default(),
+            bg_worker: Worker::new("background"),
         }
     }
 
@@ -219,8 +221,7 @@ impl Simulator for ServerCluster {
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone());
 
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
-        region_info_accessor.start();
+        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host, &self.bg_worker);
 
         if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
             for hook in hooks {
@@ -280,8 +281,8 @@ impl Simulator for ServerCluster {
         let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
 
         // Create pd client, snapshot manager, server.
-        let (worker, resolver, state) =
-            resolve::new_resolver(Arc::clone(&self.pd_client), router.clone()).unwrap();
+        let (resolver, state) =
+            resolve::new_resolver(Arc::clone(&self.pd_client), &self.bg_worker, router.clone());
         let snap_mgr = SnapManagerBuilder::default()
             .encryption_key_manager(key_manager)
             .build(tmp_str);
@@ -374,14 +375,13 @@ impl Simulator for ServerCluster {
 
         let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
 
-        let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
             engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),
             cfg.coprocessor,
         );
-        split_check_worker.start(split_check_runner).unwrap();
+        let split_check_scheduler = self.bg_worker.start("split-check", split_check_runner);
 
         node.start(
             engines,
@@ -391,7 +391,8 @@ impl Simulator for ServerCluster {
             store_meta,
             coprocessor_host,
             importer.clone(),
-            split_check_worker,
+            split_check_scheduler,
+            self.bg_worker.clone(),
             AutoSplitController::default(),
             concurrency_manager.clone(),
         )?;
@@ -425,7 +426,7 @@ impl Simulator for ServerCluster {
                 server,
                 sim_router,
                 sim_trans: simulate_trans,
-                worker,
+                worker: self.bg_worker.lazy_build("resolve"),
                 gc_worker,
             },
         );
@@ -448,8 +449,8 @@ impl Simulator for ServerCluster {
         if let Some(mut meta) = self.metas.remove(&node_id) {
             meta.server.stop().unwrap();
             meta.node.stop();
-            meta.worker.stop().unwrap().join().unwrap();
         }
+        self.bg_worker.stop();
     }
 
     fn get_node_ids(&self) -> HashSet<u64> {

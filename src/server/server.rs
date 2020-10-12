@@ -107,7 +107,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
                 .build(),
         );
         let snap_worker = Worker::new("snap-handler");
-        let lazy_worker = snap_worker.lazy_build();
+        let lazy_worker = snap_worker.lazy_build("snap-handler");
 
         let kv_service = KvService::new(
             storage,

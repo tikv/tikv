@@ -735,7 +735,7 @@ mod tests {
     use raft::eraftpb::Entry;
     use tempfile::Builder;
     use tikv_util::timer::Timer;
-    use tikv_util::worker::Worker;
+    use tikv_util::worker::{LazyWorker, Worker};
 
     use super::Event;
     use super::PendingDeleteRanges;
@@ -828,7 +828,8 @@ mod tests {
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = Worker::new("region-worker");
+        let mut bg_worker = Worker::new("region-worker");
+        let mut worker: LazyWorker<Task<RocksEngine>> = bg_worker.lazy_build("region-worker");
         let sched = worker.scheduler();
         let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let (router, _) = mpsc::sync_channel(1);
@@ -840,9 +841,7 @@ mod tests {
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(100), Event::CheckStalePeer);
-        worker.start_with_timer(runner, timer).unwrap();
+        worker.start_with_timer(runner);
 
         engine.kv.put(b"k1", b"v1").unwrap();
         let snap = engine.kv.snapshot();
@@ -910,7 +909,8 @@ mod tests {
         let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = Worker::new("snap-manager");
+        let mut bg_worker = Worker::new("snap-manager");
+        let mut worker = bg_worker.lazy_build("snapshot-worker");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
@@ -921,9 +921,7 @@ mod tests {
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(100), Event::CheckApply);
-        worker.start_with_timer(runner, timer).unwrap();
+        worker.start_with_timer(runner);
 
         let gen_and_apply_snap = |id: u64| {
             // construct snapshot

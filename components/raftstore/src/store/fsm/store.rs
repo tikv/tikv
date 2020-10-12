@@ -1203,12 +1203,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             workers.coprocessor_host.clone(),
             self.router(),
         );
-        let region_scheduler = workers.background_worker.start_with_timer(region_runner);
+        let region_scheduler = workers
+            .background_worker
+            .start_with_timer("snapshot-worker", region_runner);
 
         let raftlog_gc_runner = RaftlogGcRunner::new(self.router(), engines.clone());
         let raftlog_gc_scheduler = workers
             .background_worker
-            .start_with_timer(raftlog_gc_runner);
+            .start_with_timer("raft-gc-worker", raftlog_gc_runner);
 
         let compact_runner = CompactRunner::new(engines.kv.clone());
         let cleanup_sst_runner = CleanupSSTRunner::new(
@@ -1218,10 +1220,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             Arc::clone(&pd_client),
         );
         let cleanup_runner = CleanupRunner::new(compact_runner, cleanup_sst_runner);
-        let cleanup_scheduler = workers.background_worker.start(cleanup_runner);
+        let cleanup_scheduler = workers
+            .background_worker
+            .start("cleanup-worker", cleanup_runner);
         let consistency_check_runner =
             ConsistencyCheckRunner::<EK, _>::new(self.router.clone(), coprocessor_host.clone());
-        let consistency_check_scheduler = workers.background_worker.start(consistency_check_runner);
+        let consistency_check_scheduler = workers
+            .background_worker
+            .start("consistency-check", consistency_check_runner);
 
         let mut builder = RaftPollerBuilder {
             cfg,

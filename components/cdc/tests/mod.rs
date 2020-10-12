@@ -126,7 +126,7 @@ impl TestSuite {
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);
             concurrency_managers.insert(*id, cm);
-            worker.start(cdc_endpoint).unwrap();
+            worker.start("test_cdc_worker", cdc_endpoint).unwrap();
         }
 
         TestSuite {

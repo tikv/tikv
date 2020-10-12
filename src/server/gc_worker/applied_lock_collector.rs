@@ -390,7 +390,7 @@ impl AppliedLockCollector {
 
         let state = Arc::new(LockObserverState::default());
         let runner = LockCollectorRunner::new(Arc::clone(&state));
-        let scheduler = worker.lock().unwrap().start(runner);
+        let scheduler = worker.lock().unwrap().start("lock-collector", runner);
         let observer = LockObserver::new(state, scheduler.clone());
 
         observer.register(coprocessor_host);

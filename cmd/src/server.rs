@@ -69,7 +69,7 @@ use tikv_util::{
     config::ensure_dir_exist,
     sys::sys_quota::SysQuota,
     time::Monitor,
-    worker::{FutureWorker, Worker},
+    worker::{Builder as WorkerBuilder, FutureWorker, Worker},
 };
 use tokio::runtime::Builder;
 
@@ -181,7 +181,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
 
-        let background_worker = Worker::new("raft-background");
+        let thread_count = config.server.background_thread_count;
+        let background_worker = WorkerBuilder::new("background")
+            .thread_count(thread_count)
+            .create();
         let (resolver, state) =
             resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
@@ -209,10 +212,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     );
             }
         }
-        let region_info_accessor = RegionInfoAccessor::new(
-            coprocessor_host.as_mut().unwrap(),
-            background_worker.clone(),
-        );
+        let region_info_accessor =
+            RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap(), &background_worker);
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
@@ -473,7 +474,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         // Create cdc.
-        let mut cdc_worker = self.background_worker.lazy_build();
+        let mut cdc_worker = self.background_worker.lazy_build("cdc");
         let cdc_scheduler = cdc_worker.scheduler();
         let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
 
@@ -605,7 +606,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             coprocessor_host.clone(),
             self.config.coprocessor.clone(),
         );
-        let split_check_scheduler = self.background_worker.start(split_check_runner);
+        let split_check_scheduler = self
+            .background_worker
+            .start("split-check", split_check_runner);
         cfg_controller.register(
             tikv::config::Module::Coprocessor,
             Box::new(SplitCheckConfigManager(split_check_scheduler.clone())),
@@ -762,7 +765,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
 
         // Backup service.
-        let mut backup_worker = Box::new(self.background_worker.lazy_build());
+        let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
         let backup_service = backup::Service::new(backup_scheduler, self.security_mgr.clone());
         if servers

@@ -460,8 +460,8 @@ impl RegionInfoAccessor {
     /// Creates a new `RegionInfoAccessor` and register to `host`.
     /// `RegionInfoAccessor` doesn't need, and should not be created more than once. If it's needed
     /// in different places, just clone it, and their contents are shared.
-    pub fn new(host: &mut CoprocessorHost<impl KvEngine>, worker: Worker) -> Self {
-        let scheduler = worker.start_with_timer(RegionCollector::new());
+    pub fn new(host: &mut CoprocessorHost<impl KvEngine>, worker: &Worker) -> Self {
+        let scheduler = worker.start_with_timer("region-collector-worker", RegionCollector::new());
         register_region_event_listener(host, scheduler.clone());
 
         Self { scheduler }

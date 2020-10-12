@@ -114,7 +114,7 @@ impl RocksEngine {
         kv_engine.set_shared_block_cache(shared_block_cache);
         raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
-        let sched = worker.start(Runner(engines.clone()));
+        let sched = worker.start("engine-rocksdb", Runner(engines.clone()));
         Ok(RocksEngine {
             sched,
             core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),

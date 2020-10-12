@@ -276,46 +276,6 @@ mod tests {
     }
 
     #[test]
-    fn test_worker_with_timer() {
-        let mut worker = WorkerBuilder::new("test-worker-with-timer").create();
-        for _ in 0..10 {
-            worker.schedule("normal msg").unwrap();
-        }
-
-        let (tx, rx) = mpsc::channel();
-        let runner = Runner {
-            counter: 0,
-            ch: tx.clone(),
-        };
-
-        let mut timer = Timer::new(10);
-        timer.add_task(Duration::from_millis(60), Task::A);
-        timer.add_task(Duration::from_millis(100), Task::B);
-
-        worker.start_with_timer(runner, timer).unwrap();
-
-        for _ in 0..10 {
-            let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-            assert_eq!(msg, "normal msg");
-        }
-        let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(msg, "task a");
-        let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(msg, "task b");
-        let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(msg, "task a");
-        let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(msg, "task b");
-
-        assert_eq!(
-            rx.recv_timeout(Duration::from_secs(1)),
-            Err(RecvTimeoutError::Timeout)
-        );
-
-        worker.stop().unwrap().join().unwrap();
-    }
-
-    #[test]
     fn test_global_timer() {
         let handle = super::GLOBAL_TIMER_HANDLE.clone();
         let delay =

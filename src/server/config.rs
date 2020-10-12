@@ -127,11 +127,16 @@ pub struct Config {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub end_point_max_tasks: Option<usize>,
+
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub background_thread_count: usize,
 }
 
 impl Default for Config {
     fn default() -> Config {
         let cpu_num = SysQuota::new().cpu_cores_quota();
+        let background_thread_count = (cpu_num.round() as usize + 7) / 8;
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
@@ -176,6 +181,7 @@ impl Default for Config {
             heavy_load_wait_duration: ReadableDuration::millis(1),
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
+            background_thread_count,
         }
     }
 }

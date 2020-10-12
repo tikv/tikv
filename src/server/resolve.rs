@@ -154,7 +154,7 @@ where
         state: state.clone(),
         router,
     };
-    let scheduler = worker.start(runner);
+    let scheduler = worker.start("addr-resolver", runner);
     let resolver = PdStoreAddrResolver::new(scheduler);
     (resolver, state)
 }

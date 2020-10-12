@@ -1998,7 +1998,7 @@ mod tests {
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
-        worker.start(runner).unwrap();
+        worker.start("test-region-runner", runner).unwrap();
         let snap = s.snapshot(0);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
@@ -2314,7 +2314,7 @@ mod tests {
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
-        worker.start(runner).unwrap();
+        worker.start("test-storage", runner).unwrap();
         assert!(s1.snapshot(0).is_err());
         let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();

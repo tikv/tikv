@@ -240,10 +240,10 @@ impl Simulator for NodeCluster {
             coprocessor_host.clone(),
             cfg.coprocessor.clone(),
         );
-        split_check_worker.start(split_check_runner).unwrap();
+        let split_scheduler = split_check_worker.start("test-split-check", split_check_runner);
         cfg_controller.register(
             Module::Coprocessor,
-            Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
+            Box::new(SplitCheckConfigManager(split_scheduler.clone())),
         );
 
         let mut raftstore_cfg = cfg.raft_store;
@@ -262,6 +262,7 @@ impl Simulator for NodeCluster {
             store_meta,
             coprocessor_host,
             importer,
+            split_scheduler,
             split_check_worker,
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),

@@ -478,7 +478,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         iter.seek(SeekKey::from(from.as_ref())).unwrap();
 
         let fake_worker = Worker::new("fake-snap-worker");
-        let fake_snap_worker = fake_worker.lazy_build();
+        let fake_snap_worker = fake_worker.lazy_build("fake-snap");
 
         let check_value = |value: &[u8]| -> Result<()> {
             let mut local_state = RegionLocalState::default();

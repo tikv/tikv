@@ -1095,15 +1095,15 @@ mod tests {
         }
     }
 
-    fn new_receiver_worker<T: Display + Send + 'static>() -> (Worker<T>, Receiver<T>) {
+    fn new_receiver_worker<T: Display + Send + 'static>() -> (Worker, Receiver<T>) {
         let (tx, rx) = channel();
         let runnable = ReceiverRunnable { tx };
         let mut worker = WorkerBuilder::new("test-receiver-worker").create();
-        worker.start(runnable).unwrap();
+        worker.start("test_cdc", runnable).unwrap();
         (worker, rx)
     }
 
-    fn mock_initializer() -> (Worker<Task>, Runtime, Initializer, Receiver<Task>) {
+    fn mock_initializer() -> (Worker, Runtime, Initializer, Receiver<Task>) {
         let (receiver_worker, rx) = new_receiver_worker();
 
         let pool = Builder::new()

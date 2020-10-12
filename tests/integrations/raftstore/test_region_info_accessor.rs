@@ -11,6 +11,7 @@ use std::thread;
 use std::time::Duration;
 use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
 use tikv_util::HandyRwLock;
+use tikv_util::worker::Worker;
 
 fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
     let (regions, region_ranges) = c.debug_dump();
@@ -167,12 +168,13 @@ fn test_node_cluster_region_info_accessor() {
 
     // Create a RegionInfoAccessor on node 1
     let (tx, rx) = channel();
+    let worker = Worker::new("test");
     cluster
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
             if id == 1 {
-                let c = RegionInfoAccessor::new(host);
+                let c = RegionInfoAccessor::new(host, &worker);
                 tx.send(c).unwrap();
             }
         }));
