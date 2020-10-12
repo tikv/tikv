@@ -88,8 +88,6 @@ endpoints = [
 ]
 
 [metric]
-interval = "12s"
-address = "example.com:443"
 job = "tikv_1"
 
 [raftstore]
