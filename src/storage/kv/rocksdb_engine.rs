@@ -216,10 +216,12 @@ impl TestEngineBuilder {
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
-                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
-                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
-                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                CF_DEFAULT => {
+                    CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None))
+                }
+                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache, None)),
+                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache, None)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();

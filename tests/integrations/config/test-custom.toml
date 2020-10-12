@@ -165,7 +165,7 @@ region-max-size = "12MB"
 region-split-size = "12MB"
 region-max-keys = 100000
 region-split-keys = 100000
-consistency-check-method = "mvcc"
+consistency-check-method = "raw"
 
 [rocksdb]
 wal-recovery-mode = 1
@@ -246,6 +246,9 @@ force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 enable-doubly-skiplist = false
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -303,6 +306,9 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -345,6 +351,9 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -387,6 +396,9 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [rocksdb.ver-defaultcf]
 block-size = "12KB"
@@ -430,6 +442,9 @@ force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 enable-doubly-skiplist = false
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [rocksdb.ver-defaultcf.titan]
 min-blob-size = "2018B"
@@ -519,6 +534,9 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [raftdb.defaultcf.titan]
 min-blob-size = "2018B"

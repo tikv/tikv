@@ -68,16 +68,12 @@ pub fn ord(arg: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(Some(result))
 }
 
-#[rpn_fn(nullable, varg, min_args = 1)]
+#[rpn_fn(varg, min_args = 1)]
 #[inline]
-pub fn concat(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+pub fn concat(args: &[BytesRef]) -> Result<Option<Bytes>> {
     let mut output = Bytes::new();
     for arg in args {
-        if let Some(s) = arg {
-            output.extend_from_slice(s);
-        } else {
-            return Ok(None);
-        }
+        output.extend_from_slice(arg);
     }
     Ok(Some(output))
 }
