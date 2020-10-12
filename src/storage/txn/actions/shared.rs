@@ -1,5 +1,6 @@
 use crate::storage::mvcc::metrics::CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM;
 use crate::storage::mvcc::{Lock, LockType, MvccTxn, Result as MvccResult, TimeStamp};
+use crate::storage::txn::commands::ReleasedLocks;
 use crate::storage::Snapshot;
 use std::cmp;
 use txn_types::{is_short_value, Key, Value, Write, WriteType};
@@ -16,6 +17,7 @@ pub fn prewrite_key_value<S: Snapshot>(
     txn_size: u64,
     min_commit_ts: TimeStamp,
     try_one_pc: bool,
+    has_pessimistic_lock: bool,
 ) -> MvccResult<TimeStamp> {
     let mut lock = Lock::new(
         lock_type,
@@ -67,39 +69,44 @@ pub fn prewrite_key_value<S: Snapshot>(
     }
 
     if try_one_pc {
-        txn.put_locks_for_1pc(key, lock);
+        txn.put_locks_for_1pc(key, lock, has_pessimistic_lock);
     } else {
         txn.put_lock(key, &lock);
     }
     Ok(final_min_commit_ts)
 }
 
-pub fn handle_1pc<S: Snapshot>(
+pub(in crate::storage::txn) fn handle_1pc<S: Snapshot>(
     txn: &mut MvccTxn<S>,
     commit_ts: TimeStamp,
     max_commit_ts: TimeStamp,
-) -> TimeStamp {
+) -> (TimeStamp, Option<ReleasedLocks>) {
     if commit_ts > max_commit_ts {
-        warn!("failed to commit transaction with 1PC because commit_ts exceeds max_commit_ts from client";
+        warn!("failed to commit transaction with 1PC because commit_ts exceeds max_commit_ts from client. fallback to 2PC.";
             "start_ts" => txn.start_ts,
             "commit_ts" => commit_ts, 
             "max_commit_ts" => max_commit_ts);
         std::mem::take(&mut txn.locks_for_1pc)
             .into_iter()
-            .for_each(|(key, lock)| txn.put_lock(key, &lock));
-        return TimeStamp::zero();
+            .for_each(|(key, lock, _)| txn.put_lock(key, &lock));
+        return (TimeStamp::zero(), None);
     }
 
+    let mut released_locks = ReleasedLocks::new(txn.start_ts, commit_ts);
+
     // TODO: It's much simpler than normal 2PC committing. Is there anything missing?
-    for (key, lock) in std::mem::take(&mut txn.locks_for_1pc) {
+    for (key, lock, delete_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
         let write = Write::new(
             WriteType::from_lock_type(lock.lock_type).unwrap(),
             txn.start_ts,
             lock.short_value,
         );
         // Transactions committed with 1PC should be impossible to overwrite rollback records.
-        txn.put_write(key, commit_ts, write.as_ref().to_bytes());
+        txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
+        if delete_pessimistic_lock {
+            released_locks.push(txn.unlock_key(key, true));
+        }
     }
 
-    commit_ts
+    (commit_ts, Some(released_locks))
 }

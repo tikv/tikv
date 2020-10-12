@@ -265,7 +265,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 assert_ne!(final_min_commit_ts, TimeStamp::zero());
                 // All keys can be successfully locked and `try_one_pc` is set. Try to directly
                 // commit them.
-                handle_1pc(&mut txn, final_min_commit_ts, self.one_pc_max_commit_ts)
+                let (ts, released_locks) =
+                    handle_1pc(&mut txn, final_min_commit_ts, self.one_pc_max_commit_ts);
+                assert!(released_locks.is_none());
+                ts
             } else {
                 assert!(txn.locks_for_1pc.is_empty());
                 TimeStamp::zero()

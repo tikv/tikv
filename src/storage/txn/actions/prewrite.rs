@@ -102,6 +102,7 @@ pub fn prewrite<S: Snapshot>(
         txn_size,
         min_commit_ts,
         try_one_pc,
+        false,
     )
 }
 

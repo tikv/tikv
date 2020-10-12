@@ -110,7 +110,10 @@ pub struct MvccTxn<S: Snapshot> {
     pub(crate) start_ts: TimeStamp,
     write_size: usize,
     writes: WriteData,
-    pub(crate) locks_for_1pc: Vec<(Key, Lock)>,
+    // When 1PC is enabled, locks will be collected here instead of marshalled and put into `writes`,
+    // so it can be further processed. The elements are tuples representing
+    // (key,lock, remove_pessimistic_lock)
+    pub(crate) locks_for_1pc: Vec<(Key, Lock, bool)>,
     // collapse continuous rollbacks.
     pub(crate) collapse_rollback: bool,
     pub extra_op: ExtraOp,
@@ -219,8 +222,8 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.modifies.push(write);
     }
 
-    pub(crate) fn put_locks_for_1pc(&mut self, key: Key, lock: Lock) {
-        self.locks_for_1pc.push((key, lock));
+    pub(crate) fn put_locks_for_1pc(&mut self, key: Key, lock: Lock, remove_pessimstic_lock: bool) {
+        self.locks_for_1pc.push((key, lock, remove_pessimstic_lock));
     }
 
     pub(crate) fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
@@ -546,7 +549,7 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        if let Some(lock) = self.reader.load_lock(&key)? {
+        let has_pessimistic_lock = if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 // Abort on lock belonging to other transaction if
                 // prewrites a pessimistic lock.
@@ -576,10 +579,16 @@ impl<S: Snapshot> MvccTxn<S> {
                 // The ttl and min_commit_ts of the lock may have been pushed forward.
                 lock_ttl = std::cmp::max(lock_ttl, lock.ttl);
                 min_commit_ts = std::cmp::max(min_commit_ts, lock.min_commit_ts);
+
+                true
             }
         } else if is_pessimistic_lock {
             self.amend_pessimistic_lock(pipelined_pessimistic_lock, &key)?;
-        }
+
+            false
+        } else {
+            false
+        };
 
         self.check_extra_op(&key, mutation_type, None)?;
         // No need to check data constraint, it's resolved by pessimistic locks.
@@ -595,6 +604,7 @@ impl<S: Snapshot> MvccTxn<S> {
             txn_size,
             min_commit_ts,
             try_one_pc,
+            has_pessimistic_lock,
         )
     }
 

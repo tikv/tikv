@@ -330,7 +330,7 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
 }
 
 #[derive(Default)]
-struct ReleasedLocks {
+pub(super) struct ReleasedLocks {
     start_ts: TimeStamp,
     commit_ts: TimeStamp,
     hashes: Vec<u64>,
@@ -363,6 +363,10 @@ impl ReleasedLocks {
                 self.pessimistic = lock.pessimistic;
             }
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.hashes.is_empty()
     }
 
     // Wake up pessimistic transactions that waiting for these locks.
