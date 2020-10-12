@@ -638,8 +638,12 @@ dependencies = [
 name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
+ "criterion",
  "crossbeam-skiplist",
+ "futures 0.3.5",
  "parking_lot",
+ "rand 0.7.3",
+ "tikv_alloc",
  "tokio",
  "txn_types",
 ]
@@ -4270,9 +4274,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.14.4"
+version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cf74492539712b190e4b3234cf6a4a026812e880fe45e8001807cc0044a7f21"
+checksum = "67330cbee3b2a819e3365a773f05e884a136603687f812bf24db5b6c3d76b696"
 dependencies = [
  "cfg-if",
  "doc-comment",
@@ -4447,7 +4451,6 @@ dependencies = [
  "tikv",
  "tikv_util",
  "tokio",
- "tokio-threadpool",
  "tokio-timer",
  "txn_types",
 ]
@@ -4556,7 +4559,6 @@ dependencies = [
  "tipb",
  "tipb_helper",
  "tokio",
- "tokio-threadpool",
  "toml",
  "txn_types",
  "uuid",
@@ -4886,7 +4888,6 @@ dependencies = [
  "tipb",
  "tokio",
  "tokio-openssl",
- "tokio-threadpool",
  "tokio-timer",
  "toml",
  "txn_types",
@@ -5133,23 +5134,6 @@ checksum = "3c4b08c5f4208e699ede3df2520aca2e82401b2de33f45e96696a074480be594"
 dependencies = [
  "openssl",
  "tokio",
-]
-
-[[package]]
-name = "tokio-threadpool"
-version = "0.1.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df720b6581784c118f0eb4310796b12b1d242a7eb95f716a8367855325c25f89"
-dependencies = [
- "crossbeam-deque",
- "crossbeam-queue",
- "crossbeam-utils 0.7.2",
- "futures 0.1.29",
- "lazy_static",
- "log",
- "num_cpus",
- "slab",
- "tokio-executor",
 ]
 
 [[package]]
