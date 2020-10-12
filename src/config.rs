@@ -1506,9 +1506,16 @@ fn config_value_to_string(config_change: Vec<(String, ConfigValue)>) -> Vec<(Str
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct MetricConfig {
-    pub interval: ReadableDuration,
-    pub address: String,
     pub job: String,
+
+    // Push is deprecated.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub interval: ReadableDuration,
+
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub address: String,
 }
 
 impl Default for MetricConfig {
