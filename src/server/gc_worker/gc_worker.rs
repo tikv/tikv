@@ -3,6 +3,7 @@
 use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
+<<<<<<< HEAD
 use std::sync::mpsc;
 use std::sync::{atomic, Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -12,6 +13,16 @@ use engine_rocks::{Compat, RocksEngine};
 use engine_traits::CF_WRITE;
 use engine_traits::{MiscExt, TablePropertiesExt};
 use futures::Future;
+=======
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+use concurrency_manager::ConcurrencyManager;
+use engine_rocks::RocksEngine;
+use engine_traits::{DeleteStrategy, MiscExt, Range, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use futures::executor::block_on;
+>>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use kvproto::metapb;
 use tokio_core::reactor::Handle;
@@ -423,8 +434,11 @@ impl<E: Engine> GcRunner<E> {
         let start_data_key = keys::data_key(start_key.as_encoded());
         let end_data_key = keys::data_end_key(end_key.as_encoded());
 
-        // First, call delete_files_in_range to free as much disk space as possible
+        let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
+
+        // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
         let delete_files_start_time = Instant::now();
+<<<<<<< HEAD
         local_storage
             .c()
             .delete_all_files_in_range(&start_data_key, &end_data_key)
@@ -433,6 +447,21 @@ impl<E: Engine> GcRunner<E> {
                 warn!("unsafe destroy range failed at delete_files_in_range"; "err" => ?e);
                 e
             })?;
+=======
+        for cf in cfs {
+            local_storage
+                .delete_ranges_cf(
+                    cf,
+                    DeleteStrategy::DeleteFiles,
+                    &[Range::new(&start_data_key, &end_data_key)],
+                )
+                .map_err(|e| {
+                    let e: Error = box_err!(e);
+                    warn!("unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e);
+                    e
+                })?;
+        }
+>>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
 
         info!(
             "unsafe destroy range finished deleting files in range";
@@ -441,6 +470,7 @@ impl<E: Engine> GcRunner<E> {
 
         // Then, delete all remaining keys in the range.
         let cleanup_all_start_time = Instant::now();
+<<<<<<< HEAD
         // TODO: set use_delete_range with config here.
         local_storage
             .c()
@@ -450,12 +480,40 @@ impl<E: Engine> GcRunner<E> {
                 warn!("unsafe destroy range failed at delete_all_in_range"; "err" => ?e);
                 e
             })?;
+=======
+        for cf in cfs {
+            // TODO: set use_delete_range with config here.
+            local_storage
+                .delete_ranges_cf(
+                    cf,
+                    DeleteStrategy::DeleteByKey,
+                    &[Range::new(&start_data_key, &end_data_key)],
+                )
+                .map_err(|e| {
+                    let e: Error = box_err!(e);
+                    warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);
+                    e
+                })?;
+            local_storage
+                .delete_ranges_cf(
+                    cf,
+                    DeleteStrategy::DeleteBlobs,
+                    &[Range::new(&start_data_key, &end_data_key)],
+                )
+                .map_err(|e| {
+                    let e: Error = box_err!(e);
+                    warn!("unsafe destroy range failed at delete_blob_files_in_range"; "err" => ?e);
+                    e
+                })?;
+        }
+>>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
 
         info!(
             "unsafe destroy range finished cleaning up all";
             "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.elapsed(),
         );
 
+<<<<<<< HEAD
         local_storage
             .c()
             .delete_blob_files_in_range(&start_data_key, &end_data_key)
@@ -481,6 +539,17 @@ impl<E: Engine> GcRunner<E> {
         } else {
             warn!("unsafe destroy range: can't clear region size information: raft_store_router not set");
         }
+=======
+        self.raft_store_router
+            .send_store_msg(StoreMsg::ClearRegionSizeInRange {
+                start_key: start_key.as_encoded().to_vec(),
+                end_key: end_key.as_encoded().to_vec(),
+            })
+            .unwrap_or_else(|e| {
+                // Warn and ignore it.
+                warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
+            });
+>>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
 
         Ok(())
     }

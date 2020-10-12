@@ -4,7 +4,7 @@ use crate::engine::RocksEngine;
 use crate::options::RocksReadOptions;
 use engine_traits::Error;
 use engine_traits::IterOptions;
-use engine_traits::{CfName, CF_DEFAULT};
+use engine_traits::CF_DEFAULT;
 use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
 use engine_traits::{Iterable, Result, SstExt, SstReader};
 use engine_traits::{Iterator, SeekKey};
@@ -119,7 +119,7 @@ impl Iterator for RocksSstIterator {
 }
 
 pub struct RocksSstWriterBuilder {
-    cf: Option<CfName>,
+    cf: Option<String>,
     db: Option<Arc<DB>>,
     in_memory: bool,
     compression_type: Option<DBCompressionType>,
@@ -142,8 +142,8 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         self
     }
 
-    fn set_cf(mut self, cf: CfName) -> Self {
-        self.cf = Some(cf);
+    fn set_cf(mut self, cf: &str) -> Self {
+        self.cf = Some(cf.to_string());
         self
     }
 
@@ -167,7 +167,7 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         let mut io_options = if let Some(db) = self.db.as_ref() {
             env = db.env();
             let handle = db
-                .cf_handle(self.cf.unwrap_or(CF_DEFAULT))
+                .cf_handle(self.cf.as_deref().unwrap_or(CF_DEFAULT))
                 .ok_or_else(|| format!("CF {:?} is not found", self.cf))?;
             db.get_options_cf(handle)
         } else {
