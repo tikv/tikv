@@ -44,13 +44,13 @@ else ifeq ($(SYSTEM_ALLOC),1)
 else
 ENABLE_FEATURES += jemalloc
 
-# Only tested on Linux
-ifeq ($(shell uname -s),Linux)
-ENABLE_FEATURES += mem-profiling
 # According to jemalloc/jemalloc#585, enabling it on some platform or some
 # versions of glibc can cause deadlock.
+# Only tested on Linux
+# ifeq ($(shell uname -s),Linux)
+# ENABLE_FEATURES += mem-profiling
 # export JEMALLOC_SYS_WITH_MALLOC_CONF = prof:true,prof_active:false
-endif
+# endif
 endif
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
@@ -247,11 +247,12 @@ run-test:
 	export RUST_BACKTRACE=1 && \
 	cargo -Zpackage-features test --workspace \
 		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && \
+		--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	if [[ "`uname`" == "Linux" ]]; then \
+		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo -Zpackage-features test --workspace \
 			--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-			--features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -p tikv -p tikv_alloc --lib -- --nocapture --ignored; \
+			--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv -p tikv_alloc --lib -- --nocapture --ignored; \
 	fi
 
 .PHONY: test
