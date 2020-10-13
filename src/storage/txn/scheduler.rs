@@ -31,7 +31,8 @@ use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
 use txn_types::TimeStamp;
 
 use crate::storage::kv::{
-    drop_snapshot_callback, with_tls_engine, Engine, Result as EngineResult, Statistics,
+    drop_snapshot_callback, with_tls_engine, Engine, ExtCallback, Result as EngineResult,
+    Statistics,
 };
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::metrics::{
@@ -621,31 +622,42 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 } else if to_be_write.modifies.is_empty() {
                     scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, tag);
                 } else {
-                    let sched = scheduler.clone();
-                    // The normal write process is respond to clients and release latches
-                    // after async write finished. If pipelined pessimistic lock is enabled,
-                    // the process becomes parallel and there are two msgs for one command:
-                    //   1. Msg::PipelinedWrite: respond to clients
-                    //   2. Msg::WriteFinished: deque context and release latches
-                    // The order between these two msgs is uncertain due to thread scheduling
-                    // so we clone the result for each msg.
-                    let (write_finished_pr, pipelined_write_pr) = if pipelined {
-                        (pr.maybe_clone().unwrap(), pr)
+                    let proposed_cb: Option<ExtCallback> = if pipelined {
+                        // The normal write process is respond to clients and release latches
+                        // after async write finished. If pipelined pessimistic locking is enabled,
+                        // the process becomes parallel and there are two msgs for one command:
+                        //   1. Msg::PipelinedWrite: respond to clients
+                        //   2. Msg::WriteFinished: deque context and release latches
+                        // The order between these two msgs is uncertain due to thread scheduling
+                        // so we clone the result for each msg.
+                        let pipelined_write_pr = pr.maybe_clone().unwrap();
+                        let sched = scheduler.clone();
+                        let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
+                        Some(Box::new(move || {
+                            sched_pool
+                                .spawn(async move {
+                                    fail_point!("scheduler_pipelined_write_finish");
+                                    // The write task is proposed to the raftstore successfully.
+                                    // Respond to client early.
+                                    sched.on_pipelined_write(cid, pipelined_write_pr, tag);
+                                })
+                                .unwrap()
+                        }))
                     } else {
-                        (pr, ProcessResult::Res)
+                        None
                     };
+
+                    let sched = scheduler.clone();
+                    let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
-                        sched
-                            .get_sched_pool(priority)
-                            .clone()
-                            .pool
+                        sched_pool
                             .spawn(async move {
                                 fail_point!("scheduler_async_write_finish");
 
                                 sched.on_write_finished(
                                     cid,
-                                    write_finished_pr,
+                                    pr,
                                     result,
                                     lock_guards,
                                     pipelined,
@@ -658,17 +670,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .unwrap()
                     });
 
-                    if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
+                    if let Err(e) =
+                        engine.async_write_ext(&ctx, to_be_write, engine_cb, proposed_cb)
+                    {
                         SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                         info!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         scheduler.finish_with_err(cid, e.into());
-                    } else if pipelined {
-                        fail_point!("scheduler_pipelined_write_finish");
-
-                        // The write task is scheduled to engine successfully.
-                        // Respond to client early.
-                        scheduler.on_pipelined_write(cid, pipelined_write_pr, tag);
                     }
                 }
             }

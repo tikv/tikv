@@ -46,7 +46,7 @@ impl Default for Config {
         Self {
             wait_for_lock_timeout: ReadableDuration::millis(1000),
             wake_up_delay_duration: ReadableDuration::millis(20),
-            pipelined: false,
+            pipelined: true,
         }
     }
 }
@@ -104,12 +104,12 @@ mod tests {
         enabled = false
         wait-for-lock-timeout = "10ms"
         wake-up-delay-duration = 100
-        pipelined = true
+        pipelined = false
         "#;
 
         let config: Config = toml::from_str(conf).unwrap();
         assert_eq!(config.wait_for_lock_timeout.as_millis(), 10);
         assert_eq!(config.wake_up_delay_duration.as_millis(), 100);
-        assert_eq!(config.pipelined, true);
+        assert_eq!(config.pipelined, false);
     }
 }
