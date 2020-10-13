@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tikv_util::time::{duration_to_sec, Instant};
 
 use super::batch::ReqBatcher;
@@ -42,7 +42,6 @@ use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
-use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use txn_types::{self, Key};
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
@@ -62,8 +61,6 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     snap_scheduler: Scheduler<SnapTask>,
 
     enable_req_batch: bool,
-
-    timer_pool: Arc<Mutex<ThreadPool>>,
 
     grpc_thread_load: Arc<ThreadLoad>,
 
@@ -86,7 +83,6 @@ impl<
             ch: self.ch.clone(),
             snap_scheduler: self.snap_scheduler.clone(),
             enable_req_batch: self.enable_req_batch,
-            timer_pool: self.timer_pool.clone(),
             grpc_thread_load: self.grpc_thread_load.clone(),
             readpool_normal_thread_load: self.readpool_normal_thread_load.clone(),
             security_mgr: self.security_mgr.clone(),
@@ -107,12 +103,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         enable_req_batch: bool,
         security_mgr: Arc<SecurityManager>,
     ) -> Self {
-        let timer_pool = Arc::new(Mutex::new(
-            ThreadPoolBuilder::new()
-                .pool_size(1)
-                .name_prefix("req_batch_timer_guard")
-                .build(),
-        ));
         Service {
             gc_worker,
             storage,
@@ -121,7 +111,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             snap_scheduler,
             grpc_thread_load,
             readpool_normal_thread_load,
-            timer_pool,
             enable_req_batch,
             security_mgr,
         }
