@@ -47,7 +47,9 @@ ENABLE_FEATURES += jemalloc
 # Only tested on Linux
 ifeq ($(shell uname -s),Linux)
 ENABLE_FEATURES += mem-profiling
-export JEMALLOC_SYS_WITH_MALLOC_CONF = prof:true,prof_active:false
+# According to jemalloc/jemalloc#585, enabling it on some platform or some
+# versions of glibc can cause deadlock.
+# export JEMALLOC_SYS_WITH_MALLOC_CONF = prof:true,prof_active:false
 endif
 endif
 
