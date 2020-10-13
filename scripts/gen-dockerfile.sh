@@ -15,7 +15,7 @@
 # Install the system dependencies
 # Attempt to clean and rebuild the cache to avoid 404s
 cat <<EOT
-FROM centos:7.6.1810 as builder
+FROM centos:centos7 as builder
 RUN yum install -y epel-release && \
     yum clean all && \
     yum makecache
@@ -64,9 +64,8 @@ src_dirs=$(for i in ${components[@]}; do echo ${i}/src; done | xargs)
 lib_files=$(for i in ${components[@]}; do echo ${i}/src/lib.rs; done | xargs)
 # List components and add their Cargo files
 echo "RUN mkdir -p ${src_dirs} && touch ${lib_files}"
-for i in ${components[@]}; do
-    echo "COPY ${i}/Cargo.toml ${i}/Cargo.toml"
-done
+tar cf ./cargo.tar ${components[@]/%//Cargo.toml}
+echo "ADD ./cargo.tar ./"
 
 # Create dummy files, build the dependencies
 # then remove TiKV fingerprint for following rebuild.
@@ -87,9 +86,8 @@ EOT
 # Remove fingerprints for when we build the real binaries.
 fingerprint_dirs=$(for i in ${components[@]}; do echo ./target/release/.fingerprint/$(basename ${i})-*; done | xargs)
 echo "RUN rm -rf ${fingerprint_dirs} ./target/release/.fingerprint/tikv-*"
-for i in "${components[@]:1}"; do
-    echo "COPY ${i} ${i}"
-done
+tar cf ./code.tar ${components[@]:1}
+echo "ADD ./code.tar ./"
 echo "COPY src src"
 
 # Build real binaries now

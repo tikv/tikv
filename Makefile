@@ -355,9 +355,12 @@ error-code:
 # A special target for building TiKV docker image.
 .PHONY: docker
 docker:
-	bash ./scripts/gen-dockerfile.sh | docker build \
+	bash ./scripts/gen-dockerfile.sh > Dockerfile
+	@pwd
+	@ls -l .
+	docker build \
 		-t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
-		-f - . \
+		. \
 		--build-arg GIT_HASH=${TIKV_BUILD_GIT_HASH} \
 		--build-arg GIT_TAG=${TIKV_BUILD_GIT_TAG} \
 		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH}
