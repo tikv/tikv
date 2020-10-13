@@ -1243,7 +1243,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             apply_router: self.apply_router.clone(),
             trans,
             pd_client,
-            coprocessor_host: coprocessor_host.clone(),
+            coprocessor_host,
             importer,
             snap_mgr: mgr,
             global_replication_state,

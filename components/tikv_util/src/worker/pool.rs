@@ -7,13 +7,14 @@ use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::compat::Future01CompatExt;
-use futures::future::FutureExt;
+use futures::future::{self, FutureExt};
 use futures::stream::StreamExt;
 
 use super::metrics::*;
 use crate::future::poll_future_notify;
 use crate::timer::GLOBAL_TIMER_HANDLE;
 use crate::yatp_pool::{DefaultTicker, YatpPoolBuilder};
+use futures::executor::block_on;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use yatp::{Remote, ThreadPool};
@@ -142,6 +143,12 @@ pub struct LazyWorker<T: Display + Send + 'static> {
 }
 
 impl<T: Display + Send + 'static> LazyWorker<T> {
+    pub fn new<S: Into<String>>(name: S) -> LazyWorker<T> {
+        let name = name.into();
+        let worker = Worker::new(name.clone());
+        worker.lazy_build(name)
+    }
+
     pub fn start<R: 'static + Runnable<Task = T>>(&mut self, runner: R) -> bool {
         if let Some(receiver) = self.receiver.take() {
             self.worker
@@ -175,6 +182,54 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
         self.scheduler.stop();
         self.worker.stop();
     }
+}
+
+pub struct ReceiverWrapper<T: Display + Send> {
+    inner: UnboundedReceiver<Msg<T>>,
+}
+
+impl<T: Display + Send> ReceiverWrapper<T> {
+    pub fn recv(&mut self) -> Option<T> {
+        let msg = block_on(self.inner.next());
+        match msg {
+            Some(Msg::Task(t)) => Some(t),
+            _ => None,
+        }
+    }
+
+    pub fn recv_timeout(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<T>, std::sync::mpsc::RecvTimeoutError> {
+        let deadline = Instant::now() + timeout;
+        let delay = GLOBAL_TIMER_HANDLE.delay(deadline).compat();
+        let ret = future::select(self.inner.next(), delay);
+        match block_on(ret) {
+            future::Either::Left((msg, _)) => {
+                if let Some(Msg::Task(t)) = msg {
+                    return Ok(Some(t));
+                }
+                Ok(None)
+            }
+            future::Either::Right(_) => Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+        }
+    }
+}
+
+/// Creates a scheduler that can't schedule any task.
+///
+/// Useful for test purpose.
+pub fn dummy_scheduler<T: Display + Send>() -> (Scheduler<T>, ReceiverWrapper<T>) {
+    let (tx, rx) = unbounded();
+    (
+        Scheduler::new(
+            tx,
+            Arc::new(AtomicUsize::new(0)),
+            1000,
+            WORKER_PENDING_TASK_VEC.with_label_values(&["dummy"]),
+        ),
+        ReceiverWrapper { inner: rx },
+    )
 }
 
 #[derive(Copy, Clone)]
@@ -300,6 +355,11 @@ impl Worker {
     /// Stops the worker thread.
     pub fn stop(&self) {
         self.pool.lock().unwrap().shutdown();
+    }
+
+    /// Checks if underlying worker can't handle task immediately.
+    pub fn is_busy(&self) -> bool {
+        self.counter.load(Ordering::SeqCst) > 0
     }
 
     fn start_impl<R: Runnable + 'static>(

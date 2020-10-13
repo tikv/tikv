@@ -79,7 +79,7 @@ impl TestSuite {
         let concurrency_manager =
             ConcurrencyManager::new(block_on(cluster.pd_client.get_tso()).unwrap());
         let mut endpoints = HashMap::default();
-        let mut bg_worker = Worker::new(format!("backup-test"));
+        let bg_worker = Worker::new(format!("backup-test"));
         for (id, engines) in &cluster.engines {
             // Create and run backup endpoints.
             let sim = cluster.sim.rl();
@@ -119,6 +119,7 @@ impl TestSuite {
             context,
             ts: TimeStamp::zero(),
             _env: env,
+            bg_worker,
         }
     }
 
@@ -128,8 +129,9 @@ impl TestSuite {
 
     fn stop(mut self) {
         for (_, mut worker) in self.endpoints {
-            worker.stop().unwrap();
+            worker.stop();
         }
+        self.bg_worker.stop();
         self.cluster.shutdown();
     }
 
@@ -222,7 +224,7 @@ impl TestSuite {
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
             let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
-            end.schedule(task).unwrap();
+            end.scheduler().schedule(task).unwrap();
         }
         rx
     }
@@ -243,7 +245,7 @@ impl TestSuite {
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
             let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
-            end.schedule(task).unwrap();
+            end.scheduler().schedule(task).unwrap();
         }
         rx
     }

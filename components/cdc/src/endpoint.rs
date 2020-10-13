@@ -1081,13 +1081,13 @@ mod tests {
     use tikv_util::collections::HashSet;
     use tikv_util::config::ReadableDuration;
     use tikv_util::mpsc::batch;
-    use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, Worker};
+    use tikv_util::worker::{dummy_scheduler, LazyWorker};
 
-    struct ReceiverRunnable<T> {
+    struct ReceiverRunnable<T: Display + Send> {
         tx: Sender<T>,
     }
 
-    impl<T: Display> Runnable for ReceiverRunnable<T> {
+    impl<T: Display + Send + 'static> Runnable for ReceiverRunnable<T> {
         type Task = T;
 
         fn run(&mut self, task: T) {
@@ -1095,15 +1095,15 @@ mod tests {
         }
     }
 
-    fn new_receiver_worker<T: Display + Send + 'static>() -> (Worker, Receiver<T>) {
+    fn new_receiver_worker<T: Display + Send + 'static>() -> (LazyWorker<T>, Receiver<T>) {
         let (tx, rx) = channel();
         let runnable = ReceiverRunnable { tx };
-        let mut worker = WorkerBuilder::new("test-receiver-worker").create();
-        worker.start("test_cdc", runnable).unwrap();
+        let mut worker = LazyWorker::new("test-receiver-worker");
+        worker.start(runnable);
         (worker, rx)
     }
 
-    fn mock_initializer() -> (Worker, Runtime, Initializer, Receiver<Task>) {
+    fn mock_initializer() -> (LazyWorker<Task>, Runtime, Initializer, Receiver<Task>) {
         let (receiver_worker, rx) = new_receiver_worker();
 
         let pool = Builder::new()
@@ -1212,12 +1212,12 @@ mod tests {
             }
         }
 
-        worker.stop().unwrap().join().unwrap();
+        worker.stop();
     }
 
     #[test]
     fn test_raftstore_is_busy() {
-        let (task_sched, task_rx) = dummy_scheduler();
+        let (task_sched, mut task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));

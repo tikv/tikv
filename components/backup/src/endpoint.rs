@@ -919,7 +919,7 @@ pub mod tests {
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::txn::tests::must_commit;
     use tikv::storage::{RocksEngine, TestEngineBuilder};
-    use tikv_util::time::Instant;
+    use tikv_util::worker::Worker;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     #[derive(Clone)]
@@ -1399,31 +1399,38 @@ pub mod tests {
         assert!(endpoint.pool.borrow().size == 3);
     }
 
+    pub struct EndpointWrapper<E: Engine, R: RegionInfoProvider> {
+        inner: Arc<Mutex<Endpoint<E, R>>>,
+    }
+    impl<E: Engine, R: RegionInfoProvider> Runnable for EndpointWrapper<E, R> {
+        type Task = Task;
+
+        fn run(&mut self, task: Task) {
+            self.inner.lock().unwrap().run(task);
+        }
+    }
+
+    impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer for EndpointWrapper<E, R> {
+        fn on_timeout(&mut self) {
+            self.inner.lock().unwrap().on_timeout();
+        }
+
+        fn get_interval(&self) -> Duration {
+            self.inner.lock().unwrap().get_interval()
+        }
+    }
+
     #[test]
     fn test_thread_pool_shutdown_when_idle() {
         let (_, mut endpoint) = new_endpoint();
 
         // set the idle threshold to 100ms
         endpoint.pool_idle_threshold = 100;
-        let mut backup_timer = endpoint.new_timer();
         let endpoint = Arc::new(Mutex::new(endpoint));
+        let worker = Worker::new("endpoint");
         let scheduler = {
-            let endpoint = endpoint.clone();
-            let (tx, rx) = tikv_util::mpsc::unbounded();
-            thread::spawn(move || loop {
-                let tick_time = backup_timer.next_timeout().unwrap();
-                let timeout = tick_time.checked_sub(Instant::now()).unwrap_or_default();
-                let task = match rx.recv_timeout(timeout) {
-                    Ok(Some(task)) => Some(task),
-                    _ => None,
-                };
-                if let Some(task) = task {
-                    let mut endpoint = endpoint.lock().unwrap();
-                    endpoint.run(task);
-                }
-                endpoint.lock().unwrap().on_timeout(&mut backup_timer, ());
-            });
-            tx
+            let inner = endpoint.clone();
+            worker.start_with_timer("endpoint", EndpointWrapper { inner })
         };
 
         let mut req = BackupRequest::default();
@@ -1445,7 +1452,7 @@ pub mod tests {
         // if not task arrive after create the thread pool is empty
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
 
-        scheduler.send(Some(task)).unwrap();
+        scheduler.schedule(task).unwrap();
         // wait until the task finish
         let _ = block_on(resp_rx.into_future());
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);

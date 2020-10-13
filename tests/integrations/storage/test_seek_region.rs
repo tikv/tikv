@@ -8,8 +8,8 @@ use std::time::Duration;
 use raftstore::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use test_raftstore::*;
 use tikv_util::collections::HashMap;
-use tikv_util::HandyRwLock;
 use tikv_util::worker::Worker;
+use tikv_util::HandyRwLock;
 
 fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
     mut cluster: Cluster<T>,
@@ -126,8 +126,7 @@ fn test_region_collection_seek_region() {
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
             let worker = share_worker.lock().unwrap();
-            let p = RegionInfoAccessor::new(host, *worker);
-            p.start();
+            let p = RegionInfoAccessor::new(host, &*worker);
             tx.send((id, p)).unwrap()
         }));
 

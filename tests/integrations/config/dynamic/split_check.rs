@@ -106,5 +106,5 @@ fn test_update_split_check_config() {
         assert_eq!(cfg, &cop_config);
     });
 
-    worker.stop().unwrap().join().unwrap();
+    worker.stop();
 }

@@ -42,7 +42,7 @@ use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
 use tikv::server::lock_manager::LockManager;
-use tikv::server::resolve::{self, StoreAddrResolver, Task as ResolveTask};
+use tikv::server::resolve::{self, StoreAddrResolver};
 use tikv::server::service::DebugService;
 use tikv::server::Result as ServerResult;
 use tikv::server::{
@@ -53,7 +53,7 @@ use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
-use tikv_util::worker::{FutureWorker, LazyWorker, Worker};
+use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 use tikv_util::HandyRwLock;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
@@ -103,7 +103,6 @@ struct ServerMeta {
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
-    worker: LazyWorker<ResolveTask>,
     gc_worker: GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport>,
 }
 
@@ -136,7 +135,8 @@ impl ServerCluster {
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         let map = AddressMap::default();
         // We don't actually need to handle snapshot message, just create a dead worker to make it compile.
-        let worker = Worker::new("snap-worker");
+        let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
+        let worker = bg_worker.lazy_build("snap-worker");
         let conn_builder = ConnectionBuilder::new(
             env,
             Arc::default(),
@@ -158,7 +158,7 @@ impl ServerCluster {
             coprocessor_hooks: HashMap::default(),
             raft_client,
             concurrency_managers: HashMap::default(),
-            bg_worker: Worker::new("background"),
+            bg_worker,
         }
     }
 
@@ -426,7 +426,6 @@ impl Simulator for ServerCluster {
                 server,
                 sim_router,
                 sim_trans: simulate_trans,
-                worker: self.bg_worker.lazy_build("resolve"),
                 gc_worker,
             },
         );

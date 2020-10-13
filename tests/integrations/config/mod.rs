@@ -95,6 +95,7 @@ fn test_serde_custom_tikv_config() {
         heavy_load_wait_duration: ReadableDuration::millis(2),
         enable_request_batch: false,
         raft_client_backoff_step: ReadableDuration::secs(1),
+        background_thread_count: 999,
     };
     value.readpool = ReadPoolConfig {
         unified: UnifiedReadPoolConfig {

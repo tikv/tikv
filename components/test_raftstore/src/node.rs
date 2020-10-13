@@ -233,7 +233,7 @@ impl Simulator for NodeCluster {
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let cfg_controller = ConfigController::new(cfg.clone());
 
-        let mut split_check_worker = Worker::new("split-check");
+        let split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
             engines.kv.clone(),
             router.clone(),

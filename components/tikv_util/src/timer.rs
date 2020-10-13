@@ -203,55 +203,14 @@ fn start_global_steady_timer() -> SteadyTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
     use futures::compat::Future01CompatExt;
     use futures::executor::block_on;
-    use std::sync::mpsc::RecvTimeoutError;
-    use std::sync::mpsc::{self, Sender};
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
     enum Task {
         A,
         B,
         C,
-    }
-
-    struct Runner {
-        counter: usize,
-        ch: Sender<&'static str>,
-    }
-
-    impl Runnable for Runner {
-        type Task = &'static str;
-
-        fn run(&mut self, msg: &'static str) {
-            self.ch.send(msg).unwrap();
-        }
-        fn shutdown(&mut self) {
-            self.ch.send("").unwrap();
-        }
-    }
-
-    impl RunnableWithTimer for Runner {
-        type TimeoutTask = Task;
-
-        fn on_timeout(&mut self, timer: &mut Timer<Task>, task: Task) {
-            let timeout = match task {
-                Task::A => {
-                    self.ch.send("task a").unwrap();
-                    Duration::from_millis(60)
-                }
-                Task::B => {
-                    self.ch.send("task b").unwrap();
-                    Duration::from_millis(100)
-                }
-                _ => unreachable!(),
-            };
-            if self.counter < 2 {
-                timer.add_task(timeout, task);
-            }
-            self.counter += 1;
-        }
     }
 
     #[test]

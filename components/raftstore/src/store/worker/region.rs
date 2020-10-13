@@ -725,7 +725,7 @@ mod tests {
     use crate::store::worker::RegionRunner;
     use crate::store::{CasualMessage, SnapKey, SnapManager};
     use engine_rocks::raw::ColumnFamilyOptions;
-    use engine_rocks::RocksEngine;
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::{
         CFHandleExt, CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
     };
@@ -734,10 +734,8 @@ mod tests {
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
     use tempfile::Builder;
-    use tikv_util::timer::Timer;
     use tikv_util::worker::{LazyWorker, Worker};
 
-    use super::Event;
     use super::PendingDeleteRanges;
     use super::Task;
 
@@ -828,8 +826,8 @@ mod tests {
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut bg_worker = Worker::new("region-worker");
-        let mut worker: LazyWorker<Task<RocksEngine>> = bg_worker.lazy_build("region-worker");
+        let bg_worker = Worker::new("region-worker");
+        let mut worker: LazyWorker<Task<RocksSnapshot>> = bg_worker.lazy_build("region-worker");
         let sched = worker.scheduler();
         let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let (router, _) = mpsc::sync_channel(1);
@@ -909,7 +907,7 @@ mod tests {
         let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut bg_worker = Worker::new("snap-manager");
+        let bg_worker = Worker::new("snap-manager");
         let mut worker = bg_worker.lazy_build("snapshot-worker");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
