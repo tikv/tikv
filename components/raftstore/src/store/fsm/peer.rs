@@ -1213,6 +1213,7 @@ where
                     && self.fsm.peer.is_leader()
                 {
                     self.fsm.peer.ping();
+                    self.fsm.has_ready = true;
                 }
             }
             ExtraMessageType::MsgWantRollbackMerge => {
