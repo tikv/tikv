@@ -3491,7 +3491,7 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
             })),
             TxnExtra::default(),
@@ -3510,7 +3510,7 @@ mod tests {
                 true,
                 3,
                 0,
-                Callback::Write(Box::new(move |write: WriteResponse| {
+                Callback::write(Box::new(move |write: WriteResponse| {
                     cc_tx.send(write.response).unwrap();
                 })),
                 TxnExtra::default(),
@@ -3622,7 +3622,7 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
             })),
             TxnExtra::default(),
@@ -3662,7 +3662,7 @@ mod tests {
             region_id: u64,
             tx: Sender<RaftCmdResponse>,
         ) -> EntryBuilder {
-            let cb = Callback::Write(Box::new(move |resp: WriteResponse| {
+            let cb = Callback::write(Box::new(move |resp: WriteResponse| {
                 tx.send(resp.response).unwrap();
             }));
             self.capture_resp_with_cb(router, id, region_id, cb)
@@ -4036,7 +4036,7 @@ mod tests {
                 &router,
                 3,
                 1,
-                Callback::Write(Box::new(move |resp: WriteResponse| {
+                Callback::write(Box::new(move |resp: WriteResponse| {
                     // Sleep until yield timeout.
                     thread::sleep(Duration::from_millis(500));
                     capture_tx_clone.send(resp.response).unwrap();

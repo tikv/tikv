@@ -277,7 +277,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         cmd.mut_requests().push(ingest);
 
         let (cb, future) = paired_future_callback();
-        if let Err(e) = self.router.send_command(cmd, Callback::Write(cb)) {
+        if let Err(e) = self.router.send_command(cmd, Callback::write(cb)) {
             let mut resp = IngestResponse::default();
             resp.set_error(e.into());
             ctx.spawn(sink.success(resp).map_err(|e| {

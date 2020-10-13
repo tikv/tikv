@@ -1131,7 +1131,7 @@ impl<T: Simulator> Cluster<T> {
                     assert_eq!(regions[0].get_end_key(), key.as_slice());
                     assert_eq!(regions[0].get_end_key(), regions[1].get_start_key());
                 });
-                self.split_region(region, split_key, Callback::Write(check));
+                self.split_region(region, split_key, Callback::write(check));
             }
 
             if self.pd_client.check_split(region, split_key)

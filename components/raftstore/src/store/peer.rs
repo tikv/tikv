@@ -228,7 +228,7 @@ impl CmdEpochChecker {
             let cmd_type = req.get_admin_request().get_cmd_type();
             // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
             let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
-            (epoch_state.check_ver, epoch_state.check_ver)
+            (epoch_state.check_ver, epoch_state.check_conf_ver)
         };
         self.last_conflict_index(check_ver, check_conf_ver)
     }
@@ -1896,7 +1896,7 @@ impl Peer {
     pub fn propose<T: Transport, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
-        cb: Callback<RocksEngine>,
+        mut cb: Callback<RocksEngine>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
         txn_extra: TxnExtra,
@@ -1942,6 +1942,12 @@ impl Peer {
                 false
             }
             Ok(Either::Left(idx)) => {
+                if self.has_applied_to_current_term() {
+                    // After this peer has applied to current term and passed above checking including `cmd_epoch_checker`,
+                    // we can safely guarantee that this proposal will be committed if there is no abnormal leader transfer
+                    // in the near future. Thus proposed callback can be called.
+                    cb.invoke_proposed();
+                }
                 if is_urgent {
                     self.last_urgent_proposal_idx = idx;
                     // Eager flush to make urgent proposal be applied on all nodes as soon as
@@ -2502,7 +2508,7 @@ impl Peer {
 
         poll_ctx.raft_metrics.propose.normal += 1;
 
-        if self.get_store().applied_index_term() == self.term() {
+        if self.has_applied_to_current_term() {
             // Only when applied index's term is equal to current leader's term, the information
             // in epoch checker is up to date and can be used to check epoch.
             if let Some(index) = self
@@ -3578,6 +3584,11 @@ mod tests {
         epoch_checker.post_propose(AdminCmdType::ChangePeer, 6, 10);
         assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
 
+        // Conflict with the change peer admin cmd
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&change_peer_admin, 10),
+            Some(6)
+        );
         // Conflict with the split admin cmd
         assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
         // Conflict with the change peer admin cmd
@@ -3597,7 +3608,7 @@ mod tests {
         assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), None);
 
         assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), Some(6));
-        // Change term to 6
+        // Change term to 11
         assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 11), None);
         assert_eq!(epoch_checker.term, 11);
         // Should be empty

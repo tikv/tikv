@@ -4,13 +4,12 @@ use std::marker::PhantomData;
 use std::time::Duration;
 use std::{mem, thread, u64};
 
-use futures::future;
 use kvproto::kvrpcpb::{CommandPri, Context, ExtraOp, LockInfo};
 use txn_types::{Key, Value};
 
 use crate::storage::kv::{
-    with_tls_engine, CbContext, Engine, Result as EngineResult, ScanMode, Snapshot, Statistics,
-    WriteData,
+    with_tls_engine, CbContext, Engine, ExtCallback, Result as EngineResult, ScanMode, Snapshot,
+    Statistics, WriteData,
 };
 use crate::storage::lock_manager::{self, Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{
@@ -280,23 +279,53 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                         tag,
                     }
                 } else {
-                    let sched = scheduler.clone();
                     let sched_pool = self.take_pool();
-                    let (write_finished_pr, pipelined_write_pr) = if pipelined {
-                        (pr.maybe_clone().unwrap(), pr)
+                    let proposed_cb: Option<ExtCallback> = if pipelined {
+                        // The normal write process is respond to clients and release latches
+                        // after async write finished. If pipelined pessimistic locking is enabled,
+                        // the process becomes parallel and there are two msgs for one command:
+                        //   1. Msg::PipelinedWrite: respond to clients
+                        //   2. Msg::WriteFinished: deque context and release latches
+                        // The order between these two msgs is uncertain due to thread scheduling
+                        // so we clone the result for each msg.
+                        let pipelined_write_pr = pr.maybe_clone().unwrap();
+                        let sched = scheduler.clone();
+                        let sched_pool = sched_pool.clone();
+                        Some(Box::new(move || {
+                            sched_pool
+                                .pool
+                                .spawn(async move {
+                                    fail_point!("scheduler_pipelined_write_finish");
+                                    // The write task is proposed to the raftstore successfully.
+                                    // Respond to client early.
+                                    notify_scheduler(
+                                        sched,
+                                        Msg::PipelinedWrite {
+                                            cid,
+                                            pr: pipelined_write_pr,
+                                            tag,
+                                        },
+                                    );
+                                })
+                                .unwrap()
+                        }))
                     } else {
-                        (pr, ProcessResult::Res)
+                        None
                     };
+
+                    let sched = scheduler.clone();
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
                         sched_pool
                             .pool
                             .spawn(async move {
+                                fail_point!("scheduler_async_write_finish");
+
                                 notify_scheduler(
                                     sched,
                                     Msg::WriteFinished {
                                         cid,
-                                        pr: write_finished_pr,
+                                        pr,
                                         result,
                                         pipelined,
                                         tag,
@@ -305,25 +334,18 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                                 KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                                     .get(tag)
                                     .observe(rows as f64);
-                                future::ok::<_, ()>(())
                             })
-                            .unwrap()
+                            .unwrap();
                     });
 
-                    if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
+                    if let Err(e) =
+                        engine.async_write_ext(&ctx, to_be_write, engine_cb, proposed_cb)
+                    {
                         SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                         info!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         let err = e.into();
                         Msg::FinishedWithErr { cid, err, tag }
-                    } else if pipelined {
-                        // The write task is scheduled to engine successfully.
-                        // Respond to client early.
-                        Msg::PipelinedWrite {
-                            cid,
-                            pr: pipelined_write_pr,
-                            tag,
-                        }
                     } else {
                         return statistics;
                     }
