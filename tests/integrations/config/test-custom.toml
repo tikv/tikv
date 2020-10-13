@@ -56,7 +56,6 @@ end-point-stream-batch-row-limit = 4096
 end-point-enable-batch-if-possible = true
 end-point-request-max-handle-duration = "12s"
 end-point-max-concurrency = 10
-end-point-check-memory-locks = false
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10
@@ -75,7 +74,6 @@ max-key-size = 8192
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
-enable-async-commit = false
 
 [storage.block-cache]
 shared = true
@@ -91,8 +89,6 @@ endpoints = [
 ]
 
 [metric]
-interval = "12s"
-address = "example.com:443"
 job = "tikv_1"
 
 [raftstore]
@@ -168,7 +164,7 @@ region-max-size = "12MB"
 region-split-size = "12MB"
 region-max-keys = 100000
 region-split-keys = 100000
-consistency-check-method = "mvcc"
+consistency-check-method = "raw"
 
 [rocksdb]
 wal-recovery-mode = 1
@@ -249,6 +245,9 @@ force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 enable-doubly-skiplist = false
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -306,6 +305,9 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -348,6 +350,9 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -390,6 +395,9 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [rocksdb.ver-defaultcf]
 block-size = "12KB"
@@ -433,6 +441,9 @@ force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 enable-doubly-skiplist = false
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [rocksdb.ver-defaultcf.titan]
 min-blob-size = "2018B"
@@ -522,6 +533,9 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [raftdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -581,7 +595,7 @@ compaction-filter-skip-version-check = true
 enabled = false # test backward compatibility
 wait-for-lock-timeout = "10ms"
 wake-up-delay-duration = 100 # test backward compatibility
-pipelined = true
+pipelined = false
 
 [cdc]
 min-ts-interval = "4s"

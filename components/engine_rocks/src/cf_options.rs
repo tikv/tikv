@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::db_options::RocksTitanDBOptions;
-use engine_traits::ColumnFamilyOptions;
+use crate::{db_options::RocksTitanDBOptions, sst_partitioner::RocksSstPartitionerFactory};
+use engine_traits::{ColumnFamilyOptions, SstPartitionerFactory};
 use rocksdb::ColumnFamilyOptions as RawCFOptions;
 
 #[derive(Clone)]
@@ -58,5 +58,10 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
 
     fn get_disable_auto_compactions(&self) -> bool {
         self.0.get_disable_auto_compactions()
+    }
+
+    fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, factory: F) {
+        self.0
+            .set_sst_partitioner_factory(RocksSstPartitionerFactory(factory));
     }
 }

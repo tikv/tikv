@@ -61,7 +61,7 @@ use tikv::{
         status_server::StatusServer,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
     },
-    storage::{self, config::StorageConfigManger},
+    storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver},
 };
 use tikv_util::config::VersionTrack;
 use tikv_util::{
@@ -484,15 +484,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .engine
             .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
-        // Create CoprocessorHost.
-        let mut coprocessor_host = self.coprocessor_host.take().unwrap();
-
         let lock_mgr = LockManager::new();
         cfg_controller.register(
             tikv::config::Module::PessimisticTxn,
             Box::new(lock_mgr.config_manager()),
         );
-        lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
+        lock_mgr.register_detector_role_change_observer(self.coprocessor_host.as_mut().unwrap());
 
         let engines = self.engines.as_ref().unwrap();
 
@@ -573,7 +570,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         // Register cdc
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
-        cdc_ob.register_to(&mut coprocessor_host);
+        cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 
         let server_config = Arc::new(self.config.server.clone());
 
@@ -603,7 +600,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
             self.router.clone(),
-            coprocessor_host.clone(),
+            self.coprocessor_host.clone().unwrap(),
             self.config.coprocessor.clone(),
         );
         let split_check_scheduler = self
@@ -647,7 +644,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             snap_mgr,
             pd_worker,
             engines.store_meta.clone(),
-            coprocessor_host,
+            self.coprocessor_host.clone().unwrap(),
             importer.clone(),
             split_check_scheduler,
             self.background_worker.clone(),
@@ -656,7 +653,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
-        initial_metric(&self.config.metric, Some(node.id()));
+        initial_metric(&self.config.metric);
 
         // Start auto gc
         let auto_gc_config = AutoGcConfig::new(
@@ -664,9 +661,24 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.region_info_accessor.clone(),
             node.id(),
         );
-        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config) {
-            fatal!("failed to start auto_gc on storage, error: {}", e);
-        }
+
+        let safe_point = match gc_worker.start_auto_gc(auto_gc_config) {
+            Err(e) => fatal!("failed to start auto_gc on storage, error: {}", e),
+            Ok(safe_point) => safe_point,
+        };
+        let observer = match self.config.coprocessor.consistency_check_method {
+            ConsistencyCheckMethod::Mvcc => {
+                BoxConsistencyCheckObserver::new(MvccConsistencyCheckObserver::new(safe_point))
+            }
+            ConsistencyCheckMethod::Raw => {
+                BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default())
+            }
+        };
+        self.coprocessor_host
+            .as_mut()
+            .unwrap()
+            .registry
+            .register_consistency_check_observer(100, observer);
 
         // Start CDC.
         let cdc_endpoint = cdc::Endpoint::new(
@@ -828,8 +840,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn run_status_server(&mut self) {
         // Create a status server.
-        let status_enabled =
-            self.config.metric.address.is_empty() && !self.config.server.status_addr.is_empty();
+        let status_enabled = !self.config.server.status_addr.is_empty();
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
@@ -882,7 +893,8 @@ impl TiKVServer<RocksEngine> {
         let config_raftdb = &self.config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
-        let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
+        let raft_db_cf_opts =
+            config_raftdb.build_cf_opts(&block_cache, Some(&self.region_info_accessor));
         let raft_engine = engine_rocks::raw_util::new_engine_opt(
             raft_db_path.to_str().unwrap(),
             raft_db_opts,
@@ -894,7 +906,10 @@ impl TiKVServer<RocksEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(&block_cache);
+        let kv_cfs_opts = self
+            .config
+            .rocksdb
+            .build_cf_opts(&block_cache, Some(&self.region_info_accessor));
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
             db_path.to_str().unwrap(),
@@ -953,7 +968,10 @@ impl TiKVServer<RaftLogEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(&block_cache);
+        let kv_cfs_opts = self
+            .config
+            .rocksdb
+            .build_cf_opts(&block_cache, Some(&self.region_info_accessor));
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
             db_path.to_str().unwrap(),
