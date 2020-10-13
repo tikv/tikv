@@ -8,7 +8,7 @@ use storage::mvcc;
 use tikv::storage::TestEngineBuilder;
 use tikv::storage::{self, txn::tests::must_commit};
 use tikv::storage::{lock_manager::DummyLockManager, TestStorageBuilder};
-use tikv::storage::{mvcc::tests::*, txn::commands};
+use tikv::storage::{mvcc::tests::*, txn::commands, Statistics};
 use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]
@@ -57,7 +57,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
         .unwrap();
     // sleep a while so prewrite gets max ts before get is triggered
     thread::sleep(Duration::from_millis(200));
-    match block_on(storage.get(Context::default(), Key::from_raw(b"k"), 100.into())) {
+    match block_on(storage.get(Context::default(), Key::from_raw(b"k"), 100.into(), &mut Statistics::default())) {
         // In this case, min_commit_ts is smaller than the start ts, but the lock is visible
         // to the get.
         Err(storage::Error(box storage::ErrorInner::Mvcc(mvcc::Error(
@@ -84,7 +84,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
     // Suppose snapshot was before updating max_ts, after sleeping for 500ms the following prewrite should complete.
     fail::cfg("after-snapshot", "sleep(500)").unwrap();
     let read_ts = 20.into();
-    let get_fut = storage.get(Context::default(), Key::from_raw(b"j"), read_ts);
+    let get_fut = storage.get(Context::default(), Key::from_raw(b"j"), read_ts, &mut Statistics::default());
     thread::sleep(Duration::from_millis(100));
     fail::remove("after-snapshot");
     let (prewrite_tx, prewrite_rx) = channel();
@@ -123,7 +123,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
     .unwrap();
 
     fail::cfg("before-storage-check-memory-locks", "sleep(500)").unwrap();
-    let get_fut = storage.get(Context::default(), Key::from_raw(b"k"), 100.into());
+    let get_fut = storage.get(Context::default(), Key::from_raw(b"k"), 100.into(), &mut Statistics::default());
 
     thread::sleep(Duration::from_millis(200));
 
