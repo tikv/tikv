@@ -1,12 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::hash_map::Entry;
 use std::fs::File;
-use std::hash::Hasher;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
@@ -23,11 +21,9 @@ use crate::{Error, Result};
 
 const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
-const FILE_DICT_BUCKETS: usize = 64;
 
 struct Dicts {
-    file_dict: Mutex<FileDictionary>,
-    sharded_file_dict: Vec<Mutex<FileDictionary>>,
+    file_dict: RwLock<FileDictionary>,
     key_dict: Mutex<KeyDictionary>,
     rotation_period: Duration,
     base: PathBuf,
@@ -36,8 +32,7 @@ struct Dicts {
 impl Dicts {
     fn new(path: &str, rotation_period: Duration) -> Dicts {
         Dicts {
-            file_dict: Mutex::new(FileDictionary::default()),
-            sharded_file_dict: generate_default_file_dicts(),
+            file_dict: RwLock::new(FileDictionary::default()),
             key_dict: Mutex::new(KeyDictionary {
                 current_key_id: 0,
                 ..Default::default()
@@ -75,20 +70,8 @@ impl Dicts {
                 ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
                 ENCRYPTION_FILE_NUM_GAUGE.set(file_dict.files.len() as _);
 
-                // Create shared file dict for reading.
-                let sharded_file_dict = generate_default_file_dicts();
-                for (name, info) in file_dict.files.iter() {
-                    let hash = get_index(name);
-                    sharded_file_dict[hash]
-                        .lock()
-                        .unwrap()
-                        .files
-                        .insert(name.to_owned(), info.clone());
-                }
-
                 Ok(Some(Dicts {
-                    file_dict: Mutex::new(file_dict),
-                    sharded_file_dict,
+                    file_dict: RwLock::new(file_dict),
                     key_dict: Mutex::new(key_dict),
                     rotation_period,
                     base: base.to_owned(),
@@ -133,7 +116,8 @@ impl Dicts {
         Ok(())
     }
 
-    fn save_file_dict(&self, file_dict: &FileDictionary) -> Result<()> {
+    fn save_file_dict(&self) -> Result<()> {
+        let file_dict = self.file_dict.read().unwrap();
         let file = EncryptedFile::new(&self.base, FILE_DICT_NAME);
         let file_bytes = file_dict.write_to_bytes()?;
         // File dict is saved in plaintext.
@@ -165,8 +149,7 @@ impl Dicts {
     }
 
     fn get_file(&self, fname: &str) -> FileInfo {
-        let hash = get_index(fname);
-        let dict = self.sharded_file_dict[hash].lock().unwrap();
+        let dict = self.file_dict.read().unwrap();
         if dict.files.get(fname).is_none() {
             // Return Plaintext if file not found
             let mut file = FileInfo::default();
@@ -178,20 +161,16 @@ impl Dicts {
     }
 
     fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
-        let key_dict = self.key_dict.lock().unwrap();
-        let mut file_dict = self.file_dict.lock().unwrap();
+        let mut file_dict = self.file_dict.write().unwrap();
         let iv = Iv::new_ctr();
         let mut file = FileInfo::default();
         file.iv = iv.as_slice().to_vec();
-        file.key_id = key_dict.current_key_id;
+        file.key_id = self.key_dict.lock().unwrap().current_key_id;
         file.method = compat(method);
         file_dict.files.insert(fname.to_owned(), file.clone());
-        self.save_file_dict(&file_dict)?;
-        self.sharded_file_dict[get_index(fname)]
-            .lock()
-            .unwrap()
-            .files
-            .insert(fname.to_owned(), file);
+        drop(file_dict);
+        self.save_file_dict()?;
+
         if method != EncryptionMethod::Plaintext {
             info!("new encrypted file"; 
                   "fname" => fname, 
@@ -200,20 +179,13 @@ impl Dicts {
         } else {
             info!("new plaintext file"; "fname" => fname);
         }
-        Ok(file_dict.files.get(fname).cloned().unwrap())
+        Ok(file)
     }
 
     fn delete_file(&self, fname: &str) -> Result<()> {
-        let mut file_dict = self.file_dict.lock().unwrap();
+        let mut file_dict = self.file_dict.write().unwrap();
         let file = match file_dict.files.remove(fname) {
-            Some(file_info) => {
-                self.sharded_file_dict[get_index(fname)]
-                    .lock()
-                    .unwrap()
-                    .files
-                    .remove(fname);
-                file_info
-            }
+            Some(file_info) => file_info,
             None => {
                 // Could be a plaintext file not tracked by file dictionary.
                 info!("delete untracked plaintext file"; "fname" => fname);
@@ -222,7 +194,8 @@ impl Dicts {
         };
 
         // TOOD GC unused data keys.
-        self.save_file_dict(&file_dict)?;
+        drop(file_dict);
+        self.save_file_dict()?;
         if file.method != compat(EncryptionMethod::Plaintext) {
             info!("delete encrypted file"; "fname" => fname);
         } else {
@@ -232,7 +205,7 @@ impl Dicts {
     }
 
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let mut file_dict = self.file_dict.lock().unwrap();
+        let mut file_dict = self.file_dict.write().unwrap();
         let file = match file_dict.files.get(src_fname) {
             Some(file_info) => file_info.clone(),
             None => {
@@ -248,13 +221,10 @@ impl Dicts {
             )));
         }
         let method = file.method;
-        file_dict.files.insert(dst_fname.to_owned(), file.clone());
-        self.save_file_dict(&file_dict)?;
-        self.sharded_file_dict[get_index(dst_fname)]
-            .lock()
-            .unwrap()
-            .files
-            .insert(dst_fname.to_owned(), file);
+        file_dict.files.insert(dst_fname.to_owned(), file);
+        drop(file_dict);
+        self.save_file_dict()?;
+
         if method != compat(EncryptionMethod::Plaintext) {
             info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
         } else {
@@ -264,16 +234,9 @@ impl Dicts {
     }
 
     fn rename_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let mut file_dict = self.file_dict.lock().unwrap();
+        let mut file_dict = self.file_dict.write().unwrap();
         let file = match file_dict.files.remove(src_fname) {
-            Some(file_info) => {
-                self.sharded_file_dict[get_index(src_fname)]
-                    .lock()
-                    .unwrap()
-                    .files
-                    .remove(src_fname);
-                file_info
-            }
+            Some(file_info) => file_info,
             None => {
                 // Could be a plaintext file not tracked by file dictionary.
                 info!("rename untracked plaintext file"; "src" => src_fname, "dst" => dst_fname);
@@ -281,13 +244,10 @@ impl Dicts {
             }
         };
         let method = file.method;
-        file_dict.files.insert(dst_fname.to_owned(), file.clone());
-        self.save_file_dict(&file_dict)?;
-        self.sharded_file_dict[get_index(dst_fname)]
-            .lock()
-            .unwrap()
-            .files
-            .insert(dst_fname.to_owned(), file);
+        file_dict.files.insert(dst_fname.to_owned(), file);
+        drop(file_dict);
+        self.save_file_dict()?;
+
         if method != compat(EncryptionMethod::Plaintext) {
             info!("rename encrypted file"; "src" => src_fname, "dst" => dst_fname);
         } else {
@@ -368,20 +328,6 @@ impl Dicts {
         }
         Err(box_err!("key id collides {} times!", generate_limit))
     }
-}
-
-fn get_index(fname: &str) -> usize {
-    let mut hasher = DefaultHasher::new();
-    hasher.write(fname.as_bytes());
-    hasher.finish() as usize % FILE_DICT_BUCKETS
-}
-
-fn generate_default_file_dicts() -> Vec<Mutex<FileDictionary>> {
-    let mut default_sharded_file_dict = vec![];
-    for _ in 0..FILE_DICT_BUCKETS {
-        default_sharded_file_dict.push(Mutex::new(FileDictionary::default()));
-    }
-    default_sharded_file_dict
 }
 
 fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
@@ -833,9 +779,10 @@ mod tests {
         let mut file = FileInfo::default();
         file.method = EncryptionMethod::Aes192Ctr as _;
         file.key_id = 7; // Not exists.
-        let hash = get_index("foo");
-        manager.dicts.sharded_file_dict[hash]
-            .lock()
+        manager
+            .dicts
+            .file_dict
+            .write()
             .unwrap()
             .files
             .insert("foo".to_owned(), file);
@@ -938,7 +885,7 @@ mod tests {
         // Create a file and a datakey.
         manager.new_file("foo").unwrap();
 
-        let files = manager.dicts.file_dict.lock().unwrap().clone();
+        let files = manager.dicts.file_dict.read().unwrap().clone();
         let keys = manager.dicts.key_dict.lock().unwrap().clone();
 
         // Close and re-open.
@@ -946,7 +893,7 @@ mod tests {
         let (_tmp, manager1) = new_tmp_key_manager(Some(tmp), None, None, None);
         let manager1 = manager1.unwrap().unwrap();
 
-        let files1 = manager1.dicts.file_dict.lock().unwrap().clone();
+        let files1 = manager1.dicts.file_dict.read().unwrap().clone();
         let keys1 = manager1.dicts.key_dict.lock().unwrap().clone();
         assert_eq!(files, files1);
         assert_eq!(keys, keys1);
