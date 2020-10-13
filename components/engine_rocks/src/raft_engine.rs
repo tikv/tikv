@@ -3,7 +3,7 @@ use crate::{RocksEngine, RocksWriteBatch};
 use engine_traits::{Error, RaftEngine, RaftLogBatch, Result};
 use engine_traits::{
     Iterable, KvEngine, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt, WriteOptions,
-    CF_DEFAULT, MAX_DELETE_BATCH_COUNT,
+    CF_DEFAULT,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
@@ -186,7 +186,7 @@ impl RaftEngine for RocksEngine {
         for idx in from..to {
             let key = keys::raft_log_key(raft_group_id, idx);
             raft_wb.delete(&key)?;
-            if raft_wb.count() >= MAX_DELETE_BATCH_COUNT {
+            if raft_wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
                 self.write(&raft_wb)?;
                 raft_wb.clear();
             }
