@@ -2421,10 +2421,9 @@ where
             );
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             // The leader may be hibernated, send a message for trying to awaken the leader.
-            if poll_ctx.cfg.hibernate_regions
-                && (self.bcast_wake_up_time.is_none()
-                    || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
-                        >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL))
+            if self.bcast_wake_up_time.is_none()
+                || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
+                    >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL)
             {
                 self.bcast_wake_up_message(poll_ctx);
                 self.bcast_wake_up_time = Some(UtilInstant::now_coarse());

@@ -1208,6 +1208,12 @@ where
                 if self.fsm.group_state == GroupState::Idle {
                     self.reset_raft_tick(GroupState::Ordered);
                 }
+                // Leader should send heartbeat immediately
+                if msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+                    && self.fsm.peer.is_leader()
+                {
+                    self.fsm.peer.ping();
+                }
             }
             ExtraMessageType::MsgWantRollbackMerge => {
                 self.fsm.peer.maybe_add_want_rollback_merge_peer(
