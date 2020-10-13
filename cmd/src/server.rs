@@ -624,7 +624,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
-        initial_metric(&self.config.metric, Some(node.id()));
+        initial_metric(&self.config.metric);
 
         // Start auto gc
         let auto_gc_config = AutoGcConfig::new(
@@ -820,8 +820,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn run_status_server(&mut self) {
         // Create a status server.
-        let status_enabled =
-            self.config.metric.address.is_empty() && !self.config.server.status_addr.is_empty();
+        let status_enabled = !self.config.server.status_addr.is_empty();
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
