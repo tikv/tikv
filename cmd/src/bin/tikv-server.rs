@@ -137,6 +137,7 @@ fn main() {
             Arg::with_name("metrics-addr")
                 .long("metrics-addr")
                 .value_name("IP:PORT")
+                .hidden(true)
                 .help("Sets Prometheus Pushgateway address")
                 .long_help(
                     "Sets push address to the Prometheus Pushgateway, \

@@ -2,10 +2,12 @@
 
 //! Multi-version concurrency control functionality.
 
+mod consistency_check;
 pub(super) mod metrics;
 mod reader;
 pub(super) mod txn;
 
+pub use self::consistency_check::{Mvcc as MvccConsistencyCheckObserver, MvccInfoIterator};
 pub use self::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 pub use self::reader::*;
 pub use self::txn::{GcInfo, MvccTxn, ReleasedLock, SecondaryLockStatus, MAX_TXN_WRITE_SIZE};
@@ -295,7 +297,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
     } else {
         error!(
             "default value not found";
-            "key" => log_wrappers::Key(&key),
+            "key" => log_wrappers::Value::key(&key),
             "hint" => hint,
         );
         Error::from(ErrorInner::DefaultNotFound { key })
@@ -583,7 +585,7 @@ pub mod tests {
             secondary_keys,
             ts.into(),
             false,
-            0,
+            100,
             TimeStamp::default(),
             0,
             min_commit_ts.into(),
@@ -611,7 +613,7 @@ pub mod tests {
             secondary_keys,
             ts.into(),
             is_pessimistic_lock,
-            0,
+            100,
             for_update_ts.into(),
             0,
             min_commit_ts.into(),

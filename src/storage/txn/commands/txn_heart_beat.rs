@@ -102,7 +102,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
 
         context.statistics.add(&txn.take_statistics());
         let pr = ProcessResult::TxnStatus {
-            txn_status: TxnStatus::uncommitted(lock?),
+            txn_status: TxnStatus::uncommitted(lock?, false),
         };
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
@@ -154,12 +154,11 @@ pub mod tests {
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     pipelined_pessimistic_lock: false,
-                    enable_async_commit: true,
                 },
             )
             .unwrap();
         if let ProcessResult::TxnStatus {
-            txn_status: TxnStatus::Uncommitted { lock },
+            txn_status: TxnStatus::Uncommitted { lock, .. },
         } = result.pr
         {
             write(engine, &ctx, result.to_be_write.modifies);
@@ -194,7 +193,6 @@ pub mod tests {
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     pipelined_pessimistic_lock: false,
-                    enable_async_commit: true,
                 },
             )
             .is_err());

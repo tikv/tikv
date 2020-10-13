@@ -9,7 +9,10 @@ use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
 use futures::{Future, Sink};
-use grpcio::{ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, WriteFlags};
+use grpcio::{
+    ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatus,
+    RpcStatusCode, WriteFlags,
+};
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
 use raft::SnapshotStatus;
@@ -346,6 +349,14 @@ where
     let _ = router.report_unreachable(msg.region_id, to_peer.id);
 }
 
+fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
+    if let grpcio::Error::RpcFailure(RpcStatus { ref status, .. }) = e {
+        let x = *status == RpcStatusCode::UNIMPLEMENTED;
+        return x;
+    }
+    false
+}
+
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
 struct RaftCall<R, M, B> {
     sender: ClientCStreamSender<M>,
@@ -422,7 +433,7 @@ where
         if let Some(tx) = self.lifetime.take() {
             let should_fallback = [sink_err, recv_err]
                 .iter()
-                .any(|e| e.as_ref().map_or(false, super::grpc_error_is_unimplemented));
+                .any(|e| e.as_ref().map_or(false, grpc_error_is_unimplemented));
             if should_fallback {
                 // Asks backend to fallback.
                 let _ = tx.send(());
@@ -535,6 +546,7 @@ where
         let store_id = self.store_id;
         let res = self.builder.resolver.resolve(
             store_id,
+            #[allow(unused_mut)]
             Box::new(move |mut addr| {
                 {
                     // Wrapping the fail point in a closure, so we can modify
@@ -650,10 +662,10 @@ async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: 
 ///
 /// The general progress of connection is:
 ///
-///     1. resolve address
-///     2. connect
-///     3. make batch call
-///     4. fallback to legacy API if incompatible
+/// 1. resolve address
+/// 2. connect
+/// 3. make batch call
+/// 4. fallback to legacy API if incompatible
 ///
 /// Every failure during the process should trigger retry automatically.
 async fn start<S, R>(
@@ -827,6 +839,7 @@ where
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
         let conn_id = (msg.region_id % self.builder.cfg.grpc_raft_conn_num as u64) as usize;
+        #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
                 "transport_on_send_snapshot",

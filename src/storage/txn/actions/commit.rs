@@ -203,7 +203,7 @@ pub mod tests {
         let ts = TimeStamp::compose;
         let uncommitted = |ttl, min_commit_ts| {
             move |s| {
-                if let TxnStatus::Uncommitted { lock } = s {
+                if let TxnStatus::Uncommitted { lock, .. } = s {
                     lock.ttl == ttl && lock.min_commit_ts == min_commit_ts
                 } else {
                     false
