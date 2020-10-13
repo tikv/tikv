@@ -28,9 +28,9 @@ make clippy || panic "\e[35mplease fix the 'make clippy' errors!!!\e[0m"
 set +e
 export LOG_FILE=tests.log
 if [[ -z "$SKIP_TESTS" ]]; then
-    ./scripts/test-all 2>&1 | tee tests.out
+    make test 2>&1 | tee tests.out
 else
-    ./scripts/test-all --no-run
+    EXTRA_CARGO_ARGS="--no-run" make test
     exit $?
 fi
 status=$?
