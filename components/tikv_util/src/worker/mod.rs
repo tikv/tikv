@@ -99,9 +99,11 @@ mod tests {
         // task is handled before we update the busy status, so that we need some sleep.
         thread::sleep(Duration::from_millis(100));
         assert!(!worker.is_busy());
+        drop(scheduler);
         worker.stop();
         // now worker can't handle any task
         assert!(worker.is_busy());
+        drop(worker);
         // when shutdown, StepRunner should send back a 0.
         assert_eq!(0, rx.recv().unwrap());
     }
@@ -120,25 +122,6 @@ mod tests {
         worker.stop();
         assert_eq!(0, rx.recv().unwrap());
     }
-
-    // #[test]
-    // fn test_on_tick() {
-    //     let mut worker = Builder::new("test-worker-tick").batch_size(4).create();
-    //     for _ in 0..10 {
-    //         worker.schedule("normal msg").unwrap();
-    //     }
-    //     let (tx, rx) = mpsc::channel();
-    //     worker.start(TickRunner { ch: tx }).unwrap();
-    //     for i in 0..13 {
-    //         let msg = rx.recv_timeout(Duration::from_secs(3)).unwrap();
-    //         if i != 4 && i != 9 && i != 12 {
-    //             assert_eq!(msg, "normal msg");
-    //         } else {
-    //             assert_eq!(msg, "tick msg");
-    //         }
-    //     }
-    //     worker.stop().unwrap().join().unwrap();
-    // }
 
     #[test]
     fn test_pending_capacity() {

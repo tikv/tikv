@@ -833,7 +833,6 @@ mod tests {
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
-        worker.start_with_timer(runner);
 
         let mut ranges = vec![];
         for i in 0..10 {
@@ -862,9 +861,7 @@ mod tests {
                 })
                 .unwrap();
         }
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(100), Event::CheckStalePeer);
-        worker.start_with_timer(runner, timer).unwrap();
+        worker.start_with_timer(runner);
         thread::sleep(Duration::from_millis(20));
         drop(snap);
         thread::sleep(Duration::from_millis(200));

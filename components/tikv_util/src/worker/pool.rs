@@ -67,6 +67,16 @@ pub trait RunnableWithTimer: Runnable {
     fn get_interval(&self) -> Duration;
 }
 
+struct RunnableWrapper<R: Runnable + 'static> {
+    inner: R,
+}
+
+impl<R: Runnable + 'static> Drop for RunnableWrapper<R> {
+    fn drop(&mut self) {
+        self.inner.shutdown();
+    }
+}
+
 enum Msg<T: Display + Send> {
     Task(T),
     Stop,
@@ -265,7 +275,7 @@ impl<S: Into<String>> Builder<S> {
             .thread_count(self.thread_count, self.thread_count)
             .build_single_level_pool();
         let remote = pool.remote().clone();
-        let pool = Arc::new(Mutex::new(pool));
+        let pool = Arc::new(Mutex::new(Some(pool)));
         Worker {
             remote,
             stop: Arc::new(AtomicBool::new(false)),
@@ -279,7 +289,7 @@ impl<S: Into<String>> Builder<S> {
 /// A worker that can schedule time consuming tasks.
 #[derive(Clone)]
 pub struct Worker {
-    pool: Arc<Mutex<ThreadPool<yatp::task::future::TaskCell>>>,
+    pool: Arc<Mutex<Option<ThreadPool<yatp::task::future::TaskCell>>>>,
     remote: Remote<yatp::task::future::TaskCell>,
     pending_capacity: usize,
     counter: Arc<AtomicUsize>,
@@ -354,40 +364,43 @@ impl Worker {
 
     /// Stops the worker thread.
     pub fn stop(&self) {
-        self.pool.lock().unwrap().shutdown();
+        if let Some(pool) = self.pool.lock().unwrap().take() {
+            pool.shutdown();
+            self.stop.store(true, Ordering::Release);
+        }
     }
 
     /// Checks if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
-        self.counter.load(Ordering::SeqCst) > 0
+        self.stop.load(Ordering::SeqCst) || self.counter.load(Ordering::SeqCst) > 0
     }
 
     fn start_impl<R: Runnable + 'static>(
         &self,
-        mut runner: R,
+        runner: R,
         mut receiver: UnboundedReceiver<Msg<R::Task>>,
         metrics_pending_task_count: IntGauge,
     ) {
         let counter = self.counter.clone();
         self.remote.spawn(async move {
+            let mut handle = RunnableWrapper { inner: runner };
             while let Some(msg) = receiver.next().await {
                 match msg {
                     Msg::Task(task) => {
-                        runner.run(task);
+                        handle.inner.run(task);
                         counter.fetch_sub(1, Ordering::Relaxed);
                         metrics_pending_task_count.dec();
                     }
                     Msg::Timeout => (),
-                    Msg::Stop => break,
+                    Msg::Stop => return,
                 }
             }
-            runner.shutdown();
         });
     }
 
     fn start_with_timer_impl<R>(
         &self,
-        mut runner: R,
+        runner: R,
         tx: UnboundedSender<Msg<R::Task>>,
         mut receiver: UnboundedReceiver<Msg<R::Task>>,
         metrics_pending_task_count: IntGauge,
@@ -398,21 +411,21 @@ impl Worker {
         let timeout = runner.get_interval();
         Self::delay_notify(tx.clone(), timeout);
         self.remote.spawn(async move {
+            let mut handle = RunnableWrapper { inner: runner };
             while let Some(msg) = receiver.next().await {
                 match msg {
                     Msg::Task(task) => {
-                        runner.run(task);
+                        handle.inner.run(task);
                         counter.fetch_sub(1, Ordering::Relaxed);
                         metrics_pending_task_count.dec();
                     }
                     Msg::Timeout => {
-                        runner.on_timeout();
+                        handle.inner.on_timeout();
                         Self::delay_notify(tx.clone(), timeout);
                     }
                     Msg::Stop => break,
                 }
             }
-            runner.shutdown();
         });
     }
 }

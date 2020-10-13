@@ -152,11 +152,11 @@ mod tests {
         req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
 
         let stream = client.backup(&req).unwrap();
-        let task = rx.recv().unwrap();
+        let task = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         // Drop stream without start receiving will cause cancel error.
         drop(stream);
         // A stopped remote must not cause panic.
-        endpoint.handle_backup_task(task);
+        endpoint.handle_backup_task(task.unwrap());
 
         // Set an unique path to avoid AlreadyExists error.
         req.set_storage_backend(make_local_backend(&tmp.path().join(alloc_ts().to_string())));
@@ -165,7 +165,7 @@ mod tests {
         client.spawn(async move {
             let _ = stream.next().await;
         });
-        let task = rx.recv();
+        let task = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         // A stopped remote must not cause panic.
         endpoint.handle_backup_task(task.unwrap());
 
