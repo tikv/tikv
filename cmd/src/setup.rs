@@ -217,7 +217,7 @@ pub fn initial_logger(config: &TiKvConfig) {
 }
 
 #[allow(dead_code)]
-pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
+pub fn initial_metric(cfg: &MetricConfig) {
     tikv_util::metrics::monitor_process()
         .unwrap_or_else(|e| fatal!("failed to start process monitor: {}", e));
     tikv_util::metrics::monitor_threads("tikv")
@@ -229,13 +229,7 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
         return;
     }
 
-    let mut push_job = cfg.job.clone();
-    if let Some(id) = node_id {
-        push_job.push_str(&format!("_{}", id));
-    }
-
-    info!("start prometheus client");
-    tikv_util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
+    warn!("metrics push is not supported any more.");
 }
 
 #[allow(dead_code)]
@@ -296,8 +290,8 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
         config.raft_store.capacity = capacity;
     }
 
-    if let Some(metrics_addr) = matches.value_of("metrics-addr") {
-        config.metric.address = metrics_addr.to_owned()
+    if matches.value_of("metrics-addr").is_some() {
+        warn!("metrics push is not supported any more.");
     }
 }
 
