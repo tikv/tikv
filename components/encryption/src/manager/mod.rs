@@ -1,10 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::hash_map::Entry;
 use std::fs::File;
+use std::hash::Hasher;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
@@ -21,10 +23,12 @@ use crate::{Error, Result};
 
 const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
+const FILE_DICT_BUCKETS: usize = 64;
 
 struct Dicts {
-    file_dict: FileDictionary,
-    key_dict: KeyDictionary,
+    file_dict: Mutex<FileDictionary>,
+    sharded_file_dict: Vec<Mutex<FileDictionary>>,
+    key_dict: Mutex<KeyDictionary>,
     rotation_period: Duration,
     base: PathBuf,
 }
@@ -32,11 +36,12 @@ struct Dicts {
 impl Dicts {
     fn new(path: &str, rotation_period: Duration) -> Dicts {
         Dicts {
-            file_dict: FileDictionary::default(),
-            key_dict: KeyDictionary {
+            file_dict: Mutex::new(FileDictionary::default()),
+            sharded_file_dict: generate_default_file_dicts(),
+            key_dict: Mutex::new(KeyDictionary {
                 current_key_id: 0,
                 ..Default::default()
-            },
+            }),
             rotation_period,
             base: Path::new(path).to_owned(),
         }
@@ -70,9 +75,21 @@ impl Dicts {
                 ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
                 ENCRYPTION_FILE_NUM_GAUGE.set(file_dict.files.len() as _);
 
+                // Create shared file dict for reading.
+                let sharded_file_dict = generate_default_file_dicts();
+                for (name, info) in file_dict.files.iter() {
+                    let hash = get_index(name);
+                    sharded_file_dict[hash]
+                        .lock()
+                        .unwrap()
+                        .files
+                        .insert(name.to_owned(), info.clone());
+                }
+
                 Ok(Some(Dicts {
-                    file_dict,
-                    key_dict,
+                    file_dict: Mutex::new(file_dict),
+                    sharded_file_dict,
+                    key_dict: Mutex::new(key_dict),
                     rotation_period,
                     base: base.to_owned(),
                 }))
@@ -98,75 +115,83 @@ impl Dicts {
         }
     }
 
-    fn save_key_dict(&mut self, master_key: &dyn Backend) -> Result<()> {
+    fn save_key_dict(&self, master_key: &dyn Backend, key_dict: &mut KeyDictionary) -> Result<()> {
         let file = EncryptedFile::new(&self.base, KEY_DICT_NAME);
         if !master_key.is_secure() {
-            for value in self.key_dict.keys.values_mut() {
+            for value in key_dict.keys.values_mut() {
                 value.was_exposed = true
             }
         }
-        let key_bytes = self.key_dict.write_to_bytes()?;
+        let key_bytes = key_dict.write_to_bytes()?;
         file.write(&key_bytes, master_key)?;
 
         ENCRYPTION_FILE_SIZE_GAUGE
             .with_label_values(&["key_dictionary"])
             .set(key_bytes.len() as _);
-        ENCRYPTION_DATA_KEY_GAUGE.set(self.key_dict.keys.len() as _);
+        ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
 
         Ok(())
     }
 
-    fn save_file_dict(&self) -> Result<()> {
+    fn save_file_dict(&self, file_dict: &FileDictionary) -> Result<()> {
         let file = EncryptedFile::new(&self.base, FILE_DICT_NAME);
-        let file_bytes = self.file_dict.write_to_bytes()?;
+        let file_bytes = file_dict.write_to_bytes()?;
         // File dict is saved in plaintext.
         file.write(&file_bytes, &PlaintextBackend::default())?;
 
         ENCRYPTION_FILE_SIZE_GAUGE
             .with_label_values(&["file_dictionary"])
             .set(file_bytes.len() as _);
-        ENCRYPTION_FILE_NUM_GAUGE.set(self.file_dict.files.len() as _);
+        ENCRYPTION_FILE_NUM_GAUGE.set(file_dict.files.len() as _);
 
         Ok(())
     }
 
-    fn get_key(&self, key_id: u64) -> Option<&DataKey> {
-        self.key_dict.keys.get(&key_id)
-    }
-
-    fn current_data_key(&self) -> (u64, &DataKey) {
+    fn current_data_key(&self) -> (u64, DataKey) {
+        let key_dict = self.key_dict.lock().unwrap();
         (
-            self.key_dict.current_key_id,
-            self.key_dict
+            key_dict.current_key_id,
+            key_dict
                 .keys
-                .get(&self.key_dict.current_key_id)
+                .get(&key_dict.current_key_id)
+                .cloned()
                 .unwrap_or_else(|| {
                     panic!(
                         "current data key not found! Number of keys {}",
-                        self.key_dict.keys.len()
+                        key_dict.keys.len()
                     );
                 }),
         )
     }
 
-    fn get_file(&mut self, fname: &str) -> &FileInfo {
-        if self.file_dict.files.get(fname).is_none() {
+    fn get_file(&self, fname: &str) -> FileInfo {
+        let hash = get_index(fname);
+        let dict = self.sharded_file_dict[hash].lock().unwrap();
+        if dict.files.get(fname).is_none() {
             // Return Plaintext if file not found
             let mut file = FileInfo::default();
             file.method = compat(EncryptionMethod::Plaintext);
-            self.file_dict.files.insert(fname.to_owned(), file);
+            file
+        } else {
+            dict.files.get(fname).cloned().unwrap()
         }
-        self.file_dict.files.get(fname).unwrap()
     }
 
-    fn new_file(&mut self, fname: &str, method: EncryptionMethod) -> Result<&FileInfo> {
+    fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
+        let key_dict = self.key_dict.lock().unwrap();
+        let mut file_dict = self.file_dict.lock().unwrap();
         let iv = Iv::new_ctr();
         let mut file = FileInfo::default();
         file.iv = iv.as_slice().to_vec();
-        file.key_id = self.key_dict.current_key_id;
+        file.key_id = key_dict.current_key_id;
         file.method = compat(method);
-        self.file_dict.files.insert(fname.to_owned(), file);
-        self.save_file_dict()?;
+        file_dict.files.insert(fname.to_owned(), file.clone());
+        self.save_file_dict(&file_dict)?;
+        self.sharded_file_dict[get_index(fname)]
+            .lock()
+            .unwrap()
+            .files
+            .insert(fname.to_owned(), file);
         if method != EncryptionMethod::Plaintext {
             info!("new encrypted file"; 
                   "fname" => fname, 
@@ -175,12 +200,20 @@ impl Dicts {
         } else {
             info!("new plaintext file"; "fname" => fname);
         }
-        Ok(self.file_dict.files.get(fname).unwrap())
+        Ok(file_dict.files.get(fname).cloned().unwrap())
     }
 
-    fn delete_file(&mut self, fname: &str) -> Result<()> {
-        let file = match self.file_dict.files.remove(fname) {
-            Some(file_info) => file_info,
+    fn delete_file(&self, fname: &str) -> Result<()> {
+        let mut file_dict = self.file_dict.lock().unwrap();
+        let file = match file_dict.files.remove(fname) {
+            Some(file_info) => {
+                self.sharded_file_dict[get_index(fname)]
+                    .lock()
+                    .unwrap()
+                    .files
+                    .remove(fname);
+                file_info
+            }
             None => {
                 // Could be a plaintext file not tracked by file dictionary.
                 info!("delete untracked plaintext file"; "fname" => fname);
@@ -189,7 +222,7 @@ impl Dicts {
         };
 
         // TOOD GC unused data keys.
-        self.save_file_dict()?;
+        self.save_file_dict(&file_dict)?;
         if file.method != compat(EncryptionMethod::Plaintext) {
             info!("delete encrypted file"; "fname" => fname);
         } else {
@@ -198,8 +231,9 @@ impl Dicts {
         Ok(())
     }
 
-    fn link_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let file = match self.file_dict.files.get(src_fname) {
+    fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
+        let mut file_dict = self.file_dict.lock().unwrap();
+        let file = match file_dict.files.get(src_fname) {
             Some(file_info) => file_info.clone(),
             None => {
                 // Could be a plaintext file not tracked by file dictionary.
@@ -207,15 +241,20 @@ impl Dicts {
                 return Ok(());
             }
         };
-        if self.file_dict.files.get(dst_fname).is_some() {
+        if file_dict.files.get(dst_fname).is_some() {
             return Err(Error::Io(IoError::new(
                 ErrorKind::AlreadyExists,
                 format!("file already exists, {}", dst_fname),
             )));
         }
         let method = file.method;
-        self.file_dict.files.insert(dst_fname.to_owned(), file);
-        self.save_file_dict()?;
+        file_dict.files.insert(dst_fname.to_owned(), file.clone());
+        self.save_file_dict(&file_dict)?;
+        self.sharded_file_dict[get_index(dst_fname)]
+            .lock()
+            .unwrap()
+            .files
+            .insert(dst_fname.to_owned(), file);
         if method != compat(EncryptionMethod::Plaintext) {
             info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
         } else {
@@ -224,9 +263,17 @@ impl Dicts {
         Ok(())
     }
 
-    fn rename_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let file = match self.file_dict.files.remove(src_fname) {
-            Some(file_info) => file_info,
+    fn rename_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
+        let mut file_dict = self.file_dict.lock().unwrap();
+        let file = match file_dict.files.remove(src_fname) {
+            Some(file_info) => {
+                self.sharded_file_dict[get_index(src_fname)]
+                    .lock()
+                    .unwrap()
+                    .files
+                    .remove(src_fname);
+                file_info
+            }
             None => {
                 // Could be a plaintext file not tracked by file dictionary.
                 info!("rename untracked plaintext file"; "src" => src_fname, "dst" => dst_fname);
@@ -234,8 +281,13 @@ impl Dicts {
             }
         };
         let method = file.method;
-        self.file_dict.files.insert(dst_fname.to_owned(), file);
-        self.save_file_dict()?;
+        file_dict.files.insert(dst_fname.to_owned(), file.clone());
+        self.save_file_dict(&file_dict)?;
+        self.sharded_file_dict[get_index(dst_fname)]
+            .lock()
+            .unwrap()
+            .files
+            .insert(dst_fname.to_owned(), file);
         if method != compat(EncryptionMethod::Plaintext) {
             info!("rename encrypted file"; "src" => src_fname, "dst" => dst_fname);
         } else {
@@ -244,31 +296,31 @@ impl Dicts {
         Ok(())
     }
 
-    fn rotate_key(&mut self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<bool> {
+    fn rotate_key(&self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<bool> {
         info!("encryption: rotate data key."; "key_id" => key_id);
-        match self.key_dict.keys.entry(key_id) {
+        let mut key_dict = self.key_dict.lock().unwrap();
+        match key_dict.keys.entry(key_id) {
             // key id collides
             Entry::Occupied(_) => return Ok(false),
             Entry::Vacant(e) => e.insert(key),
         };
         // Update current data key id.
-        self.key_dict.current_key_id = key_id;
+        key_dict.current_key_id = key_id;
         // re-encrypt key dict file.
-        self.save_key_dict(master_key).map(|()| true)
+        self.save_key_dict(master_key, &mut key_dict).map(|()| true)
     }
 
     fn maybe_rotate_data_key(
-        &mut self,
+        &self,
         method: EncryptionMethod,
         master_key: &dyn Backend,
     ) -> Result<()> {
         let now = SystemTime::now();
         // 0 means it's a new key dict
-        if self.key_dict.current_key_id != 0 {
+        if self.key_dict.lock().unwrap().current_key_id != 0 {
             // It's not a new dict, then check current data key
             // creation time.
             let (_, key) = self.current_data_key();
-
             // Generate a new data key if
             //   1. encryption method is not the same, or
             //   2. the current data key was exposed and the new master key is secure.
@@ -318,6 +370,20 @@ impl Dicts {
     }
 }
 
+fn get_index(fname: &str) -> usize {
+    let mut hasher = DefaultHasher::new();
+    hasher.write(fname.as_bytes());
+    hasher.finish() as usize % FILE_DICT_BUCKETS
+}
+
+fn generate_default_file_dicts() -> Vec<Mutex<FileDictionary>> {
+    let mut default_sharded_file_dict = vec![];
+    for _ in 0..FILE_DICT_BUCKETS {
+        default_sharded_file_dict.push(Mutex::new(FileDictionary::default()));
+    }
+    default_sharded_file_dict
+}
+
 fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
     use rand::{rngs::OsRng, RngCore};
 
@@ -328,10 +394,9 @@ fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
     (key_id, key)
 }
 
-#[derive(Clone)]
 pub struct DataKeyManager {
     master_key: Arc<dyn Backend>,
-    dicts: Arc<RwLock<Dicts>>,
+    dicts: Dicts,
     method: EncryptionMethod,
 }
 
@@ -365,7 +430,7 @@ impl DataKeyManager {
                 "encryption is to enable but master key is either absent or insecure."
             ));
         }
-        let mut dicts = match (
+        let dicts = match (
             Dicts::open(dict_path, rotation_period, master_key.as_ref()),
             method,
         ) {
@@ -394,21 +459,23 @@ impl DataKeyManager {
                     master_key_config, previous_master_key_config
                 );
                 let previous_master_key = create_backend(previous_master_key_config)?;
-                let mut dicts =
-                    Dicts::open(dict_path, rotation_period, previous_master_key.as_ref())
-                        .map_err(|e| {
-                            if let Error::WrongMasterKey(e_previous) = e {
-                                Error::BothMasterKeyFail(e_current, e_previous)
-                            } else {
-                                e
-                            }
-                        })?
-                        .ok_or_else(|| {
-                            Error::Other(box_err!(
-                            "Fallback to previous master key but find dictionaries to be empty."))
-                        })?;
+                let dicts = Dicts::open(dict_path, rotation_period, previous_master_key.as_ref())
+                    .map_err(|e| {
+                        if let Error::WrongMasterKey(e_previous) = e {
+                            Error::BothMasterKeyFail(e_current, e_previous)
+                        } else {
+                            e
+                        }
+                    })?
+                    .ok_or_else(|| {
+                        Error::Other(box_err!(
+                            "Fallback to previous master key but find dictionaries to be empty."
+                        ))
+                    })?;
                 // Rewrite key_dict after replace master key.
-                dicts.save_key_dict(master_key.as_ref())?;
+                let mut key_dict = dicts.key_dict.lock().unwrap();
+                dicts.save_key_dict(master_key.as_ref(), &mut key_dict)?;
+                drop(key_dict);
                 info!("encryption: persisted result after replace master key.");
 
                 dicts
@@ -421,7 +488,7 @@ impl DataKeyManager {
         ENCRYPTION_INITIALIZED_GAUGE.set(1);
 
         Ok(Some(DataKeyManager {
-            dicts: Arc::new(RwLock::new(dicts)),
+            dicts,
             master_key,
             method,
         }))
@@ -494,16 +561,15 @@ impl DataKeyManager {
 impl EncryptionKeyManager for DataKeyManager {
     // Get key to open existing file.
     fn get_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
-        let mut dicts = self.dicts.write().unwrap();
         let (method, key_id, iv) = {
-            let file = dicts.get_file(fname);
-            (file.method, file.key_id, file.iv.to_owned())
+            let file = self.dicts.get_file(fname);
+            (file.method, file.key_id, file.iv)
         };
         // Fail if key is specified but not found.
         let key = if method as i32 == EncryptionMethod::Plaintext as i32 {
             vec![]
         } else {
-            match dicts.get_key(key_id) {
+            match self.dicts.key_dict.lock().unwrap().keys.get(&key_id) {
                 Some(k) => k.key.clone(),
                 None => {
                     return Err(IoError::new(
@@ -522,12 +588,12 @@ impl EncryptionKeyManager for DataKeyManager {
     }
 
     fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
-        let mut dicts = self.dicts.write().unwrap();
         // Rotate data key if necessary.
-        dicts.maybe_rotate_data_key(self.method, self.master_key.as_ref())?;
-        let (_, data_key) = dicts.current_data_key();
+        self.dicts
+            .maybe_rotate_data_key(self.method, self.master_key.as_ref())?;
+        let (_, data_key) = self.dicts.current_data_key();
         let key = data_key.get_key().to_owned();
-        let file = dicts.new_file(fname, self.method)?;
+        let file = self.dicts.new_file(fname, self.method)?;
         let encrypted_file = FileEncryptionInfo {
             key,
             method: crypter::encryption_method_to_db_encryption_method(file.method),
@@ -537,23 +603,17 @@ impl EncryptionKeyManager for DataKeyManager {
     }
 
     fn delete_file(&self, fname: &str) -> IoResult<()> {
-        self.dicts.write().unwrap().delete_file(fname)?;
+        self.dicts.delete_file(fname)?;
         Ok(())
     }
 
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
-        self.dicts
-            .write()
-            .unwrap()
-            .link_file(src_fname, dst_fname)?;
+        self.dicts.link_file(src_fname, dst_fname)?;
         Ok(())
     }
 
     fn rename_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
-        self.dicts
-            .write()
-            .unwrap()
-            .rename_file(src_fname, dst_fname)?;
+        self.dicts.rename_file(src_fname, dst_fname)?;
         Ok(())
     }
 }
@@ -570,7 +630,6 @@ mod tests {
         fs::{remove_file, File},
         io::Write,
         sync::{Arc, Mutex},
-        thread::sleep,
     };
     use tempfile::TempDir;
 
@@ -774,11 +833,10 @@ mod tests {
         let mut file = FileInfo::default();
         file.method = EncryptionMethod::Aes192Ctr as _;
         file.key_id = 7; // Not exists.
-        manager
-            .dicts
-            .write()
+        let hash = get_index("foo");
+        manager.dicts.sharded_file_dict[hash]
+            .lock()
             .unwrap()
-            .file_dict
             .files
             .insert("foo".to_owned(), file);
         manager.get_file("foo").unwrap_err();
@@ -829,53 +887,44 @@ mod tests {
     #[test]
     fn test_key_manager_rotate() {
         let (_tmp, manager) = new_tmp_key_manager(None, None, None, None);
-        let manager = manager.unwrap().unwrap();
-
+        let mut manager = manager.unwrap().unwrap();
         let (key_id, key) = {
-            let dicts = manager.dicts.read().unwrap();
-            let (id, k) = dicts.current_data_key();
-            (id, k.clone())
+            let (id, k) = manager.dicts.current_data_key();
+            (id, k)
         };
 
         // Do not rotate.
         manager
             .dicts
-            .write()
-            .unwrap()
             .maybe_rotate_data_key(manager.method, manager.master_key.as_ref())
             .unwrap();
         let (current_key_id1, current_key1) = {
-            let dicts = manager.dicts.read().unwrap();
-            let (id, k) = dicts.current_data_key();
-            (id, k.clone())
+            let (id, k) = manager.dicts.current_data_key();
+            (id, k)
         };
         assert_eq!(current_key_id1, key_id);
         assert_eq!(current_key1, key);
 
         // Change rotateion period to a smaller value, must rotate.
-        manager.dicts.write().unwrap().rotation_period = Duration::from_millis(1);
-        sleep(Duration::from_secs(1));
+        manager.dicts.rotation_period = Duration::from_millis(1);
+        std::thread::sleep(Duration::from_secs(1));
         manager
             .dicts
-            .write()
-            .unwrap()
             .maybe_rotate_data_key(manager.method, manager.master_key.as_ref())
             .unwrap();
         let (current_key_id2, current_key2) = {
-            let dicts = manager.dicts.read().unwrap();
-            let (id, k) = dicts.current_data_key();
-            (id, k.clone())
+            let (id, k) = manager.dicts.current_data_key();
+            (id, k)
         };
         assert_ne!(current_key_id2, key_id);
         assert_ne!(current_key2, key);
 
         // Sleep and must rotate when new a file.
-        sleep(Duration::from_secs(1));
+        std::thread::sleep(Duration::from_secs(1));
         manager.new_file("foo").unwrap();
         let (current_key_id3, current_key3) = {
-            let dicts = manager.dicts.read().unwrap();
-            let (id, k) = dicts.current_data_key();
-            (id, k.clone())
+            let (id, k) = manager.dicts.current_data_key();
+            (id, k)
         };
         assert_ne!(current_key_id3, current_key_id2);
         assert_ne!(current_key3, current_key2);
@@ -889,33 +938,32 @@ mod tests {
         // Create a file and a datakey.
         manager.new_file("foo").unwrap();
 
-        let (files, keys) = {
-            let dicts = manager.dicts.read().unwrap();
-            (dicts.file_dict.clone(), dicts.key_dict.clone())
-        };
+        let files = manager.dicts.file_dict.lock().unwrap().clone();
+        let keys = manager.dicts.key_dict.lock().unwrap().clone();
 
         // Close and re-open.
         drop(manager);
         let (_tmp, manager1) = new_tmp_key_manager(Some(tmp), None, None, None);
         let manager1 = manager1.unwrap().unwrap();
 
-        let dicts = manager1.dicts.read().unwrap();
-        assert_eq!(files, dicts.file_dict);
-        assert_eq!(keys, dicts.key_dict);
+        let files1 = manager1.dicts.file_dict.lock().unwrap().clone();
+        let keys1 = manager1.dicts.key_dict.lock().unwrap().clone();
+        assert_eq!(files, files1);
+        assert_eq!(keys, keys1);
     }
 
     #[test]
     fn test_dcit_rotate_key_collides() {
         let (_tmp, manager) = new_tmp_key_manager(None, None, None, None);
         let manager = manager.unwrap().unwrap();
-        let mut dict = manager.dicts.write().unwrap();
-
-        let ok = dict
+        let ok = manager
+            .dicts
             .rotate_key(1, DataKey::default(), manager.master_key.as_ref())
             .unwrap();
         assert!(ok);
 
-        let ok = dict
+        let ok = manager
+            .dicts
             .rotate_key(1, DataKey::default(), manager.master_key.as_ref())
             .unwrap();
         assert!(!ok);
@@ -931,37 +979,40 @@ mod tests {
         };
         let (_tmp_data_dir, manager) = new_tmp_key_manager(None, None, Some(master_key), None);
         let manager = manager.unwrap().unwrap();
-        let mut dicts = manager.dicts.write().unwrap();
-
         let (key_id, key) = {
-            let (id, k) = dicts.current_data_key();
-            (id, k.clone())
+            let (id, k) = manager.dicts.current_data_key();
+            (id, k)
         };
 
         // Do not rotate.
-        dicts
+        manager
+            .dicts
             .maybe_rotate_data_key(manager.method, manager.master_key.as_ref())
             .unwrap();
         let (current_key_id1, current_key1) = {
-            let (id, k) = dicts.current_data_key();
-            (id, k.clone())
+            let (id, k) = manager.dicts.current_data_key();
+            (id, k)
         };
         assert_eq!(current_key_id1, key_id);
         assert_eq!(current_key1, key);
 
         // Expose the current data key and must rotate.
-        dicts
+        manager
+            .dicts
             .key_dict
+            .lock()
+            .unwrap()
             .keys
             .get_mut(&current_key_id1)
             .unwrap()
             .was_exposed = true;
-        dicts
+        manager
+            .dicts
             .maybe_rotate_data_key(manager.method, manager.master_key.as_ref())
             .unwrap();
         let (current_key_id2, current_key2) = {
-            let (id, k) = dicts.current_data_key();
-            (id, k.clone())
+            let (id, k) = manager.dicts.current_data_key();
+            (id, k)
         };
         assert_ne!(current_key_id2, key_id);
         assert_ne!(current_key2, key);
@@ -978,28 +1029,29 @@ mod tests {
 
         let (_tmp_data_dir, manager) = new_tmp_key_manager(None, None, Some(master_key), None);
         let manager = manager.unwrap().unwrap();
-        let mut dicts = manager.dicts.write().unwrap();
 
         for i in 0..100 {
-            let ok = dicts
+            let ok = manager
+                .dicts
                 .rotate_key(i, DataKey::default(), manager.master_key.as_ref())
                 .unwrap();
             assert!(ok);
         }
-        for value in dicts.key_dict.keys.values() {
+        for value in manager.dicts.key_dict.lock().unwrap().keys.values() {
             assert!(!value.was_exposed);
         }
 
         // Change it insecure backend and save dicts,
         // must set expose for all keys.
         let insecure = Arc::new(PlaintextBackend::default());
-        let ok = dicts
+        let ok = manager
+            .dicts
             .rotate_key(100, DataKey::default(), insecure.as_ref())
             .unwrap();
         assert!(ok);
 
         let mut count = 0;
-        for value in dicts.key_dict.keys.values() {
+        for value in manager.dicts.key_dict.lock().unwrap().keys.values() {
             count += 1;
             assert!(value.was_exposed);
         }
