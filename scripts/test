@@ -29,4 +29,4 @@ export RUST_BACKTRACE=1
 
 cargo -Zpackage-features test --workspace \
     --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-    --features "mem-profiling ${TIKV_ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} "$@"
+    --features "${TIKV_ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} "$@"

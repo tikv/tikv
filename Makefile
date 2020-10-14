@@ -131,7 +131,7 @@ clean:
 ## Development builds
 ## ------------------
 
-all: format build test
+all: format build test error-code
 
 dev: format clippy
 	@env FAIL_POINT=1 make test
