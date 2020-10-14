@@ -30,9 +30,9 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
-rusoto_core = "0.44.0"
-rusoto_kms = { version = "0.44.0", features = ["serialize_structs"] }
-rusoto_credential = "0.44.0"
+rusoto_core = "0.45.0"
+rusoto_kms = { version = "0.45.0", features = ["serialize_structs"] }
+rusoto_credential = "0.45.0"
 rusoto_util = { path = "../rusoto_util" }
 bytes = "0.4"
 tokio = { version = "0.2", features = ["time", "rt-core"] }
@@ -42,7 +42,7 @@ futures = "0.3"
 matches = "0.1.8"
 tempfile = "3.1"
 toml = "0.4"
-rusoto_mock = "0.44.0"
+rusoto_mock = "0.45.0"
 rust-ini = "0.14.0"
 structopt = "0.3"
 test_util = { path = "../test_util" }

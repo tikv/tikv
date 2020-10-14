@@ -235,29 +235,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
-        match config.coprocessor.consistency_check_method {
-            ConsistencyCheckMethod::Mvcc => {
-                // TODO: use mvcc consistency checker.
-                coprocessor_host
-                    .as_mut()
-                    .unwrap()
-                    .registry
-                    .register_consistency_check_observer(
-                        100,
-                        BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
-                    );
-            }
-            ConsistencyCheckMethod::Raw => {
-                coprocessor_host
-                    .as_mut()
-                    .unwrap()
-                    .registry
-                    .register_consistency_check_observer(
-                        100,
-                        BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
-                    );
-            }
-        }
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();
 
@@ -515,9 +492,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Box::new(gc_worker.get_config_manager()),
         );
 
-        // Create CoprocessorHost.
-        let coprocessor_host = self.coprocessor_host.take().unwrap();
-
         let lock_mgr = LockManager::new();
 
         let engines = self.engines.as_ref().unwrap();
@@ -626,7 +600,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
             self.router.clone(),
-            coprocessor_host.clone(),
+            self.coprocessor_host.clone().unwrap(),
             self.config.coprocessor.clone(),
         );
         split_check_worker.start(split_check_runner).unwrap();
@@ -668,7 +642,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             snap_mgr,
             pd_worker,
             engines.store_meta.clone(),
-            coprocessor_host,
+            self.coprocessor_host.clone().unwrap(),
             importer.clone(),
             split_check_worker,
             auto_split_controller,
@@ -676,7 +650,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
-        initial_metric(&self.config.metric, Some(node.id()));
+        initial_metric(&self.config.metric);
 
         self.servers = Some(Servers {
             lock_mgr,
@@ -767,8 +741,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn run_status_server(&mut self) {
         // Create a status server.
-        let status_enabled =
-            self.config.metric.address.is_empty() && !self.config.server.status_addr.is_empty();
+        let status_enabled = !self.config.server.status_addr.is_empty();
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
@@ -821,7 +794,8 @@ impl TiKVServer<RocksEngine> {
         let config_raftdb = &self.config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
-        let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
+        let raft_db_cf_opts =
+            config_raftdb.build_cf_opts(&block_cache, Some(&self.region_info_accessor));
         let raft_engine = engine_rocks::raw_util::new_engine_opt(
             raft_db_path.to_str().unwrap(),
             raft_db_opts,
@@ -833,7 +807,10 @@ impl TiKVServer<RocksEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(&block_cache);
+        let kv_cfs_opts = self
+            .config
+            .rocksdb
+            .build_cf_opts(&block_cache, Some(&self.region_info_accessor));
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
             db_path.to_str().unwrap(),
@@ -885,13 +862,17 @@ impl TiKVServer<RaftLogEngine> {
             &self.config.raft_store.raftdb_path,
             &raft_engine,
             env.clone(),
+            8,
         );
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(&block_cache);
+        let kv_cfs_opts = self
+            .config
+            .rocksdb
+            .build_cf_opts(&block_cache, Some(&self.region_info_accessor));
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
             db_path.to_str().unwrap(),

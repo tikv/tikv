@@ -34,7 +34,6 @@ prost-codec = [
   "txn_types/prost-codec",
   "encryption/prost-codec",
   "tikv_util/prost-codec",
-  "log_wrappers/prost-codec"
 ]
 protobuf-codec = [
   "engine_rocks/protobuf-codec",
@@ -50,7 +49,6 @@ protobuf-codec = [
   "txn_types/protobuf-codec",
   "encryption/protobuf-codec",
   "tikv_util/protobuf-codec",
-  "log_wrappers/protobuf-codec"
 ]
 testexport = ["raftstore/testexport"]
 
@@ -132,7 +130,7 @@ slog_derive = "0.2"
 parking_lot = "0.10"
 prometheus = { version = "0.8", features = ["nightly", "push", "metric-name-prefix"] }
 sst_importer = { path = "components/sst_importer" }
-sysinfo = "0.14"
+sysinfo = "0.15"
 semver = "0.10"
 tempfile = "3.0"
 match_template = { path = "components/match_template" }
@@ -149,7 +147,6 @@ tikv_util = { path = "components/tikv_util" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio = { version = "0.2", features = ["full"] }
-tokio-threadpool = "0.1.13"
 tokio-timer = "0.2"
 tokio-openssl = "0.4"
 toml = "0.4"
