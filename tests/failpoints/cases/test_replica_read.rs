@@ -407,14 +407,7 @@ fn test_new_split_learner_can_not_find_leader() {
 
     // Wait for learner catch up data
     thread::sleep(Duration::from_millis(1000));
-    let resp_ch = async_read_on_peer(
-        &mut cluster,
-        learner_peer.clone(),
-        new_region.clone(),
-        b"k2",
-        true,
-        true,
-    );
+    let resp_ch = async_read_on_peer(&mut cluster, learner_peer, new_region, b"k2", true, true);
     let resp = resp_ch.recv_timeout(Duration::from_secs(3)).unwrap();
     let exp_value = resp.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
