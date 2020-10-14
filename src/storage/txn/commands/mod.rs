@@ -441,7 +441,6 @@ pub struct WriteContext<'a, L: LockManager> {
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub pipelined_pessimistic_lock: bool,
-    pub enable_async_commit: bool,
 }
 
 impl Command {
@@ -635,7 +634,6 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         if let ProcessResult::PrewriteResult {
@@ -688,7 +686,6 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         if let ProcessResult::PrewriteResult {
@@ -730,7 +727,6 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -755,7 +751,6 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;

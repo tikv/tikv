@@ -190,7 +190,6 @@ pub mod tests {
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     pipelined_pessimistic_lock: false,
-                    enable_async_commit: true,
                 },
             )
             .unwrap();
@@ -226,7 +225,6 @@ pub mod tests {
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
                         pipelined_pessimistic_lock: false,
-                        enable_async_commit: true,
                     },
                 )
                 .unwrap();
