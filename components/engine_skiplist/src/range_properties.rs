@@ -27,8 +27,8 @@ impl RangePropertiesExt for SkiplistEngine {
         let mut count = 0;
         engine
             .range(StdRange {
-                start: range.start_key.to_vec(),
-                end: range.end_key.to_vec(),
+                start: (range.start_key.to_vec(), 0),
+                end: (range.end_key.to_vec(), 0),
             })
             .for_each(|_| count += 1);
         Ok(count)
@@ -58,10 +58,10 @@ impl RangePropertiesExt for SkiplistEngine {
         let mut count = 0;
         engine
             .range(StdRange {
-                start: range.start_key.to_vec(),
-                end: range.end_key.to_vec(),
+                start: (range.start_key.to_vec(), 0),
+                end: (range.end_key.to_vec(), 0),
             })
-            .for_each(|e| count += e.key().len() + e.value().len());
+            .for_each(|e| count += e.key().0.len() + e.value().len());
         Ok(count as u64)
     }
 
@@ -114,13 +114,13 @@ impl RangePropertiesExt for SkiplistEngine {
         let mut cur_size = 0;
         engine
             .range(StdRange {
-                start: range.start_key.to_vec(),
-                end: range.end_key.to_vec(),
+                start: (range.start_key.to_vec(), 0),
+                end: (range.end_key.to_vec(), 0),
             })
             .for_each(|e| {
-                cur_size += e.key().len() + e.value().len();
+                cur_size += e.key().0.len() + e.value().len();
                 if cur_size as u64 >= split_size {
-                    split_keys.push(e.key().clone());
+                    split_keys.push(e.key().0.clone());
                     cur_size = 0;
                 }
             });
@@ -159,11 +159,11 @@ impl RangePropertiesExt for SkiplistEngine {
         let engine = self.get_cf_engine(cfname)?;
         Ok(engine
             .range(StdRange {
-                start: range.start_key.to_vec(),
-                end: range.end_key.to_vec(),
+                start: (range.start_key.to_vec(), 0),
+                end: (range.end_key.to_vec(), 0),
             })
             .nth((keys / 2) as usize)
-            .map(|e| e.key().to_owned()))
+            .map(|e| e.key().0.clone()))
     }
 
     fn divide_range(&self, range: Range, region_id: u64, parts: usize) -> Result<Vec<Vec<u8>>> {
@@ -192,13 +192,13 @@ impl RangePropertiesExt for SkiplistEngine {
         let mut count = 0;
         engine
             .range(StdRange {
-                start: range.start_key.to_vec(),
-                end: range.end_key.to_vec(),
+                start: (range.start_key.to_vec(), 0),
+                end: (range.end_key.to_vec(), 0),
             })
             .for_each(|e| {
                 if count >= parts {
                     count = 0;
-                    keys.push(e.key().to_owned());
+                    keys.push(e.key().0.clone());
                 }
                 count += 1;
             });

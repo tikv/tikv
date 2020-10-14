@@ -1,12 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::SkiplistEngine;
+use crate::{Key, SkiplistEngine, Value};
 use crossbeam_skiplist::map::Entry;
 use engine_traits::{
     DecodeProperties, MvccProperties, MvccPropertiesExt, Result, TableProperties,
     TablePropertiesCollection, TablePropertiesExt,
 };
-use txn_types::{Key, TimeStamp, Write, WriteType};
+use txn_types::{Key as TxnKey, TimeStamp, Write, WriteType};
 
 use std::ops::{RangeFrom, RangeInclusive};
 
@@ -19,23 +19,26 @@ impl MvccPropertiesExt for SkiplistEngine {
         end_key: &[u8],
     ) -> Result<MvccProperties> {
         let engine = self.get_cf_engine(cf).unwrap();
-        let range: Box<dyn Iterator<Item = Entry<Vec<u8>, Vec<u8>>>> = if end_key.is_empty() {
+        let range: Box<dyn Iterator<Item = Entry<Key, Value>>> = if end_key.is_empty() {
             Box::new(engine.range(RangeFrom {
-                start: start_key.to_vec(),
+                start: (start_key.to_vec(), 0),
             }))
         } else {
-            Box::new(engine.range(RangeInclusive::new(start_key.to_vec(), end_key.to_vec())))
+            Box::new(engine.range(RangeInclusive::new(
+                (start_key.to_vec(), 0),
+                (end_key.to_vec(), 0),
+            )))
         };
 
         let mut props = MvccProperties::new();
         let mut last_row: Option<Vec<u8>> = None;
         let mut row_versions = 0;
         for entry in range {
-            if !keys::validate_data_key(entry.key()) {
+            if !keys::validate_data_key(&entry.key().0) {
                 continue;
             }
 
-            let (k, ts) = match Key::split_on_ts_for(entry.key()) {
+            let (k, ts) = match TxnKey::split_on_ts_for(&entry.key().0) {
                 Ok((k, ts)) if ts < safe_point => (k, ts),
                 _ => {
                     continue;
@@ -61,7 +64,7 @@ impl MvccPropertiesExt for SkiplistEngine {
                 props.max_row_versions = row_versions;
             }
 
-            let write_type = match Write::parse_type(entry.value()) {
+            let write_type = match Write::parse_type(&entry.value()) {
                 Ok(v) => v,
                 Err(_) => {
                     continue;

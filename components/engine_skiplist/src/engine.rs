@@ -8,7 +8,7 @@ use engine_traits::{
     CFHandleExt, CfName, Error, IterOptions, Iterable, Iterator, KvEngine, MvccPropertiesExt,
     Peekable, ReadOptions, Result, SeekKey, SyncMutable, WriteOptions, CF_DEFAULT,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tikv_util::collections::HashMap;
 
 use crate::cf_handle::SkiplistCFHandle;
@@ -64,20 +64,25 @@ impl SkiplistEngineBuilder {
             engines,
             cf_handles,
             total_bytes: Arc::new(AtomicUsize::new(0)),
+            current_version: Arc::new(AtomicU64::new(0)),
         }
     }
 }
+
+pub type Key = (Vec<u8>, u64);
+pub type Value = Vec<u8>;
 
 #[derive(Clone, Debug)]
 pub struct SkiplistEngine {
     pub name: &'static str,
     pub total_bytes: Arc<AtomicUsize>,
-    pub(crate) engines: HashMap<SkiplistCFHandle, Arc<SkipMap<Vec<u8>, Vec<u8>>>>,
+    pub(crate) engines: HashMap<SkiplistCFHandle, Arc<SkipMap<Key, Value>>>,
     pub(crate) cf_handles: HashMap<CfName, SkiplistCFHandle>,
+    pub(crate) current_version: Arc<AtomicU64>,
 }
 
 impl SkiplistEngine {
-    pub fn get_cf_engine(&self, cf: &str) -> Result<&Arc<SkipMap<Vec<u8>, Vec<u8>>>> {
+    pub fn get_cf_engine(&self, cf: &str) -> Result<&Arc<SkipMap<Key, Value>>> {
         let handle = self
             .cf_handles
             .get(cf)
@@ -86,13 +91,45 @@ impl SkiplistEngine {
             .get(handle)
             .ok_or_else(|| Error::Engine("cannot get engine by handle".to_string()))
     }
+
+    pub fn put_version(&self, cf: &str, key: &[u8], value: &[u8], version: u64) -> Result<()> {
+        let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
+            .with_label_values(&[self.name, "put"])
+            .start_coarse_timer();
+        self.total_bytes.fetch_add(key.len(), Ordering::Relaxed);
+        self.total_bytes.fetch_add(value.len(), Ordering::Relaxed);
+        let engine = self.get_cf_engine(cf)?;
+        engine.insert((key.to_vec(), version), value.to_vec());
+        Ok(())
+    }
+
+    pub fn get_version(
+        &self,
+        opts: &ReadOptions,
+        cf: &str,
+        key: &[u8],
+        version: Option<u64>,
+    ) -> Result<Option<(Value, u64)>> {
+        let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
+            .with_label_values(&[self.name, "get"])
+            .start_coarse_timer();
+        let engine = self.get_cf_engine(cf)?;
+        let version = version.unwrap_or(std::u64::MAX);
+        if let Some(e) = engine.upper_bound(Bound::Excluded(&(key.to_vec(), version))) {
+            if e.key().0 == key {
+                return Ok(Some((e.value().to_vec(), e.key().1)));
+            }
+        };
+        Ok(None)
+    }
 }
 
 impl KvEngine for SkiplistEngine {
     type Snapshot = SkiplistSnapshot;
 
     fn snapshot(&self) -> Self::Snapshot {
-        SkiplistSnapshot::new(self.clone())
+        let version = self.current_version.load(Ordering::Acquire);
+        SkiplistSnapshot::new(self.clone(), version)
     }
     fn sync(&self) -> Result<()> {
         Ok(())
@@ -114,13 +151,8 @@ impl Peekable for SkiplistEngine {
         cf: &str,
         key: &[u8],
     ) -> Result<Option<Self::DBVector>> {
-        let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
-            .with_label_values(&[self.name, "get"])
-            .start_coarse_timer();
-        let engine = self.get_cf_engine(cf)?;
-        Ok(engine
-            .get(key)
-            .map(|e| SkiplistDBVector(e.value().to_vec())))
+        let value = self.get_version(opts, cf, key, None)?;
+        Ok(value.map(|(v, _)| SkiplistDBVector(v)))
     }
 }
 
@@ -129,13 +161,12 @@ impl SyncMutable for SkiplistEngine {
         self.put_cf(CF_DEFAULT, key, value)
     }
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
-            .with_label_values(&[self.name, "put"])
-            .start_coarse_timer();
-        self.total_bytes.fetch_add(key.len(), Ordering::Relaxed);
-        self.total_bytes.fetch_add(value.len(), Ordering::Relaxed);
-        let engine = self.get_cf_engine(cf)?;
-        engine.insert(key.to_vec(), value.to_vec());
+        self.put_version(
+            cf,
+            key,
+            value,
+            self.current_version.fetch_add(1, Ordering::AcqRel),
+        );
         Ok(())
     }
 
@@ -146,12 +177,18 @@ impl SyncMutable for SkiplistEngine {
         let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
             .with_label_values(&[self.name, "delete"])
             .start_coarse_timer();
+        let range = Range {
+            start: (key.to_vec(), 0),
+            end: (key.to_vec(), std::u64::MAX),
+        };
         let engine = self.get_cf_engine(cf)?;
-        if let Some(e) = engine.remove(key) {
-            self.total_bytes.fetch_sub(e.key().len(), Ordering::Relaxed);
+        engine.range(range).for_each(|e| {
+            e.remove();
+            self.total_bytes
+                .fetch_sub(e.key().0.len(), Ordering::Relaxed);
             self.total_bytes
                 .fetch_sub(e.value().len(), Ordering::Relaxed);
-        }
+        });
         Ok(())
     }
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
@@ -159,13 +196,14 @@ impl SyncMutable for SkiplistEngine {
             .with_label_values(&[self.name, "delete_range"])
             .start_coarse_timer();
         let range = Range {
-            start: begin_key.to_vec(),
-            end: end_key.to_vec(),
+            start: (begin_key.to_vec(), 0),
+            end: (end_key.to_vec(), 0),
         };
         let engine = self.get_cf_engine(cf)?;
         engine.range(range).for_each(|e| {
             e.remove();
-            self.total_bytes.fetch_sub(e.key().len(), Ordering::Relaxed);
+            self.total_bytes
+                .fetch_sub(e.key().0.len(), Ordering::Relaxed);
             self.total_bytes
                 .fetch_sub(e.value().len(), Ordering::Relaxed);
         });
@@ -183,11 +221,13 @@ impl Iterable for SkiplistEngine {
         let engine = self.get_cf_engine(cf)?.clone();
         let lower_bound = opts.lower_bound().map(|e| e.to_vec());
         let upper_bound = opts.upper_bound().map(|e| e.to_vec());
+        let version = self.current_version.load(Ordering::Acquire);
         Ok(SkiplistEngineIterator::new(
             self.name,
             engine,
             lower_bound,
             upper_bound,
+            version,
         ))
     }
 }
@@ -196,68 +236,95 @@ static ITERATOR_ID: AtomicUsize = AtomicUsize::new(0);
 
 pub struct SkiplistEngineIterator {
     name: &'static str,
-    engine: Arc<SkipMap<Vec<u8>, Vec<u8>>>,
+    engine: Arc<SkipMap<Key, Value>>,
     lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
-    last_kv: Option<(Vec<u8>, Vec<u8>)>,
+    last_kv: Option<(Key, Value)>,
+    version: u64,
 }
 
 impl SkiplistEngineIterator {
-    fn new(
+    pub fn new(
         name: &'static str,
-        engine: Arc<SkipMap<Vec<u8>, Vec<u8>>>,
+        engine: Arc<SkipMap<Key, Value>>,
         lower_bound: Option<Vec<u8>>,
         upper_bound: Option<Vec<u8>>,
+        version: u64,
     ) -> Self {
         let engine_clone = engine.clone();
-        let lower = engine_clone.lower_bound(
-            lower_bound
-                .as_ref()
-                .map(|e| Bound::Included(e.as_slice()))
-                .unwrap_or_else(|| Bound::Unbounded),
-        );
-        let last_kv = if let Some(l) = lower {
-            if check_in_range(l.key(), upper_bound.as_ref(), lower_bound.as_ref()) {
-                Some((l.key().to_vec(), l.value().to_vec()))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        Self {
+        let mut iter = Self {
             name,
             lower_bound,
             upper_bound,
             engine,
-            last_kv,
+            version,
+            last_kv: None,
+        };
+        let start = iter.seek_start();
+        iter.last_kv = start;
+        iter
+    }
+
+    fn seek_start(&self) -> Option<(Key, Value)> {
+        let lower_bound = self.lower_bound.as_ref().map(|v| (v.clone(), 0));
+        if let Some(mut e) = self.engine.lower_bound(
+            lower_bound
+                .as_ref()
+                .map(|v| Bound::Included(v))
+                .unwrap_or(Bound::Unbounded),
+        ) {
+            while !check_version(e.key(), self.version) {
+                if !e.move_next() {
+                    return None;
+                }
+            }
+            if check_in_range(
+                e.key(),
+                self.upper_bound.as_ref(),
+                self.lower_bound.as_ref(),
+            ) {
+                loop {
+                    if let Some(n) = e.next() {
+                        if n.key().0 == e.key().0 && check_version(n.key(), self.version) {
+                            e.move_next();
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                return Some((e.key().clone(), e.value().clone()));
+            }
         }
+        None
     }
 
-    fn lower_bound(&self) -> Option<SkipEntry<Vec<u8>, Vec<u8>>> {
-        self.engine.lower_bound(
-            self.lower_bound
+    fn seek_end(&self) -> Option<(Key, Value)> {
+        let upper_bound = self.upper_bound.as_ref().map(|v| (v.clone(), 0));
+        if let Some(mut e) = self.engine.upper_bound(
+            upper_bound
                 .as_ref()
-                .map(|e| Bound::Included(e.as_slice()))
-                .unwrap_or_else(|| Bound::Unbounded),
-        )
-    }
-
-    fn upper_bound(&self) -> Option<SkipEntry<Vec<u8>, Vec<u8>>> {
-        self.engine.upper_bound(
-            self.upper_bound
-                .as_ref()
-                .map(|e| Bound::Excluded(e.as_slice()))
-                .unwrap_or_else(|| Bound::Unbounded),
-        )
+                .map(|v| Bound::Excluded(v))
+                .unwrap_or(Bound::Unbounded),
+        ) {
+            while !check_version(e.key(), self.version) {
+                if !e.move_prev() {
+                    return None;
+                }
+            }
+            if check_in_range(
+                e.key(),
+                self.upper_bound.as_ref(),
+                self.lower_bound.as_ref(),
+            ) {
+                return Some((e.key().clone(), e.value().clone()));
+            }
+        }
+        None
     }
 }
 
-fn check_in_range(
-    key: &Vec<u8>,
-    upper_bound: Option<&Vec<u8>>,
-    lower_bound: Option<&Vec<u8>>,
-) -> bool {
+fn check_in_range(key: &Key, upper_bound: Option<&Vec<u8>>, lower_bound: Option<&Vec<u8>>) -> bool {
+    let (key, _) = key;
     if let Some(upper) = upper_bound {
         if upper <= key {
             return false;
@@ -271,6 +338,10 @@ fn check_in_range(
     true
 }
 
+fn check_version(key: &Key, version: u64) -> bool {
+    key.1 < version
+}
+
 impl Iterator for SkiplistEngineIterator {
     fn seek(&mut self, key: SeekKey) -> Result<bool> {
         let _timer = SKIPLIST_ACTION_HISTOGRAM_VEC
@@ -278,55 +349,42 @@ impl Iterator for SkiplistEngineIterator {
             .start_coarse_timer();
 
         self.last_kv = match key {
-            SeekKey::Start => {
-                if let Some(e) = self.lower_bound() {
-                    if check_in_range(
-                        e.key(),
-                        self.upper_bound.as_ref(),
-                        self.lower_bound.as_ref(),
-                    ) {
-                        Some((e.key().to_vec(), e.value().to_vec()))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            SeekKey::End => {
-                if let Some(e) = self.upper_bound() {
-                    if check_in_range(
-                        e.key(),
-                        self.upper_bound.as_ref(),
-                        self.lower_bound.as_ref(),
-                    ) {
-                        Some((e.key().to_vec(), e.value().to_vec()))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
+            SeekKey::Start => self.seek_start(),
+            SeekKey::End => self.seek_end(),
             SeekKey::Key(key) => {
+                // Check lower bound, seek to start if key is smaller than lower bound.
                 if let Some(l) = self.lower_bound.as_deref() {
                     if key < l {
                         return self.seek(SeekKey::Start);
                     }
                 }
+                // Check upper bound, set `last_kv` to None and return false if key is bigger
+                // than upper bound.
                 if let Some(u) = self.upper_bound.as_deref() {
                     if key > u {
                         self.last_kv = None;
                         return Ok(false);
                     }
                 }
-                if let Some(e) = self.engine.lower_bound(Bound::Included(key)) {
+                // Use `Skiplist::lower_bound` to seek key, `Bound::Included` indicates to return the first key >= `key`.
+                if let Some(mut e) = self.engine.lower_bound(Bound::Included(&(key.to_vec(), 0))) {
+                    while !check_version(e.key(), self.version) && e.move_next() {}
                     if check_in_range(
                         e.key(),
                         self.upper_bound.as_ref(),
                         self.lower_bound.as_ref(),
-                    ) {
-                        Some((e.key().to_vec(), e.value().to_vec()))
+                    ) && check_version(e.key(), self.version)
+                    {
+                        loop {
+                            if let Some(n) = e.next() {
+                                if n.key().0 == e.key().0 && check_version(n.key(), self.version) {
+                                    e.move_next();
+                                    continue;
+                                }
+                            }
+                            break;
+                        }
+                        Some((e.key().clone(), e.value().clone()))
                     } else {
                         None
                     }
@@ -345,24 +403,31 @@ impl Iterator for SkiplistEngineIterator {
         match key {
             SeekKey::Start | SeekKey::End => self.seek(key),
             SeekKey::Key(key) => {
+                // Check lower bound, set `last_kv` to None and return false if key is smaller
+                // then lower bound.
                 if let Some(l) = self.lower_bound.as_deref() {
                     if key < l {
+                        self.last_kv = None;
                         return Ok(false);
                     }
                 }
+                // Check upper bound, seek to end if key is bigger than upper bound.
                 if let Some(u) = self.upper_bound.as_deref() {
                     if key > u {
-                        self.last_kv = None;
                         return self.seek(SeekKey::End);
                     }
                 }
-                self.last_kv = if let Some(e) = self.engine.upper_bound(Bound::Excluded(key)) {
+                // Use `Skiplist::upper_bound` to seek key, `Bound::Excluded` indicates to return the last key < `key`.
+                self.last_kv = if let Some(mut e) =
+                    self.engine.upper_bound(Bound::Excluded(&(key.to_vec(), 0)))
+                {
+                    while !check_version(e.key(), self.version) && e.move_prev() {}
                     if check_in_range(
                         e.key(),
                         self.upper_bound.as_ref(),
                         self.lower_bound.as_ref(),
                     ) {
-                        Some((e.key().to_vec(), e.value().to_vec()))
+                        Some((e.key().clone(), e.value().clone()))
                     } else {
                         None
                     }
@@ -381,17 +446,19 @@ impl Iterator for SkiplistEngineIterator {
         if self.last_kv.is_none() {
             return Ok(false);
         }
-        let (last_key, _) = self.last_kv.as_ref().unwrap();
-        self.last_kv = if let Some(e) = self
+        let ((last_key, _), _) = self.last_kv.as_ref().unwrap();
+        self.last_kv = if let Some(mut e) = self
             .engine
-            .upper_bound(Bound::Excluded(last_key.as_slice()))
+            .upper_bound(Bound::Excluded(&(last_key.clone(), 0)))
         {
+            while !check_version(e.key(), self.version) && e.move_prev() {}
             if check_in_range(
                 e.key(),
                 self.upper_bound.as_ref(),
                 self.lower_bound.as_ref(),
-            ) {
-                Some((e.key().to_vec(), e.value().to_vec()))
+            ) && check_version(e.key(), self.version)
+            {
+                Some((e.key().clone(), e.value().clone()))
             } else {
                 None
             }
@@ -407,17 +474,27 @@ impl Iterator for SkiplistEngineIterator {
         if self.last_kv.is_none() {
             return Ok(false);
         }
-        let (last_key, _) = self.last_kv.as_ref().unwrap();
-        self.last_kv = if let Some(e) = self
+        let ((last_key, _), _) = self.last_kv.as_ref().unwrap();
+        self.last_kv = if let Some(mut e) = self
             .engine
-            .lower_bound(Bound::Excluded(last_key.as_slice()))
+            .lower_bound(Bound::Excluded(&(last_key.clone(), std::u64::MAX)))
         {
+            while !check_version(e.key(), self.version) && e.move_next() {}
             if check_in_range(
                 e.key(),
                 self.upper_bound.as_ref(),
                 self.lower_bound.as_ref(),
             ) {
-                Some((e.key().to_vec(), e.value().to_vec()))
+                loop {
+                    if let Some(n) = e.next() {
+                        if n.key().0 == e.key().0 && check_version(n.key(), self.version) {
+                            e.move_next();
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                Some((e.key().clone(), e.value().clone()))
             } else {
                 None
             }
@@ -428,7 +505,7 @@ impl Iterator for SkiplistEngineIterator {
     }
 
     fn key(&self) -> &[u8] {
-        let (key, _) = self.last_kv.as_ref().unwrap();
+        let ((key, _), _) = self.last_kv.as_ref().unwrap();
         key.as_slice()
     }
     fn value(&self) -> &[u8] {
@@ -452,23 +529,63 @@ mod tests {
         let engine = SkiplistEngineBuilder::new("test").cf_names(ALL_CFS).build();
         let _ = engine.get_cf_engine(CF_WRITE);
         let data = vec![
+            // k0
+            (b"k0", b"w1"),
+            (b"k0", b"w2"),
             (b"k0", b"v0"),
+            // k1
+            (b"k1", b"w1"),
+            (b"k1", b"w2"),
             (b"k1", b"v1"),
+            // k3
+            (b"k3", b"w1"),
+            (b"k3", b"w2"),
+            (b"k3", b"w3"),
+            (b"k3", b"w4"),
             (b"k3", b"v3"),
+            // k5
+            (b"k5", b"w1"),
             (b"k5", b"v5"),
+            // k7
+            (b"k7", b"w1"),
+            (b"k7", b"w2"),
             (b"k7", b"v7"),
-            (b"k8", b"v8"),
+            // k9
+            (b"k9", b"w1"),
+            (b"k9", b"v9"),
         ];
         for (k, v) in data {
             engine.put_cf(CF_WRITE, k, v).unwrap();
         }
         let start = KeyBuilder::from_slice(b"k1", 2, 0);
-        let end = KeyBuilder::from_slice(b"k8", 2, 0);
+        let end = KeyBuilder::from_slice(b"k9", 2, 0);
         let opts = IterOptions::new(Some(start), Some(end), false);
-        let mut iter = engine.iterator_cf_opt(CF_WRITE, opts).unwrap();
+        let snapshot = engine.snapshot();
+        let mut iter = snapshot.iterator_cf_opt(CF_WRITE, opts).unwrap();
         assert_eq!(iter.key(), b"k1");
         assert_eq!(iter.value(), b"v1");
-        assert!(!iter.seek(SeekKey::Key(b"k8")).unwrap());
+
+        let data = vec![
+            (b"k1", b"w3"),
+            (b"k3", b"w5"),
+            (b"k4", b"w1"),
+            (b"k7", b"w3"),
+            (b"k8", b"w1"),
+        ];
+        for (k, v) in data {
+            engine.put_cf(CF_WRITE, k, v).unwrap();
+        }
+        let v1 = snapshot.get_value_cf(CF_WRITE, b"k1").unwrap();
+        assert_eq!(v1.unwrap().as_ref(), b"v1");
+        assert!(iter.seek(SeekKey::End).unwrap());
+        assert_eq!(iter.key(), b"k7");
+        assert_eq!(iter.value(), b"v7");
+
+        assert!(iter.seek(SeekKey::Start).unwrap());
+        assert_eq!(iter.key(), b"k1");
+        assert_eq!(iter.value(), b"v1");
+
+        assert!(!iter.seek(SeekKey::Key(b"k9")).unwrap());
 
         assert!(iter.seek(SeekKey::Key(b"k0")).unwrap());
         assert_eq!(iter.key(), b"k1");
@@ -478,7 +595,7 @@ mod tests {
         assert_eq!(iter.key(), b"k7");
         assert_eq!(iter.value(), b"v7");
 
-        assert!(!iter.next().unwrap());
+        assert!(!iter.next().unwrap(), "{:?}", iter.key());
 
         assert!(iter.seek(SeekKey::Key(b"k2")).unwrap());
         assert_eq!(iter.key(), b"k3");
@@ -487,6 +604,34 @@ mod tests {
         assert!(iter.seek(SeekKey::Key(b"k6")).unwrap());
         assert_eq!(iter.key(), b"k7");
         assert_eq!(iter.value(), b"v7");
+
+        let expected = vec![
+            (b"k1", b"v1"),
+            (b"k3", b"v3"),
+            (b"k5", b"v5"),
+            (b"k7", b"v7"),
+        ];
+        let mut i = 0;
+        assert!(iter.seek(SeekKey::Start).unwrap());
+        assert_eq!(iter.key(), b"k1");
+        assert_eq!(iter.value(), b"v1");
+        while iter.valid().unwrap() {
+            assert_eq!(iter.key(), expected[i].0);
+            assert_eq!(iter.value(), expected[i].1);
+            i += 1;
+            iter.next().unwrap();
+        }
+
+        let mut i = expected.len();
+        assert!(iter.seek(SeekKey::End).unwrap());
+        assert_eq!(iter.key(), b"k7");
+        assert_eq!(iter.value(), b"v7");
+        while iter.valid().unwrap() {
+            assert_eq!(iter.key(), expected[i - 1].0);
+            assert_eq!(iter.value(), expected[i - 1].1);
+            i -= 1;
+            iter.prev().unwrap();
+        }
     }
 
     #[test]
@@ -494,11 +639,29 @@ mod tests {
         let engine = SkiplistEngineBuilder::new("test").cf_names(ALL_CFS).build();
         let _ = engine.get_cf_engine(CF_WRITE);
         let data = vec![
+            // k0
+            (b"k0", b"w1"),
+            (b"k0", b"w2"),
             (b"k0", b"v0"),
+            // k1
+            (b"k1", b"w1"),
+            (b"k1", b"w2"),
             (b"k1", b"v1"),
+            // k3
+            (b"k3", b"w1"),
+            (b"k3", b"w2"),
+            (b"k3", b"w3"),
+            (b"k3", b"w4"),
             (b"k3", b"v3"),
+            // k5
+            (b"k5", b"w1"),
             (b"k5", b"v5"),
+            // k7
+            (b"k7", b"w1"),
+            (b"k7", b"w2"),
             (b"k7", b"v7"),
+            // k8
+            (b"k8", b"w1"),
             (b"k8", b"v8"),
         ];
         for (k, v) in data {
@@ -510,7 +673,23 @@ mod tests {
         let mut iter = engine.iterator_cf_opt(CF_WRITE, opts).unwrap();
         assert_eq!(iter.key(), b"k1");
         assert_eq!(iter.value(), b"v1");
+
+        let data = vec![
+            (b"k1", b"w3"),
+            (b"k3", b"w5"),
+            (b"k4", b"w1"),
+            (b"k7", b"w3"),
+            (b"k8", b"w1"),
+        ];
+        for (k, v) in data {
+            engine.put_cf(CF_WRITE, k, v).unwrap();
+        }
+
         assert!(iter.seek_for_prev(SeekKey::Key(b"k9")).unwrap());
+        assert_eq!(iter.key(), b"k7");
+        assert_eq!(iter.value(), b"v7");
+
+        assert!(iter.seek_for_prev(SeekKey::Key(b"k8")).unwrap());
         assert_eq!(iter.key(), b"k7");
         assert_eq!(iter.value(), b"v7");
 
