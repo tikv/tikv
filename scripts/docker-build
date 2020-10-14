@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# To avoid rebuilds we first install all Cargo dependencies
+# This process requires running this script
+set -euo pipefail
+
+# Create a shadow setup under the directory docker/
+# This has only what is needed to install all dependencies
+components=($(find . -type f -name 'Cargo.toml' -exec dirname {} \; | grep -v .docker | sort -u))
+for component in "${components[@]}"; do
+    mkdir -p ".docker/${component}/src"
+    lib_rs="${component}/src/lib.rs"
+    if ! [[ -e ".docker/$lib_rs" ]] ; then
+        touch ".docker/$lib_rs"
+    fi
+    cargo="${component}/Cargo.toml"
+    # Use chksum to avoid unnecessary updates that would ruin the docker cache
+    if [[ ! -e ".docker/$cargo" ]] || [[ $(cksum "$cargo") != $(cksum ".docker/$cargo") ]] ; then
+        cp "$cargo" ".docker/$cargo"
+    fi
+done
+
+exec docker build "$@" .
