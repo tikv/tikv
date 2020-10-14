@@ -68,14 +68,14 @@ pub fn ord(arg: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(Some(result))
 }
 
-#[rpn_fn(varg, min_args = 1)]
+#[rpn_fn(varg, writer, min_args = 1)]
 #[inline]
-pub fn concat(args: &[BytesRef]) -> Result<Option<Bytes>> {
-    let mut output = Bytes::new();
+pub fn concat(args: &[BytesRef], writer: BytesWriter) -> Result<BytesGuard> {
+    let mut writer = writer.begin();
     for arg in args {
-        output.extend_from_slice(arg);
+        writer.partial_write(arg);
     }
-    Ok(Some(output))
+    Ok(writer.finish())
 }
 
 #[rpn_fn(nullable, varg, min_args = 2)]
