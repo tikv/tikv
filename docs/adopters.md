@@ -39,7 +39,7 @@ The following are a list of TiKV adopters deploying TiKV with TiDB.
 |[VIPKID](https://www.crunchbase.com/organization/vipkid)|EdTech||
 |[Yuanfudao.com](https://www.crunchbase.com/organization/yuanfudao)|EdTech|[English](https://pingcap.com/blog/2017-08-08-tidbforyuanfudao/); [Chinese](https://pingcap.com/cases-cn/user-case-yuanfudao/)|
 |[Bank of Beijing](https://en.wikipedia.org/wiki/Bank_of_Beijing)|Banking|[English](https://pingcap.com/case-studies/how-we-use-a-distributed-database-to-achieve-horizontal-scaling-without-downtime); Chinese [#1](https://pingcap.com/cases-cn/user-case-beijing-bank/), [#2](https://pingcap.com/cases-cn/user-case-beijing-bank-2/)|
-|[Bank of China](https://en.wikipedia.org/wiki/Bank_of_China)|Banking|[English](https://en.pingcap.com/case-studies/how-bank-of-china-uses-a-scale-out-database-to-support-zabbix-monitoring-at-scale);[Chinese](https://pingcap.com/cases-cn/user-case-bank-of-china/)|
+|[Bank of China](https://en.wikipedia.org/wiki/Bank_of_China)|Banking|[English](https://en.pingcap.com/case-studies/how-bank-of-china-uses-a-scale-out-database-to-support-zabbix-monitoring-at-scale); [Chinese](https://pingcap.com/cases-cn/user-case-bank-of-china/)|
 |[Industrial and Commercial Bank of China](https://en.wikipedia.org/wiki/Industrial_and_Commercial_Bank_of_China)|Banking||
 |[Yimian Data](https://www.crunchbase.com/organization/yimian-data)|Big Data|[Chinese](https://www.pingcap.com/cases-cn/user-case-yimian)|
 |[CAASDATA](https://www.caasdata.com/)|Big Data|[Chinese](https://pingcap.com/cases-cn/user-case-kasi/)|
@@ -54,7 +54,7 @@ The following are a list of TiKV adopters deploying TiKV with TiDB.
 |[Hoodinn](https://www.crunchbase.com/organization/hoodinn)|Gaming||
 |[SEA group](https://sea-group.org/?lang=en)|Gaming||
 |[Zhaopin.com](https://www.crunchbase.com/organization/zhaopin)|Recruiting||
-|[BIGO](https://www.crunchbase.com/organization/bigo-technology); |Live Streaming|[English](https://en.pingcap.com/case-studies/why-we-chose-an-htap-database-over-mysql-for-horizontal-scaling-and-complex-queries);[Chinese](https://pingcap.com/cases-cn/user-case-bigo/)|
+|[BIGO](https://www.crunchbase.com/organization/bigo-technology); |Live Streaming|[English](https://en.pingcap.com/case-studies/why-we-chose-an-htap-database-over-mysql-for-horizontal-scaling-and-complex-queries); [Chinese](https://pingcap.com/cases-cn/user-case-bigo/)|
 |[Panda.tv](https://www.crunchbase.com/organization/panda-tv)|Live Streaming||
 |[VNG](https://en.wikipedia.org/wiki/VNG_Corporation)|Mobile Payment|English [#1](https://pingcap.com/case-studies/tidb-at-zalopay-infrastructure-lesson-learned/), [#2](https://pingcap.com/case-studies/zalopay-using-a-scale-out-mysql-alternative-to-serve-millions-of-users)|
 |[Ping++](https://www.crunchbase.com/organization/ping-5)|Mobile Payment|[Chinese](https://pingcap.com/cases-cn/user-case-ping++/)|
