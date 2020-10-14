@@ -30,9 +30,9 @@ The following are a list of TiKV adopters deploying TiKV with TiDB.
 |[Xiaohongshu](https://en.wikipedia.org/wiki/Xiaohongshu)|E-commerce|[English](https://pingcap.com/case-studies/how-we-use-a-scale-out-htap-database-for-real-time-analytics-and-complex-queries); Chinese [#1](https://pingcap.com/cases-cn/user-case-xiaohongshu/), [#2](https://pingcap.com/cases-cn/user-case-xiaohongshu-2/)|
 |[Happigo.com](https://www.crunchbase.com/organization/happigo-com)|E-commerce||
 |[Yimutian](http://www.ymt.com/)|E-commerce||
-|[Youju Tech](https://www.ujuz.cn/)|E-Commerce||
-|[Maizuo](https://www.crunchbase.com/organization/maizhuo)|E-Commerce||
-|[Mogujie](https://www.crunchbase.com/organization/mogujie)|E-Commerce||
+|[Youju Tech](https://www.ujuz.cn/)|E-commerce||
+|[Maizuo](https://www.crunchbase.com/organization/maizhuo)|E-commerce||
+|[Mogujie](https://www.crunchbase.com/organization/mogujie)|E-commerce||
 |[Xiaomi](https://en.wikipedia.org/wiki/Xiaomi)|Consumer Electronics|[Chinese](https://pingcap.com/cases-cn/user-case-xiaomi/)|
 |[Qunar.com](https://www.crunchbase.com/organization/qunar-com)|Travel|[Chinese](https://www.pingcap.com/cases-cn/user-case-qunar/)|
 |[Hulu](https://www.hulu.com)|Entertainment||
