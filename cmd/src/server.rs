@@ -132,14 +132,14 @@ struct TiKVServer<ER: RaftEngine> {
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
-    router: RaftRouter<RocksEngine, ER>,
-    system: Option<RaftBatchSystem<RocksEngine, ER>>,
+    router: RaftRouter<RocksEngine>,
+    system: Option<RaftBatchSystem<RocksEngine>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<TiKVEngines<ER>>,
-    servers: Option<Servers<ER>>,
+    servers: Option<Servers>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
@@ -150,13 +150,13 @@ struct TiKVServer<ER: RaftEngine> {
 struct TiKVEngines<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
+    engine: RaftKv<ServerRaftStoreRouter<RocksEngine>>,
 }
 
-struct Servers<ER: RaftEngine> {
+struct Servers {
     lock_mgr: LockManager,
-    server: Server<RaftRouter<RocksEngine, ER>, resolve::PdStoreAddrResolver>,
-    node: Node<RpcClient, ER>,
+    server: Server<RaftRouter<RocksEngine>, resolve::PdStoreAddrResolver>,
+    node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
 }
@@ -438,7 +438,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_gc_worker(
         &mut self,
-    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>, RaftRouter<RocksEngine, ER>> {
+    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>, RaftRouter<RocksEngine>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -458,10 +458,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_servers(
         &mut self,
-        gc_worker: &GcWorker<
-            RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
-            RaftRouter<RocksEngine, ER>,
-        >,
+        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>, RaftRouter<RocksEngine>>,
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -859,7 +856,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
     }
 
-    fn stop(self) {
+    fn stop(mut self) {
         let mut servers = self.servers.unwrap();
         servers
             .server
@@ -872,6 +869,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         servers.lock_mgr.stop();
 
         self.to_stop.into_iter().for_each(|s| s.stop());
+        if let Some(engines) = self.engines.take() {
+            engines.engines.raft.stop();
+        }
     }
 }
 

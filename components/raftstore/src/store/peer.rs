@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteOptions};
+use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot};
 use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
@@ -42,6 +42,7 @@ use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask}
 use crate::store::{Callback, Config, GlobalReplicationState, PdTask, ReadResponse};
 use crate::{Error, Result};
 
+use futures::executor::block_on;
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -53,9 +54,7 @@ use tokio::sync::mpsc::Receiver as FutureReceiver;
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
 use super::metrics::*;
-use super::peer_storage::{
-    write_peer_state, ApplySnapResult, CheckApplyingSnapStatus, InvokeContext, PeerStorage,
-};
+use super::peer_storage::{ApplySnapResult, CheckApplyingSnapStatus, InvokeContext, PeerStorage};
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{
@@ -613,9 +612,9 @@ where
 
     /// Register self to apply_scheduler so that the peer is then usable.
     /// Also trigger `RegionChangeEvent::Create` here.
-    pub fn activate<T, C>(
+    pub fn activate<T: Transport>(
         &mut self,
-        ctx: &PollContext<EK, ER, T, C>,
+        ctx: &PollContext<EK, ER, T>,
         apply_receiver: Option<FutureReceiver<ApplyTask<EK>>>,
     ) {
         let reg = Registration::new(self);
@@ -688,9 +687,9 @@ where
     }
 
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
-    pub fn maybe_destroy<T, C>(
+    pub fn maybe_destroy<T: Transport>(
         &mut self,
-        ctx: &PollContext<EK, ER, T, C>,
+        ctx: &PollContext<EK, ER, T>,
     ) -> Option<DestroyPeerJob> {
         if self.pending_remove {
             info!(
@@ -736,11 +735,7 @@ where
     /// 1. Set the region to tombstone;
     /// 2. Clear data;
     /// 3. Notify all pending requests.
-    pub fn destroy<T, C>(
-        &mut self,
-        ctx: &PollContext<EK, ER, T, C>,
-        keep_data: bool,
-    ) -> Result<()> {
+    pub fn destroy(&mut self, keep_data: bool) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = Instant::now();
 
@@ -752,20 +747,12 @@ where
         );
 
         // Set Tombstone state explicitly
-        let mut kv_wb = ctx.engines.kv.write_batch();
-        let mut raft_wb = ctx.engines.raft.log_batch(1024);
-        self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
-        write_peer_state(
-            &mut kv_wb,
-            &region,
-            PeerState::Tombstone,
-            self.pending_merge_state.clone(),
-        )?;
-        // write kv rocksdb first in case of restart happen between two write
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
-        ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
-        ctx.engines.raft.consume(&mut raft_wb, true)?;
+        self.mut_store().clear_meta()?;
+        let state = self.pending_merge_state.clone();
+        self.mut_store()
+            .write_peer_state(&region, PeerState::Tombstone, state)?;
+        self.mut_store().flush_kv_state()?;
+        block_on(self.mut_store().flush())?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -1011,9 +998,9 @@ where
     }
 
     /// Steps the raft message.
-    pub fn step<T, C>(
+    pub fn step<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         mut m: eraftpb::Message,
     ) -> Result<()> {
         fail_point!(
@@ -1104,9 +1091,9 @@ where
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
-    pub fn collect_pending_peers<T, C>(
+    pub fn collect_pending_peers<T: Transport>(
         &mut self,
-        ctx: &PollContext<EK, ER, T, C>,
+        ctx: &PollContext<EK, ER, T>,
     ) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
@@ -1201,7 +1188,10 @@ where
         false
     }
 
-    pub fn check_stale_state<T, C>(&mut self, ctx: &mut PollContext<EK, ER, T, C>) -> StaleState {
+    pub fn check_stale_state<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) -> StaleState {
         if self.is_leader() {
             // Leaders always have valid state.
             //
@@ -1241,7 +1231,7 @@ where
         }
     }
 
-    fn on_role_changed<T, C>(&mut self, ctx: &mut PollContext<EK, ER, T, C>, ready: &Ready) {
+    fn on_role_changed<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
         // Update leader lease when the Raft state changes.
         if let Some(ss) = ready.ss() {
             match ss.raft_state {
@@ -1412,9 +1402,9 @@ where
             && !self.replication_sync
     }
 
-    pub fn handle_raft_ready_append<T: Transport, C>(
+    pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
     ) -> Option<(Ready, InvokeContext)> {
         if self.pending_remove {
             return None;
@@ -1440,8 +1430,11 @@ where
         if !self.pending_messages.is_empty() {
             fail_point!("raft_before_follower_send");
             let messages = mem::replace(&mut self.pending_messages, vec![]);
-            ctx.need_flush_trans = true;
-            self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
+            self.send(
+                ctx.trans.as_mut().unwrap(),
+                messages,
+                &mut ctx.raft_metrics.message,
+            );
         }
         let mut destroy_regions = vec![];
         if self.has_pending_snapshot() {
@@ -1457,7 +1450,6 @@ where
                 );
                 return None;
             }
-
             let meta = ctx.store_meta.lock().unwrap();
             // For merge process, the stale source peer is destroyed asynchronously when applying
             // snapshot or creating new peer. So here checks whether there is any overlap, if so,
@@ -1585,14 +1577,13 @@ where
             // For more details, check raft thesis 10.2.1.
             fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
-            ctx.need_flush_trans = true;
-            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message);
+            self.send(
+                ctx.trans.as_mut().unwrap(),
+                msgs,
+                &mut ctx.raft_metrics.message,
+            );
         }
-
-        let invoke_ctx = match self
-            .mut_store()
-            .handle_raft_ready(ctx, &ready, destroy_regions)
-        {
+        let invoke_ctx = match self.mut_store().handle_raft_ready(&ready, destroy_regions) {
             Ok(r) => r,
             Err(e) => {
                 // We may have written something to writebatch and it can't be reverted, so has
@@ -1604,9 +1595,9 @@ where
         Some((ready, invoke_ctx))
     }
 
-    pub fn post_raft_ready_append<T: Transport, C>(
+    pub fn post_raft_ready_append<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         ready: &mut Ready,
         invoke_ctx: InvokeContext,
     ) -> Option<ApplySnapResult> {
@@ -1643,11 +1634,10 @@ where
                 self.pending_messages = mem::replace(&mut ready.messages, vec![]);
             } else {
                 self.send(
-                    &mut ctx.trans,
+                    ctx.trans.as_mut().unwrap(),
                     ready.messages.drain(..),
                     &mut ctx.raft_metrics.message,
                 );
-                ctx.need_flush_trans = true;
             }
         }
 
@@ -1661,11 +1651,10 @@ where
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply<T, C>(
+    pub fn handle_raft_ready_apply<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         ready: &mut Ready,
-        invoke_ctx: &InvokeContext,
     ) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
@@ -1675,7 +1664,6 @@ where
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
         if ready.snapshot().is_empty() {
-            debug_assert!(!invoke_ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
             let mut lease_to_be_updated = self.is_leader();
@@ -1781,10 +1769,10 @@ where
         self.proposals.gc();
     }
 
-    fn response_read<T, C>(
+    fn response_read<T: Transport>(
         &self,
         read: &mut ReadIndexRequest<EK::Snapshot>,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         replica_read: bool,
     ) {
         debug!(
@@ -1817,7 +1805,10 @@ where
     }
 
     /// Responses to the ready read index request on the replica, the replica is not a leader.
-    fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<EK, ER, T, C>) {
+    fn post_pending_read_index_on_replica<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) {
         while let Some(mut read) = self.pending_reads.pop_front() {
             assert!(read.read_index.is_some());
             let is_read_index_request = read.cmds.len() == 1
@@ -1836,7 +1827,7 @@ where
         }
     }
 
-    fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<EK, ER, T, C>, ready: &Ready) {
+    fn apply_reads<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
         let mut propose_time = None;
         let states = ready.read_states().iter().map(|state| {
             let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
@@ -1880,9 +1871,9 @@ where
         }
     }
 
-    pub fn post_apply<T, C>(
+    pub fn post_apply<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         apply_state: RaftApplyState,
         applied_index_term: u64,
         apply_metrics: &ApplyMetrics,
@@ -1941,10 +1932,10 @@ where
     }
 
     /// Try to renew leader lease.
-    fn maybe_renew_leader_lease<T, C>(
+    fn maybe_renew_leader_lease<T: Transport>(
         &mut self,
         ts: Timespec,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         progress: Option<ReadProgress>,
     ) {
         // A nonleader peer should never has leader lease.
@@ -2023,9 +2014,9 @@ where
     /// Propose a request.
     ///
     /// Return true means the request has been proposed successfully.
-    pub fn propose<T: Transport, C>(
+    pub fn propose<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
@@ -2095,9 +2086,9 @@ where
         }
     }
 
-    fn post_propose<T, C>(
+    fn post_propose<T: Transport>(
         &mut self,
-        poll_ctx: &mut PollContext<EK, ER, T, C>,
+        poll_ctx: &mut PollContext<EK, ER, T>,
         mut p: Proposal<EK::Snapshot>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
@@ -2116,9 +2107,9 @@ where
     /// right after all conf change is applied.
     /// If 'allow_remove_leader' is false then the peer to be removed should
     /// not be the leader.
-    fn check_conf_change<T, C>(
+    fn check_conf_change<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         change_peers: &[ChangePeerRequest],
         cc: &impl ConfChangeI,
     ) -> Result<()> {
@@ -2271,9 +2262,9 @@ where
         true
     }
 
-    fn ready_to_transfer_leader<T, C>(
+    fn ready_to_transfer_leader<T: Transport>(
         &self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         mut index: u64,
         peer: &metapb::Peer,
     ) -> Option<&'static str> {
@@ -2311,9 +2302,9 @@ where
         None
     }
 
-    fn read_local<T, C>(
+    fn read_local<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) {
@@ -2374,9 +2365,9 @@ where
     // 1. The region is in merging or splitting;
     // 2. The message is stale and dropped by the Raft group internally;
     // 3. There is already a read request proposed in the current lease;
-    fn read_index<T: Transport, C>(
+    fn read_index<T: Transport>(
         &mut self,
-        poll_ctx: &mut PollContext<EK, ER, T, C>,
+        poll_ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
         cb: Callback<EK::Snapshot>,
@@ -2526,9 +2517,9 @@ where
         Ok((min_m.unwrap_or(0), min_c.unwrap_or(0)))
     }
 
-    fn pre_propose_prepare_merge<T, C>(
+    fn pre_propose_prepare_merge<T: Transport>(
         &self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
     ) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
@@ -2598,9 +2589,9 @@ where
         Ok(())
     }
 
-    fn pre_propose<T, C>(
+    fn pre_propose<T: Transport>(
         &self,
-        poll_ctx: &mut PollContext<EK, ER, T, C>,
+        poll_ctx: &mut PollContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
     ) -> Result<ProposalContext> {
         poll_ctx.coprocessor_host.pre_propose(self.region(), req)?;
@@ -2631,9 +2622,9 @@ where
     /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located on `index` position.
     /// Ok(Either::Right(index)) means the proposal is rejected by `CmdEpochChecker` and the `index` is the position of
     /// the last conflict admin cmd.
-    fn propose_normal<T, C>(
+    fn propose_normal<T: Transport>(
         &mut self,
-        poll_ctx: &mut PollContext<EK, ER, T, C>,
+        poll_ctx: &mut PollContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
         if self.pending_merge_state.is_some()
@@ -2712,9 +2703,9 @@ where
         Ok(Either::Left(propose_index))
     }
 
-    fn execute_transfer_leader<T, C>(
+    fn execute_transfer_leader<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         msg: &eraftpb::Message,
     ) {
         // log_term is set by original leader, represents the term last log is written
@@ -2786,9 +2777,9 @@ where
     ///     does, it calls raft transfer_leader API to do the remaining work.
     ///
     /// See also: tikv/rfcs#37.
-    fn propose_transfer_leader<T, C>(
+    fn propose_transfer_leader<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> bool {
@@ -2814,9 +2805,9 @@ where
     /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located on `index` position.
     /// Ok(Either::Right(index)) means the proposal is rejected by `CmdEpochChecker` and the `index` is the position of
     /// the last conflict admin cmd.
-    fn propose_conf_change<T, C>(
+    fn propose_conf_change<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         req: &RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
         if self.pending_merge_state.is_some() {
@@ -2874,9 +2865,9 @@ where
     // 2. Removing the leader is not allowed in the configuration;
     // 3. The conf change makes the raft group not healthy;
     // 4. The conf change is dropped by raft group internally.
-    fn propose_conf_change_internal<T, C, CP: ChangePeerI>(
+    fn propose_conf_change_internal<T: Transport, CP: ChangePeerI>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         change_peer: CP,
         data: Vec<u8>,
     ) -> Result<u64> {
@@ -2909,9 +2900,9 @@ where
         Ok(propose_index)
     }
 
-    fn handle_read<T, C>(
+    fn handle_read<T: Transport>(
         &self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
@@ -3042,7 +3033,7 @@ where
         Some(status)
     }
 
-    pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<EK, ER, T, C>) {
+    pub fn heartbeat_pd<T: Transport>(&mut self, ctx: &PollContext<EK, ER, T>) {
         let task = PdTask::Heartbeat {
             term: self.term(),
             region: self.region().clone(),
@@ -3138,7 +3129,7 @@ where
         }
     }
 
-    pub fn bcast_wake_up_message<T: Transport, C>(&self, ctx: &mut PollContext<EK, ER, T, C>) {
+    pub fn bcast_wake_up_message<T: Transport>(&self, ctx: &mut PollContext<EK, ER, T>) {
         for peer in self.region().get_peers() {
             if peer.get_id() == self.peer_id() {
                 continue;
@@ -3150,7 +3141,7 @@ where
             send_msg.set_to_peer(peer.clone());
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-            if let Err(e) = ctx.trans.send(send_msg) {
+            if let Err(e) = ctx.trans.as_mut().unwrap().send(send_msg) {
                 error!(?e;
                     "failed to send wake up message";
                     "region_id" => self.region_id,
@@ -3158,15 +3149,13 @@ where
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
                 );
-            } else {
-                ctx.need_flush_trans = true;
             }
         }
     }
 
-    pub fn bcast_check_stale_peer_message<T: Transport, C>(
+    pub fn bcast_check_stale_peer_message<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
     ) {
         if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver() {
             self.check_stale_conf_ver = self.region().get_region_epoch().get_conf_ver();
@@ -3183,7 +3172,7 @@ where
             send_msg.set_to_peer(peer.clone());
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgCheckStalePeer);
-            if let Err(e) = ctx.trans.send(send_msg) {
+            if let Err(e) = ctx.trans.as_mut().unwrap().send(send_msg) {
                 error!(?e;
                     "failed to send check stale peer message";
                     "region_id" => self.region_id,
@@ -3191,8 +3180,6 @@ where
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
                 );
-            } else {
-                ctx.need_flush_trans = true;
             }
         }
     }
@@ -3208,10 +3195,10 @@ where
         }
     }
 
-    pub fn send_want_rollback_merge<T: Transport, C>(
+    pub fn send_want_rollback_merge<T: Transport>(
         &self,
         premerge_commit: u64,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
     ) {
         let mut send_msg = RaftMessage::default();
         send_msg.set_region_id(self.region_id);
@@ -3233,7 +3220,7 @@ where
         let extra_msg = send_msg.mut_extra_msg();
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_premerge_commit(premerge_commit);
-        if let Err(e) = ctx.trans.send(send_msg) {
+        if let Err(e) = ctx.trans.as_mut().unwrap().send(send_msg) {
             error!(?e;
                 "failed to send want rollback merge message";
                 "region_id" => self.region_id,
@@ -3241,8 +3228,6 @@ where
                 "target_peer_id" => to_peer.get_id(),
                 "target_store_id" => to_peer.get_store_id(),
             );
-        } else {
-            ctx.need_flush_trans = true;
         }
     }
 
@@ -3379,10 +3364,11 @@ where
     }
 }
 
-impl<EK, ER, T, C> ReadExecutor<EK> for PollContext<EK, ER, T, C>
+impl<EK, ER, T> ReadExecutor<EK> for PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
+    T: Transport,
 {
     fn get_engine(&self) -> &EK {
         &self.engines.kv

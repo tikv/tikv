@@ -2,14 +2,14 @@
 
 use std::cell::RefCell;
 
-use crossbeam::{SendError, TrySendError};
-use engine_traits::{KvEngine, RaftEngine, Snapshot};
+use crossbeam::TrySendError;
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
 use tikv_util::time::ThreadReadId;
 
-use crate::store::fsm::RaftRouter;
+use crate::store::fsm::{AsyncRouter, AsyncRouterError, RaftRouter};
 use crate::store::transport::{CasualRouter, ProposalRouter, StoreRouter};
 use crate::store::{
     Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
@@ -146,12 +146,12 @@ where
 }
 
 /// A router that routes messages to the raftstore
-pub struct ServerRaftStoreRouter<EK: KvEngine, ER: RaftEngine> {
-    router: RaftRouter<EK, ER>,
-    local_reader: RefCell<LocalReader<RaftRouter<EK, ER>, EK>>,
+pub struct ServerRaftStoreRouter<EK: KvEngine> {
+    router: RaftRouter<EK>,
+    local_reader: RefCell<LocalReader<RaftRouter<EK>, EK>>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine> Clone for ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine> Clone for ServerRaftStoreRouter<EK> {
     fn clone(&self) -> Self {
         ServerRaftStoreRouter {
             router: self.router.clone(),
@@ -160,12 +160,12 @@ impl<EK: KvEngine, ER: RaftEngine> Clone for ServerRaftStoreRouter<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine> ServerRaftStoreRouter<EK> {
     /// Creates a new router.
     pub fn new(
-        router: RaftRouter<EK, ER>,
-        reader: LocalReader<RaftRouter<EK, ER>, EK>,
-    ) -> ServerRaftStoreRouter<EK, ER> {
+        router: RaftRouter<EK>,
+        reader: LocalReader<RaftRouter<EK>, EK>,
+    ) -> ServerRaftStoreRouter<EK> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
@@ -174,13 +174,13 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK> for ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine> StoreRouter<EK> for ServerRaftStoreRouter<EK> {
     fn send(&self, msg: StoreMsg<EK>) -> RaftStoreResult<()> {
         StoreRouter::send(&self.router, msg)
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> ProposalRouter<EK::Snapshot> for ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine> ProposalRouter<EK::Snapshot> for ServerRaftStoreRouter<EK> {
     fn send(
         &self,
         cmd: RaftCommand<EK::Snapshot>,
@@ -189,13 +189,13 @@ impl<EK: KvEngine, ER: RaftEngine> ProposalRouter<EK::Snapshot> for ServerRaftSt
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> CasualRouter<EK> for ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine> CasualRouter<EK> for ServerRaftStoreRouter<EK> {
     fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> RaftStoreResult<()> {
         CasualRouter::send(&self.router, region_id, msg)
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK> {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         RaftStoreRouter::send_raft_msg(&self.router, msg)
     }
@@ -214,7 +214,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine> LocalReadRouter<EK> for ServerRaftStoreRouter<EK> {
     fn read(
         &self,
         read_id: Option<ThreadReadId>,
@@ -240,7 +240,7 @@ pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreErro
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for RaftRouter<EK, ER> {
+impl<EK: KvEngine> RaftStoreRouter<EK> for RaftRouter<EK> {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let region_id = msg.get_region_id();
         self.send_raft_message(msg)
@@ -252,9 +252,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for RaftRouter<EK, ER> {
         region_id: u64,
         msg: SignificantMsg<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
-        if let Err(SendError(msg)) = self
-            .router
-            .force_send(region_id, PeerMsg::SignificantMsg(msg))
+        if let Err(AsyncRouterError::Closed(msg)) =
+            self.router.send(region_id, PeerMsg::SignificantMsg(msg))
         {
             // TODO: panic here once we can detect system is shutting down reliably.
             error!("failed to send significant msg"; "msg" => ?msg);
@@ -265,6 +264,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for RaftRouter<EK, ER> {
     }
 
     fn broadcast_normal(&self, msg_gen: impl FnMut() -> PeerMsg<EK>) {
-        batch_system::Router::broadcast_normal(self, msg_gen)
+        AsyncRouter::broadcast_normal(self, msg_gen)
     }
 }

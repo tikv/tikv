@@ -31,7 +31,6 @@ use raft::eraftpb::{
 use raft_proto::ConfChangeI;
 use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
-use tikv_util::escape;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
@@ -895,11 +894,6 @@ where
         apply_ctx: &mut ApplyContext<EK, W>,
         entry: Entry,
     ) -> ApplyResult<EK::Snapshot> {
-        // Although conf change can't yield in normal case, it is convenient to
-        // simulate yield before applying a conf change log.
-        fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
-            ApplyResult::Yield
-        });
         let (index, term) = (entry.get_index(), entry.get_term());
         let conf_change: ConfChangeV2 = match entry.get_entry_type() {
             EntryType::EntryConfChange => {
@@ -985,7 +979,6 @@ where
 
         apply_ctx.host.pre_apply(&self.region, &cmd);
         let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx, index, term, &cmd).await;
-        let is_conf_change = get_change_peer_cmd(&cmd).is_some();
         debug!(
             "applied command";
             "region_id" => self.region_id(),

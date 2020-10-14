@@ -1,7 +1,7 @@
 use crate::*;
+use futures::future::BoxFuture;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
-use futures::future::BoxFuture;
 
 pub trait RaftEngine: Clone + Send + 'static {
     type LogBatch: RaftLogBatch;

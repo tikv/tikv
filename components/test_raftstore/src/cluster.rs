@@ -54,8 +54,8 @@ pub trait Simulator {
         engines: Engines<RocksEngine, RocksEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem<RocksEngine, RocksEngine>,
+        router: RaftRouter<RocksEngine>,
+        system: RaftBatchSystem<RocksEngine>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -67,7 +67,7 @@ pub trait Simulator {
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>>;
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
@@ -186,7 +186,7 @@ impl<T: Simulator> Cluster<T> {
         assert!(self.key_managers_map.insert(node_id, key_mgr).is_none());
     }
 
-    fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RocksEngine>>) {
+    fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine>>) {
         let (engines, key_manager, dir) = create_test_engine(router, &self.cfg);
         self.dbs.push(engines);
         self.key_managers.push(key_manager);

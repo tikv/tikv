@@ -3,7 +3,7 @@
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
-use engine_traits::{KvEngine, RaftEngine, Snapshot};
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
 
@@ -42,25 +42,22 @@ where
     fn send(&self, msg: StoreMsg<EK>) -> Result<()>;
 }
 
-impl<EK, ER> CasualRouter<EK> for RaftRouter<EK, ER>
+impl<EK> CasualRouter<EK> for RaftRouter<EK>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
     #[inline]
     fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()> {
         match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
-            Err(TrySendError::Disconnected(_)) => Err(Error::RegionNotFound(region_id)),
+            Err(_) => Err(Error::RegionNotFound(region_id)),
         }
     }
 }
 
-impl<EK, ER> ProposalRouter<EK::Snapshot> for RaftRouter<EK, ER>
+impl<EK> ProposalRouter<EK::Snapshot> for RaftRouter<EK>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
     #[inline]
     fn send(
@@ -71,10 +68,9 @@ where
     }
 }
 
-impl<EK, ER> StoreRouter<EK> for RaftRouter<EK, ER>
+impl<EK> StoreRouter<EK> for RaftRouter<EK>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
     #[inline]
     fn send(&self, msg: StoreMsg<EK>) -> Result<()> {

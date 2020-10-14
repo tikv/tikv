@@ -1,30 +1,33 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::{mem, thread, u64};
+use std::{thread, u64};
 
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
-use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{Engines, KvEngine, Mutable, WriteOptions};
+use crossbeam::channel::TrySendError;
+use engine_traits::{Engines, KvEngine, Mutable};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
+use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
-use raft::{Ready, StateRole};
+use raft::StateRole;
 use time::{self, Timespec};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use yatp::pool::ThreadPool;
+use yatp::task::future::TaskCell;
+use yatp::Remote;
 
 use engine_traits::CompactedEvent;
 use engine_traits::{RaftEngine, RaftLogBatch};
@@ -33,36 +36,35 @@ use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
-use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
+use tikv_util::yatp_pool::{PoolTicker, YatpPoolBuilder};
+use tikv_util::{is_zero_duration, sys as sys_util, RingQueue};
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
-use crate::observe_perf_context_type;
-use crate::report_perf_context;
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
 };
 
-use crate::store::fsm::{create_apply_batch_system, ApplyBatchSystem, ApplyNotifier, Registration};
-use crate::store::fsm::{ApplyRes, ApplyTaskRes};
+use crate::store::fsm::{
+    create_apply_batch_system, ApplyBatchSystem, ApplyNotifier, AsyncRouter, Registration,
+};
+use crate::store::fsm::{ApplyRes, ApplyTaskRes, AsyncRouterError};
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
-use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
+use crate::store::peer_storage;
 use crate::store::transport::Transport;
-use crate::store::util::{is_initial_msg, PerfContextStatistics};
+use crate::store::util::is_initial_msg;
 use crate::store::worker::{
     AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
     RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
-use crate::store::PeerTicks;
 use crate::store::{
     util, Callback, CasualMessage, GlobalReplicationState, MergeResultKind, PeerMsg, RaftCommand,
     SignificantMsg, SnapManager, StoreMsg, StoreTick,
@@ -73,8 +75,6 @@ use tikv_util::future::poll_future_notify;
 
 type Key = Vec<u8>;
 
-const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
-const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 pub const PENDING_VOTES_CAP: usize = 20;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
@@ -146,19 +146,11 @@ impl StoreMeta {
     }
 }
 
-pub struct RaftRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
+pub struct RaftRouter<EK: KvEngine> {
+    pub router: AsyncRouter<EK>,
 }
 
-impl<EK, ER> Clone for RaftRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
+impl<EK: KvEngine> Clone for RaftRouter<EK> {
     fn clone(&self) -> Self {
         RaftRouter {
             router: self.router.clone(),
@@ -166,23 +158,18 @@ where
     }
 }
 
-impl<EK, ER> Deref for RaftRouter<EK, ER>
+impl<EK> Deref for RaftRouter<EK>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
-    type Target = BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>;
+    type Target = AsyncRouter<EK>;
 
-    fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>> {
+    fn deref(&self) -> &AsyncRouter<EK> {
         &self.router
     }
 }
 
-impl<EK, ER> ApplyNotifier<EK> for RaftRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
+impl<EK: KvEngine> ApplyNotifier<EK> for RaftRouter<EK> {
     fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
         for r in apply_res {
             self.router.try_send(
@@ -194,7 +181,7 @@ where
         }
     }
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>) {
-        self.router.try_send(region_id, msg);
+        let _ = self.router.send(region_id, msg);
     }
 
     fn clone_box(&self) -> Box<dyn ApplyNotifier<EK>> {
@@ -202,31 +189,24 @@ where
     }
 }
 
-impl<EK, ER> RaftRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
+impl<EK: KvEngine> RaftRouter<EK> {
     pub fn send_raft_message(
         &self,
-        mut msg: RaftMessage,
+        msg: RaftMessage,
     ) -> std::result::Result<(), TrySendError<RaftMessage>> {
         let id = msg.get_region_id();
-        match self.try_send(id, PeerMsg::RaftMessage(msg)) {
-            Either::Left(Ok(())) => return Ok(()),
-            Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(m)))) => {
-                return Err(TrySendError::Full(m));
-            }
-            Either::Left(Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m)))) => {
-                return Err(TrySendError::Disconnected(m));
-            }
-            Either::Right(PeerMsg::RaftMessage(m)) => msg = m,
-            _ => unreachable!(),
-        }
-        match self.send_control(StoreMsg::RaftMessage(msg)) {
+        match self.router.send(id, PeerMsg::RaftMessage(msg)) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(StoreMsg::RaftMessage(m))) => Err(TrySendError::Full(m)),
-            Err(TrySendError::Disconnected(StoreMsg::RaftMessage(m))) => {
+            Err(AsyncRouterError::NotExist(PeerMsg::RaftMessage(msg))) => self
+                .router
+                .send_control(StoreMsg::RaftMessage(msg))
+                .map_err(|e| match e {
+                    TrySendError::Disconnected(StoreMsg::RaftMessage(msg)) => {
+                        TrySendError::Disconnected(msg)
+                    }
+                    _ => unreachable!(),
+                }),
+            Err(AsyncRouterError::Closed(PeerMsg::RaftMessage(m))) => {
                 Err(TrySendError::Disconnected(m))
             }
             _ => unreachable!(),
@@ -241,8 +221,10 @@ where
         let region_id = cmd.request.get_header().get_region_id();
         match self.send(region_id, PeerMsg::RaftCommand(cmd)) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(PeerMsg::RaftCommand(cmd))) => Err(TrySendError::Full(cmd)),
-            Err(TrySendError::Disconnected(PeerMsg::RaftCommand(cmd))) => {
+            Err(AsyncRouterError::Closed(PeerMsg::RaftCommand(cmd))) => {
+                Err(TrySendError::Disconnected(cmd))
+            }
+            Err(AsyncRouterError::NotExist(PeerMsg::RaftCommand(cmd))) => {
                 Err(TrySendError::Disconnected(cmd))
             }
             _ => unreachable!(),
@@ -267,25 +249,11 @@ where
     }
 }
 
-#[derive(Default)]
-pub struct PeerTickBatch {
-    pub ticks: Vec<Box<dyn FnOnce() + Send>>,
-    pub wait_duration: Duration,
-}
-
-impl Clone for PeerTickBatch {
-    fn clone(&self) -> PeerTickBatch {
-        PeerTickBatch {
-            ticks: vec![],
-            wait_duration: self.wait_duration,
-        }
-    }
-}
-
-pub struct PollContext<EK, ER, T, C: 'static>
+pub struct PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
+    T: Transport,
 {
     pub cfg: Config,
     pub store: metapb::Store,
@@ -296,8 +264,9 @@ where
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-    pub router: RaftRouter<EK, ER>,
-    pub apply_batch_system: ApplyBatchSystem<EK>,
+    pub router: RaftRouter<EK>,
+    pub apply_batch_system: Arc<ApplyBatchSystem<EK>>,
+    pub remote: Remote<TaskCell>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     /// region_id -> (peer_id, is_splitting)
@@ -315,64 +284,77 @@ where
     pub applying_snap_count: Arc<AtomicUsize>,
     pub coprocessor_host: CoprocessorHost<EK>,
     pub timer: SteadyTimer,
-    pub trans: T,
-    pub pd_client: Arc<C>,
+    pub trans: Option<T>,
     pub global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
     pub engines: Engines<EK, ER>,
-    pub kv_wb: EK::WriteBatch,
-    pub raft_wb: ER::LogBatch,
-    pub pending_count: usize,
-    pub sync_log: bool,
-    pub has_ready: bool,
-    pub ready_res: Vec<(Ready, InvokeContext)>,
-    pub need_flush_trans: bool,
     pub current_time: Option<Timespec>,
-    pub perf_context_statistics: PerfContextStatistics,
-    pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
+    pub cfg_tracker: Tracker<Config>,
 }
 
-impl<EK, ER, T, C> HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>
-    for PollContext<EK, ER, T, C>
+impl<EK, ER, T> Clone for PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
+    T: Transport,
 {
-    fn wb_mut(&mut self) -> (&mut EK::WriteBatch, &mut ER::LogBatch) {
-        (&mut self.kv_wb, &mut self.raft_wb)
-    }
-
-    #[inline]
-    fn kv_wb_mut(&mut self) -> &mut EK::WriteBatch {
-        &mut self.kv_wb
-    }
-
-    #[inline]
-    fn raft_wb_mut(&mut self) -> &mut ER::LogBatch {
-        &mut self.raft_wb
-    }
-
-    #[inline]
-    fn sync_log(&self) -> bool {
-        self.sync_log
-    }
-
-    #[inline]
-    fn set_sync_log(&mut self, sync: bool) {
-        self.sync_log = sync;
+    fn clone(&self) -> Self {
+        let global_stat = self.global_stat.clone();
+        PollContext {
+            cfg: self.cfg.clone(),
+            store: self.store.clone(),
+            pd_scheduler: self.pd_scheduler.clone(),
+            consistency_check_scheduler: self.consistency_check_scheduler.clone(),
+            split_check_scheduler: self.split_check_scheduler.clone(),
+            region_scheduler: self.region_scheduler.clone(),
+            router: self.router.clone(),
+            cleanup_scheduler: self.cleanup_scheduler.clone(),
+            raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
+            importer: self.importer.clone(),
+            store_meta: self.store_meta.clone(),
+            pending_create_peers: self.pending_create_peers.clone(),
+            raft_metrics: RaftMetrics::default(),
+            snap_mgr: self.snap_mgr.clone(),
+            applying_snap_count: self.applying_snap_count.clone(),
+            coprocessor_host: self.coprocessor_host.clone(),
+            timer: SteadyTimer::default(),
+            trans: None,
+            global_replication_state: self.global_replication_state.clone(),
+            store_stat: global_stat.local(),
+            global_stat,
+            engines: self.engines.clone(),
+            current_time: None,
+            node_start_time: Some(TiInstant::now_coarse()),
+            apply_batch_system: self.apply_batch_system.clone(),
+            remote: self.remote.clone(),
+            cfg_tracker: self.cfg_tracker.clone(),
+        }
     }
 }
-
-impl<EK, ER, T, C> PollContext<EK, ER, T, C>
+impl<EK, ER, T> PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
+    T: Transport + 'static,
 {
     #[inline]
     pub fn store_id(&self) -> u64 {
         self.store.get_id()
+    }
+
+    pub fn register(&self, new_region_id: u64, fsm: PeerFsm<EK, ER>) {
+        let (tx, rx) = unbounded_channel();
+        let ctx = self.clone();
+        self.remote.spawn(async move {
+            handle_normal(rx, ctx, fsm).await;
+        });
+
+        self.router.register(new_region_id, tx);
+        self.router
+            .force_send(new_region_id, PeerMsg::Start)
+            .unwrap();
     }
 
     /// Timeout is calculated from TiKV start, the node should not become
@@ -389,23 +371,14 @@ where
         timeout
     }
 
-    pub fn update_ticks_timeout(&mut self) {
-        self.tick_batch[PeerTicks::RAFT.bits() as usize].wait_duration =
-            self.cfg.raft_base_tick_interval.0;
-        self.tick_batch[PeerTicks::RAFT_LOG_GC.bits() as usize].wait_duration =
-            self.cfg.raft_log_gc_tick_interval.0;
-        self.tick_batch[PeerTicks::PD_HEARTBEAT.bits() as usize].wait_duration =
-            self.cfg.pd_heartbeat_tick_interval.0;
-        self.tick_batch[PeerTicks::SPLIT_REGION_CHECK.bits() as usize].wait_duration =
-            self.cfg.split_region_check_tick_interval.0;
-        self.tick_batch[PeerTicks::CHECK_PEER_STALE_STATE.bits() as usize].wait_duration =
-            self.cfg.peer_stale_state_check_interval.0;
-        self.tick_batch[PeerTicks::CHECK_MERGE.bits() as usize].wait_duration =
-            self.cfg.merge_check_tick_interval.0;
+    pub fn flush(&mut self) {
+        self.raft_metrics.flush();
+        self.store_stat.flush();
+        self.trans.as_mut().unwrap().flush();
     }
 }
 
-impl<EK, ER, T: Transport, C> PollContext<EK, ER, T, C>
+impl<EK, ER, T: Transport> PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -415,7 +388,7 @@ where
         if !is_zero_duration(&timeout) {
             let mb = self.router.control_mailbox();
             let delay = self.timer.delay(timeout).compat().map(move |_| {
-                if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
+                if let Err(e) = mb.send(StoreMsg::Tick(tick)) {
                     info!(
                         "failed to schedule store tick, are we shutting down?";
                         "tick" => ?tick,
@@ -467,13 +440,12 @@ where
         } else {
             gc_msg.set_is_tombstone(true);
         }
-        if let Err(e) = self.trans.send(gc_msg) {
+        if let Err(e) = self.trans.as_mut().unwrap().send(gc_msg) {
             error!(?e;
                 "send gc message failed";
                 "region_id" => region_id,
             );
         }
-        self.need_flush_trans = true;
     }
 }
 
@@ -481,67 +453,29 @@ struct Store {
     // store id, before start the id is 0.
     id: u64,
     last_compact_checked_key: Key,
-    stopped: bool,
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
     last_unreachable_report: HashMap<u64, Instant>,
 }
 
-pub struct StoreFsm<EK>
-where
-    EK: KvEngine,
-{
+impl Store {
+    pub fn new() -> Store {
+        Store {
+            id: 0,
+            last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
+            start_time: None,
+            consistency_check_time: HashMap::default(),
+            last_unreachable_report: HashMap::default(),
+        }
+    }
+}
+
+struct StoreFsmDelegate<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport + 'static> {
     store: Store,
-    receiver: Receiver<StoreMsg<EK>>,
+    ctx: PollContext<EK, ER, T>,
 }
 
-impl<EK> StoreFsm<EK>
-where
-    EK: KvEngine,
-{
-    pub fn new(cfg: &Config) -> (LooseBoundedSender<StoreMsg<EK>>, Box<StoreFsm<EK>>) {
-        let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
-        let fsm = Box::new(StoreFsm {
-            store: Store {
-                id: 0,
-                last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
-                stopped: false,
-                start_time: None,
-                consistency_check_time: HashMap::default(),
-                last_unreachable_report: HashMap::default(),
-            },
-            receiver: rx,
-        });
-        (tx, fsm)
-    }
-}
-
-impl<EK> Fsm for StoreFsm<EK>
-where
-    EK: KvEngine,
-{
-    type Message = StoreMsg<EK>;
-
-    #[inline]
-    fn is_stopped(&self) -> bool {
-        self.store.stopped
-    }
-}
-
-struct StoreFsmDelegate<
-    'a,
-    EK: KvEngine + 'static,
-    ER: RaftEngine + 'static,
-    T: 'static,
-    C: 'static,
-> {
-    fsm: &'a mut StoreFsm<EK>,
-    ctx: &'a mut PollContext<EK, ER, T, C>,
-}
-
-impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdClient>
-    StoreFsmDelegate<'a, EK, ER, T, C>
-{
+impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport> StoreFsmDelegate<EK, ER, T> {
     fn on_tick(&mut self, tick: StoreTick) {
         let t = TiInstant::now_coarse();
         match tick {
@@ -560,50 +494,48 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
         slow_log!(
             elapsed,
             "[store {}] handle timeout {:?}",
-            self.fsm.store.id,
+            self.store.id,
             tick
         );
     }
 
-    fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg<EK>>) {
-        for m in msgs.drain(..) {
-            match m {
-                StoreMsg::Tick(tick) => self.on_tick(tick),
-                StoreMsg::RaftMessage(msg) => {
-                    if let Err(e) = self.on_raft_message(msg) {
-                        error!(?e;
-                            "handle raft message failed";
-                            "store_id" => self.fsm.store.id,
-                        );
-                    }
+    fn handle_msgs(&mut self, m: StoreMsg<EK>) {
+        match m {
+            StoreMsg::Tick(tick) => self.on_tick(tick),
+            StoreMsg::RaftMessage(msg) => {
+                if let Err(e) = self.on_raft_message(msg) {
+                    error!(?e;
+                        "handle raft message failed";
+                        "store_id" => self.store.id,
+                    );
                 }
-                StoreMsg::CompactedEvent(event) => self.on_compaction_finished(event),
-                StoreMsg::ValidateSSTResult { invalid_ssts } => {
-                    self.on_validate_sst_result(invalid_ssts)
-                }
-                StoreMsg::ClearRegionSizeInRange { start_key, end_key } => {
-                    self.clear_region_size_in_range(&start_key, &end_key)
-                }
-                StoreMsg::StoreUnreachable { store_id } => {
-                    self.on_store_unreachable(store_id);
-                }
-                StoreMsg::Start { store } => self.start(store),
-                #[cfg(any(test, feature = "testexport"))]
-                StoreMsg::Validate(f) => f(&self.ctx.cfg),
-                StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
             }
+            StoreMsg::CompactedEvent(event) => self.on_compaction_finished(event),
+            StoreMsg::ValidateSSTResult { invalid_ssts } => {
+                self.on_validate_sst_result(invalid_ssts)
+            }
+            StoreMsg::ClearRegionSizeInRange { start_key, end_key } => {
+                self.clear_region_size_in_range(&start_key, &end_key)
+            }
+            StoreMsg::StoreUnreachable { store_id } => {
+                self.on_store_unreachable(store_id);
+            }
+            StoreMsg::Start { store } => self.start(store),
+            #[cfg(any(test, feature = "testexport"))]
+            StoreMsg::Validate(f) => f(&self.ctx.cfg),
+            StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
         }
     }
 
     fn start(&mut self, store: metapb::Store) {
-        if self.fsm.store.start_time.is_some() {
+        if self.store.start_time.is_some() {
             panic!(
                 "[store {}] unable to start again with meta {:?}",
-                self.fsm.store.id, store
+                self.store.id, store
             );
         }
-        self.fsm.store.id = store.get_id();
-        self.fsm.store.start_time = Some(time::get_time());
+        self.store.id = store.get_id();
+        self.store.start_time = Some(time::get_time());
         self.register_cleanup_import_sst_tick();
         self.register_compact_check_tick();
         self.register_pd_store_heartbeat_tick();
@@ -614,304 +546,118 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
     }
 }
 
-pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'static, C: 'static> {
-    tag: String,
-    store_msg_buf: Vec<StoreMsg<EK>>,
-    peer_msg_buf: Vec<PeerMsg<EK>>,
-    previous_metrics: RaftMetrics,
-    timer: TiInstant,
-    poll_ctx: PollContext<EK, ER, T, C>,
-    messages_per_tick: usize,
-    cfg_tracker: Tracker<Config>,
-}
-
-impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER, T, C> {
-    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
-        // Only enable the fail point when the store id is equal to 3, which is
-        // the id of slow store in tests.
-        fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
-        if self.poll_ctx.need_flush_trans
-            && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
-        {
-            self.poll_ctx.trans.flush();
-            self.poll_ctx.need_flush_trans = false;
-        }
-        let ready_cnt = self.poll_ctx.ready_res.len();
-        if ready_cnt != 0 && self.poll_ctx.cfg.early_apply {
-            let mut batch_pos = 0;
-            let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, vec![]);
-            for (ready, invoke_ctx) in &mut ready_res {
-                let region_id = invoke_ctx.region_id;
-                if peers[batch_pos].region_id() == region_id {
-                } else {
-                    while peers[batch_pos].region_id() != region_id {
-                        batch_pos += 1;
-                    }
-                }
-                PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
-                    .handle_raft_ready_apply(ready, invoke_ctx);
-            }
-            self.poll_ctx.ready_res = ready_res;
-        }
-        self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
-        fail_point!("raft_before_save");
-        if !self.poll_ctx.kv_wb.is_empty() {
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            self.poll_ctx
-                .engines
-                .kv
-                .write_opt(&self.poll_ctx.kv_wb, &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("{} failed to save append state result: {:?}", self.tag, e);
-                });
-            let data_size = self.poll_ctx.kv_wb.data_size();
-            if data_size > KV_WB_SHRINK_SIZE {
-                self.poll_ctx.kv_wb = self.poll_ctx.engines.kv.write_batch_with_cap(4 * 1024);
-            } else {
-                self.poll_ctx.kv_wb.clear();
-            }
-        }
-        fail_point!("raft_between_save");
-        if !self.poll_ctx.raft_wb.is_empty() {
-            fail_point!(
-                "raft_before_save_on_store_1",
-                self.poll_ctx.store_id() == 1,
-                |_| {}
-            );
-
-            self.poll_ctx
-                .engines
-                .raft
-                .consume_and_shrink(
-                    &mut self.poll_ctx.raft_wb,
-                    true,
-                    RAFT_WB_SHRINK_SIZE,
-                    4 * 1024,
-                )
-                .unwrap_or_else(|e| {
-                    panic!("{} failed to save raft append result: {:?}", self.tag, e);
-                });
-        }
-
-        report_perf_context!(
-            self.poll_ctx.perf_context_statistics,
-            STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-        );
-        fail_point!("raft_after_save");
-        if ready_cnt != 0 {
-            let mut batch_pos = 0;
-            let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
-            for (ready, invoke_ctx) in ready_res.drain(..) {
-                let region_id = invoke_ctx.region_id;
-                if peers[batch_pos].region_id() == region_id {
-                } else {
-                    while peers[batch_pos].region_id() != region_id {
-                        batch_pos += 1;
-                    }
-                }
-                PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
-                    .post_raft_ready_append(ready, invoke_ctx);
-            }
-        }
-        let dur = self.timer.elapsed();
-        if !self.poll_ctx.store_stat.is_busy {
-            let election_timeout = Duration::from_millis(
-                self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
-                    * self.poll_ctx.cfg.raft_election_timeout_ticks as u64,
-            );
-            if dur >= election_timeout {
-                self.poll_ctx.store_stat.is_busy = true;
-            }
-        }
-
-        self.poll_ctx
-            .raft_metrics
-            .append_log
-            .observe(duration_to_sec(dur) as f64);
-
-        slow_log!(
-            dur,
-            "{} handle {} pending peers include {} ready, {} entries, {} messages and {} \
-             snapshots",
-            self.tag,
-            self.poll_ctx.pending_count,
-            ready_cnt,
-            self.poll_ctx.raft_metrics.ready.append - self.previous_metrics.ready.append,
-            self.poll_ctx.raft_metrics.ready.message - self.previous_metrics.ready.message,
-            self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.ready.snapshot
-        );
-    }
-
-    fn flush_ticks(&mut self) {
-        for t in PeerTicks::get_all_ticks() {
-            let idx = t.bits() as usize;
-            if self.poll_ctx.tick_batch[idx].ticks.is_empty() {
-                continue;
-            }
-            let peer_ticks = std::mem::replace(&mut self.poll_ctx.tick_batch[idx].ticks, vec![]);
-            let f = self
-                .poll_ctx
-                .timer
-                .delay(self.poll_ctx.tick_batch[idx].wait_duration)
-                .compat()
-                .map(move |_| {
-                    for tick in peer_ticks {
-                        tick();
-                    }
-                });
-            poll_future_notify(f);
-        }
-    }
-}
-
-impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
-    PollHandler<PeerFsm<EK, ER>, StoreFsm<EK>> for RaftPoller<EK, ER, T, C>
+fn begin<EK, ER, T>(poll_ctx: &mut PollContext<EK, ER, T>)
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+    T: Transport + 'static,
 {
-    fn begin(&mut self, _batch_size: usize) {
-        self.previous_metrics = self.poll_ctx.raft_metrics.clone();
-        self.poll_ctx.pending_count = 0;
-        self.poll_ctx.sync_log = false;
-        self.poll_ctx.has_ready = false;
-        self.timer = TiInstant::now_coarse();
-        // update config
-        self.poll_ctx.perf_context_statistics.start();
-        if let Some(incoming) = self.cfg_tracker.any_new() {
-            match Ord::cmp(
-                &incoming.messages_per_tick,
-                &self.poll_ctx.cfg.messages_per_tick,
-            ) {
-                CmpOrdering::Greater => {
-                    self.store_msg_buf.reserve(incoming.messages_per_tick);
-                    self.peer_msg_buf.reserve(incoming.messages_per_tick);
-                    self.messages_per_tick = incoming.messages_per_tick;
-                }
-                CmpOrdering::Less => {
-                    self.store_msg_buf.shrink_to(incoming.messages_per_tick);
-                    self.peer_msg_buf.shrink_to(incoming.messages_per_tick);
-                    self.messages_per_tick = incoming.messages_per_tick;
-                }
-                _ => {}
-            }
-            self.poll_ctx.cfg = incoming.clone();
-            self.poll_ctx.update_ticks_timeout();
-        }
+    // update config
+    if let Some(incoming) = poll_ctx.cfg_tracker.any_new() {
+        poll_ctx.cfg = incoming.clone();
     }
+}
 
-    fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {
-        let mut expected_msg_count = None;
-        while self.store_msg_buf.len() < self.messages_per_tick {
-            match store.receiver.try_recv() {
-                Ok(msg) => self.store_msg_buf.push(msg),
-                Err(TryRecvError::Empty) => {
-                    expected_msg_count = Some(0);
-                    break;
-                }
-                Err(TryRecvError::Disconnected) => {
-                    store.store.stopped = true;
-                    expected_msg_count = Some(0);
-                    break;
-                }
-            }
-        }
-        let mut delegate = StoreFsmDelegate {
-            fsm: store,
-            ctx: &mut self.poll_ctx,
-        };
-        delegate.handle_msgs(&mut self.store_msg_buf);
-        expected_msg_count
+async fn handle_control<EK, ER, T>(
+    mut receiver: UnboundedReceiver<StoreMsg<EK>>,
+    poll_ctx: PollContext<EK, ER, T>,
+    store: Store,
+) where
+    EK: KvEngine,
+    ER: RaftEngine,
+    T: Transport + 'static,
+{
+    let mut delegate = StoreFsmDelegate {
+        store,
+        ctx: poll_ctx,
+    };
+    while let Some(msg) = receiver.recv().await {
+        begin(&mut delegate.ctx);
+        delegate.handle_msgs(msg);
     }
+}
 
-    fn handle_normal(&mut self, peer: &mut PeerFsm<EK, ER>) -> Option<usize> {
-        let mut expected_msg_count = None;
+struct ReceiverWrapper<EK: KvEngine> {
+    receiver: UnboundedReceiver<PeerMsg<EK>>,
+    region_id: u64,
+}
 
-        fail_point!(
-            "pause_on_peer_collect_message",
-            peer.peer_id() == 1,
-            |_| unreachable!()
-        );
+impl<EK: KvEngine> Drop for ReceiverWrapper<EK> {
+    fn drop(&mut self) {
+        while let Ok(m) = self.receiver.try_recv() {
+            let callback = match m {
+                PeerMsg::RaftCommand(cmd) => cmd.callback,
+                PeerMsg::CasualMessage(CasualMessage::SplitRegion { callback, .. }) => callback,
+                _ => continue,
+            };
 
-        while self.peer_msg_buf.len() < self.messages_per_tick {
-            match peer.receiver.try_recv() {
-                // TODO: we may need a way to optimize the message copy.
-                Ok(msg) => {
-                    fail_point!(
-                        "pause_on_peer_destroy_res",
-                        peer.peer_id() == 1
-                            && match msg {
-                                PeerMsg::ApplyRes {
-                                    res: ApplyTaskRes::Destroy { .. },
-                                } => true,
-                                _ => false,
-                            },
-                        |_| unreachable!()
-                    );
-                    self.peer_msg_buf.push(msg);
-                }
-                Err(TryRecvError::Empty) => {
-                    expected_msg_count = Some(0);
-                    break;
-                }
-                Err(TryRecvError::Disconnected) => {
-                    peer.stop();
-                    expected_msg_count = Some(0);
-                    break;
-                }
-            }
-        }
-        let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
-        delegate.handle_msgs(&mut self.peer_msg_buf);
-        delegate.collect_ready();
-        expected_msg_count
-    }
-
-    fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
-        self.flush_ticks();
-        if self.poll_ctx.has_ready {
-            self.handle_raft_ready(peers);
-        }
-        self.poll_ctx.current_time = None;
-        self.poll_ctx
-            .raft_metrics
-            .process_ready
-            .observe(duration_to_sec(self.timer.elapsed()) as f64);
-        self.poll_ctx.raft_metrics.flush();
-        self.poll_ctx.store_stat.flush();
-    }
-
-    fn pause(&mut self) {
-        if self.poll_ctx.need_flush_trans {
-            self.poll_ctx.trans.flush();
-            self.poll_ctx.need_flush_trans = false;
+            let mut err = errorpb::Error::default();
+            err.set_message("region is not found".to_owned());
+            err.mut_region_not_found().set_region_id(self.region_id);
+            let mut resp = RaftCmdResponse::default();
+            resp.mut_header().set_error(err);
+            callback.invoke_with_response(resp);
         }
     }
 }
 
-pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T, C> {
-    pub cfg: Arc<VersionTrack<Config>>,
-    pub store: metapb::Store,
-    pd_scheduler: FutureScheduler<PdTask<EK>>,
-    consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
-    split_check_scheduler: Scheduler<SplitCheckTask>,
-    cleanup_scheduler: Scheduler<CleanupTask>,
-    raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
-    pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-    pub router: RaftRouter<EK, ER>,
-    pub importer: Arc<SSTImporter>,
-    pub store_meta: Arc<Mutex<StoreMeta>>,
-    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    snap_mgr: SnapManager,
-    pub coprocessor_host: CoprocessorHost<EK>,
-    trans: T,
-    pd_client: Arc<C>,
-    global_stat: GlobalStoreStat,
-    pub engines: Engines<EK, ER>,
-    applying_snap_count: Arc<AtomicUsize>,
-    global_replication_state: Arc<Mutex<GlobalReplicationState>>,
-    apply_system: ApplyBatchSystem<EK>,
+async fn handle_normal<EK, ER, T>(
+    receiver: UnboundedReceiver<PeerMsg<EK>>,
+    poll_ctx: PollContext<EK, ER, T>,
+    fsm: PeerFsm<EK, ER>,
+) where
+    EK: KvEngine,
+    ER: RaftEngine,
+    T: Transport + 'static,
+{
+    fail_point!(
+        "pause_on_peer_collect_message",
+        fsm.peer_id() == 1,
+        |_| unreachable!()
+    );
+
+    let mut receiver = ReceiverWrapper {
+        receiver,
+        region_id: fsm.region_id(),
+    };
+
+    let mut delegate = PeerFsmDelegate::new(fsm, poll_ctx);
+    while let Some(msg) = receiver.receiver.recv().await {
+        // TODO: we may need a way to optimize the message copy.
+        begin(&mut delegate.ctx);
+        delegate.ctx.trans = Some(take_tls_trans());
+        delegate.handle_msg(msg);
+        while let Ok(msg) = receiver.receiver.try_recv() {
+            fail_point!(
+                "pause_on_peer_destroy_res",
+                delegate.fsm.peer_id() == 1
+                    && match msg {
+                        PeerMsg::ApplyRes {
+                            res: ApplyTaskRes::Destroy { .. },
+                        } => true,
+                        _ => false,
+                    },
+                |_| unreachable!()
+            );
+            delegate.handle_msg(msg);
+            if delegate.fsm.is_stop() {
+                break;
+            }
+        }
+        if let Some((mut ready, invoke_ctx)) = delegate.collect_ready() {
+            delegate.handle_raft_ready_apply(&mut ready);
+            set_tls_trans(delegate.ctx.trans.take().unwrap());
+            delegate.flush().await;
+            delegate.ctx.trans = Some(take_tls_trans());
+            delegate.post_raft_ready_append(ready, invoke_ctx);
+        } else if delegate.fsm.is_stop() {
+            receiver.receiver.close();
+        }
+        set_tls_trans(delegate.ctx.trans.take().unwrap());
+    }
 }
 
-impl<EK: KvEngine, ER: RaftEngine, T, C> RaftPollerBuilder<EK, ER, T, C> {
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollContext<EK, ER, T> {
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
@@ -964,9 +710,9 @@ impl<EK: KvEngine, ER: RaftEngine, T, C> RaftPollerBuilder<EK, ER, T, C> {
                 return Ok(true);
             }
 
-            let (tx, rec, mut peer) = box_try!(PeerFsm::create(
+            let (rec, mut peer) = box_try!(PeerFsm::create(
                 store_id,
-                &self.cfg.value(),
+                &self.cfg,
                 self.region_scheduler.clone(),
                 self.engines.clone(),
                 region,
@@ -981,7 +727,7 @@ impl<EK: KvEngine, ER: RaftEngine, T, C> RaftPollerBuilder<EK, ER, T, C> {
             meta.regions.insert(region_id, region.clone());
             // No need to check duplicated here, because we use region id as the key
             // in DB.
-            region_peers.push((tx, rec, peer));
+            region_peers.push((rec, peer));
             self.coprocessor_host.on_region_changed(
                 region,
                 RegionChangeEvent::Create,
@@ -1001,9 +747,9 @@ impl<EK: KvEngine, ER: RaftEngine, T, C> RaftPollerBuilder<EK, ER, T, C> {
         // schedule applying snapshot after raft writebatch were written.
         for region in applying_regions {
             info!("region is applying snapshot"; "region" => ?region, "store_id" => store_id);
-            let (tx, receiver, mut peer) = PeerFsm::create(
+            let (receiver, mut peer) = PeerFsm::create(
                 store_id,
-                &self.cfg.value(),
+                &self.cfg,
                 self.region_scheduler.clone(),
                 self.engines.clone(),
                 &region,
@@ -1013,7 +759,7 @@ impl<EK: KvEngine, ER: RaftEngine, T, C> RaftPollerBuilder<EK, ER, T, C> {
             meta.region_ranges
                 .insert(enc_end_key(&region), region.get_id());
             meta.regions.insert(region.get_id(), region);
-            region_peers.push((tx, receiver, peer));
+            region_peers.push((receiver, peer));
         }
 
         info!(
@@ -1075,68 +821,6 @@ impl<EK: KvEngine, ER: RaftEngine, T, C> RaftPollerBuilder<EK, ER, T, C> {
     }
 }
 
-impl<EK, ER, T, C> HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK>> for RaftPollerBuilder<EK, ER, T, C>
-where
-    EK: KvEngine + 'static,
-    ER: RaftEngine + 'static,
-    T: Transport + 'static,
-    C: PdClient + 'static,
-{
-    type Handler = RaftPoller<EK, ER, T, C>;
-
-    fn build(&mut self) -> RaftPoller<EK, ER, T, C> {
-        let mut ctx = PollContext {
-            cfg: self.cfg.value().clone(),
-            store: self.store.clone(),
-            pd_scheduler: self.pd_scheduler.clone(),
-            consistency_check_scheduler: self.consistency_check_scheduler.clone(),
-            split_check_scheduler: self.split_check_scheduler.clone(),
-            region_scheduler: self.region_scheduler.clone(),
-            router: self.router.clone(),
-            cleanup_scheduler: self.cleanup_scheduler.clone(),
-            raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
-            importer: self.importer.clone(),
-            store_meta: self.store_meta.clone(),
-            pending_create_peers: self.pending_create_peers.clone(),
-            raft_metrics: RaftMetrics::default(),
-            snap_mgr: self.snap_mgr.clone(),
-            applying_snap_count: self.applying_snap_count.clone(),
-            coprocessor_host: self.coprocessor_host.clone(),
-            timer: SteadyTimer::default(),
-            trans: self.trans.clone(),
-            pd_client: self.pd_client.clone(),
-            global_replication_state: self.global_replication_state.clone(),
-            global_stat: self.global_stat.clone(),
-            store_stat: self.global_stat.local(),
-            engines: self.engines.clone(),
-            kv_wb: self.engines.kv.write_batch(),
-            raft_wb: self.engines.raft.log_batch(4 * 1024),
-            pending_count: 0,
-            sync_log: false,
-            has_ready: false,
-            ready_res: Vec::new(),
-            need_flush_trans: false,
-            current_time: None,
-            perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
-            tick_batch: vec![PeerTickBatch::default(); 256],
-            node_start_time: Some(TiInstant::now_coarse()),
-            apply_batch_system: self.apply_system.clone(),
-        };
-        ctx.update_ticks_timeout();
-        let tag = format!("[store {}]", ctx.store.get_id());
-        RaftPoller {
-            tag: tag.clone(),
-            store_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
-            peer_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
-            previous_metrics: ctx.raft_metrics.clone(),
-            timer: TiInstant::now_coarse(),
-            messages_per_tick: ctx.cfg.messages_per_tick,
-            poll_ctx: ctx,
-            cfg_tracker: self.cfg.clone().tracker(tag),
-        }
-    }
-}
-
 struct Workers<EK: KvEngine> {
     pd_worker: FutureWorker<PdTask<EK>>,
     consistency_check_worker: Worker<ConsistencyCheckTask<EK::Snapshot>>,
@@ -1148,20 +832,81 @@ struct Workers<EK: KvEngine> {
     coprocessor_host: CoprocessorHost<EK>,
 }
 
-pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
-    system: BatchSystem<PeerFsm<EK, ER>, StoreFsm<EK>>,
-    router: RaftRouter<EK, ER>,
+pub struct RaftBatchSystem<EK: KvEngine> {
+    pool: Option<ThreadPool<TaskCell>>,
+    store_rx: Option<UnboundedReceiver<StoreMsg<EK>>>,
+    router: RaftRouter<EK>,
     workers: Option<Workers<EK>>,
     apply_system: Option<ApplyBatchSystem<EK>>,
 }
+use std::cell::UnsafeCell;
+use std::ptr;
 
-impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
-    pub fn router(&self) -> RaftRouter<EK, ER> {
+thread_local! {
+    // A pointer to thread local Transport. Use raw pointer and `UnsafeCell` to reduce runtime check.
+    static TLS_TRANSPORT: UnsafeCell<*mut ()> = UnsafeCell::new(ptr::null_mut());
+}
+
+/// Set the thread local ApplyContext.
+///
+/// Postcondition: `TLS_TRANSPORT` is non-null.
+fn set_tls_trans<T: Transport>(trans: T) {
+    // Safety: we check that `TLS_ENGINE_ANY` is null to ensure we don't leak an existing
+    // engine; we ensure there are no other references to `engine`.
+    TLS_TRANSPORT.with(move |e| unsafe {
+        if (*e.get()).is_null() {
+            let trans = Box::into_raw(Box::new(Some(trans))) as *mut ();
+            *e.get() = trans;
+            return;
+        }
+        let ctx = &mut *(*e.get() as *mut Option<T>);
+        ctx.replace(trans);
+    });
+}
+
+fn take_tls_trans<T: Transport>() -> T {
+    TLS_TRANSPORT.with(|e| unsafe {
+        let ctx = &mut *(*e.get() as *mut Option<T>);
+        ctx.take().unwrap()
+    })
+}
+
+pub fn flush_tls_trans<T: Transport>() {
+    TLS_TRANSPORT.with(|e| unsafe {
+        if (*e.get()).is_null() {
+            return;
+        }
+        let trans = &mut *(*e.get() as *mut Option<T>);
+        if let Some(t) = trans.as_mut() {
+            t.flush();
+        }
+    })
+}
+
+#[derive(Clone)]
+struct TransTicker<T: Transport + 'static> {
+    _data: PhantomData<T>,
+}
+
+impl<T: Transport + 'static> Default for TransTicker<T> {
+    fn default() -> Self {
+        Self { _data: PhantomData }
+    }
+}
+
+impl<T: Transport + 'static> PoolTicker for TransTicker<T> {
+    fn on_tick(&mut self) {
+        flush_tls_trans::<T>();
+    }
+}
+
+impl<EK: KvEngine> RaftBatchSystem<EK> {
+    pub fn router(&self) -> RaftRouter<EK> {
         self.router.clone()
     }
 
     // TODO: reduce arguments
-    pub fn spawn<T: Transport + 'static, C: PdClient + 'static>(
+    pub fn spawn<ER: RaftEngine, T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
@@ -1209,11 +954,32 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pending_create_peers.clone(),
             &cfg.value(),
         );
+        let shared_trans = Arc::new(Mutex::new(trans));
 
-        let mut builder = RaftPollerBuilder {
-            cfg,
+        let pool = YatpPoolBuilder::new(TransTicker::<T>::default())
+            .name_prefix("store")
+            .thread_count(
+                cfg.value().store_batch_system.pool_size,
+                cfg.value().store_batch_system.pool_size,
+            )
+            .after_start(move || {
+                let trans = shared_trans.lock().unwrap().clone();
+                set_tls_trans(trans);
+            })
+            .before_pause(flush_tls_trans::<T>)
+            .before_stop(|| {
+                let mut trans: T = take_tls_trans();
+                trans.flush();
+            })
+            .build_single_level_pool();
+
+        let global_stat = GlobalStoreStat::default();
+        let tag = format!("[store {}]", meta.get_id());
+        let mut ctx = PollContext::<EK, ER, T> {
+            cfg: cfg.value().clone(),
             store: meta,
             engines,
+            current_time: None,
             region_scheduler,
             router: self.router.clone(),
             split_check_scheduler: workers.split_check_worker.scheduler(),
@@ -1221,50 +987,55 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             consistency_check_scheduler: workers.consistency_check_worker.scheduler(),
             cleanup_scheduler: workers.cleanup_worker.scheduler(),
             raftlog_gc_scheduler: workers.raftlog_gc_worker.scheduler(),
-            trans,
-            pd_client,
-            coprocessor_host: coprocessor_host.clone(),
+            coprocessor_host,
+            timer: Default::default(),
             importer,
             snap_mgr: mgr,
             global_replication_state,
-            global_stat: GlobalStoreStat::default(),
             store_meta,
             pending_create_peers,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
-            apply_system: apply_system.clone(),
+            apply_batch_system: Arc::new(apply_system.clone()),
+            remote: pool.remote().clone(),
+            raft_metrics: Default::default(),
+            trans: None,
+            store_stat: global_stat.local(),
+            global_stat,
+            node_start_time: Some(TiInstant::now_coarse()),
+            cfg_tracker: cfg.clone().tracker(tag),
         };
         self.apply_system = Some(apply_system);
-        let region_peers = builder.init()?;
-        self.start_system::<T, C>(
+        self.pool = Some(pool);
+        let region_peers = ctx.init()?;
+        self.start_system(
             workers,
             region_peers,
-            builder,
+            ctx,
+            pd_client,
             auto_split_controller,
-            coprocessor_host,
             concurrency_manager,
         )?;
         Ok(())
     }
 
-    fn start_system<T: Transport + 'static, C: PdClient + 'static>(
+    fn start_system<ER: RaftEngine, T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         mut workers: Workers<EK>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
-        builder: RaftPollerBuilder<EK, ER, T, C>,
+        ctx: PollContext<EK, ER, T>,
+        pd_client: Arc<C>,
         auto_split_controller: AutoSplitController,
-        coprocessor_host: CoprocessorHost<EK>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
-        builder.snap_mgr.init()?;
-        let engines = builder.engines.clone();
-        let snap_mgr = builder.snap_mgr.clone();
-        let cfg = builder.cfg.value().clone();
-        let store = builder.store.clone();
-        let pd_client = builder.pd_client.clone();
-        let importer = builder.importer.clone();
+        ctx.snap_mgr.init()?;
+        let engines = ctx.engines.clone();
+        let snap_mgr = ctx.snap_mgr.clone();
+        let cfg = ctx.cfg.clone();
+        let store = ctx.store.clone();
+        let importer = ctx.importer.clone();
         {
-            let mut meta = builder.store_meta.lock().unwrap();
-            for (_, _, peer_fsm) in &region_peers {
+            let mut meta = ctx.store_meta.lock().unwrap();
+            for (_, peer_fsm) in &region_peers {
                 let peer = peer_fsm.get_peer();
                 meta.readers
                     .insert(peer_fsm.region_id(), ReadDelegate::from_peer(peer));
@@ -1279,22 +1050,23 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 .broadcast_normal(|| PeerMsg::HeartbeatPd);
         });
 
-        let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
-        for (tx, receiver, fsm) in region_peers {
+        for (receiver, fsm) in region_peers {
             address.push(fsm.region_id());
-            builder
-                .apply_system
+            ctx.apply_batch_system
                 .register(Registration::new(fsm.get_peer()), receiver);
-            mailboxes.push((fsm.region_id(), BasicMailbox::new(tx, fsm)));
+            ctx.register(fsm.region_id(), fsm);
         }
-        let tag = format!("raftstore-{}", store.get_id());
-        self.system.spawn(tag, builder);
-        self.router.register_all(mailboxes);
+        let store_fsm = Store::new();
+        let store_rx = self.store_rx.take().unwrap();
+        let store_ctx = ctx.clone();
+        self.pool.as_mut().unwrap().spawn(async move {
+            handle_control(store_rx, store_ctx, store_fsm).await;
+        });
 
         // Make sure Msg::Start is the first message each FSM received.
         for addr in address {
-            self.router.force_send(addr, PeerMsg::Start).unwrap();
+            self.router.send(addr, PeerMsg::Start).unwrap();
         }
         self.router
             .send_control(StoreMsg::Start {
@@ -1342,7 +1114,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         box_try!(workers.pd_worker.start(pd_runner));
 
         let consistency_check_runner =
-            ConsistencyCheckRunner::<EK, _>::new(self.router.clone(), coprocessor_host);
+            ConsistencyCheckRunner::<EK, _>::new(self.router.clone(), ctx.coprocessor_host);
         box_try!(workers
             .consistency_check_worker
             .start(consistency_check_runner));
@@ -1367,9 +1139,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         handles.push(workers.consistency_check_worker.stop());
         handles.push(workers.cleanup_worker.stop());
         handles.push(workers.raftlog_gc_worker.stop());
-        self.system.shutdown();
+        self.router.shutdown();
         if let Some(apply_system) = self.apply_system.take() {
             apply_system.shutdown();
+        }
+        if let Some(pool) = self.pool.take() {
+            pool.shutdown();
         }
         for h in handles {
             if let Some(h) = h {
@@ -1380,15 +1155,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     }
 }
 
-pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
-    cfg: &Config,
-) -> (RaftRouter<EK, ER>, RaftBatchSystem<EK, ER>) {
-    let (store_tx, store_fsm) = StoreFsm::new(cfg);
-    let (router, system) =
-        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
-    let raft_router = RaftRouter { router };
+pub fn create_raft_batch_system<EK: KvEngine>(_: &Config) -> (RaftRouter<EK>, RaftBatchSystem<EK>) {
+    let (store_tx, store_rx) = unbounded_channel();
+    let raft_router = RaftRouter {
+        router: AsyncRouter::new(store_tx),
+    };
+
     let system = RaftBatchSystem {
-        system,
+        pool: None,
+        store_rx: Some(store_rx),
         workers: None,
         router: raft_router.clone(),
         apply_system: None,
@@ -1408,9 +1183,7 @@ enum CheckMsgStatus {
     NewPeerFirst,
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
-    StoreFsmDelegate<'a, EK, ER, T, C>
-{
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<EK, ER, T> {
     /// Checks if the message is targeting a stale peer.
     fn check_msg(&mut self, msg: &RaftMessage) -> Result<CheckMsgStatus> {
         let region_id = msg.get_region_id();
@@ -1506,13 +1279,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                 let extra_msg = send_msg.mut_extra_msg();
                 extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
                 extra_msg.set_check_peers(region.get_peers().into());
-                if let Err(e) = self.ctx.trans.send(send_msg) {
+                if let Err(e) = self.ctx.trans.as_mut().unwrap().send(send_msg) {
                     error!(?e;
                         "send check stale peer response message failed";
                         "region_id" => region_id,
                     );
                 }
-                self.ctx.need_flush_trans = true;
             }
 
             return Ok(CheckMsgStatus::DropMsg);
@@ -1541,12 +1313,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
         match self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg)) {
-            Ok(()) | Err(TrySendError::Full(_)) => return Ok(()),
-            Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shutdown() => return Ok(()),
-            Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m))) => msg = m,
+            Ok(()) => return Ok(()),
+            Err(AsyncRouterError::Closed(_)) if self.ctx.router.is_shutdown() => return Ok(()),
+            Err(AsyncRouterError::Closed(PeerMsg::RaftMessage(m))) => msg = m,
+            Err(AsyncRouterError::NotExist(PeerMsg::RaftMessage(m))) => msg = m,
             e => panic!(
                 "[store {}] [region {}] unexpected redirect error: {:?}",
-                self.fsm.store.id, region_id, e
+                self.store.id, region_id, e
             ),
         }
 
@@ -1554,7 +1327,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
             "handle raft message";
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
-            "store_id" => self.fsm.store.id,
+            "store_id" => self.store.id,
             "region_id" => region_id,
             "msg_type" => ?msg.get_message().get_msg_type(),
         );
@@ -1611,11 +1384,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                 store_meta.pending_votes.push(msg);
                 return Ok(());
             }
-            if let Err(e) = self
-                .ctx
-                .router
-                .force_send(region_id, PeerMsg::RaftMessage(msg))
-            {
+            if let Err(e) = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg)) {
                 warn!("handle first request vote failed"; "region_id" => region_id, "error" => ?e);
             }
             return Ok(());
@@ -1751,7 +1520,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
             {
                 // If new region's epoch version is greater than exist region's, the exist region
                 // may has been merged/splitted already.
-                let _ = self.ctx.router.force_send(
+                let _ = self.ctx.router.send(
                     exist_region.get_id(),
                     PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
                 );
@@ -1766,7 +1535,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         for id in regions_to_destroy {
             self.ctx
                 .router
-                .force_send(
+                .send(
                     id,
                     PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
                         target_region_id: region_id,
@@ -1778,7 +1547,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         }
 
         // New created peers should know it's learner or not.
-        let (tx, receiver, mut peer) = PeerFsm::replicate(
+        let (receiver, mut peer) = PeerFsm::replicate(
             self.ctx.store_id(),
             &self.ctx.cfg,
             self.ctx.region_scheduler.clone(),
@@ -1804,12 +1573,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         self.ctx
             .apply_batch_system
             .register(Registration::new(peer.get_peer()), receiver);
-        let mailbox = BasicMailbox::new(tx, peer);
-        self.ctx.router.register(region_id, mailbox);
-        self.ctx
-            .router
-            .force_send(region_id, PeerMsg::Start)
-            .unwrap();
+        self.ctx.register(region_id, peer);
         Ok(true)
     }
 
@@ -1858,7 +1622,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         if self.ctx.cleanup_scheduler.is_busy() {
             debug!(
                 "compact worker is busy, check space redundancy next time";
-                "store_id" => self.fsm.store.id,
+                "store_id" => self.store.id,
             );
             return;
         }
@@ -1872,7 +1636,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         {
             debug!(
                 "skip compact check when disabled auto compactions";
-                "store_id" => self.fsm.store.id,
+                "store_id" => self.store.id,
             );
             return;
         }
@@ -1880,21 +1644,21 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         // Start from last checked key.
         let mut ranges_need_check =
             Vec::with_capacity(self.ctx.cfg.region_compact_check_step as usize + 1);
-        ranges_need_check.push(self.fsm.store.last_compact_checked_key.clone());
+        ranges_need_check.push(self.store.last_compact_checked_key.clone());
 
         let largest_key = {
             let meta = self.ctx.store_meta.lock().unwrap();
             if meta.region_ranges.is_empty() {
                 debug!(
                     "there is no range need to check";
-                    "store_id" => self.fsm.store.id
+                    "store_id" => self.store.id
                 );
                 return;
             }
 
             // Collect continuous ranges.
             let left_ranges = meta.region_ranges.range((
-                Excluded(self.fsm.store.last_compact_checked_key.clone()),
+                Excluded(self.store.last_compact_checked_key.clone()),
                 Unbounded::<Key>,
             ));
             ranges_need_check.extend(
@@ -1914,9 +1678,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                 ranges_need_check.push(keys::DATA_MAX_KEY.to_vec());
             }
             // Next task will start from the very beginning.
-            self.fsm.store.last_compact_checked_key = keys::DATA_MIN_KEY.to_vec();
+            self.store.last_compact_checked_key = keys::DATA_MIN_KEY.to_vec();
         } else {
-            self.fsm.store.last_compact_checked_key = last_key;
+            self.store.last_compact_checked_key = last_key;
         }
 
         // Schedule the task.
@@ -1931,7 +1695,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         )) {
             error!(
                 "schedule space check task failed";
-                "store_id" => self.fsm.store.id,
+                "store_id" => self.store.id,
                 "err" => ?e,
             );
         }
@@ -1964,7 +1728,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
             .with_label_values(&["applying"])
             .set(apply_snapshot_count as i64);
 
-        stats.set_start_time(self.fsm.store.start_time.unwrap().sec as u32);
+        stats.set_start_time(self.store.start_time.unwrap().sec as u32);
 
         // report store write flow to pd
         stats.set_bytes_written(
@@ -1998,7 +1762,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         let task = PdTask::StoreHeartbeat { stats, store_info };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
             error!("notify pd failed";
-                "store_id" => self.fsm.store.id,
+                "store_id" => self.store.id,
                 "err" => ?e
             );
         }
@@ -2010,9 +1774,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
-        fail_point!("peer_2_handle_snap_mgr_gc", self.fsm.store.id == 2, |_| Ok(
-            ()
-        ));
+        fail_point!("peer_2_handle_snap_mgr_gc", self.store.id == 2, |_| Ok(()));
         let snap_keys = self.ctx.snap_mgr.list_idle_snap()?;
         if snap_keys.is_empty() {
             return Ok(());
@@ -2021,16 +1783,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         let schedule_gc_snap = |region_id: u64, snaps| -> Result<()> {
             debug!(
                 "schedule snap gc";
-                "store_id" => self.fsm.store.id,
+                "store_id" => self.store.id,
                 "region_id" => region_id,
             );
             let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
             match self.ctx.router.send(region_id, gc_snap) {
                 Ok(()) => Ok(()),
-                Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shutdown() => Ok(()),
-                Err(TrySendError::Disconnected(PeerMsg::CasualMessage(
-                    CasualMessage::GcSnap { snaps },
-                ))) => {
+                Err(AsyncRouterError::NotExist(_)) if self.ctx.router.is_shutdown() => Ok(()),
+                Err(AsyncRouterError::Closed(_)) if self.ctx.router.is_shutdown() => Ok(()),
+                Err(AsyncRouterError::Closed(PeerMsg::CasualMessage(CasualMessage::GcSnap {
+                    snaps,
+                }))) => {
                     // The snapshot exists because MsgAppend has been rejected. So the
                     // peer must have been exist. But now it's disconnected, so the peer
                     // has to be destroyed instead of being created.
@@ -2051,8 +1814,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                     }
                     Ok(())
                 }
-                Err(TrySendError::Full(_)) => Ok(()),
-                Err(TrySendError::Disconnected(_)) => unreachable!(),
+                Err(_) => unreachable!(),
             }
         };
         for (key, is_sending) in snap_keys {
@@ -2079,7 +1841,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         if let Err(e) = self.handle_snap_mgr_gc() {
             error!(?e;
                 "handle gc snap failed";
-                "store_id" => self.fsm.store.id,
+                "store_id" => self.store.id,
             );
         }
         self.register_snap_mgr_gc_tick();
@@ -2112,7 +1874,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
             {
                 error!(
                     "schedule compact lock cf task failed";
-                    "store_id" => self.fsm.store.id,
+                    "store_id" => self.store.id,
                     "err" => ?e,
                 );
             }
@@ -2141,9 +1903,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
     }
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
-    StoreFsmDelegate<'a, EK, ER, T, C>
-{
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<EK, ER, T> {
     fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
         if ssts.is_empty() {
             return;
@@ -2171,7 +1931,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         {
             error!(
                 "schedule to delete ssts failed";
-                "store_id" => self.fsm.store.id,
+                "store_id" => self.store.id,
                 "err" => ?e,
             );
         }
@@ -2210,7 +1970,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
             {
                 error!(
                     "schedule to delete ssts failed";
-                    "store_id" => self.fsm.store.id,
+                    "store_id" => self.store.id,
                     "err" => ?e
                 );
             }
@@ -2227,7 +1987,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
             {
                 error!(
                    "schedule to validate ssts failed";
-                   "store_id" => self.fsm.store.id,
+                   "store_id" => self.store.id,
                    "err" => ?e,
                 );
             }
@@ -2252,7 +2012,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         let target_peer = {
             let meta = self.ctx.store_meta.lock().unwrap();
             for region_id in meta.regions.keys() {
-                match self.fsm.store.consistency_check_time.get(region_id) {
+                match self.store.consistency_check_time.get(region_id) {
                     Some(time) => {
                         if *time < oldest {
                             oldest = *time;
@@ -2275,11 +2035,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         };
         info!(
             "scheduling consistency check for region";
-            "store_id" => self.fsm.store.id,
+            "store_id" => self.store.id,
             "region_id" => target_region_id,
         );
-        self.fsm
-            .store
+        self.store
             .consistency_check_time
             .insert(target_region_id, Instant::now());
         let mut request = new_admin_request(target_region_id, target_peer);
@@ -2300,7 +2059,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         if let Err(e) = self.on_cleanup_import_sst() {
             error!(?e;
                 "cleanup import sst failed";
-                "store_id" => self.fsm.store.id,
+                "store_id" => self.store.id,
             );
         }
         self.register_cleanup_import_sst_tick();
@@ -2338,7 +2097,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
     fn on_store_unreachable(&mut self, store_id: u64) {
         let now = Instant::now();
         if self
-            .fsm
             .store
             .last_unreachable_report
             .get(&store_id)
@@ -2349,10 +2107,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         }
         info!(
             "broadcasting unreachable";
-            "store_id" => self.fsm.store.id,
+            "store_id" => self.store.id,
             "unreachable_store_id" => store_id,
         );
-        self.fsm.store.last_unreachable_report.insert(store_id, now);
+        self.store.last_unreachable_report.insert(store_id, now);
         // It's possible to acquire the lock and only send notification to
         // involved regions. However loop over all the regions can take a
         // lot of time, which may block other operations.

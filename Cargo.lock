@@ -3130,7 +3130,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/Little-Wallace/raft-engine?branch=async-io#38d77cf3d7071ea60c306c131aebd13a3d841042"
+source = "git+https://github.com/Little-Wallace/raft-engine?branch=async-io#276a241e194f52179995fd64220846528d647a89"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -5642,7 +5642,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git#3894a861643b6ba384aaad352bbaed9717f66838"
+source = "git+https://github.com/tikv/yatp.git#2e7cd9bfe8151f8beed67d39c88617af38595c49"
 dependencies = [
  "crossbeam-deque",
  "dashmap",

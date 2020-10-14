@@ -13,7 +13,7 @@ use std::{cmp, io};
 use futures::future::TryFutureExt;
 use tokio::task::spawn_local;
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::KvEngine;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{
@@ -420,15 +420,14 @@ where
     }
 }
 
-pub struct Runner<EK, ER, T>
+pub struct Runner<EK, T>
 where
     EK: KvEngine,
-    ER: RaftEngine,
     T: PdClient + 'static,
 {
     store_id: u64,
     pd_client: Arc<T>,
-    router: RaftRouter<EK, ER>,
+    router: RaftRouter<EK>,
     db: EK,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -445,10 +444,9 @@ where
     concurrency_manager: ConcurrencyManager,
 }
 
-impl<EK, ER, T> Runner<EK, ER, T>
+impl<EK, T> Runner<EK, T>
 where
     EK: KvEngine,
-    ER: RaftEngine,
     T: PdClient + 'static,
 {
     const INTERVAL_DIVISOR: u32 = 2;
@@ -456,13 +454,13 @@ where
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        router: RaftRouter<EK, ER>,
+        router: RaftRouter<EK>,
         db: EK,
         scheduler: Scheduler<Task<EK>>,
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
-    ) -> Runner<EK, ER, T> {
+    ) -> Runner<EK, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start(auto_split_controller) {
@@ -531,7 +529,7 @@ where
     // Note: The parameter doesn't contain `self` because this function may
     // be called in an asynchronous context.
     fn handle_ask_batch_split(
-        router: RaftRouter<EK, ER>,
+        router: RaftRouter<EK>,
         scheduler: Scheduler<Task<EK>>,
         pd_client: Arc<T>,
         mut region: metapb::Region,
@@ -993,10 +991,9 @@ where
     }
 }
 
-impl<EK, ER, T> Runnable<Task<EK>> for Runner<EK, ER, T>
+impl<EK, T> Runnable<Task<EK>> for Runner<EK, T>
 where
     EK: KvEngine,
-    ER: RaftEngine,
     T: PdClient,
 {
     fn run(&mut self, task: Task<EK>) {
@@ -1235,8 +1232,8 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     req
 }
 
-fn send_admin_request<EK, ER>(
-    router: &RaftRouter<EK, ER>,
+fn send_admin_request<EK>(
+    router: &RaftRouter<EK>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
@@ -1244,7 +1241,6 @@ fn send_admin_request<EK, ER>(
     callback: Callback<EK::Snapshot>,
 ) where
     EK: KvEngine,
-    ER: RaftEngine,
 {
     let cmd_type = request.get_cmd_type();
 
@@ -1264,14 +1260,13 @@ fn send_admin_request<EK, ER>(
 }
 
 /// Sends a raft message to destroy the specified stale Peer
-fn send_destroy_peer_message<EK, ER>(
-    router: &RaftRouter<EK, ER>,
+fn send_destroy_peer_message<EK>(
+    router: &RaftRouter<EK>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,
 ) where
     EK: KvEngine,
-    ER: RaftEngine,
 {
     let mut message = RaftMessage::default();
     message.set_region_id(local_region.get_id());

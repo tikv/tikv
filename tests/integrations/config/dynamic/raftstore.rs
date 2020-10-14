@@ -22,13 +22,28 @@ use tikv_util::config::VersionTrack;
 use tikv_util::worker::{FutureWorker, Worker};
 
 #[derive(Clone)]
-struct MockTransport;
-impl Transport for MockTransport {
-    fn send(&mut self, _: RaftMessage) -> Result<()> {
+struct MockTransport {
+    has_data: bool,
+}
+impl MockTransport {
+    fn do_send(&mut self, _: RaftMessage) -> Result<()> {
         unimplemented!()
     }
-    fn flush(&mut self) {
+    fn do_flush(&mut self) {
         unimplemented!()
+    }
+}
+
+impl Transport for MockTransport {
+    fn send(&mut self, msg: RaftMessage) -> Result<()> {
+        self.has_data = true;
+        self.do_send(msg)
+    }
+    fn flush(&mut self) {
+        if self.has_data {
+            self.do_flush();
+            self.has_data = false;
+        }
     }
 }
 
@@ -59,8 +74,8 @@ fn start_raftstore(
     dir: &TempDir,
 ) -> (
     ConfigController,
-    RaftRouter<RocksEngine, RocksEngine>,
-    RaftBatchSystem<RocksEngine, RocksEngine>,
+    RaftRouter<RocksEngine>,
+    RaftBatchSystem<RocksEngine>,
 ) {
     let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
     let engines = create_tmp_engine(dir);
@@ -97,7 +112,7 @@ fn start_raftstore(
             Default::default(),
             cfg_track,
             engines,
-            MockTransport,
+            MockTransport { has_data: false },
             Arc::new(TestPdClient::new(0, true)),
             snap_mgr,
             pd_worker,
@@ -113,7 +128,7 @@ fn start_raftstore(
     (cfg_controller, raft_router, system)
 }
 
-fn validate_store<F>(router: &RaftRouter<RocksEngine, RocksEngine>, f: F)
+fn validate_store<F>(router: &RaftRouter<RocksEngine>, f: F)
 where
     F: FnOnce(&Config) + Send + 'static,
 {

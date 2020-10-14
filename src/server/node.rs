@@ -58,30 +58,29 @@ where
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
+pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
-    system: RaftBatchSystem<RocksEngine, ER>,
+    system: RaftBatchSystem<RocksEngine>,
     has_started: bool,
 
     pd_client: Arc<C>,
     state: Arc<Mutex<GlobalReplicationState>>,
 }
 
-impl<C, ER> Node<C, ER>
+impl<C> Node<C>
 where
     C: PdClient,
-    ER: RaftEngine,
 {
     /// Creates a new Node.
     pub fn new(
-        system: RaftBatchSystem<RocksEngine, ER>,
+        system: RaftBatchSystem<RocksEngine>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
-    ) -> Node<C, ER> {
+    ) -> Node<C> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -133,7 +132,7 @@ where
     /// bootstrapped yet. Then it spawns a thread to run the raftstore in
     /// background.
     #[allow(clippy::too_many_arguments)]
-    pub fn start<T>(
+    pub fn start<ER, T>(
         &mut self,
         engines: Engines<RocksEngine, ER>,
         trans: T,
@@ -147,6 +146,7 @@ where
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
     where
+        ER: RaftEngine,
         T: Transport + 'static,
     {
         let mut store_id = self.check_store(&engines)?;
@@ -199,13 +199,13 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter<RocksEngine, ER> {
+    pub fn get_router(&self) -> RaftRouter<RocksEngine> {
         self.system.router()
     }
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
+    fn check_store<ER: RaftEngine>(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
         let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
@@ -250,7 +250,7 @@ where
         }
     }
 
-    fn bootstrap_store(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
+    fn bootstrap_store<ER: RaftEngine>(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
         let store_id = self.alloc_id()?;
         debug!("alloc store id"; "store_id" => store_id);
 
@@ -261,7 +261,7 @@ where
 
     // Exported for tests.
     #[doc(hidden)]
-    pub fn prepare_bootstrap_cluster(
+    pub fn prepare_bootstrap_cluster<ER: RaftEngine>(
         &self,
         engines: &Engines<RocksEngine, ER>,
         store_id: u64,
@@ -285,7 +285,7 @@ where
         Ok(region)
     }
 
-    fn check_or_prepare_bootstrap_cluster(
+    fn check_or_prepare_bootstrap_cluster<ER: RaftEngine>(
         &self,
         engines: &Engines<RocksEngine, ER>,
         store_id: u64,
@@ -301,7 +301,7 @@ where
         }
     }
 
-    fn bootstrap_cluster(
+    fn bootstrap_cluster<ER: RaftEngine>(
         &mut self,
         engines: &Engines<RocksEngine, ER>,
         first_region: metapb::Region,
@@ -363,7 +363,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn start_store<T>(
+    fn start_store<ER, T>(
         &mut self,
         store_id: u64,
         engines: Engines<RocksEngine, ER>,
@@ -378,6 +378,7 @@ where
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
     where
+        ER: RaftEngine,
         T: Transport + 'static,
     {
         info!("start raft store thread"; "store_id" => store_id);
