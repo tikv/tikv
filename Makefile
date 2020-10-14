@@ -356,14 +356,13 @@ error-code:
 .PHONY: docker
 docker:
 	bash ./scripts/gen-dockerfile.sh > Dockerfile
-	@pwd
-	@ls -l .
 	docker build \
 		-t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
 		. \
 		--build-arg GIT_HASH=${TIKV_BUILD_GIT_HASH} \
 		--build-arg GIT_TAG=${TIKV_BUILD_GIT_TAG} \
-		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH}
+		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH} || true
+	@rm -f Dockerfile cargo.tar code.tar
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------
