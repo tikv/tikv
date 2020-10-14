@@ -67,7 +67,7 @@ This section describes how to deploy TiKV on a single machine installed with the
 You can use the [pd-ctl](https://github.com/pingcap/pd/tree/master/tools/pd-ctl) tool to verify whether PD and TiKV are successfully deployed:
 
 ```
-./bin/pd-ctl store -d -u http://127.0.0.1:2379
+./bin/pd-ctl store -u http://127.0.0.1:2379
 ```
 
 If the state of all the TiKV instances is "Up", you have successfully deployed a TiKV cluster.
