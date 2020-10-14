@@ -118,7 +118,7 @@ all: format build test error-code
 dev: format clippy
 	@env FAIL_POINT=1 make test
 
-build_by_type: error-code
+build_by_type:
 	@echo prometheus metric name prefix is ${PROMETHEUS_METRIC_NAME_PREFIX}
 	@echo engine is ${ENGINE_LABEL_VALUE}
 	@echo profile is ${PROXY_PROFILE}
@@ -181,7 +181,7 @@ endif
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
 build_dist_release: export PROXY_PROFILE=dist_release
-build_dist_release: error-code
+build_dist_release:
 	make x-build-dist
 ifeq ($(shell uname),Linux) # Macs don't have objcopy
 	# Reduce binary size by compressing binaries.
