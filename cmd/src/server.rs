@@ -189,29 +189,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
-        match config.coprocessor.consistency_check_method {
-            ConsistencyCheckMethod::Mvcc => {
-                // TODO: use mvcc consistency checker.
-                coprocessor_host
-                    .as_mut()
-                    .unwrap()
-                    .registry
-                    .register_consistency_check_observer(
-                        100,
-                        BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
-                    );
-            }
-            ConsistencyCheckMethod::Raw => {
-                coprocessor_host
-                    .as_mut()
-                    .unwrap()
-                    .registry
-                    .register_consistency_check_observer(
-                        100,
-                        BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
-                    );
-            }
-        }
         let region_info_accessor =
             RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap(), &background_worker);
 

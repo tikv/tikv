@@ -79,7 +79,7 @@ impl TestSuite {
         let concurrency_manager =
             ConcurrencyManager::new(block_on(cluster.pd_client.get_tso()).unwrap());
         let mut endpoints = HashMap::default();
-        let bg_worker = Worker::new(format!("backup-test"));
+        let bg_worker = Worker::new("backup-test");
         for (id, engines) in &cluster.engines {
             // Create and run backup endpoints.
             let sim = cluster.sim.rl();
