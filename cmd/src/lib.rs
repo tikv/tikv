@@ -8,8 +8,8 @@ extern crate tikv_util;
 #[macro_use]
 mod setup;
 pub mod dump;
-mod server;
 mod proxy;
+mod server;
 
 fn proxy_version_info() -> String {
     let fallback = "Unknown (env var does not exist when building)";
