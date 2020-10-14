@@ -15,7 +15,7 @@
 # Install the system dependencies
 # Attempt to clean and rebuild the cache to avoid 404s
 cat <<EOT
-FROM centos:centos7 as builder
+FROM centos:7.6.1810 as builder
 RUN yum install -y epel-release && \
     yum clean all && \
     yum makecache
