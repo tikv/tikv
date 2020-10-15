@@ -629,6 +629,7 @@ version = "0.0.1"
 dependencies = [
  "criterion",
  "crossbeam-skiplist",
+ "fail 0.4.0",
  "futures 0.3.5",
  "parking_lot",
  "rand 0.7.3",
