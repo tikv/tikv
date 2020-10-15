@@ -17,5 +17,5 @@ Thanks for using TiKV! Before asking a question, please take a look in the follo
   - [TiKV-Ctl Documentation](https://tikv.org/docs/4.0/reference/tools/tikv-ctl/)
   - [TiDB & TiKV Documentation](http://docs.pingcap.com/)
 
-You might get a faster response in the TiKV [Discourse forum](https://forum.tikv.org/c/tikv) or [Slack](https://join.slack.com/t/tikv-wg/shared_invite/enQtNTUyODE4ODU2MzI0LTgzZDQ3NzZlNDkzMGIyYjU1MTA0NzIwMjFjODFiZjA0YjFmYmQyOTZiNzNkNzg1N2U1MDdlZTIxNTU5NWNhNjk).
+You might get a faster response in [Slack](https://join.slack.com/t/tikv-wg/shared_invite/enQtNTUyODE4ODU2MzI0LTgzZDQ3NzZlNDkzMGIyYjU1MTA0NzIwMjFjODFiZjA0YjFmYmQyOTZiNzNkNzg1N2U1MDdlZTIxNTU5NWNhNjk).
 -->
