@@ -1610,7 +1610,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                     let _ = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
                     return Ok(());
                 }
-                // Can't crerate peer, see if we should keep this message
+                // Can't create peer, see if we should keep this message
                 util::is_first_message(msg.get_message())
             }
         };
