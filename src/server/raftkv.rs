@@ -20,7 +20,7 @@ use txn_types::{Key, TxnExtraScheduler, Value};
 use super::metrics::*;
 use crate::storage::kv::{
     write_modifies, Callback, CbContext, Cursor, Engine, Error as KvError,
-    ErrorInner as KvErrorInner, Iterator as EngineIterator, Modify, ScanMode,
+    ErrorInner as KvErrorInner, ExtCallback, Iterator as EngineIterator, Modify, ScanMode,
     Snapshot as EngineSnapshot, WriteData,
 };
 use crate::storage::{self, kv};
@@ -224,7 +224,8 @@ where
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
-        cb: Callback<CmdRes>,
+        write_cb: Callback<CmdRes>,
+        proposed_cb: Option<ExtCallback>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
         {
@@ -257,10 +258,13 @@ where
         self.router
             .send_command(
                 cmd,
-                StoreCallback::Write(Box::new(move |resp| {
-                    let (cb_ctx, res) = on_write_result(resp, len);
-                    cb((cb_ctx, res.map_err(Error::into)));
-                })),
+                StoreCallback::write_ext(
+                    Box::new(move |resp| {
+                        let (cb_ctx, res) = on_write_result(resp, len);
+                        write_cb((cb_ctx, res.map_err(Error::into)));
+                    }),
+                    proposed_cb,
+                ),
             )
             .map_err(From::from)
     }
@@ -336,7 +340,22 @@ where
         write_modifies(&self.engine, modifies)
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
+    fn async_write(
+        &self,
+        ctx: &Context,
+        batch: WriteData,
+        write_cb: Callback<()>,
+    ) -> kv::Result<()> {
+        self.async_write_ext(ctx, batch, write_cb, None)
+    }
+
+    fn async_write_ext(
+        &self,
+        ctx: &Context,
+        batch: WriteData,
+        write_cb: Callback<()>,
+        proposed_cb: Option<ExtCallback>,
+    ) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
         if batch.modifies.is_empty() {
             return Err(KvError::from(KvErrorInner::EmptyRequest));
@@ -397,18 +416,19 @@ where
                         .write
                         .observe(begin_instant.elapsed_secs());
                     fail_point!("raftkv_async_write_finish");
-                    cb((cb_ctx, Ok(())))
+                    write_cb((cb_ctx, Ok(())))
                 }
-                Ok(CmdRes::Snap(_)) => cb((
+                Ok(CmdRes::Snap(_)) => write_cb((
                     cb_ctx,
                     Err(box_err!("unexpect snapshot, should mutate instead.")),
                 )),
                 Err(e) => {
                     let status_kind = get_status_kind_from_engine_error(&e);
                     ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                    cb((cb_ctx, Err(e)))
+                    write_cb((cb_ctx, Err(e)))
                 }
             }),
+            proposed_cb,
         )
         .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
