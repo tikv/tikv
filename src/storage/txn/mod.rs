@@ -8,9 +8,7 @@ pub mod scheduler;
 
 mod actions;
 
-pub use actions::commit::commit;
-pub use actions::prewrite::prewrite;
-pub use actions::shared::prewrite_key_value;
+pub use actions::{commit::commit, pessimistic_prewrite::pessimistic_prewrite, prewrite::prewrite};
 
 mod latch;
 mod store;
@@ -236,5 +234,7 @@ impl ErrorCodeExt for Error {
 pub mod tests {
     use super::*;
     pub use actions::commit::tests::{must_err as must_commit_err, must_succeed as must_commit};
+    pub use actions::pessimistic_prewrite::tests::try_pessimistic_prewrite_check_not_exists;
     pub use actions::prewrite::tests::{try_prewrite_check_not_exists, try_prewrite_insert};
+    pub use actions::tests::*;
 }
