@@ -380,33 +380,12 @@ fn test_new_split_learner_can_not_find_leader() {
     assert_eq!(cluster.get(b"k2"), Some(b"v2".to_vec()));
 
     fail::remove("apply_before_split_1_3");
+
     // Wait learner split
     thread::sleep(Duration::from_millis(500));
 
     let new_region = cluster.get_region(b"k2");
     let learner_peer = find_peer(&new_region, 3).unwrap().clone();
-    // This will trigger leader send heartbeat meassage to learner immediately
-    // instead waiting heartbeat timeout
-    let resp = async_read_on_peer(
-        &mut cluster,
-        learner_peer.clone(),
-        new_region.clone(),
-        b"k2",
-        true,
-        true,
-    );
-    let resp = resp.recv_timeout(Duration::from_secs(3)).unwrap();
-    assert!(
-        resp.get_header()
-            .get_error()
-            .get_message()
-            .contains("can not read index due to no leader"),
-        "{:?}",
-        resp.get_header()
-    );
-
-    // Wait for learner catch up data
-    thread::sleep(Duration::from_millis(1000));
     let resp_ch = async_read_on_peer(&mut cluster, learner_peer, new_region, b"k2", true, true);
     let resp = resp_ch.recv_timeout(Duration::from_secs(3)).unwrap();
     let exp_value = resp.get_responses()[0].get_get().get_value();

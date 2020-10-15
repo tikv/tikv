@@ -1208,13 +1208,6 @@ where
                 if self.fsm.group_state == GroupState::Idle {
                     self.reset_raft_tick(GroupState::Ordered);
                 }
-                // Leader should send heartbeat immediately
-                if msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
-                    && self.fsm.peer.is_leader()
-                {
-                    self.fsm.peer.ping();
-                    self.fsm.has_ready = true;
-                }
             }
             ExtraMessageType::MsgWantRollbackMerge => {
                 self.fsm.peer.maybe_add_want_rollback_merge_peer(
@@ -2180,7 +2173,7 @@ where
 
             if !campaigned {
                 if let Some(msg) = meta
-                    .pending_votes
+                    .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
                     if let Err(e) = self
