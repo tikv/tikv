@@ -36,6 +36,7 @@ use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
@@ -374,7 +375,6 @@ where
     pub fn flush(&mut self) {
         self.raft_metrics.flush();
         self.store_stat.flush();
-        self.trans.as_mut().unwrap().flush();
     }
 }
 
@@ -557,6 +557,7 @@ where
         poll_ctx.cfg = incoming.clone();
     }
     poll_ctx.trans = Some(take_tls_trans());
+    poll_ctx.current_time = Some(monotonic_raw_now());
 }
 
 async fn handle_control<EK, ER, T>(
@@ -651,6 +652,7 @@ async fn handle_normal<EK, ER, T>(
             delegate.flush().await;
             delegate.ctx.trans = Some(take_tls_trans());
             delegate.post_raft_ready_append(ready, invoke_ctx);
+            delegate.ctx.flush();
         } else if delegate.fsm.is_stop() {
             receiver.receiver.close();
         }
