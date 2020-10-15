@@ -109,11 +109,11 @@ When building with make, cargo will automatically use [pipelined][p] compilation
 
 ## Running TiKV
 
-To run TiKV as an actual key-value store, you will need to run it as a cluster (a cluster can have just one node, which is useful for testing). You can do this on a single machine or on multiple machines. You need to use [PD](https://github.com/tikv/pd) to manage the cluster (even if there is just one node on a single machine). Instructions are in our [docs](https://tikv.org/docs/4.0/tasks/deploy/binary/) (if you build TiKV from source, then you don't need to download the binary).
+To run TiKV as an actual key-value store, you will need to run it as a cluster (a cluster can have just one node, which is useful for testing). You can do this on a single machine or on multiple machines. You need to use [PD](https://github.com/tikv/pd) to manage the cluster (even if there is just one node on a single machine). Instructions are in our [docs](https://tikv.org/docs/dev/tasks/deploy/binary/) (if you build TiKV from source, then you don't need to download the binary).
 
 ### Configuration
 
-Read our configuration guide to learn about various [configuration options](https://tikv.org/docs/4.0/tasks/configure/introduction/). There is also a [configuration template](./etc/config-template.toml).
+Read our configuration guide to learn about various [configuration options](https://tikv.org/docs/dev/tasks/configure/introduction/). There is also a [configuration template](./etc/config-template.toml).
 
 ## Contribution flow
 
