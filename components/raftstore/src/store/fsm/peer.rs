@@ -113,6 +113,16 @@ where
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
 }
 
+impl<EK, ER> Drop for PeerFsm<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn drop(&mut self) {
+        self.peer.stop();
+    }
+}
+
 pub struct BatchRaftCmdRequestBuilder<E>
 where
     E: KvEngine,
