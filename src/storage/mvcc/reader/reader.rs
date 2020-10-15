@@ -506,7 +506,7 @@ mod tests {
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
 
-    use crate::storage::txn::{commit, pessimistic_prewrite, prewrite};
+    use crate::storage::txn::{acquire_pessimistic_lock, commit, pessimistic_prewrite, prewrite};
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::raw::DB;
@@ -623,8 +623,17 @@ mod tests {
             let for_update_ts = for_update_ts.into();
             let cm = ConcurrencyManager::new(for_update_ts);
             let mut txn = MvccTxn::new(snap, start_ts.into(), true, cm);
-            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts, false, TimeStamp::zero())
-                .unwrap();
+            acquire_pessimistic_lock(
+                &mut txn,
+                k,
+                pk,
+                false,
+                0,
+                for_update_ts,
+                false,
+                TimeStamp::zero(),
+            )
+            .unwrap();
             self.write(txn.into_modifies());
         }
 

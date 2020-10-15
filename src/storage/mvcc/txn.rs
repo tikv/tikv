@@ -363,151 +363,6 @@ impl<S: Snapshot> MvccTxn<S> {
         Err(ErrorInner::KeyIsLocked(info).into())
     }
 
-    pub fn acquire_pessimistic_lock(
-        &mut self,
-        key: Key,
-        primary: &[u8],
-        should_not_exist: bool,
-        lock_ttl: u64,
-        for_update_ts: TimeStamp,
-        need_value: bool,
-        min_commit_ts: TimeStamp,
-    ) -> Result<Option<Value>> {
-        fail_point!("acquire_pessimistic_lock", |err| Err(make_txn_error(
-            err,
-            &key,
-            self.start_ts,
-        )
-        .into()));
-
-        fn pessimistic_lock(
-            primary: &[u8],
-            start_ts: TimeStamp,
-            lock_ttl: u64,
-            for_update_ts: TimeStamp,
-            min_commit_ts: TimeStamp,
-        ) -> Lock {
-            Lock::new(
-                LockType::Pessimistic,
-                primary.to_vec(),
-                start_ts,
-                lock_ttl,
-                None,
-                for_update_ts,
-                0,
-                min_commit_ts,
-            )
-        }
-
-        let mut val = None;
-        if let Some(lock) = self.reader.load_lock(&key)? {
-            if lock.ts != self.start_ts {
-                return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
-            }
-            if lock.lock_type != LockType::Pessimistic {
-                return Err(ErrorInner::LockTypeNotMatch {
-                    start_ts: self.start_ts,
-                    key: key.into_raw()?,
-                    pessimistic: false,
-                }
-                .into());
-            }
-            if need_value {
-                val = self.reader.get(&key, for_update_ts, true)?;
-            }
-            // Overwrite the lock with small for_update_ts
-            if for_update_ts > lock.for_update_ts {
-                let lock = pessimistic_lock(
-                    primary,
-                    self.start_ts,
-                    lock_ttl,
-                    for_update_ts,
-                    min_commit_ts,
-                );
-                self.put_lock(key, &lock);
-            } else {
-                MVCC_DUPLICATE_CMD_COUNTER_VEC
-                    .acquire_pessimistic_lock
-                    .inc();
-            }
-            return Ok(val);
-        }
-
-        if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
-            // The isolation level of pessimistic transactions is RC. `for_update_ts` is
-            // the commit_ts of the data this transaction read. If exists a commit version
-            // whose commit timestamp is larger than current `for_update_ts`, the
-            // transaction should retry to get the latest data.
-            if commit_ts > for_update_ts {
-                MVCC_CONFLICT_COUNTER
-                    .acquire_pessimistic_lock_conflict
-                    .inc();
-                return Err(ErrorInner::WriteConflict {
-                    start_ts: self.start_ts,
-                    conflict_start_ts: write.start_ts,
-                    conflict_commit_ts: commit_ts,
-                    key: key.into_raw()?,
-                    primary: primary.to_vec(),
-                }
-                .into());
-            }
-
-            // Handle rollback.
-            // The rollack informathin may come from either a Rollback record or a record with
-            // `has_overlapped_rollback` flag.
-            if commit_ts == self.start_ts
-                && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
-            {
-                assert!(write.has_overlapped_rollback || write.start_ts == commit_ts);
-                return Err(ErrorInner::PessimisticLockRolledBack {
-                    start_ts: self.start_ts,
-                    key: key.into_raw()?,
-                }
-                .into());
-            }
-            // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
-            if commit_ts > self.start_ts {
-                if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
-                    if write.start_ts == self.start_ts {
-                        assert!(
-                            commit_ts == self.start_ts && write.write_type == WriteType::Rollback
-                        );
-                        return Err(ErrorInner::PessimisticLockRolledBack {
-                            start_ts: self.start_ts,
-                            key: key.into_raw()?,
-                        }
-                        .into());
-                    }
-                }
-            }
-
-            // Check data constraint when acquiring pessimistic lock.
-            self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
-
-            if need_value {
-                val = match write.write_type {
-                    // If it's a valid Write, no need to read again.
-                    WriteType::Put => Some(self.reader.load_data(&key, write)?),
-                    WriteType::Delete => None,
-                    WriteType::Lock | WriteType::Rollback => {
-                        self.reader.get(&key, commit_ts.prev(), true)?
-                    }
-                };
-            }
-        }
-
-        let lock = pessimistic_lock(
-            primary,
-            self.start_ts,
-            lock_ttl,
-            for_update_ts,
-            min_commit_ts,
-        );
-        self.put_lock(key, &lock);
-
-        Ok(val)
-    }
-
     // TiKV may fails to write pessimistic locks due to pipelined process.
     // If the data is not changed after acquiring the lock, we can still prewrite the key.
     pub(crate) fn amend_pessimistic_lock(
@@ -890,7 +745,7 @@ mod tests {
     use crate::storage::mvcc::{Error, ErrorInner, Mutation, MvccReader};
     use crate::storage::txn::commands::*;
     use crate::storage::txn::tests::*;
-    use crate::storage::txn::{commit, pessimistic_prewrite, prewrite};
+    use crate::storage::txn::{acquire_pessimistic_lock, commit, pessimistic_prewrite, prewrite};
     use crate::storage::SecondaryLocksStatus;
     use kvproto::kvrpcpb::Context;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
@@ -2298,7 +2153,8 @@ mod tests {
 
             txn.extra_op = ExtraOp::ReadOldValue;
             if is_pessimistic {
-                txn.acquire_pessimistic_lock(
+                acquire_pessimistic_lock(
+                    &mut txn,
                     key.clone(),
                     b"key",
                     false,
