@@ -384,13 +384,6 @@ impl parse::Parse for RpnFnAttr {
             ));
         }
 
-        if writer && is_varg {
-            return Err(Error::new_spanned(
-                config_items,
-                "`varg` doesn't support writer",
-            ));
-        }
-
         if writer && is_raw_varg {
             return Err(Error::new_spanned(
                 config_items,
@@ -891,6 +884,7 @@ struct VargsRpnFn {
     metadata_type: Option<TokenStream>,
     metadata_mapper: Option<TokenStream>,
     nullable: bool,
+    writer: bool,
     item_fn: ItemFn,
     arg_type: TypePath,
     arg_type_anonymous: TokenStream,
@@ -899,7 +893,12 @@ struct VargsRpnFn {
 
 impl VargsRpnFn {
     fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
-        if item_fn.sig.inputs.len() != attr.captures.len() + 1 {
+        let args_len = if attr.writer {
+            item_fn.sig.inputs.len() - 1
+        } else {
+            item_fn.sig.inputs.len()
+        };
+        if args_len != attr.captures.len() + 1 {
             return Err(Error::new_spanned(
                 item_fn.sig.inputs,
                 format!("Expect {} parameters", attr.captures.len() + 1),
@@ -910,15 +909,25 @@ impl VargsRpnFn {
         let arg_type = Self::get_args_type(&attr, &fn_arg)?;
         let arg_type_anonymous = arg_type.eval_type.get_type_with_lifetime(quote! { '_ });
 
-        let ret_type = parse2::<RpnFnSignatureReturnType>(
-            (&item_fn.sig.output).into_token_stream(),
-        )
-        .map_err(|_| {
-            Error::new_spanned(
-                &item_fn.sig.output,
-                "Expect return type to be like `Result<Option<T>>`",
-            )
-        })?;
+        let ret_type = if attr.writer {
+            parse2::<RpnFnSignatureReturnGuardType>((&item_fn.sig.output).into_token_stream())
+                .map_err(|_| {
+                    Error::new_spanned(
+                        &item_fn.sig.output,
+                        "Expect return type to be like `Result<SomeGuard>`",
+                    )
+                })?
+                .into_return_type()?
+        } else {
+            parse2::<RpnFnSignatureReturnType>((&item_fn.sig.output).into_token_stream()).map_err(
+                |_| {
+                    Error::new_spanned(
+                        &item_fn.sig.output,
+                        "Expect return type to be like `Result<Option<T>>`",
+                    )
+                },
+            )?
+        };
         Ok(Self {
             captures: attr.captures,
             max_args: attr.max_args,
@@ -927,6 +936,7 @@ impl VargsRpnFn {
             metadata_type: attr.metadata_type,
             metadata_mapper: attr.metadata_mapper,
             nullable: attr.nullable,
+            writer: attr.writer,
             item_fn,
             arg_type: arg_type.eval_type.get_type_path(),
             arg_type_anonymous,
@@ -1012,6 +1022,30 @@ impl VargsRpnFn {
 
         let vec_type = &self.ret_type;
 
+        let func_args = if self.nullable {
+            quote! {
+                #(#captures,)*
+                    unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [Option<#vectorized_type>]) }
+            }
+        } else {
+            quote! {
+                #(#captures,)*
+                    unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [#vectorized_type]) }
+            }
+        };
+
+        let chunked_push = if self.writer {
+            quote! {
+                let writer = result.into_writer();
+                let guard = #fn_ident #ty_generics_turbofish(#func_args, writer)?;
+                result = guard.into_inner();
+            }
+        } else {
+            quote! {
+                result.chunked_push(#fn_ident #ty_generics_turbofish(#func_args)?);
+            }
+        };
+
         let arg_loop = if self.nullable {
             quote! {
                 for arg_index in 0..args_len {
@@ -1020,8 +1054,7 @@ impl VargsRpnFn {
                     #transmute_ref
                     vargs_buf[arg_index] = arg;
                 }
-                result.chunked_push(#fn_ident #ty_generics_turbofish( #(#captures,)*
-                    unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [Option<#vectorized_type>]) })?);
+                #chunked_push
             }
         } else {
             quote! {
@@ -1039,8 +1072,7 @@ impl VargsRpnFn {
                 if has_null {
                     result.chunked_push(None);
                 } else {
-                result.chunked_push(#fn_ident #ty_generics_turbofish( #(#captures,)*
-                    unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [#vectorized_type]) })?);
+                    #chunked_push
                 }
             }
         };

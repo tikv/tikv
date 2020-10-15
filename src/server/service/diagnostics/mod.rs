@@ -24,8 +24,10 @@ use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget
 use kvproto::diagnosticspb::SearchLogRequestTarget;
 
 use security::{check_common_name, SecurityManager};
-use sysinfo::SystemExt;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::{
+    sys::{SystemExt, SYS_INFO},
+    timer::GLOBAL_TIMER_HANDLE,
+};
 
 mod ioload;
 mod log;
@@ -122,7 +124,7 @@ impl Diagnostics for Service {
         let collect = async move {
             let (load, when) = match tp {
                 ServerInfoType::LoadInfo | ServerInfoType::All => {
-                    let mut system = sysinfo::System::new();
+                    let mut system = SYS_INFO.lock().unwrap();
                     system.refresh_networks_list();
                     system.refresh_all();
                     let load = (
