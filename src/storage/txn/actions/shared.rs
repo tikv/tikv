@@ -4,7 +4,7 @@ use crate::storage::Snapshot;
 use std::cmp;
 use txn_types::{is_short_value, Key, Value};
 
-pub fn prewrite_key_value<S: Snapshot>(
+pub(super) fn prewrite_key_value<S: Snapshot>(
     txn: &mut MvccTxn<S>,
     key: Key,
     lock_type: LockType,
