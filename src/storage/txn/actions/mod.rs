@@ -6,10 +6,8 @@
 //! for archiving a certain target
 
 pub mod commit;
+pub mod pessimistic_prewrite;
 pub mod prewrite;
-pub mod shared;
+pub(crate) mod shared;
 
-#[cfg(test)]
-pub mod tests {
-    // Todo: move tests in mvcc/txn.rs which tests cooperation of different actions here
-}
+pub mod tests;
