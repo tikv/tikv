@@ -1084,6 +1084,7 @@ mod tests {
     use test_raftstore::TestPdClient;
     use tikv::storage::kv::Engine;
     use tikv::storage::mvcc::tests::*;
+    use tikv::storage::txn::tests::must_prewrite_put;
     use tikv::storage::TestEngineBuilder;
     use tikv_util::collections::HashSet;
     use tikv_util::config::ReadableDuration;
