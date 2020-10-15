@@ -1164,7 +1164,7 @@ mod latest_entry_tests {
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::tests::must_commit;
+    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use crate::storage::{Engine, TestEngineBuilder};
     use kvproto::kvrpcpb::Context;
 
