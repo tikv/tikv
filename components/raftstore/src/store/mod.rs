@@ -29,8 +29,8 @@ pub use self::compaction_guard::CompactionGuardGeneratorFactory;
 pub use self::config::Config;
 pub use self::fsm::{DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
-    Callback, CasualMessage, MergeResultKind, PeerMsg, PeerTicks, RaftCommand, ReadCallback,
-    ReadResponse, SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
+    Callback, CasualMessage, ExtCallback, MergeResultKind, PeerMsg, PeerTicks, RaftCommand,
+    ReadCallback, ReadResponse, SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{
     AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy,

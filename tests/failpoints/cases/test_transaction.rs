@@ -4,10 +4,11 @@ use futures::executor::block_on;
 use kvproto::kvrpcpb::Context;
 use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc;
+use tikv::storage::txn::commands;
+use tikv::storage::txn::tests::{must_prewrite_put, must_prewrite_put_err};
 use tikv::storage::TestEngineBuilder;
 use tikv::storage::{self, txn::tests::must_commit};
 use tikv::storage::{lock_manager::DummyLockManager, TestStorageBuilder};
-use tikv::storage::{mvcc::tests::*, txn::commands};
 use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]
