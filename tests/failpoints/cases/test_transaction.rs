@@ -156,7 +156,6 @@ fn test_update_max_ts_before_scan_memory_locks() {
 
 /// Generates a test that checks the correct behavior of holding and dropping locks,
 /// during the process of a single prewrite command.
-/// `fn_name` is a closure to check
 macro_rules! lock_release_test {
     ($test_name:ident, $lock_exists:ident, $before_actions:expr, $middle_actions:expr, $after_actions:expr, $should_succeed:expr) => {
         #[test]
