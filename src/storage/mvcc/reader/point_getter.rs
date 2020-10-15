@@ -337,7 +337,10 @@ mod tests {
 
     use crate::storage::kv::{CfStatistics, Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::tests::must_commit;
+    use crate::storage::txn::tests::{
+        must_commit, must_pessimistic_prewrite_delete, must_prewrite_delete, must_prewrite_lock,
+        must_prewrite_put,
+    };
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
