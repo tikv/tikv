@@ -189,7 +189,8 @@ members = [
   "fuzz/fuzzer-libfuzzer",
   "fuzz/fuzzer-honggfuzz",
   "tests",
-  "cmd",
+  "cmd/tikv-server",
+  "cmd/tikv-ctl",
   "components/test_raftstore",
   "components/test_storage",
   "components/test_coprocessor",
@@ -227,9 +228,9 @@ members = [
   "components/encryption",
   "components/error_code",
   "components/concurrency_manager",
-  "components/server",
+  "components/server"
 ]
-default-members = ["cmd"]
+default-members = ["cmd/tikv-server"]
 
 [profile.dev]
 opt-level = 0
