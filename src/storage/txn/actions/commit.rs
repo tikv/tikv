@@ -33,7 +33,7 @@ pub fn commit<S: Snapshot>(
                     key: key.into_raw()?,
                     min_commit_ts: lock.min_commit_ts,
                 }
-                    .into());
+                .into());
             }
 
             // It's an abnormal routine since pessimistic locks shouldn't be committed in our
@@ -70,7 +70,7 @@ pub fn commit<S: Snapshot>(
                         commit_ts,
                         key: key.into_raw()?,
                     }
-                        .into())
+                    .into())
                 }
                 // Committed by concurrent transaction.
                 Some((_, WriteType::Put))
@@ -110,9 +110,8 @@ pub mod tests {
 
     #[cfg(test)]
     use crate::storage::txn::tests::{
-        must_prewrite_delete, must_prewrite_lock, must_prewrite_put,
-        must_prewrite_put_for_large_txn, must_prewrite_put_impl,
-        must_acquire_pessimistic_lock_for_large_txn,
+        must_acquire_pessimistic_lock_for_large_txn, must_prewrite_delete, must_prewrite_lock,
+        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl,
     };
 
     #[cfg(test)]

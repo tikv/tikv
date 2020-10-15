@@ -486,20 +486,6 @@ pub mod tests {
         }
     }
 
-    pub fn must_pessimistic_locked<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-    ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
-        let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
-        assert_eq!(lock.ts, start_ts.into());
-        assert_eq!(lock.for_update_ts, for_update_ts.into());
-        assert_eq!(lock.lock_type, LockType::Pessimistic);
-    }
-
     pub fn must_unlocked<E: Engine>(engine: &E, key: &[u8]) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
