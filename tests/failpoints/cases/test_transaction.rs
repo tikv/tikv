@@ -158,7 +158,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
 /// during the process of a single prewrite command.
 /// `fn_name` is a closure to check
 macro_rules! lock_release_test {
-    ($test_name:ident, $lock_exists:ident, $before_actions:expr, $middle_actions:expr, $after_actions:expr, $should_success:expr) => {
+    ($test_name:ident, $lock_exists:ident, $before_actions:expr, $middle_actions:expr, $after_actions:expr, $should_succeed:expr) => {
         #[test]
         fn $test_name() {
             let engine = TestEngineBuilder::new().build().unwrap();
@@ -196,7 +196,7 @@ macro_rules! lock_release_test {
                 .unwrap();
             $middle_actions;
             let res = prewrite_rx.recv();
-            assert_eq!(res.unwrap().is_ok(), $should_success);
+            assert_eq!(res.unwrap().is_ok(), $should_succeed);
             $after_actions;
         }
     };
