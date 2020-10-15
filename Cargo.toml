@@ -230,7 +230,7 @@ members = [
   "components/concurrency_manager",
   "components/server"
 ]
-default-members = ["cmd/tikv-server"]
+default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
 [profile.dev]
 opt-level = 0
