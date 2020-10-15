@@ -499,7 +499,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport> StoreFsmDel
         );
     }
 
-    fn handle_msgs(&mut self, m: StoreMsg<EK>) {
+    fn handle_msg(&mut self, m: StoreMsg<EK>) {
         match m {
             StoreMsg::Tick(tick) => self.on_tick(tick),
             StoreMsg::RaftMessage(msg) => {
@@ -556,6 +556,7 @@ where
     if let Some(incoming) = poll_ctx.cfg_tracker.any_new() {
         poll_ctx.cfg = incoming.clone();
     }
+    poll_ctx.trans = Some(take_tls_trans());
 }
 
 async fn handle_control<EK, ER, T>(
@@ -573,7 +574,8 @@ async fn handle_control<EK, ER, T>(
     };
     while let Some(msg) = receiver.recv().await {
         begin(&mut delegate.ctx);
-        delegate.handle_msgs(msg);
+        delegate.handle_msg(msg);
+        set_tls_trans(delegate.ctx.trans.take().unwrap());
     }
 }
 
@@ -625,7 +627,6 @@ async fn handle_normal<EK, ER, T>(
     while let Some(msg) = receiver.receiver.recv().await {
         // TODO: we may need a way to optimize the message copy.
         begin(&mut delegate.ctx);
-        delegate.ctx.trans = Some(take_tls_trans());
         delegate.handle_msg(msg);
         while let Ok(msg) = receiver.receiver.try_recv() {
             fail_point!(
