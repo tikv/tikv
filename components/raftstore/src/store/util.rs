@@ -306,7 +306,7 @@ pub fn find_sibling_regions(
             .take(cop_cfg.batch_split_limit as usize)
             .map(|(_, region_id)| meta.regions[region_id].to_owned())
             .filter(|r| {
-                compare_region_epoch(r.get_region_epoch(), region, true, true, false).is_ok()
+                compare_region_epoch(r.get_region_epoch(), region, false, true, false).is_ok()
             })
             .collect()
     } else {
@@ -315,7 +315,7 @@ pub fn find_sibling_regions(
             .take(cop_cfg.batch_split_limit as usize)
             .map(|(_, region_id)| meta.regions[region_id].to_owned())
             .filter(|r| {
-                compare_region_epoch(r.get_region_epoch(), region, true, true, false).is_ok()
+                compare_region_epoch(r.get_region_epoch(), region, false, true, false).is_ok()
             })
             .collect()
     }
