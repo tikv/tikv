@@ -629,6 +629,7 @@ version = "0.0.1"
 dependencies = [
  "criterion",
  "crossbeam-skiplist",
+ "fail 0.4.0",
  "futures 0.3.5",
  "parking_lot",
  "rand 0.7.3",
@@ -1144,27 +1145,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "errno"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6eab5ee3df98a279d9b316b1af6ac95422127b1290317e6d18c1743c99418b01"
-dependencies = [
- "errno-dragonfly",
- "libc",
- "winapi 0.3.8",
-]
-
-[[package]]
-name = "errno-dragonfly"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14ca354e36190500e1e1fb267c647932382b54053c50b14970856c0b00a35067"
-dependencies = [
- "gcc",
- "libc",
-]
-
-[[package]]
 name = "error-chain"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1507,12 +1487,6 @@ checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
 dependencies = [
  "byteorder",
 ]
-
-[[package]]
-name = "gcc"
-version = "0.3.55"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f5f3913fa0bfe7ee1fd8248b6b9f42a5af4b9d65ec2dd2c3c26132b950ecfc2"
 
 [[package]]
 name = "generic-array"
@@ -1985,7 +1959,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#95f66baeec7f28cf30aca7874f30115e04e98b8f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#488fb4181c063d7328308049cced6d4ef9616ba7"
 dependencies = [
  "cc",
  "cmake",
@@ -1994,7 +1968,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#95f66baeec7f28cf30aca7874f30115e04e98b8f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#488fb4181c063d7328308049cced6d4ef9616ba7"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2014,7 +1988,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#95f66baeec7f28cf30aca7874f30115e04e98b8f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#488fb4181c063d7328308049cced6d4ef9616ba7"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3042,25 +3016,19 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine#400c925fbda92036845a85c79b91350a2acd9bf8"
+source = "git+https://github.com/tikv/raft-engine#8452ee10d0b287f12053ba25183a9a65d014e423"
 dependencies = [
  "byteorder",
  "crc32fast",
  "crossbeam",
- "errno",
  "fxhash",
  "lazy_static",
- "libc",
  "log",
  "lz4-sys",
  "nix 0.18.0",
- "prometheus",
  "protobuf",
- "quick-error",
  "serde",
- "serde_derive",
- "tempfile",
- "toml",
+ "thiserror",
 ]
 
 [[package]]
@@ -3479,7 +3447,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#95f66baeec7f28cf30aca7874f30115e04e98b8f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#488fb4181c063d7328308049cced6d4ef9616ba7"
 dependencies = [
  "libc",
  "librocksdb_sys",
