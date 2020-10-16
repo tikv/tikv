@@ -25,6 +25,7 @@ const FILE_DICT_NAME: &str = "file.dict";
 struct Dicts {
     file_dict: RwLock<FileDictionary>,
     key_dict: Mutex<KeyDictionary>,
+    write_lock: Mutex<()>,
     rotation_period: Duration,
     base: PathBuf,
 }
@@ -37,6 +38,7 @@ impl Dicts {
                 current_key_id: 0,
                 ..Default::default()
             }),
+            write_lock: Mutex::new(()),
             rotation_period,
             base: Path::new(path).to_owned(),
         }
@@ -73,6 +75,7 @@ impl Dicts {
                 Ok(Some(Dicts {
                     file_dict: RwLock::new(file_dict),
                     key_dict: Mutex::new(key_dict),
+                    write_lock: Mutex::new(()),
                     rotation_period,
                     base: base.to_owned(),
                 }))
@@ -121,6 +124,7 @@ impl Dicts {
         let file = EncryptedFile::new(&self.base, FILE_DICT_NAME);
         let file_bytes = file_dict.write_to_bytes()?;
         // File dict is saved in plaintext.
+        let _ = self.write_lock.lock().unwrap();
         file.write(&file_bytes, &PlaintextBackend::default())?;
 
         ENCRYPTION_FILE_SIZE_GAUGE
@@ -150,23 +154,25 @@ impl Dicts {
 
     fn get_file(&self, fname: &str) -> FileInfo {
         let dict = self.file_dict.read().unwrap();
-        if dict.files.get(fname).is_none() {
-            // Return Plaintext if file not found
-            let mut file = FileInfo::default();
-            file.method = compat(EncryptionMethod::Plaintext);
-            file
-        } else {
-            dict.files.get(fname).cloned().unwrap()
+        let file_info = dict.files.get(fname);
+        match file_info {
+            None => {
+                // Return Plaintext if file not found
+                let mut file = FileInfo::default();
+                file.method = compat(EncryptionMethod::Plaintext);
+                file
+            }
+            Some(info) => info.clone(),
         }
     }
 
     fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
-        let mut file_dict = self.file_dict.write().unwrap();
         let iv = Iv::new_ctr();
         let mut file = FileInfo::default();
         file.iv = iv.as_slice().to_vec();
         file.key_id = self.key_dict.lock().unwrap().current_key_id;
         file.method = compat(method);
+        let mut file_dict = self.file_dict.write().unwrap();
         file_dict.files.insert(fname.to_owned(), file.clone());
         drop(file_dict);
         self.save_file_dict()?;
