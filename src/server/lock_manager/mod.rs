@@ -26,6 +26,7 @@ use crate::storage::{
 };
 use raftstore::coprocessor::CoprocessorHost;
 
+use crossbeam::utils::CachePadded;
 use engine_rocks::RocksEngine;
 use parking_lot::Mutex;
 use pd_client::PdClient;
@@ -56,7 +57,7 @@ pub struct LockManager {
     waiter_count: Arc<AtomicUsize>,
 
     /// Record transactions which have sent requests to detect deadlock.
-    detected: Arc<Vec<Mutex<HashSet<TimeStamp>>>>,
+    detected: Arc<Vec<CachePadded<Mutex<HashSet<TimeStamp>>>>>,
 }
 
 impl Clone for LockManager {
@@ -77,7 +78,7 @@ impl LockManager {
         let waiter_mgr_worker = FutureWorker::new("waiter-manager");
         let detector_worker = FutureWorker::new("deadlock-detector");
         let mut detected = Vec::with_capacity(DETECTED_SLOTS_NUM);
-        detected.resize_with(DETECTED_SLOTS_NUM, || Mutex::new(HashSet::default()));
+        detected.resize_with(DETECTED_SLOTS_NUM, || Mutex::new(HashSet::default()).into());
 
         Self {
             waiter_mgr_scheduler: WaiterMgrScheduler::new(waiter_mgr_worker.scheduler()),
