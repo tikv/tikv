@@ -18,6 +18,7 @@ pub fn pessimistic_prewrite<S: Snapshot>(
     txn_size: u64,
     mut min_commit_ts: TimeStamp,
     pipelined_pessimistic_lock: bool,
+    try_one_pc: bool,
 ) -> MvccResult<TimeStamp> {
     if mutation.should_not_write() {
         return Err(box_err!(
@@ -32,7 +33,7 @@ pub fn pessimistic_prewrite<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
     ));
 
-    if let Some(lock) = txn.reader.load_lock(&key)? {
+    let has_pessimistic_lock = if let Some(lock) = txn.reader.load_lock(&key)? {
         if lock.ts != txn.start_ts {
             // Abort on lock belonging to other transaction if
             // prewrites a pessimistic lock.
@@ -62,10 +63,14 @@ pub fn pessimistic_prewrite<S: Snapshot>(
             // The ttl and min_commit_ts of the lock may have been pushed forward.
             lock_ttl = std::cmp::max(lock_ttl, lock.ttl);
             min_commit_ts = std::cmp::max(min_commit_ts, lock.min_commit_ts);
+            true
         }
     } else if is_pessimistic_lock {
         txn.amend_pessimistic_lock(pipelined_pessimistic_lock, &key)?;
-    }
+        false
+    } else {
+        false
+    };
 
     txn.check_extra_op(&key, mutation_type, None)?;
     // No need to check data constraint, it's resolved by pessimistic locks.
@@ -80,6 +85,8 @@ pub fn pessimistic_prewrite<S: Snapshot>(
         for_update_ts,
         txn_size,
         min_commit_ts,
+        try_one_pc,
+        has_pessimistic_lock,
     )
 }
 
@@ -112,6 +119,7 @@ pub mod tests {
             TimeStamp::default(),
             0,
             TimeStamp::default(),
+            false,
             false,
         )?;
         Ok(())

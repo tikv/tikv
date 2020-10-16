@@ -579,7 +579,18 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
 
-            prewrite(&mut txn, m, pk, &None, false, 0, 0, TimeStamp::default()).unwrap();
+            prewrite(
+                &mut txn,
+                m,
+                pk,
+                &None,
+                false,
+                0,
+                0,
+                TimeStamp::default(),
+                false,
+            )
+            .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -605,6 +616,7 @@ mod tests {
                 TimeStamp::default(),
                 0,
                 TimeStamp::default(),
+                false,
                 false,
             )
             .unwrap();

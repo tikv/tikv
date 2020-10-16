@@ -17,6 +17,7 @@ pub fn prewrite<S: Snapshot>(
     lock_ttl: u64,
     txn_size: u64,
     min_commit_ts: TimeStamp,
+    try_one_pc: bool,
 ) -> MvccResult<TimeStamp> {
     let lock_type = LockType::from_mutation(&mutation);
     // For the insert/checkNotExists operation, the old key should not be in the system.
@@ -102,6 +103,8 @@ pub fn prewrite<S: Snapshot>(
         TimeStamp::zero(),
         txn_size,
         min_commit_ts,
+        try_one_pc,
+        false,
     )
 }
 
@@ -137,6 +140,7 @@ pub mod tests {
             0,
             0,
             TimeStamp::default(),
+            false,
         )?;
         write(engine, &ctx, txn.into_modifies());
         Ok(())
@@ -163,6 +167,7 @@ pub mod tests {
             0,
             0,
             TimeStamp::default(),
+            false,
         )?;
         Ok(())
     }

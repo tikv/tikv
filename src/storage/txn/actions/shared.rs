@@ -1,8 +1,9 @@
 use crate::storage::mvcc::metrics::CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM;
 use crate::storage::mvcc::{Lock, LockType, MvccTxn, Result as MvccResult, TimeStamp};
+use crate::storage::txn::commands::ReleasedLocks;
 use crate::storage::Snapshot;
 use std::cmp;
-use txn_types::{is_short_value, Key, Value};
+use txn_types::{is_short_value, Key, Value, Write, WriteType};
 
 pub(super) fn prewrite_key_value<S: Snapshot>(
     txn: &mut MvccTxn<S>,
@@ -15,6 +16,8 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
     for_update_ts: TimeStamp,
     txn_size: u64,
     min_commit_ts: TimeStamp,
+    try_one_pc: bool,
+    has_pessimistic_lock: bool,
 ) -> MvccResult<TimeStamp> {
     let mut lock = Lock::new(
         lock_type,
@@ -37,10 +40,14 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
         }
     }
 
-    let mut async_commit_ts = TimeStamp::zero();
-    if let Some(secondary_keys) = secondary_keys {
-        lock.use_async_commit = true;
-        lock.secondaries = secondary_keys.to_owned();
+    let mut final_min_commit_ts = TimeStamp::zero();
+    // The final_min_commit_ts will be calculated if either async commit or 1PC is enabled.
+    // It's allowed to enable 1PC without enabling async commit.
+    if secondary_keys.is_some() || try_one_pc {
+        if let Some(secondary_keys) = secondary_keys {
+            lock.use_async_commit = true;
+            lock.secondaries = secondary_keys.to_owned();
+        }
 
         // This operation should not block because the latch makes sure only one thread
         // is operating on this key.
@@ -49,7 +56,7 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
                 ::futures_executor::block_on(txn.concurrency_manager.lock_key(&key))
             });
 
-        async_commit_ts = key_guard.with_lock(|l| {
+        final_min_commit_ts = key_guard.with_lock(|l| {
             let max_ts = txn.concurrency_manager.max_ts();
             fail_point!("before-set-lock-in-memory");
             let min_commit_ts = cmp::max(cmp::max(max_ts, txn.start_ts), for_update_ts).next();
@@ -61,6 +68,45 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
         txn.guards.push(key_guard);
     }
 
-    txn.put_lock(key, &lock);
-    Ok(async_commit_ts)
+    if try_one_pc {
+        txn.put_locks_for_1pc(key, lock, has_pessimistic_lock);
+    } else {
+        txn.put_lock(key, &lock);
+    }
+    Ok(final_min_commit_ts)
+}
+
+pub(in crate::storage::txn) fn handle_1pc<S: Snapshot>(
+    txn: &mut MvccTxn<S>,
+    commit_ts: TimeStamp,
+    max_commit_ts: TimeStamp,
+) -> (TimeStamp, Option<ReleasedLocks>) {
+    if commit_ts > max_commit_ts {
+        warn!("failed to commit transaction with 1PC because commit_ts exceeds max_commit_ts from client. fallback to 2PC.";
+            "start_ts" => txn.start_ts,
+            "commit_ts" => commit_ts, 
+            "max_commit_ts" => max_commit_ts);
+        std::mem::take(&mut txn.locks_for_1pc)
+            .into_iter()
+            .for_each(|(key, lock, _)| txn.put_lock(key, &lock));
+        return (TimeStamp::zero(), None);
+    }
+
+    let mut released_locks = ReleasedLocks::new(txn.start_ts, commit_ts);
+
+    // TODO: It's much simpler than normal 2PC committing. Is there anything missing?
+    for (key, lock, delete_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
+        let write = Write::new(
+            WriteType::from_lock_type(lock.lock_type).unwrap(),
+            txn.start_ts,
+            lock.short_value,
+        );
+        // Transactions committed with 1PC should be impossible to overwrite rollback records.
+        txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
+        if delete_pessimistic_lock {
+            released_locks.push(txn.unlock_key(key, true));
+        }
+    }
+
+    (commit_ts, Some(released_locks))
 }
