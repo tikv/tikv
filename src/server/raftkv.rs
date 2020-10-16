@@ -8,14 +8,17 @@ use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CfName;
 use engine_traits::CF_DEFAULT;
-use engine_traits::{IterOptions, Peekable, ReadOptions, Snapshot, TablePropertiesExt};
+use engine_traits::{
+    IterOptions, MvccProperties, MvccPropertiesExt, Peekable, ReadOptions, Snapshot,
+    TablePropertiesExt,
+};
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
 };
 use kvproto::{errorpb, metapb};
-use txn_types::{Key, TxnExtraScheduler, Value};
+use txn_types::{Key, TimeStamp, TxnExtraScheduler, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -492,6 +495,19 @@ where
         self.engine
             .get_range_properties_cf(cf, &start, &end)
             .map_err(|e| e.into())
+    }
+
+    fn get_mvcc_properties_cf(
+        &self,
+        cf: CfName,
+        safe_point: TimeStamp,
+        start: &[u8],
+        end: &[u8],
+    ) -> Option<MvccProperties> {
+        let start = keys::data_key(start);
+        let end = keys::data_end_key(end);
+        self.engine
+            .get_mvcc_properties_cf(cf, safe_point, &start, &end)
     }
 }
 
