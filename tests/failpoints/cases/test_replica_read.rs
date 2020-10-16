@@ -355,7 +355,6 @@ fn test_read_after_cleanup_range_for_snap() {
 }
 
 /// Tests the learner of new split region will know its leader without waitting the leader heartbeat timeout
-/// 
 /// The learner of a new split region may not know its leader if it applies log slowly and drops the no-op 
 /// entry from the new leader, and it had to wait for a heartbeat timeout to know its leader before that it
 /// can't handle any read request.
