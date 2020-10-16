@@ -297,6 +297,8 @@ mod encryption;
 pub use crate::encryption::*;
 mod properties;
 pub use crate::properties::*;
+mod sst_partitioner;
+pub use crate::sst_partitioner::*;
 mod range_properties;
 pub use crate::range_properties::*;
 

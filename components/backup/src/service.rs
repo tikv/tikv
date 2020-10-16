@@ -94,8 +94,7 @@ mod tests {
     use crate::endpoint::tests::*;
     use external_storage::make_local_backend;
     use security::*;
-    use tikv::storage::mvcc::tests::*;
-    use tikv::storage::txn::tests::must_commit;
+    use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::mpsc::Receiver;
     use txn_types::TimeStamp;
 
