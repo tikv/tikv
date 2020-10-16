@@ -7,11 +7,12 @@ use std::{fmt, u64};
 
 use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
 use kvproto::kvrpcpb::KeyRange;
-use kvproto::metapb;
-use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
+use kvproto::metapb::{self, PeerRole};
+use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
+use raft_proto::ConfChangeI;
 use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use time::{Duration, Timespec};
@@ -47,7 +48,7 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::default();
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
-    peer.set_role(metapb::PeerRole::Voter);
+    peer.set_role(PeerRole::Voter);
     peer
 }
 
@@ -56,7 +57,7 @@ pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::default();
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
-    peer.set_role(metapb::PeerRole::Learner);
+    peer.set_role(PeerRole::Learner);
     peer
 }
 
@@ -651,22 +652,36 @@ pub fn is_sibling_regions(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
 }
 
 pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
-    // Here `learners` means learner peers, and `nodes` means voter peers.
     let mut conf_state = ConfState::default();
+    let mut in_joint = false;
     for p in region.get_peers() {
-        // TODO: when using joint consensus we also need to consider joint state
-        // which contains other roles like IncommingVoter and DemotingVoter
-        if is_learner(p) {
-            conf_state.mut_learners().push(p.get_id());
-        } else {
-            conf_state.mut_voters().push(p.get_id());
+        match p.get_role() {
+            PeerRole::Voter => {
+                conf_state.mut_voters().push(p.get_id());
+                conf_state.mut_voters_outgoing().push(p.get_id());
+            }
+            PeerRole::Learner => conf_state.mut_learners().push(p.get_id()),
+            role => {
+                in_joint = true;
+                match role {
+                    PeerRole::IncomingVoter => conf_state.mut_voters().push(p.get_id()),
+                    PeerRole::DemotingVoter => {
+                        conf_state.mut_voters_outgoing().push(p.get_id());
+                        conf_state.mut_learners_next().push(p.get_id());
+                    }
+                    _ => unreachable!(),
+                }
+            }
         }
+    }
+    if !in_joint {
+        conf_state.mut_voters_outgoing().clear();
     }
     conf_state
 }
 
 pub fn is_learner(peer: &metapb::Peer) -> bool {
-    peer.get_role() == metapb::PeerRole::Learner
+    peer.get_role() == PeerRole::Learner
 }
 
 pub struct KeysInfoFormatter<
@@ -687,13 +702,13 @@ impl<
         let mut it = self.0.clone();
         match it.len() {
             0 => write!(f, "(no key)"),
-            1 => write!(f, "key {}", hex::encode_upper(it.next().unwrap())),
+            1 => write!(f, "key {}", log_wrappers::Value::key(it.next().unwrap())),
             _ => write!(
                 f,
                 "{} keys range from {} to {}",
                 it.len(),
-                hex::encode_upper(it.next().unwrap()),
-                hex::encode_upper(it.next_back().unwrap())
+                log_wrappers::Value::key(it.next().unwrap()),
+                log_wrappers::Value::key(it.next_back().unwrap())
             ),
         }
     }
@@ -782,6 +797,88 @@ impl PerfContextStatistics {
         self.write_scheduling_flushes_compactions_time = 0;
         self.db_condition_wait_nanos = 0;
         self.write_delay_time = 0;
+    }
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum ConfChangeKind {
+    // Only contains one configuration change
+    Simple,
+    // Enter joint state
+    EnterJoint,
+    // Leave joint state
+    LeaveJoint,
+}
+
+impl ConfChangeKind {
+    pub fn confchange_kind(change_num: usize) -> ConfChangeKind {
+        match change_num {
+            0 => ConfChangeKind::LeaveJoint,
+            1 => ConfChangeKind::Simple,
+            _ => ConfChangeKind::EnterJoint,
+        }
+    }
+}
+
+/// Abstracts over ChangePeerV2Request and (legacy) ChangePeerRequest to allow
+/// treating them in a unified manner.
+pub trait ChangePeerI {
+    type CC: ConfChangeI;
+    type CP: AsRef<[ChangePeerRequest]>;
+
+    fn get_change_peers(&self) -> Self::CP;
+
+    fn to_confchange(&self, _: Vec<u8>) -> Self::CC;
+}
+
+impl<'a> ChangePeerI for &'a ChangePeerRequest {
+    type CC = eraftpb::ConfChange;
+    type CP = Vec<ChangePeerRequest>;
+
+    fn get_change_peers(&self) -> Vec<ChangePeerRequest> {
+        vec![ChangePeerRequest::clone(self)]
+    }
+
+    fn to_confchange(&self, ctx: Vec<u8>) -> eraftpb::ConfChange {
+        let mut cc = eraftpb::ConfChange::default();
+        cc.set_change_type(self.get_change_type());
+        cc.set_node_id(self.get_peer().get_id());
+        cc.set_context(ctx);
+        cc
+    }
+}
+
+impl<'a> ChangePeerI for &'a ChangePeerV2Request {
+    type CC = eraftpb::ConfChangeV2;
+    type CP = &'a [ChangePeerRequest];
+
+    fn get_change_peers(&self) -> &'a [ChangePeerRequest] {
+        self.get_changes()
+    }
+
+    fn to_confchange(&self, ctx: Vec<u8>) -> eraftpb::ConfChangeV2 {
+        let mut cc = eraftpb::ConfChangeV2::default();
+        let changes: Vec<_> = self
+            .get_changes()
+            .iter()
+            .map(|c| {
+                let mut ccs = eraftpb::ConfChangeSingle::default();
+                ccs.set_change_type(c.get_change_type());
+                ccs.set_node_id(c.get_peer().get_id());
+                ccs
+            })
+            .collect();
+
+        if changes.len() <= 1 {
+            // Leave joint or simple confchange
+            cc.set_transition(eraftpb::ConfChangeTransition::Auto);
+        } else {
+            // Enter joint
+            cc.set_transition(eraftpb::ConfChangeTransition::Explicit);
+        }
+        cc.set_changes(changes.into());
+        cc.set_context(ctx);
+        cc
     }
 }
 
@@ -959,22 +1056,97 @@ mod tests {
         }
     }
 
+    fn gen_region(
+        voters: &[u64],
+        learners: &[u64],
+        incomming_v: &[u64],
+        demoting_v: &[u64],
+    ) -> metapb::Region {
+        let mut region = metapb::Region::default();
+        macro_rules! push_peer {
+            ($ids: ident, $role: expr) => {
+                for id in $ids {
+                    let mut peer = metapb::Peer::default();
+                    peer.set_id(*id);
+                    peer.set_role($role);
+                    region.mut_peers().push(peer);
+                }
+            };
+        }
+        push_peer!(voters, metapb::PeerRole::Voter);
+        push_peer!(learners, metapb::PeerRole::Learner);
+        push_peer!(incomming_v, metapb::PeerRole::IncomingVoter);
+        push_peer!(demoting_v, metapb::PeerRole::DemotingVoter);
+        region
+    }
+
     #[test]
     fn test_conf_state_from_region() {
-        let mut region = metapb::Region::default();
+        let cases = vec![
+            (vec![1], vec![2], vec![], vec![]),
+            (vec![], vec![], vec![1], vec![2]),
+            (vec![1, 2], vec![], vec![], vec![]),
+            (vec![1, 2], vec![], vec![3], vec![]),
+            (vec![1], vec![2], vec![3, 4], vec![5, 6]),
+        ];
 
-        let mut peer = metapb::Peer::default();
-        peer.set_id(1);
-        region.mut_peers().push(peer);
+        for (voter, learner, incomming, demoting) in cases {
+            let region = gen_region(
+                voter.as_slice(),
+                learner.as_slice(),
+                incomming.as_slice(),
+                demoting.as_slice(),
+            );
+            let cs = conf_state_from_region(&region);
+            if incomming.is_empty() && demoting.is_empty() {
+                // Not in joint
+                assert!(cs.get_voters_outgoing().is_empty());
+                assert!(cs.get_learners_next().is_empty());
+                assert!(voter.iter().all(|id| cs.get_voters().contains(id)));
+                assert!(learner.iter().all(|id| cs.get_learners().contains(id)));
+            } else {
+                // In joint
+                assert!(voter.iter().all(
+                    |id| cs.get_voters().contains(id) && cs.get_voters_outgoing().contains(id)
+                ));
+                assert!(learner.iter().all(|id| cs.get_learners().contains(id)));
+                assert!(incomming.iter().all(|id| cs.get_voters().contains(id)));
+                assert!(demoting
+                    .iter()
+                    .all(|id| cs.get_voters_outgoing().contains(id)
+                        && cs.get_learners_next().contains(id)));
+            }
+        }
+    }
 
-        let mut peer = metapb::Peer::default();
-        peer.set_id(2);
-        peer.set_role(metapb::PeerRole::Learner);
-        region.mut_peers().push(peer);
+    #[test]
+    fn test_changepeer_v2_to_confchange() {
+        let mut req = ChangePeerV2Request::default();
 
-        let cs = conf_state_from_region(&region);
-        assert!(cs.get_voters().contains(&1));
-        assert!(cs.get_learners().contains(&2));
+        // Zore change for leave joint
+        assert_eq!(
+            (&req).to_confchange(vec![]).get_transition(),
+            eraftpb::ConfChangeTransition::Auto
+        );
+
+        // One change for simple confchange
+        req.mut_changes().push(ChangePeerRequest::default());
+        assert_eq!(
+            (&req).to_confchange(vec![]).get_transition(),
+            eraftpb::ConfChangeTransition::Auto
+        );
+
+        // More than one change for enter joint
+        req.mut_changes().push(ChangePeerRequest::default());
+        assert_eq!(
+            (&req).to_confchange(vec![]).get_transition(),
+            eraftpb::ConfChangeTransition::Explicit
+        );
+        req.mut_changes().push(ChangePeerRequest::default());
+        assert_eq!(
+            (&req).to_confchange(vec![]).get_transition(),
+            eraftpb::ConfChangeTransition::Explicit
+        );
     }
 
     #[test]

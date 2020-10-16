@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tikv_util::time::{duration_to_sec, Instant};
 
 use super::batch::ReqBatcher;
@@ -30,17 +30,18 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
+use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
+use raftstore::{DiscardReason, Error as RaftStoreError};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
-use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use txn_types::{self, Key};
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
@@ -60,8 +61,6 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     snap_scheduler: Scheduler<SnapTask>,
 
     enable_req_batch: bool,
-
-    timer_pool: Arc<Mutex<ThreadPool>>,
 
     grpc_thread_load: Arc<ThreadLoad>,
 
@@ -84,7 +83,6 @@ impl<
             ch: self.ch.clone(),
             snap_scheduler: self.snap_scheduler.clone(),
             enable_req_batch: self.enable_req_batch,
-            timer_pool: self.timer_pool.clone(),
             grpc_thread_load: self.grpc_thread_load.clone(),
             readpool_normal_thread_load: self.readpool_normal_thread_load.clone(),
             security_mgr: self.security_mgr.clone(),
@@ -105,12 +103,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         enable_req_batch: bool,
         security_mgr: Arc<SecurityManager>,
     ) -> Self {
-        let timer_pool = Arc::new(Mutex::new(
-            ThreadPoolBuilder::new()
-                .pool_size(1)
-                .name_prefix("req_batch_timer_guard")
-                .build(),
-        ));
         Service {
             gc_worker,
             storage,
@@ -119,21 +111,9 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             snap_scheduler,
             grpc_thread_load,
             readpool_normal_thread_load,
-            timer_pool,
             enable_req_batch,
             security_mgr,
         }
-    }
-
-    fn send_fail_status<M>(
-        &self,
-        ctx: RpcContext<'_>,
-        sink: UnarySink<M>,
-        err: Error,
-        code: RpcStatusCode,
-    ) {
-        let status = RpcStatus::new(code, Some(format!("{}", err)));
-        ctx.spawn(sink.fail(status).map(|_| ()));
     }
 }
 
@@ -718,11 +698,21 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let req = CasualMessage::SplitRegion {
             region_epoch: req.take_context().take_region_epoch(),
             split_keys,
-            callback: Callback::Write(cb),
+            callback: Callback::write(cb),
         };
 
         if let Err(e) = self.ch.send_casual_msg(region_id, req) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
+            // Retrun region error instead a gRPC error.
+            let mut resp = SplitRegionResponse::default();
+            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
+            ctx.spawn(
+                async move {
+                    sink.success(resp).await?;
+                    ServerResult::Ok(())
+                }
+                .map_err(|_| ())
+                .map(|_| ()),
+            );
             return;
         }
 
@@ -773,7 +763,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     fn read_index(
         &mut self,
         ctx: RpcContext<'_>,
-        req: ReadIndexRequest,
+        mut req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
@@ -799,11 +789,28 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
         let (cb, f) = paired_future_callback();
 
-        // We must deal with all requests which acquire read-quorum in raftstore-thread, so just send it as an command.
+        // We must deal with all requests which acquire read-quorum in raftstore-thread,
+        // so just send it as an command.
         if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
+            // Retrun region error instead a gRPC error.
+            let mut resp = ReadIndexResponse::default();
+            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
+            ctx.spawn(
+                async move {
+                    sink.success(resp).await?;
+                    ServerResult::Ok(())
+                }
+                .map_err(|_| ())
+                .map(|_| ()),
+            );
             return;
         }
+
+        let check_memory_locks_fut = self.storage.check_memory_locks_in_ranges(
+            req.take_context(),
+            req.get_start_ts().into(),
+            req.take_ranges().into(),
+        );
 
         let task = async move {
             let mut res = f.await?;
@@ -823,8 +830,24 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                         raft_resps
                     ));
                 } else {
-                    let read_index = raft_resps[0].get_read_index().get_read_index();
-                    resp.set_read_index(read_index);
+                    // Update max_read_ts and check memory locks after read index command finishes.
+                    // It reduces the chance of encountering locks if we check it as late as possibile.
+                    match check_memory_locks_fut.await {
+                        Ok(Some(lock)) => {
+                            resp.set_locked(lock);
+                        }
+                        Ok(None) => {
+                            let read_index = raft_resps[0].get_read_index().get_read_index();
+                            resp.set_read_index(read_index);
+                        }
+                        res => {
+                            if let Some(err) = extract_region_error(&res) {
+                                resp.set_region_error(err);
+                            } else {
+                                warn!("unknown error: {:?}", res);
+                            }
+                        }
+                    }
                 }
             }
             sink.success(resp).await?;
@@ -1156,11 +1179,7 @@ fn future_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: ScanRequest,
 ) -> impl Future<Output = ServerResult<ScanResponse>> {
-    let end_key = if req.get_end_key().is_empty() {
-        None
-    } else {
-        Some(Key::from_raw(req.get_end_key()))
-    };
+    let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
     let v = storage.scan(
         req.take_context(),
         Key::from_raw(req.get_start_key()),
@@ -1605,7 +1624,7 @@ txn_command_future!(future_cleanup, CleanupRequest, CleanupResponse, (v, resp) {
 txn_command_future!(future_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResponse, (v, resp) {
     match v {
         Ok(txn_status) => {
-            if let TxnStatus::Uncommitted { lock } = txn_status {
+            if let TxnStatus::Uncommitted { lock, .. } = txn_status {
                 resp.set_lock_ttl(lock.ttl);
             } else {
                 unreachable!();
@@ -1615,7 +1634,6 @@ txn_command_future!(future_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResp
     }
 });
 txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStatusResponse,
-    (req) let caller_start_ts = req.get_caller_start_ts().into();
     (v, resp) {
         match v {
             Ok(txn_status) => match txn_status {
@@ -1625,12 +1643,8 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                 TxnStatus::Committed { commit_ts } => {
                     resp.set_commit_version(commit_ts.into_inner())
                 }
-                TxnStatus::Uncommitted { lock } => {
-                    // If the caller_start_ts is max, it's a point get in the autocommit transaction.
-                    // Even though the min_commit_ts is not pushed, the point get can ingore the lock
-                    // next time because it's not committed. So we pretend it has been pushed.
-                    // Also note that min_commit_ts of async commit locks are never pushed.
-                    if !lock.use_async_commit && (lock.min_commit_ts > caller_start_ts || caller_start_ts.is_max()) {
+                TxnStatus::Uncommitted { lock, min_commit_ts_pushed } => {
+                    if min_commit_ts_pushed {
                         resp.set_action(Action::MinCommitTsPushed);
                     }
                     resp.set_lock_ttl(lock.ttl);
@@ -1714,6 +1728,18 @@ impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Respon
         v.mut_responses().push(e.1);
         None
     }
+}
+
+fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionError {
+    if let RaftStoreError::Transport(DiscardReason::Disconnected) = e {
+        // `From::from(RaftStoreError) -> RegionError` treats `Disconnected` as `Other`.
+        let mut region_error = RegionError::default();
+        let mut region_not_found = RegionNotFound::default();
+        region_not_found.region_id = region_id;
+        region_error.set_region_not_found(region_not_found);
+        return region_error;
+    }
+    e.into()
 }
 
 #[cfg(test)]

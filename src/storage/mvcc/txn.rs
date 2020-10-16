@@ -8,10 +8,9 @@ use crate::storage::types::TxnStatus;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
-use std::{cmp, fmt};
+use std::fmt;
 use txn_types::{
-    is_short_value, Key, Lock, LockType, Mutation, MutationType, OldValue, TimeStamp, TxnExtra,
-    Value, Write, WriteType,
+    Key, Lock, LockType, MutationType, OldValue, TimeStamp, TxnExtra, Value, Write, WriteType,
 };
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
@@ -121,7 +120,7 @@ pub struct MvccTxn<S: Snapshot> {
     // When the locks are written to the underlying engine, subsequent
     // reading requests should be able to read the locks from the engine.
     // So these guards can be released after finishing writing.
-    guards: Vec<KeyHandleGuard>,
+    pub(crate) guards: Vec<KeyHandleGuard>,
 }
 
 impl<S: Snapshot> MvccTxn<S> {
@@ -223,7 +222,7 @@ impl<S: Snapshot> MvccTxn<S> {
         Some(released)
     }
 
-    fn put_value(&mut self, key: Key, ts: TimeStamp, value: Value) {
+    pub(crate) fn put_value(&mut self, key: Key, ts: TimeStamp, value: Value) {
         let write = Modify::Put(CF_DEFAULT, key.append_ts(ts), value);
         self.write_size += write.size();
         self.writes.modifies.push(write);
@@ -250,67 +249,6 @@ impl<S: Snapshot> MvccTxn<S> {
     fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
     }
-
-    fn prewrite_key_value(
-        &mut self,
-        key: Key,
-        lock_type: LockType,
-        primary: &[u8],
-        secondary_keys: &Option<Vec<Vec<u8>>>,
-        value: Option<Value>,
-        lock_ttl: u64,
-        for_update_ts: TimeStamp,
-        txn_size: u64,
-        min_commit_ts: TimeStamp,
-    ) -> Result<TimeStamp> {
-        let mut lock = Lock::new(
-            lock_type,
-            primary.to_vec(),
-            self.start_ts,
-            lock_ttl,
-            None,
-            for_update_ts,
-            txn_size,
-            min_commit_ts,
-        );
-
-        if let Some(value) = value {
-            if is_short_value(&value) {
-                // If the value is short, embed it in Lock.
-                lock.short_value = Some(value);
-            } else {
-                // value is long
-                self.put_value(key.clone(), self.start_ts, value);
-            }
-        }
-
-        let mut async_commit_ts = TimeStamp::zero();
-        if let Some(secondary_keys) = secondary_keys {
-            lock.use_async_commit = true;
-            lock.secondaries = secondary_keys.to_owned();
-
-            // This operation should not block because the latch makes sure only one thread
-            // is operating on this key.
-            let key_guard =
-                CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM.observe_closure_duration(|| {
-                    ::futures_executor::block_on(self.concurrency_manager.lock_key(&key))
-                });
-
-            async_commit_ts = key_guard.with_lock(|l| {
-                let max_ts = self.concurrency_manager.max_ts();
-                let min_commit_ts = cmp::max(cmp::max(max_ts, self.start_ts), for_update_ts).next();
-                lock.min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
-                *l = Some(lock.clone());
-                lock.min_commit_ts
-            });
-
-            self.guards.push(key_guard);
-        }
-
-        self.put_lock(key, &lock);
-        Ok(async_commit_ts)
-    }
-
     // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
     // to do the rollback differs according to whether there's an overlapped write record.
     pub(crate) fn check_write_and_rollback_lock(
@@ -387,7 +325,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
     /// Checks the existence of the key according to `should_not_exist`.
     /// If not, returns an `AlreadyExist` error.
-    fn check_data_constraint(
+    pub(crate) fn check_data_constraint(
         &mut self,
         should_not_exist: bool,
         write: &Write,
@@ -409,11 +347,11 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     // Pessimistic transactions only acquire pessimistic locks on row keys.
-    // The corrsponding index keys are not locked until pessimistic prewrite.
-    // It's possible that lock conflict occours on them, but the isolation is
+    // The corresponding index keys are not locked until pessimistic prewrite.
+    // It's possible that lock conflict occurs on them, but the isolation is
     // guaranteed by pessimistic locks on row keys, so let TiDB resolves these
     // locks immediately.
-    fn handle_non_pessimistic_lock_conflict(&self, key: Key, lock: Lock) -> Result<()> {
+    pub(crate) fn handle_non_pessimistic_lock_conflict(&self, key: Key, lock: Lock) -> Result<()> {
         // The previous pessimistic transaction has been committed or aborted.
         // Resolve it immediately.
         //
@@ -570,87 +508,9 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(val)
     }
 
-    pub fn pessimistic_prewrite(
-        &mut self,
-        mutation: Mutation,
-        primary: &[u8],
-        secondary_keys: &Option<Vec<Vec<u8>>>,
-        is_pessimistic_lock: bool,
-        mut lock_ttl: u64,
-        for_update_ts: TimeStamp,
-        txn_size: u64,
-        mut min_commit_ts: TimeStamp,
-        pipelined_pessimistic_lock: bool,
-    ) -> Result<TimeStamp> {
-        if mutation.should_not_write() {
-            return Err(box_err!(
-                "cannot handle checkNotExists in pessimistic prewrite"
-            ));
-        }
-        let mutation_type = mutation.mutation_type();
-        let lock_type = LockType::from_mutation(&mutation);
-        let (key, value) = mutation.into_key_value();
-
-        fail_point!("pessimistic_prewrite", |err| Err(make_txn_error(
-            err,
-            &key,
-            self.start_ts,
-        )
-        .into()));
-
-        if let Some(lock) = self.reader.load_lock(&key)? {
-            if lock.ts != self.start_ts {
-                // Abort on lock belonging to other transaction if
-                // prewrites a pessimistic lock.
-                if is_pessimistic_lock {
-                    warn!(
-                        "prewrite failed (pessimistic lock not found)";
-                        "start_ts" => self.start_ts,
-                        "key" => %key,
-                        "lock_ts" => lock.ts
-                    );
-                    return Err(ErrorInner::PessimisticLockNotFound {
-                        start_ts: self.start_ts,
-                        key: key.into_raw()?,
-                    }
-                    .into());
-                }
-                return Err(self
-                    .handle_non_pessimistic_lock_conflict(key, lock)
-                    .unwrap_err());
-            } else {
-                if lock.lock_type != LockType::Pessimistic {
-                    // Duplicated command. No need to overwrite the lock and data.
-                    MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-                    return Ok(lock.min_commit_ts);
-                }
-                // The lock is pessimistic and owned by this txn, go through to overwrite it.
-                // The ttl and min_commit_ts of the lock may have been pushed forward.
-                lock_ttl = std::cmp::max(lock_ttl, lock.ttl);
-                min_commit_ts = std::cmp::max(min_commit_ts, lock.min_commit_ts);
-            }
-        } else if is_pessimistic_lock {
-            self.amend_pessimistic_lock(pipelined_pessimistic_lock, &key)?;
-        }
-
-        self.check_extra_op(&key, mutation_type, None)?;
-        // No need to check data constraint, it's resolved by pessimistic locks.
-        self.prewrite_key_value(
-            key,
-            lock_type.unwrap(),
-            primary,
-            secondary_keys,
-            value,
-            lock_ttl,
-            for_update_ts,
-            txn_size,
-            min_commit_ts,
-        )
-    }
-
     // TiKV may fails to write pessimistic locks due to pipelined process.
     // If the data is not changed after acquiring the lock, we can still prewrite the key.
-    fn amend_pessimistic_lock(
+    pub(crate) fn amend_pessimistic_lock(
         &mut self,
         pipelined_pessimistic_lock: bool,
         key: &Key,
@@ -701,105 +561,6 @@ impl<S: Snapshot> MvccTxn<S> {
             .pipelined_acquire_pessimistic_lock_amend_success
             .inc();
         Ok(())
-    }
-
-    pub fn prewrite(
-        &mut self,
-        mutation: Mutation,
-        primary: &[u8],
-        secondary_keys: &Option<Vec<Vec<u8>>>,
-        skip_constraint_check: bool,
-        lock_ttl: u64,
-        txn_size: u64,
-        min_commit_ts: TimeStamp,
-    ) -> Result<TimeStamp> {
-        let lock_type = LockType::from_mutation(&mutation);
-        // For the insert/checkNotExists operation, the old key should not be in the system.
-        let should_not_exist = mutation.should_not_exists();
-        let should_not_write = mutation.should_not_write();
-        let mutation_type = mutation.mutation_type();
-        let (key, value) = mutation.into_key_value();
-
-        fail_point!("prewrite", |err| Err(make_txn_error(
-            err,
-            &key,
-            self.start_ts,
-        )
-        .into()));
-
-        let mut prev_write = None;
-        // Check whether there is a newer version.
-        if !skip_constraint_check {
-            if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
-                // Abort on writes after our start timestamp ...
-                // If exists a commit version whose commit timestamp is larger than current start
-                // timestamp, we should abort current prewrite.
-                if commit_ts > self.start_ts {
-                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                    return Err(ErrorInner::WriteConflict {
-                        start_ts: self.start_ts,
-                        conflict_start_ts: write.start_ts,
-                        conflict_commit_ts: commit_ts,
-                        key: key.into_raw()?,
-                        primary: primary.to_vec(),
-                    }
-                    .into());
-                }
-                // If there's a write record whose commit_ts equals to our start ts, the current
-                // transaction is ok to continue, unless the record means that the current
-                // transaction has been rolled back.
-                if commit_ts == self.start_ts
-                    && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
-                {
-                    MVCC_CONFLICT_COUNTER.rolled_back.inc();
-                    // TODO: Maybe we need to add a new error for the rolled back case.
-                    return Err(ErrorInner::WriteConflict {
-                        start_ts: self.start_ts,
-                        conflict_start_ts: write.start_ts,
-                        conflict_commit_ts: commit_ts,
-                        key: key.into_raw()?,
-                        primary: primary.to_vec(),
-                    }
-                    .into());
-                }
-                self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
-                prev_write = Some(write);
-            }
-        }
-        if should_not_write {
-            return Ok(TimeStamp::zero());
-        }
-        // Check whether the current key is locked at any timestamp.
-        if let Some(lock) = self.reader.load_lock(&key)? {
-            if lock.ts != self.start_ts {
-                return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
-            }
-            // TODO: remove it in future
-            if lock.lock_type == LockType::Pessimistic {
-                return Err(ErrorInner::LockTypeNotMatch {
-                    start_ts: self.start_ts,
-                    key: key.into_raw()?,
-                    pessimistic: true,
-                }
-                .into());
-            }
-            // Duplicated command. No need to overwrite the lock and data.
-            MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-            return Ok(lock.min_commit_ts);
-        }
-
-        self.check_extra_op(&key, mutation_type, prev_write)?;
-        self.prewrite_key_value(
-            key,
-            lock_type.unwrap(),
-            primary,
-            secondary_keys,
-            value,
-            lock_ttl,
-            TimeStamp::zero(),
-            txn_size,
-            min_commit_ts,
-        )
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<Option<ReleasedLock>> {
@@ -1002,7 +763,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
     // Check and execute the extra operation.
     // Currently we use it only for reading the old value for CDC.
-    fn check_extra_op(
+    pub fn check_extra_op(
         &mut self,
         key: &Key,
         mutation_type: MutationType,
@@ -1126,11 +887,10 @@ mod tests {
 
     use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
-    use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
-
+    use crate::storage::mvcc::{Error, ErrorInner, Mutation, MvccReader};
     use crate::storage::txn::commands::*;
-    use crate::storage::txn::commit;
     use crate::storage::txn::tests::*;
+    use crate::storage::txn::{commit, pessimistic_prewrite, prewrite};
     use crate::storage::SecondaryLocksStatus;
     use kvproto::kvrpcpb::Context;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
@@ -1686,7 +1446,8 @@ mod tests {
         let key = Key::from_raw(k);
         assert_eq!(txn.write_size(), 0);
 
-        txn.prewrite(
+        prewrite(
+            &mut txn,
             Mutation::Put((key.clone(), v.to_vec())),
             pk,
             &None,
@@ -1730,32 +1491,32 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let cm = ConcurrencyManager::new(10.into());
         let mut txn = MvccTxn::new(snapshot, 5.into(), true, cm.clone());
-        assert!(txn
-            .prewrite(
-                Mutation::Put((Key::from_raw(key), value.to_vec())),
-                key,
-                &None,
-                false,
-                0,
-                0,
-                TimeStamp::default(),
-            )
-            .is_err());
+        assert!(prewrite(
+            &mut txn,
+            Mutation::Put((Key::from_raw(key), value.to_vec())),
+            key,
+            &None,
+            false,
+            0,
+            0,
+            TimeStamp::default(),
+        )
+        .is_err());
 
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5.into(), true, cm);
-        assert!(txn
-            .prewrite(
-                Mutation::Put((Key::from_raw(key), value.to_vec())),
-                key,
-                &None,
-                true,
-                0,
-                0,
-                TimeStamp::default(),
-            )
-            .is_ok());
+        assert!(prewrite(
+            &mut txn,
+            Mutation::Put((Key::from_raw(key), value.to_vec())),
+            key,
+            &None,
+            true,
+            0,
+            0,
+            TimeStamp::default(),
+        )
+        .is_ok());
     }
 
     #[test]
@@ -2550,7 +2311,8 @@ mod tests {
                 write(WriteData::from_modifies(txn.into_modifies()));
                 txn = new_txn(start_ts.into(), cm.clone());
                 txn.extra_op = ExtraOp::ReadOldValue;
-                txn.pessimistic_prewrite(
+                pessimistic_prewrite(
+                    &mut txn,
                     mutation,
                     b"key",
                     &None,
@@ -2563,8 +2325,17 @@ mod tests {
                 )
                 .unwrap();
             } else {
-                txn.prewrite(mutation, b"key", &None, false, 0, 0, TimeStamp::default())
-                    .unwrap();
+                prewrite(
+                    &mut txn,
+                    mutation,
+                    b"key",
+                    &None,
+                    false,
+                    0,
+                    0,
+                    TimeStamp::default(),
+                )
+                .unwrap();
             }
             if check_old_value {
                 let extra = txn.take_extra();
@@ -2598,17 +2369,17 @@ mod tests {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-            let min_commit_ts = txn
-                .prewrite(
-                    mutation,
-                    b"key",
-                    &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
-                    false,
-                    0,
-                    4,
-                    TimeStamp::zero(),
-                )
-                .unwrap();
+            let min_commit_ts = prewrite(
+                &mut txn,
+                mutation,
+                b"key",
+                &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+                false,
+                0,
+                4,
+                TimeStamp::zero(),
+            )
+            .unwrap();
             let modifies = txn.into_modifies();
             if !modifies.is_empty() {
                 engine
@@ -2649,19 +2420,19 @@ mod tests {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-            let min_commit_ts = txn
-                .pessimistic_prewrite(
-                    mutation,
-                    b"key",
-                    &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
-                    true,
-                    0,
-                    4.into(),
-                    4,
-                    TimeStamp::zero(),
-                    false,
-                )
-                .unwrap();
+            let min_commit_ts = pessimistic_prewrite(
+                &mut txn,
+                mutation,
+                b"key",
+                &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+                true,
+                0,
+                4.into(),
+                4,
+                TimeStamp::zero(),
+                false,
+            )
+            .unwrap();
             let modifies = txn.into_modifies();
             if !modifies.is_empty() {
                 engine
@@ -2702,19 +2473,19 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm);
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-        let min_commit_ts = txn
-            .pessimistic_prewrite(
-                mutation,
-                b"key",
-                &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
-                true,
-                0,
-                4.into(),
-                4,
-                TimeStamp::zero(),
-                false,
-            )
-            .unwrap();
+        let min_commit_ts = pessimistic_prewrite(
+            &mut txn,
+            mutation,
+            b"key",
+            &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+            true,
+            0,
+            4.into(),
+            4,
+            TimeStamp::zero(),
+            false,
+        )
+        .unwrap();
         assert_eq!(min_commit_ts.into_inner(), 100);
     }
 

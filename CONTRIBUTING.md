@@ -45,9 +45,9 @@ rustup component add clippy
 
 ### Building and testing
 
-TiKV includes a `Makefile` with common workflows, you can also use `cargo`, as you would in many other Rust projects.
+TiKV includes a `Makefile` that has common workflows and sets up a standard build environment. You can also use `cargo`, as you would in many other Rust projects. It can help to run a command in the same environment as the Makefile: this can avoid re-compilations due to environment changes. This is done by prefixing a command with `scripts/env`, for example: `./scripts/env cargo build`
 
-At this point, you can build TiKV:
+You can build TiKV:
 
 ```bash
 make build
@@ -78,7 +78,7 @@ You can run the test suite alone, or just run a specific test:
 # Run the full suite
 make test
 # Run a specific test
-cargo test --all $TESTNAME -- --nocapture
+./scripts/test $TESTNAME -- --nocapture
 ```
 
 TiKV follows the Rust community coding style. We use Rustfmt and [Clippy](https://github.com/Manishearth/rust-clippy) to automatically format and lint our code. Using these tools is checked in our CI. These are as part of `make dev`, you can also run them alone:
@@ -111,7 +111,7 @@ When building with make, cargo will automatically use [pipelined][p] compilation
 
 ## Running TiKV
 
-To run TiKV as an actual key-value store, you will need to run it as a cluster (a cluster can have just one node, which is useful for testing). You can do this on a single machine or on multiple machines. You need to use [PD](https://github.com/pingcap/pd) to manage the cluster (even if there is just one node on a single machine). Instructions are in our [docs](docs/how-to/deploy/using-binary.md) (if you build TiKV from source, then you don't need to download the binary).
+To run TiKV as an actual key-value store, you will need to run it as a cluster (a cluster can have just one node, which is useful for testing). You can do this on a single machine or on multiple machines. You need to use [PD](https://github.com/tikv/pd) to manage the cluster (even if there is just one node on a single machine). Instructions are in our [docs](docs/how-to/deploy/using-binary.md) (if you build TiKV from source, then you don't need to download the binary).
 
 
 ### Configuration
@@ -146,11 +146,11 @@ If you are planning something big, for example, relates to multiple components o
 
 The TiKV team actively develops and maintains a bunch of dependencies used in TiKV, which you may be also interested in:
 
-- [rust-prometheus](https://github.com/pingcap/rust-prometheus): The Prometheus client for Rust, our metrics collecting and reporting library
-- [rust-rocksdb](https://github.com/pingcap/rust-rocksdb): Our RocksDB binding and wrapper for Rust
-- [raft-rs](https://github.com/pingcap/raft-rs): The Raft distributed consensus algorithm implemented in Rust
-- [grpc-rs](https://github.com/pingcap/grpc-rs): The gRPC library for Rust built on the gRPC C Core library and Rust Futures
-- [fail-rs](https://github.com/pingcap/fail-rs): Fail points for Rust
+- [rust-prometheus](https://github.com/tikv/rust-prometheus): The Prometheus client for Rust, our metrics collecting and reporting library
+- [rust-rocksdb](https://github.com/tikv/rust-rocksdb): Our RocksDB binding and wrapper for Rust
+- [raft-rs](https://github.com/tikv/raft-rs): The Raft distributed consensus algorithm implemented in Rust
+- [grpc-rs](https://github.com/tikv/grpc-rs): The gRPC library for Rust built on the gRPC C Core library and Rust Futures
+- [fail-rs](https://github.com/tikv/fail-rs): Fail points for Rust
 
 
 ### Format of the commit message

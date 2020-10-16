@@ -313,7 +313,7 @@ mod tests {
     use std::time::Duration;
     use tikv::storage::kv::TestEngineBuilder;
     use tikv::storage::mvcc::tests::*;
-    use tikv::storage::txn::tests::*;
+    use tikv::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
 
     #[test]
     fn test_register_and_deregister() {
