@@ -72,6 +72,8 @@ pub enum Callback<S: Snapshot> {
         /// It's used to notify the caller to move on early because it's very likely the request
         /// will be applied to the raftstore.
         proposed_cb: Option<ExtCallback>,
+        /// `committed_cb` is called after a request is committed and before it's being applied, and
+        /// it's guaranteed that the request will be successfully applied soon.
         committed_cb: Option<ExtCallback>,
     },
 }

@@ -219,14 +219,6 @@ impl<L: LockManager> SchedulerInner<L> {
         tctx
     }
 
-    // fn store_process_result(&self, cid: u64, pr: ProcessResult) {
-    //     self.task_contexts[id_index(cid)]
-    //         .lock()
-    //         .get_mut(&cid)
-    //         .unwrap()
-    //         .pr = Some(pr);
-    // }
-
     fn take_task_cb(&self, cid: u64) -> Option<StorageCallback> {
         self.task_contexts[id_index(cid)]
             .lock()
@@ -537,21 +529,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         );
         self.release_lock(&tctx.lock, cid);
     }
-
-    // fn store_process_result(&self, cid: u64, pr: ProcessResult) {
-    //     self.inner.store_process_result(cid, pr);
-    // }
-
-    // fn on_pipelined_write(cid: u64, cb:  tag: metrics::CommandKind) {
-    //     debug!("pipelined write"; "cid" => cid);
-    //     SCHED_STAGE_COUNTER_VEC.get(tag).pipelined_write.inc();
-    //     // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
-    //     // The task ctx has been dequeued.
-    //     if let Some((cb, pr)) = self.inner.take_task_cb_and_process_result(cid) {
-    //         cb.execute(pr);
-    //     }
-    //     // It won't release locks here until write finished.
-    // }
 
     fn early_response(
         cid: u64,
