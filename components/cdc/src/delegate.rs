@@ -37,7 +37,7 @@ use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
 use crate::endpoint::OldValueCallback;
 use crate::metrics::*;
-use crate::service::ConnID;
+use crate::service::{CdcEvent, ConnID};
 use crate::{Error, Result};
 
 const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
@@ -77,7 +77,7 @@ pub struct Downstream {
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
-    sink: Option<BatchSender<(usize, Event)>>,
+    sink: Option<BatchSender<CdcEvent>>,
     state: Arc<AtomicCell<DownstreamState>>,
 }
 
@@ -105,20 +105,20 @@ impl Downstream {
 
     /// Sink events to the downstream.
     /// The size of `Error` and `ResolvedTS` are considered zero.
-    pub fn sink_event(&self, mut change_data_event: Event, size: usize) {
-        change_data_event.set_request_id(self.req_id);
+    pub fn sink_event(&self, mut event: Event) {
+        event.set_request_id(self.req_id);
         if self
             .sink
             .as_ref()
             .unwrap()
-            .send((size, change_data_event))
+            .send(CdcEvent::Event(event))
             .is_err()
         {
             error!("send event failed"; "downstream" => %self.peer);
         }
     }
 
-    pub fn set_sink(&mut self, sink: BatchSender<(usize, Event)>) {
+    pub fn set_sink(&mut self, sink: BatchSender<CdcEvent>) {
         self.sink = Some(sink);
     }
 
@@ -142,7 +142,7 @@ impl Downstream {
         cdc_err.set_duplicate_request(err);
         change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
         change_data_event.region_id = region_id;
-        self.sink_event(change_data_event, 0);
+        self.sink_event(change_data_event);
     }
 }
 
@@ -238,7 +238,7 @@ impl Delegate {
                     "err" => ?e);
                 let err = Error::Request(e.into());
                 let change_data_error = self.error_event(err);
-                downstream.sink_event(change_data_error, 0);
+                downstream.sink_event(change_data_error);
                 return false;
             }
             self.downstreams.push(downstream);
@@ -270,7 +270,7 @@ impl Delegate {
         downstreams.retain(|d| {
             if d.id == id {
                 if let Some(change_data_error) = change_data_error.clone() {
-                    d.sink_event(change_data_error, 0);
+                    d.sink_event(change_data_error);
                 }
                 d.state.store(DownstreamState::Stopped);
             }
@@ -327,10 +327,10 @@ impl Delegate {
         for d in &self.downstreams {
             d.state.store(DownstreamState::Stopped);
         }
-        self.broadcast(change_data_err, 0, false);
+        self.broadcast(change_data_err, false);
     }
 
-    fn broadcast(&self, change_data_event: Event, size: usize, normal_only: bool) {
+    fn broadcast(&self, change_data_event: Event, normal_only: bool) {
         let downstreams = self.downstreams();
         assert!(
             !downstreams.is_empty(),
@@ -342,12 +342,9 @@ impl Delegate {
             if normal_only && downstreams[i].state.load() != DownstreamState::Normal {
                 continue;
             }
-            downstreams[i].sink_event(change_data_event.clone(), size);
+            downstreams[i].sink_event(change_data_event.clone());
         }
-        downstreams
-            .last()
-            .unwrap()
-            .sink_event(change_data_event, size);
+        downstreams.last().unwrap().sink_event(change_data_event);
     }
 
     /// Install a resolver and return pending downstreams.
@@ -390,10 +387,6 @@ impl Delegate {
         };
         debug!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
-        let mut change_data_event = Event::default();
-        change_data_event.region_id = self.region_id;
-        change_data_event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.into_inner()));
-        self.broadcast(change_data_event, 0, true);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
             .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64);
         Some(resolved_ts)
@@ -443,7 +436,7 @@ impl Delegate {
         };
 
         let entries_len = entries.len();
-        let mut rows = vec![(0, Vec::with_capacity(entries_len))];
+        let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
         for entry in entries {
             match entry {
@@ -460,13 +453,12 @@ impl Delegate {
                     decode_default(default.1, &mut row);
                     let row_size = row.key.len() + row.value.len();
                     if current_rows_size + row_size >= EVENT_MAX_SIZE {
-                        rows.last_mut().unwrap().0 = current_rows_size;
-                        rows.push((0, Vec::with_capacity(entries_len)));
+                        rows.push(Vec::with_capacity(entries_len));
                         current_rows_size = 0;
                     }
                     current_rows_size += row_size;
                     row.old_value = old_value.unwrap_or_default();
-                    rows.last_mut().unwrap().1.push(row);
+                    rows.last_mut().unwrap().push(row);
                 }
                 Some(TxnEntry::Commit {
                     default,
@@ -495,31 +487,30 @@ impl Delegate {
                     row.old_value = old_value.unwrap_or_default();
                     let row_size = row.key.len() + row.value.len();
                     if current_rows_size + row_size >= EVENT_MAX_SIZE {
-                        rows.last_mut().unwrap().0 = current_rows_size;
-                        rows.push((0, Vec::with_capacity(entries_len)));
+                        rows.push(Vec::with_capacity(entries_len));
                         current_rows_size = 0;
                     }
                     current_rows_size += row_size;
-                    rows.last_mut().unwrap().1.push(row);
+                    rows.last_mut().unwrap().push(row);
                 }
                 None => {
                     let mut row = EventRow::default();
 
                     // This type means scan has finised.
                     set_event_row_type(&mut row, EventLogType::Initialized);
-                    rows.last_mut().unwrap().1.push(row);
+                    rows.last_mut().unwrap().push(row);
                 }
             }
         }
 
-        for (s, rs) in rows {
+        for rs in rows {
             if !rs.is_empty() {
                 let mut event_entries = EventEntries::default();
                 event_entries.entries = rs.into();
-                let mut change_data_event = Event::default();
-                change_data_event.region_id = self.region_id;
-                change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-                downstream.sink_event(change_data_event, s);
+                let mut event = Event::default();
+                event.region_id = self.region_id;
+                event.event = Some(Event_oneof_event::Entries(event_entries));
+                downstream.sink_event(event);
             }
         }
     }
@@ -531,7 +522,6 @@ impl Delegate {
         old_value_cb: Rc<RefCell<OldValueCallback>>,
     ) -> Result<()> {
         let mut rows = HashMap::default();
-        let mut total_size = 0;
         for mut req in requests {
             // CDC cares about put requests only.
             if req.get_cmd_type() != CmdType::Put {
@@ -628,7 +618,6 @@ impl Delegate {
                     let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
                     let row = rows.entry(key.into_raw().unwrap()).or_default();
                     decode_default(put.take_value(), row);
-                    total_size += row.value.len();
                 }
                 other => {
                     panic!("invalid cf {}", other);
@@ -645,7 +634,7 @@ impl Delegate {
         change_data_event.region_id = self.region_id;
         change_data_event.index = index;
         change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-        self.broadcast(change_data_event, total_size, true);
+        self.broadcast(change_data_event, true);
         Ok(())
     }
 
@@ -784,21 +773,29 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
-            let (events, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
-                Ok((events, rx)) => (events, rx),
-                Err(e) => panic!("unexpected recv error: {:?}", e.0),
-            };
+            let (resps, rx) = rx_wrap
+                .replace(None)
+                .unwrap()
+                .into_future()
+                .wait()
+                .unwrap_or_else(|e| panic!("unexpected recv error: {:?}", e.0));
             rx_wrap.set(Some(rx));
-            let mut events = events.unwrap();
-            assert_eq!(events.len(), 1);
-            for e in &events {
-                assert_eq!(e.1.get_request_id(), request_id);
+            let mut resps = resps.unwrap();
+            assert_eq!(resps.len(), 1);
+            for r in &resps {
+                if let CdcEvent::Event(e) = r {
+                    assert_eq!(e.get_request_id(), request_id);
+                }
             }
-            let (_, change_data_event) = &mut events[0];
-            let event = change_data_event.event.take().unwrap();
-            match event {
-                Event_oneof_event::Error(err) => err,
-                _ => panic!("unknown event"),
+            let cdc_event = &mut resps[0];
+            if let CdcEvent::Event(e) = cdc_event {
+                let event = e.event.take().unwrap();
+                match event {
+                    Event_oneof_event::Error(err) => err,
+                    _ => panic!("unknown event"),
+                }
+            } else {
+                panic!("unknown event")
             }
         };
 
@@ -906,25 +903,31 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let check_event = |event_rows: Vec<EventRow>| {
-            let (events, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
-                Ok((events, rx)) => (events, rx),
-                Err(e) => panic!("unexpected recv error: {:?}", e.0),
-            };
+            let (resps, rx) = rx_wrap
+                .replace(None)
+                .unwrap()
+                .into_future()
+                .wait()
+                .unwrap_or_else(|e| panic!("unexpected recv error: {:?}", e.0));
             rx_wrap.set(Some(rx));
-            let mut events = events.unwrap();
-            assert_eq!(events.len(), 1);
-            for e in &events {
-                assert_eq!(e.1.get_request_id(), request_id);
-            }
-            let (_, change_data_event) = &mut events[0];
-            assert_eq!(change_data_event.region_id, region_id);
-            assert_eq!(change_data_event.index, 0);
-            let event = change_data_event.event.take().unwrap();
-            match event {
-                Event_oneof_event::Entries(entries) => {
-                    assert_eq!(entries.entries.as_slice(), event_rows.as_slice());
+            let mut resps = resps.unwrap();
+            assert_eq!(resps.len(), 1);
+            for r in &resps {
+                if let CdcEvent::Event(e) = r {
+                    assert_eq!(e.get_request_id(), request_id);
                 }
-                _ => panic!("unknown event"),
+            }
+            let cdc_event = resps.remove(0);
+            if let CdcEvent::Event(mut e) = cdc_event {
+                assert_eq!(e.region_id, region_id);
+                assert_eq!(e.index, 0);
+                let event = e.event.take().unwrap();
+                match event {
+                    Event_oneof_event::Entries(entries) => {
+                        assert_eq!(entries.entries.as_slice(), event_rows.as_slice());
+                    }
+                    _ => panic!("unknown event"),
+                }
             }
         };
 
