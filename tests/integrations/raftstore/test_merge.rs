@@ -989,10 +989,10 @@ fn test_merge_cascade_merge_isolated() {
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
 
-// Test if a learner can be destroyed properly when it's isloated and removed by conf change
+// Test if a learner can be destroyed properly when it's isolated and removed by conf change
 // before its region merge to another region
 #[test]
-fn test_merge_isloated_not_in_merge_learner() {
+fn test_merge_isolated_not_in_merge_learner() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -1034,10 +1034,10 @@ fn test_merge_isloated_not_in_merge_learner() {
     must_get_equal(&cluster.get_engine(2), b"k123", b"v123");
 }
 
-// Test if a learner can be destroyed properly when it's isloated and removed by conf change
+// Test if a learner can be destroyed properly when it's isolated and removed by conf change
 // before another region merge to its region
 #[test]
-fn test_merge_isloated_stale_learner() {
+fn test_merge_isolated_stale_learner() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
@@ -1087,7 +1087,7 @@ fn test_merge_isloated_stale_learner() {
 /// 3. Then its region merges to another region.
 /// 4. Isolation disappears
 #[test]
-fn test_merge_isloated_not_in_merge_learner_2() {
+fn test_merge_isolated_not_in_merge_learner_2() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);

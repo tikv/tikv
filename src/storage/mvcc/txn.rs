@@ -4,15 +4,13 @@ use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::mvcc::{
     metrics::*, reader::MvccReader, reader::TxnCommitRecord, ErrorInner, Result,
 };
-use crate::storage::txn::prewrite_key_value;
 use crate::storage::types::TxnStatus;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use std::fmt;
 use txn_types::{
-    Key, Lock, LockType, Mutation, MutationType, OldValue, TimeStamp, TxnExtra, Value, Write,
-    WriteType,
+    Key, Lock, LockType, MutationType, OldValue, TimeStamp, TxnExtra, Value, Write, WriteType,
 };
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
@@ -363,7 +361,7 @@ impl<S: Snapshot> MvccTxn<S> {
     // It's possible that lock conflict occours on them, but the isolation is
     // guaranteed by pessimistic locks on row keys, so let TiDB resolves these
     // locks immediately.
-    fn handle_non_pessimistic_lock_conflict(&self, key: Key, lock: Lock) -> Result<()> {
+    pub(crate) fn handle_non_pessimistic_lock_conflict(&self, key: Key, lock: Lock) -> Result<()> {
         // The previous pessimistic transaction has been committed or aborted.
         // Resolve it immediately.
         //
@@ -520,97 +518,9 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(val)
     }
 
-    pub fn pessimistic_prewrite(
-        &mut self,
-        mutation: Mutation,
-        primary: &[u8],
-        secondary_keys: &Option<Vec<Vec<u8>>>,
-        is_pessimistic_lock: bool,
-        mut lock_ttl: u64,
-        for_update_ts: TimeStamp,
-        txn_size: u64,
-        mut min_commit_ts: TimeStamp,
-        pipelined_pessimistic_lock: bool,
-        try_one_pc: bool,
-    ) -> Result<TimeStamp> {
-        if mutation.should_not_write() {
-            return Err(box_err!(
-                "cannot handle checkNotExists in pessimistic prewrite"
-            ));
-        }
-        let mutation_type = mutation.mutation_type();
-        let lock_type = LockType::from_mutation(&mutation);
-        let (key, value) = mutation.into_key_value();
-
-        fail_point!("pessimistic_prewrite", |err| Err(make_txn_error(
-            err,
-            &key,
-            self.start_ts,
-        )
-        .into()));
-
-        let has_pessimistic_lock = if let Some(lock) = self.reader.load_lock(&key)? {
-            if lock.ts != self.start_ts {
-                // Abort on lock belonging to other transaction if
-                // prewrites a pessimistic lock.
-                if is_pessimistic_lock {
-                    warn!(
-                        "prewrite failed (pessimistic lock not found)";
-                        "start_ts" => self.start_ts,
-                        "key" => %key,
-                        "lock_ts" => lock.ts
-                    );
-                    return Err(ErrorInner::PessimisticLockNotFound {
-                        start_ts: self.start_ts,
-                        key: key.into_raw()?,
-                    }
-                    .into());
-                }
-                return Err(self
-                    .handle_non_pessimistic_lock_conflict(key, lock)
-                    .unwrap_err());
-            } else {
-                if lock.lock_type != LockType::Pessimistic {
-                    // Duplicated command. No need to overwrite the lock and data.
-                    MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-                    return Ok(lock.min_commit_ts);
-                }
-                // The lock is pessimistic and owned by this txn, go through to overwrite it.
-                // The ttl and min_commit_ts of the lock may have been pushed forward.
-                lock_ttl = std::cmp::max(lock_ttl, lock.ttl);
-                min_commit_ts = std::cmp::max(min_commit_ts, lock.min_commit_ts);
-
-                true
-            }
-        } else if is_pessimistic_lock {
-            self.amend_pessimistic_lock(pipelined_pessimistic_lock, &key)?;
-
-            false
-        } else {
-            false
-        };
-
-        self.check_extra_op(&key, mutation_type, None)?;
-        // No need to check data constraint, it's resolved by pessimistic locks.
-        prewrite_key_value(
-            self,
-            key,
-            lock_type.unwrap(),
-            primary,
-            secondary_keys,
-            value,
-            lock_ttl,
-            for_update_ts,
-            txn_size,
-            min_commit_ts,
-            try_one_pc,
-            has_pessimistic_lock,
-        )
-    }
-
     // TiKV may fails to write pessimistic locks due to pipelined process.
     // If the data is not changed after acquiring the lock, we can still prewrite the key.
-    fn amend_pessimistic_lock(
+    pub(crate) fn amend_pessimistic_lock(
         &mut self,
         pipelined_pessimistic_lock: bool,
         key: &Key,
@@ -987,10 +897,10 @@ mod tests {
 
     use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
-    use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
+    use crate::storage::mvcc::{Error, ErrorInner, Mutation, MvccReader};
     use crate::storage::txn::commands::*;
     use crate::storage::txn::tests::*;
-    use crate::storage::txn::{commit, prewrite};
+    use crate::storage::txn::{commit, pessimistic_prewrite, prewrite};
     use crate::storage::SecondaryLocksStatus;
     use kvproto::kvrpcpb::Context;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
@@ -2414,7 +2324,8 @@ mod tests {
                 write(WriteData::from_modifies(txn.into_modifies()));
                 txn = new_txn(start_ts.into(), cm.clone());
                 txn.extra_op = ExtraOp::ReadOldValue;
-                txn.pessimistic_prewrite(
+                pessimistic_prewrite(
+                    &mut txn,
                     mutation,
                     b"key",
                     &None,
@@ -2525,20 +2436,20 @@ mod tests {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-            let min_commit_ts = txn
-                .pessimistic_prewrite(
-                    mutation,
-                    b"key",
-                    &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
-                    true,
-                    0,
-                    4.into(),
-                    4,
-                    TimeStamp::zero(),
-                    false,
-                    false,
-                )
-                .unwrap();
+            let min_commit_ts = pessimistic_prewrite(
+                &mut txn,
+                mutation,
+                b"key",
+                &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+                true,
+                0,
+                4.into(),
+                4,
+                TimeStamp::zero(),
+                false,
+                false,
+            )
+            .unwrap();
             let modifies = txn.into_modifies();
             if !modifies.is_empty() {
                 engine
@@ -2579,20 +2490,20 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm);
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-        let min_commit_ts = txn
-            .pessimistic_prewrite(
-                mutation,
-                b"key",
-                &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
-                true,
-                0,
-                4.into(),
-                4,
-                TimeStamp::zero(),
-                false,
-                false,
-            )
-            .unwrap();
+        let min_commit_ts = pessimistic_prewrite(
+            &mut txn,
+            mutation,
+            b"key",
+            &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+            true,
+            0,
+            4.into(),
+            4,
+            TimeStamp::zero(),
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(min_commit_ts.into_inner(), 100);
     }
 
