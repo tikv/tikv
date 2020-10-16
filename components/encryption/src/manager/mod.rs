@@ -124,7 +124,7 @@ impl Dicts {
         let file = EncryptedFile::new(&self.base, FILE_DICT_NAME);
         let file_bytes = file_dict.write_to_bytes()?;
         // File dict is saved in plaintext.
-        let _ = self.write_lock.lock().unwrap();
+        let _lock = self.write_lock.lock().unwrap();
         file.write(&file_bytes, &PlaintextBackend::default())?;
 
         ENCRYPTION_FILE_SIZE_GAUGE
