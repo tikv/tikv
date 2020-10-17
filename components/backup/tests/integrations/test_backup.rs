@@ -98,7 +98,7 @@ impl TestSuite {
         cluster.must_put(b"foo", b"foo");
         let region_id = 1;
         let leader = cluster.leader_of_region(region_id).unwrap();
-        let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
+        let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id());
 
         let epoch = cluster.get_region_epoch(region_id);
         let mut context = Context::default();
@@ -590,8 +590,17 @@ fn test_backup_rawkv() {
         &tmp.path().join(format!("{}", backup_ts.next().next())),
     );
     let resps3 = block_on(rx.collect::<Vec<_>>());
-    assert_eq!(files1, resps3[0].files);
+    let files3 = resps3[0].files.clone();
 
+    // After https://github.com/tikv/tikv/pull/8707 merged.
+    // the backup file name will based on local timestamp.
+    // so the two backup's file name may not be same, we should skip this check.
+    assert_eq!(files1.len(), 1);
+    assert_eq!(files3.len(), 1);
+    assert_eq!(files1[0].sha256, files3[0].sha256);
+    assert_eq!(files1[0].total_bytes, files3[0].total_bytes);
+    assert_eq!(files1[0].total_kvs, files3[0].total_kvs);
+    assert_eq!(files1[0].size, files3[0].size);
     suite.stop();
 }
 

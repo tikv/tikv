@@ -4,14 +4,12 @@ use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
 
-use rocksdb::{DBOptions, TitanDBOptions};
+use engine_rocks::raw::{DBOptions, TitanDBOptions};
 use tempfile::Builder;
 
 use engine_rocks::util::{self as rocks_util, RocksCFOptions};
 use engine_rocks::{RocksColumnFamilyOptions, RocksDBOptions};
-use engine_traits::{
-    ColumnFamilyOptions, Engines, MetricsFlusher, MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
-};
+use engine_traits::{ColumnFamilyOptions, Engines, MetricsFlusher, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 #[test]
 fn test_metrics_flusher() {
@@ -31,7 +29,6 @@ fn test_metrics_flusher() {
     ];
     let engine =
         rocks_util::new_engine_opt(path.path().to_str().unwrap(), db_opt, cfs_opts).unwrap();
-    assert!(engine.is_titan());
 
     let cfs_opts = vec![RocksCFOptions::new(
         CF_DEFAULT,
@@ -43,7 +40,6 @@ fn test_metrics_flusher() {
         cfs_opts,
     )
     .unwrap();
-    assert!(!raft_engine.is_titan());
 
     let engines = Engines::new(engine, raft_engine);
     let mut metrics_flusher = MetricsFlusher::new(engines);

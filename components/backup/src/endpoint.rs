@@ -5,6 +5,7 @@ use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{borrow::Cow, time::*};
 
 use concurrency_manager::ConcurrencyManager;
@@ -26,11 +27,12 @@ use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
-use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use txn_types::{Key, Lock, TimeStamp};
+use yatp::task::callback::{Handle, TaskCell};
+use yatp::ThreadPool;
 
 use crate::metrics::*;
 use crate::*;
@@ -67,6 +69,7 @@ impl fmt::Display for Task {
         write!(f, "{:?}", self)
     }
 }
+
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BackupTask")
@@ -509,7 +512,7 @@ impl<R: RegionInfoProvider> Progress<R> {
 
 struct ControlThreadPool {
     size: usize,
-    workers: Option<ThreadPool<DefaultContext>>,
+    workers: Option<Arc<ThreadPool<TaskCell>>>,
     last_active: Instant,
 }
 
@@ -526,7 +529,15 @@ impl ControlThreadPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        self.workers.as_ref().unwrap().execute(|_| func());
+        let workers = self.workers.as_ref().unwrap();
+        let w = workers.clone();
+        workers.spawn(move |_: &mut Handle<'_>| {
+            func();
+            // Debug service requires jobs in the old thread pool continue to run even after
+            // the pool is recreated. So the pool needs to be ref counted and dropped after
+            // task has finished.
+            drop(w);
+        });
     }
 
     /// Lazily adjust the thread pool's size
@@ -537,9 +548,11 @@ impl ControlThreadPool {
         if self.size >= new_size && self.size - new_size <= 10 {
             return;
         }
-        let workers = ThreadPoolBuilder::with_default_factory("backup-worker".to_owned())
-            .thread_count(new_size)
-            .build();
+        let workers = Arc::new(
+            yatp::Builder::new(thd_name!("backup-worker"))
+                .max_thread_count(new_size)
+                .build_callback_pool(),
+        );
         let _ = self.workers.replace(workers);
         self.size = new_size;
         BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
@@ -860,16 +873,23 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
     }
 }
 
-/// Construct an backup file name based on the given store id and region.
-/// A name consists with three parts: store id, region_id and a epoch version.
+/// Construct an backup file name based on the given store id, region, range start key and local unix timestamp.
+/// A name consists with five parts: store id, region_id, a epoch version, the hash of range start key and timestamp.
+/// range start key is used to keep the unique file name for file, to handle different tables exists on the same region.
+/// local unix timestamp is used to keep the unique file name for file, to handle receive the same request after connection reset.
 fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
+    let start = SystemTime::now();
+    let since_the_epoch = start
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards");
     match key {
         Some(k) => format!(
-            "{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}",
             store_id,
             region.get_id(),
             region.get_region_epoch().get_version(),
-            k
+            k,
+            since_the_epoch.as_millis()
         ),
         None => format!(
             "{}_{}_{}",
@@ -903,8 +923,7 @@ pub mod tests {
     use raftstore::store::util::new_peer;
     use std::thread;
     use tempfile::TempDir;
-    use tikv::storage::mvcc::tests::*;
-    use tikv::storage::txn::tests::must_commit;
+    use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::time::Instant;
     use txn_types::SHORT_VALUE_MAX_LEN;
@@ -914,6 +933,7 @@ pub mod tests {
         regions: Arc<Mutex<RegionCollector>>,
         cancel: Option<Arc<AtomicBool>>,
     }
+
     impl MockRegionInfoProvider {
         pub fn new() -> Self {
             MockRegionInfoProvider {
@@ -942,6 +962,7 @@ pub mod tests {
             self.cancel = Some(cancel);
         }
     }
+
     impl RegionInfoProvider for MockRegionInfoProvider {
         fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> CopResult<()> {
             let from = from.to_vec();
@@ -990,6 +1011,7 @@ pub mod tests {
         let (none, _rx) = block_on(rx.into_future());
         assert!(none.is_none(), "{:?}", none);
     }
+
     #[test]
     fn test_seek_range() {
         let (_tmp, endpoint) = new_endpoint();
