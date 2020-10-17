@@ -105,7 +105,7 @@ impl<E: Engine> SyncTestStorage<E> {
         key: &Key,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Option<Value>> {
-        block_on(self.store.get(ctx, key.to_owned(), start_ts.into(), &mut Statistics::default()))
+        block_on(self.store.get(ctx, key.to_owned(), start_ts.into()))
     }
 
     #[allow(dead_code)]
@@ -115,7 +115,7 @@ impl<E: Engine> SyncTestStorage<E> {
         keys: &[Key],
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Vec<Result<KvPair>>> {
-        block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into(), &mut Statistics::default()))
+        block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
     }
 
     pub fn batch_get_command(

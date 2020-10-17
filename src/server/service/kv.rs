@@ -1153,26 +1153,28 @@ fn future_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
-    let mut statistics = Statistics::default();
     let v = storage.get(
         req.take_context(),
         Key::from_raw(req.get_key()),
         req.get_version().into(),
-        &mut statistics,
     );
 
     async move {
         let perf_statistics = PerfStatisticsInstant::new();
         let v = v.await;
         let mut resp = GetResponse::default();
-        let detail_v2 = statistics_to_scan_detail_v2(perf_statistics.delta(), statistics);
-        resp.set_scan_detail_v2(detail_v2);
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
             match v {
-                Ok(Some(val)) => resp.set_value(val),
-                Ok(None) => resp.set_not_found(true),
+                Ok((val, statistics)) => {
+                    let detail_v2 = statistics_to_scan_detail_v2(perf_statistics.delta(), statistics);
+                    resp.set_scan_detail_v2(detail_v2);
+                    match val {
+                        Some(val) => resp.set_value(val),
+                        None => resp.set_not_found(true),
+                    }
+                },
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -1212,24 +1214,24 @@ fn future_batch_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
-    let mut statistics = Statistics::default();
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-    let v = storage.batch_get(
+    let r  = storage.batch_get(
         req.take_context(),
         keys,
         req.get_version().into(),
-        &mut statistics);
+    );
 
     async move {
         let perf_statistics = PerfStatisticsInstant::new();
-        let v = v.await;
+        let v = r.await;
         let mut resp = BatchGetResponse::default();
-        let detail_v2 = statistics_to_scan_detail_v2(perf_statistics.delta(), statistics);
-        resp.set_scan_detail_v2(detail_v2);
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_pairs(extract_kv_pairs(v).into());
+            let (val, statistics) = extract_kv_pairs_and_statistics(v);
+            let detail_v2 = statistics_to_scan_detail_v2(perf_statistics.delta(), statistics);
+            resp.set_scan_detail_v2(detail_v2);
+            resp.set_pairs(val.into());
         }
         Ok(resp)
     }
@@ -1727,7 +1729,7 @@ pub mod batch_commands_request {
 pub use kvproto::tikvpb::batch_commands_request;
 #[cfg(feature = "prost-codec")]
 pub use kvproto::tikvpb::batch_commands_response;
-use crate::protos::kvrpcpb::{BatchGetRequest, ImportRequest};
+use crate::storage::errors::extract_kv_pairs_and_statistics;
 
 struct BatchRespCollector;
 impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>
@@ -1763,8 +1765,12 @@ fn statistics_to_scan_detail_v2(perf_statistics_delta: PerfStatisticsDelta, stat
     detail_v2.set_rocksdb_delete_skipped_count(
         perf_statistics_delta.0.internal_delete_skipped_count as u64,
     );
-    detail_v2.set_rocksdb_key_skipped_count(perf_statistics_delta.0.internal_key_skipped_count as u64);
-    detail_v2.set_rocksdb_block_cache_hit_count(perf_statistics_delta.0.block_cache_hit_count as u64);
+    detail_v2.set_rocksdb_key_skipped_count(
+        perf_statistics_delta.0.internal_key_skipped_count as u64,
+    );
+    detail_v2.set_rocksdb_block_cache_hit_count(
+        perf_statistics_delta.0.block_cache_hit_count as u64,
+    );
     detail_v2.set_rocksdb_block_read_count(perf_statistics_delta.0.block_read_count as u64);
     detail_v2.set_rocksdb_block_read_byte(perf_statistics_delta.0.block_read_byte as u64);
     detail_v2

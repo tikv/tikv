@@ -254,8 +254,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         key: Key,
         start_ts: TimeStamp,
-        statistics: &mut Statistics
-    ) -> impl Future<Output = Result<Option<Value>>> {
+    ) -> impl Future<Output = Result<(Option<Value>, Statistics)>> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -291,6 +290,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
+                    let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -300,7 +300,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         false,
                     );
                     let result = snap_store
-                        .get(&key, statistics)
+                        .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
@@ -317,7 +317,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
 
-                    result
+                    Ok((result?, statistics))
                 }
             },
             priority,
@@ -457,8 +457,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         keys: Vec<Key>,
         start_ts: TimeStamp,
-        statistics: &mut Statistics
-    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
+    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, Statistics)>> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -496,7 +495,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
-
+                    let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -506,7 +505,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         false,
                     );
                     let result = snap_store
-                        .batch_get(&keys, statistics)
+                        .batch_get(&keys,&mut statistics)
                         .map_err(Error::from)
                         .map(|v| {
                             let kv_pairs: Vec<_> = v
@@ -535,7 +534,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
-                    result
+
+                    Ok((result?, statistics))
                 }
             },
             priority,
@@ -1742,7 +1742,7 @@ mod tests {
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into(), &mut Statistics::default())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
         );
         storage
             .sched_txn_command(
@@ -1760,11 +1760,10 @@ mod tests {
             Context::default(),
             Key::from_raw(b"x"),
             100.into(),
-            &mut Statistics::default(),
         )));
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into(), &mut Statistics::default())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
         );
     }
 
@@ -1808,7 +1807,7 @@ mod tests {
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 1.into(), &mut Statistics::default())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 1.into())),
         );
         expect_error(
             |e| match e {
@@ -2417,7 +2416,6 @@ mod tests {
                 Context::default(),
                 vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                 2.into(),
-                &mut Statistics::default(),
             )),
         );
         storage
@@ -2451,7 +2449,6 @@ mod tests {
                     Key::from_raw(b"b"),
                 ],
                 5.into(),
-                &mut Statistics::default(),
             )),
         );
     }
@@ -2590,11 +2587,11 @@ mod tests {
         rx.recv().unwrap();
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 120.into(), &mut Statistics::default())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 120.into())),
         );
         expect_value(
             b"101".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 120.into(), &mut Statistics::default())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 120.into())),
         );
         storage
             .sched_txn_command(
@@ -2766,7 +2763,7 @@ mod tests {
         let (tx, rx) = channel();
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
-        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into(), &mut Statistics::default())));
+        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into())));
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         storage
@@ -2792,12 +2789,12 @@ mod tests {
         rx.recv().unwrap();
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
-        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into(), &mut Statistics::default())));
+        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into())));
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into(), &mut Statistics::default())),
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into())),
         );
     }
 
@@ -2814,7 +2811,6 @@ mod tests {
             Context::default(),
             Key::from_raw(b"x"),
             100.into(),
-            &mut Statistics::default(),
         )));
         storage
             .sched_txn_command(
@@ -2850,7 +2846,7 @@ mod tests {
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into(), &mut Statistics::default())),
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into())),
         );
         // Command Get with high priority not block by command Pause.
         assert_eq!(rx.recv().unwrap(), 3);
@@ -2894,18 +2890,17 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        statistics = Statistics::default();
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into(),&mut statistics)),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
         );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into(),&mut statistics)),
+            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into())),
         );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into(),&mut statistics)),
+            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into())),
         );
 
         // Delete range [x, z)
@@ -2923,17 +2918,15 @@ mod tests {
             Context::default(),
             Key::from_raw(b"x"),
             101.into(),
-            &mut statistics,
         )));
         expect_none(block_on(storage.get(
             Context::default(),
             Key::from_raw(b"y"),
             101.into(),
-            &mut statistics,
         )));
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into(), &mut statistics)),
+            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into())),
         );
 
         storage
@@ -2950,7 +2943,6 @@ mod tests {
             Context::default(),
             Key::from_raw(b"z"),
             101.into(),
-            &mut statistics,
         )));
     }
 
@@ -5431,13 +5423,13 @@ mod tests {
 
         // Test get
         let key_error = extract_key_error(
-            &block_on(storage.get(ctx.clone(), key.clone(), 100.into(),&mut Statistics::default())).unwrap_err(),
+            &block_on(storage.get(ctx.clone(), key.clone(), 100.into())).unwrap_err(),
         );
         assert_eq!(key_error.get_locked().get_key(), b"key");
 
         // Test batch_get
         let key_error = extract_key_error(
-            &block_on(storage.batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into(), &mut Statistics::default()))
+            &block_on(storage.batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into()))
                 .unwrap_err(),
         );
         assert_eq!(key_error.get_locked().get_key(), b"key");
