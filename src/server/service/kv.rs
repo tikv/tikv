@@ -16,7 +16,7 @@ use crate::storage::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
         extract_region_error,
     },
-    kv::{Engine, PerfStatisticsInstant, Statistics},
+    kv::{Engine, PerfStatisticsInstant, Statistics, PerfStatisticsDelta},
     lock_manager::LockManager,
     SecondaryLocksStatus, Storage, TxnStatus,
 };
@@ -1165,7 +1165,7 @@ fn future_get<E: Engine, L: LockManager>(
         let perf_statistics = PerfStatisticsInstant::new();
         let v = v.await;
         let mut resp = GetResponse::default();
-        let detail_v2 = statistics_to_scan_detail_v2(perf_statistics, statistics);
+        let detail_v2 = statistics_to_scan_detail_v2(perf_statistics.delta(), statistics);
         resp.set_scan_detail_v2(detail_v2);
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1224,7 +1224,7 @@ fn future_batch_get<E: Engine, L: LockManager>(
         let perf_statistics = PerfStatisticsInstant::new();
         let v = v.await;
         let mut resp = BatchGetResponse::default();
-        let detail_v2 = statistics_to_scan_detail_v2(perf_statistics, statistics);
+        let detail_v2 = statistics_to_scan_detail_v2(perf_statistics.delta(), statistics);
         resp.set_scan_detail_v2(detail_v2);
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1756,17 +1756,17 @@ fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionE
     e.into()
 }
 
-fn statistics_to_scan_detail_v2(perf_statistics: PerfStatisticsInstant, statistics: Statistics) -> ScanDetailV2 {
+fn statistics_to_scan_detail_v2(perf_statistics_delta: PerfStatisticsDelta, statistics: Statistics) -> ScanDetailV2 {
     let mut detail_v2 = ScanDetailV2::default();
     detail_v2.set_processed_versions(statistics.write.processed_keys as u64);
     detail_v2.set_total_versions(statistics.write.total_op_count() as u64);
     detail_v2.set_rocksdb_delete_skipped_count(
-        perf_statistics.0.internal_delete_skipped_count as u64,
+        perf_statistics_delta.0.internal_delete_skipped_count as u64,
     );
-    detail_v2.set_rocksdb_key_skipped_count(perf_statistics.0.internal_key_skipped_count as u64);
-    detail_v2.set_rocksdb_block_cache_hit_count(perf_statistics.0.block_cache_hit_count as u64);
-    detail_v2.set_rocksdb_block_read_count(perf_statistics.0.block_read_count as u64);
-    detail_v2.set_rocksdb_block_read_byte(perf_statistics.0.block_read_byte as u64);
+    detail_v2.set_rocksdb_key_skipped_count(perf_statistics_delta.0.internal_key_skipped_count as u64);
+    detail_v2.set_rocksdb_block_cache_hit_count(perf_statistics_delta.0.block_cache_hit_count as u64);
+    detail_v2.set_rocksdb_block_read_count(perf_statistics_delta.0.block_read_count as u64);
+    detail_v2.set_rocksdb_block_read_byte(perf_statistics_delta.0.block_read_byte as u64);
     detail_v2
 }
 
