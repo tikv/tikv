@@ -3741,6 +3741,19 @@ mod tests {
         epoch_checker.post_propose(AdminCmdType::ChangePeer, 6, 10);
         assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
 
+        assert_eq!(
+            epoch_checker.last_cmd_index(AdminCmdType::BatchSplit),
+            Some(5)
+        );
+        assert_eq!(
+            epoch_checker.last_cmd_index(AdminCmdType::ChangePeer),
+            Some(6)
+        );
+        assert_eq!(
+            epoch_checker.last_cmd_index(AdminCmdType::PrepareMerge),
+            None
+        );
+
         // Conflict with the change peer admin cmd
         assert_eq!(
             epoch_checker.propose_check_epoch(&change_peer_admin, 10),
