@@ -5,7 +5,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 
 use crate::storage::{
-    kv::{self, Error as EngineError, ErrorInner as EngineErrorInner, Statistics},
+    kv::{self, Error as EngineError, ErrorInner as EngineErrorInner, PerfStatisticsDelta, Statistics},
     mvcc::{self, Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
@@ -344,9 +344,10 @@ pub fn extract_kv_pairs(res: Result<Vec<Result<KvPair>>>) -> Vec<kvrpcpb::KvPair
     }
 }
 
-pub fn extract_kv_pairs_and_statistics(res: Result<(Vec<Result<KvPair>>, Statistics)>) -> (Vec<kvrpcpb::KvPair>, Statistics) {
+pub fn extract_kv_pairs_and_statistics(res: Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)>)
+    -> (Vec<kvrpcpb::KvPair>, Statistics, PerfStatisticsDelta) {
     match res {
-        Ok((r, s)) => {
+        Ok((r, s, ps)) => {
             let r = r.into_iter()
                 .map(|r| match r {
                     Ok((key, value)) => {
@@ -362,12 +363,12 @@ pub fn extract_kv_pairs_and_statistics(res: Result<(Vec<Result<KvPair>>, Statist
                     }
                 })
                 .collect();
-            (r ,s)
+            (r , s, ps)
         }
         Err(e) => {
             let mut pair = kvrpcpb::KvPair::default();
             pair.set_error(extract_key_error(&e));
-            (vec![pair], Statistics::default())
+            (vec![pair], Statistics::default(), PerfStatisticsDelta::default())
         }
     }
 }

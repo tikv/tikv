@@ -49,7 +49,7 @@ pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CbContext, CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
+        PerfStatisticsInstant, PerfStatisticsDelta, RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
@@ -254,7 +254,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         key: Key,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<(Option<Value>, Statistics)>> {
+    ) -> impl Future<Output = Result<(Option<Value>, Statistics, PerfStatisticsDelta)>> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -291,6 +291,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
+                    let perf_statistics = PerfStatisticsInstant::new();
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -317,7 +318,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
 
-                    Ok((result?, statistics))
+                    Ok((result?, statistics, perf_statistics.delta()))
                 }
             },
             priority,
@@ -457,7 +458,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         keys: Vec<Key>,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, Statistics)>> {
+    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)>> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -496,6 +497,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
+                    let perf_statistics = PerfStatisticsInstant::new();
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -535,7 +537,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
 
-                    Ok((result?, statistics))
+                    Ok((result?, statistics, perf_statistics.delta()))
                 }
             },
             priority,

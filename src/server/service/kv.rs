@@ -16,7 +16,7 @@ use crate::storage::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
         extract_region_error,
     },
-    kv::{Engine, PerfStatisticsInstant, Statistics, PerfStatisticsDelta},
+    kv::{Engine, Statistics, PerfStatisticsDelta},
     lock_manager::LockManager,
     SecondaryLocksStatus, Storage, TxnStatus,
 };
@@ -1160,15 +1160,14 @@ fn future_get<E: Engine, L: LockManager>(
     );
 
     async move {
-        let perf_statistics = PerfStatisticsInstant::new();
         let v = v.await;
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
             match v {
-                Ok((val, statistics)) => {
-                    let detail_v2 = statistics_to_scan_detail_v2(perf_statistics.delta(), statistics);
+                Ok((val, statistics, perf_statistics_delta)) => {
+                    let detail_v2 = statistics_to_scan_detail_v2(perf_statistics_delta, statistics);
                     resp.set_scan_detail_v2(detail_v2);
                     match val {
                         Some(val) => resp.set_value(val),
@@ -1222,14 +1221,13 @@ fn future_batch_get<E: Engine, L: LockManager>(
     );
 
     async move {
-        let perf_statistics = PerfStatisticsInstant::new();
         let v = r.await;
         let mut resp = BatchGetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            let (val, statistics) = extract_kv_pairs_and_statistics(v);
-            let detail_v2 = statistics_to_scan_detail_v2(perf_statistics.delta(), statistics);
+            let (val, statistics, perf_statistics_delta) = extract_kv_pairs_and_statistics(v);
+            let detail_v2 = statistics_to_scan_detail_v2(perf_statistics_delta, statistics);
             resp.set_scan_detail_v2(detail_v2);
             resp.set_pairs(val.into());
         }
