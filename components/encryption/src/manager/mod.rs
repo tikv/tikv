@@ -71,8 +71,8 @@ impl Dicts {
                 let mut file_dict = FileDictionary::default();
                 file_dict.merge_from_bytes(&file_bytes)?;
                 let mut key_dict = KeyDictionary::default();
-                let current_key_id = AtomicU64::new(key_dict.current_key_id);
                 key_dict.merge_from_bytes(&key_bytes)?;
+                let current_key_id = AtomicU64::new(key_dict.current_key_id);
 
                 ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
                 ENCRYPTION_FILE_NUM_GAUGE.set(file_dict.files.len() as _);
@@ -182,9 +182,10 @@ impl Dicts {
         file.iv = iv.as_slice().to_vec();
         file.key_id = self.current_key_id.load(Ordering::Relaxed);
         file.method = compat(method);
-        let mut file_dict = self.file_dict.lock().unwrap();
-        file_dict.files.insert(fname.to_owned(), file.clone());
-        drop(file_dict);
+        {
+            let mut file_dict = self.file_dict.lock().unwrap();
+            file_dict.files.insert(fname.to_owned(), file.clone());
+        }
         self.save_file_dict()?;
 
         if method != EncryptionMethod::Plaintext {
@@ -199,18 +200,19 @@ impl Dicts {
     }
 
     fn delete_file(&self, fname: &str) -> Result<()> {
-        let mut file_dict = self.file_dict.lock().unwrap();
-        let file = match file_dict.files.remove(fname) {
-            Some(file_info) => file_info,
-            None => {
-                // Could be a plaintext file not tracked by file dictionary.
-                info!("delete untracked plaintext file"; "fname" => fname);
-                return Ok(());
+        let file = {
+            let mut file_dict = self.file_dict.lock().unwrap();
+            match file_dict.files.remove(fname) {
+                Some(file_info) => file_info,
+                None => {
+                    // Could be a plaintext file not tracked by file dictionary.
+                    info!("delete untracked plaintext file"; "fname" => fname);
+                    return Ok(());
+                }
             }
         };
 
         // TOOD GC unused data keys.
-        drop(file_dict);
         self.save_file_dict()?;
         if file.method != compat(EncryptionMethod::Plaintext) {
             info!("delete encrypted file"; "fname" => fname);
@@ -435,9 +437,10 @@ impl DataKeyManager {
                         ))
                     })?;
                 // Rewrite key_dict after replace master key.
-                let mut key_dict = dicts.key_dict.lock().unwrap();
-                dicts.save_key_dict(master_key.as_ref(), &mut key_dict)?;
-                drop(key_dict);
+                {
+                    let mut key_dict = dicts.key_dict.lock().unwrap();
+                    dicts.save_key_dict(master_key.as_ref(), &mut key_dict)?;
+                }
                 info!("encryption: persisted result after replace master key.");
 
                 dicts
