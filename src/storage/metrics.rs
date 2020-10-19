@@ -358,13 +358,4 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
-    pub static ref SCHED_EARLY_RESP_TIME_DIFF: HistogramVec = register_histogram_vec!(
-        "tikv_scheduler_early_response_time_diff_seconds",
-        "How much latency reduced by early responsing",
-        &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
-    )
-    .unwrap();
-    pub static ref SCHED_EARLY_RESP_TIME_DIFF_VEC_STATIC: SchedDurationVec =
-        auto_flush_from!(SCHED_EARLY_RESP_TIME_DIFF, SchedDurationVec);
 }

@@ -37,9 +37,8 @@ use crate::storage::kv::{
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::metrics::{
     self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC,
-    SCHED_CONTEX_GAUGE, SCHED_EARLY_RESP_TIME_DIFF_VEC_STATIC, SCHED_HISTOGRAM_VEC_STATIC,
-    SCHED_LATCH_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC,
-    SCHED_WRITING_BYTES_GAUGE,
+    SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC,
+    SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
 };
 use crate::storage::txn::commands::{ResponsePolicy, WriteContext, WriteResult};
 use crate::storage::txn::{
@@ -92,7 +91,6 @@ struct TaskContext {
 
     lock: Lock,
     cb: Option<StorageCallback>,
-    result_taken_timer: Option<Instant>,
     write_bytes: usize,
     tag: metrics::CommandKind,
     // How long it waits on latches.
@@ -120,7 +118,6 @@ impl TaskContext {
             task: Some(task),
             lock,
             cb: Some(cb),
-            result_taken_timer: None,
             write_bytes,
             tag,
             latch_timer: Instant::now_coarse(),
@@ -464,8 +461,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         result: EngineResult<()>,
         lock_guards: Vec<KeyHandleGuard>,
         pipelined: bool,
+        async_apply_prewrite: bool,
         tag: metrics::CommandKind,
     ) {
+        // TODO: Does async apply prewrite worth a special metric here?
         if !pipelined {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         } else {
@@ -475,16 +474,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .inc();
         }
 
-        debug!("write command finished"; "cid" => cid, "pipelined" => pipelined);
+        debug!("write command finished"; 
+            "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
 
-        // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
-        if let Some(timer) = tctx.result_taken_timer {
-            SCHED_EARLY_RESP_TIME_DIFF_VEC_STATIC
-                .get(tag)
-                .observe(timer.elapsed_secs());
-        }
+        // If pilelined pessimistic lock or async apply prewrite takes effect, the process result
+        // should be already sent on success, and the `pr` passed to the function is None.
         if let Some(cb) = tctx.cb {
             let pr = match result {
                 Ok(()) => pr.unwrap(),
@@ -499,8 +495,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 cb.execute(pr);
             }
         } else {
-            // TODO: Fix assertion here.
-            // assert!(pipelined);
+            assert!(pipelined || async_apply_prewrite);
         }
 
         self.release_lock(&tctx.lock, cid);
@@ -617,6 +612,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             extra_op: task.extra_op,
             statistics,
             pipelined_pessimistic_lock: self.inner.pipelined_pessimistic_lock,
+            async_apply_prewrite: self.inner.enable_async_commit_async_apply,
         };
 
         match task.cmd.process_write(snapshot, context) {
@@ -636,41 +632,28 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 if let Some((lock, is_first_lock, wait_timeout)) = lock_info {
                     scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout);
                 } else if to_be_write.modifies.is_empty() {
-                    scheduler.on_write_finished(cid, Some(pr), Ok(()), lock_guards, false, tag);
+                    scheduler.on_write_finished(
+                        cid,
+                        Some(pr),
+                        Ok(()),
+                        lock_guards,
+                        false,
+                        false,
+                        tag,
+                    );
                 } else {
-                    let mut proposed_cb: Option<ExtCallback> = None;
-                    let mut committed_cb: Option<ExtCallback> = None;
                     let mut pr = Some(pr);
-                    if pipelined {
-                        // The normal write process is respond to clients and release latches
-                        // after async write finished. If pipelined pessimistic locking is enabled,
-                        // the process becomes parallel and there are two msgs for one command:
-                        //   1. Msg::PipelinedWrite: respond to clients
-                        //   2. Msg::WriteFinished: deque context and release latches
-                        // The order between these two msgs is uncertain due to thread scheduling
-                        // so we clone the result for each msg.
-                        let pr1 = pr.take().unwrap();
-                        let sched = scheduler.clone();
-                        proposed_cb = Some(Box::new(move || {
-                            fail_point!("scheduler_pipelined_write_finish");
-                            // The write task is proposed to the raftstore successfully.
-                            // Respond to client early.
-                            let cb = sched.inner.take_task_cb(cid).unwrap();
-                            Self::early_response(
-                                cid,
-                                cb,
-                                pr1,
-                                tag,
-                                metrics::CommandStageKind::pipelined_write,
-                            );
-                        }));
-                    } else if self.inner.enable_async_commit_async_apply {
+                    let mut is_async_apply_prewrite = false;
+
+                    let (proposed_cb, committed_cb): (Option<ExtCallback>, Option<ExtCallback>) =
                         match response_policy {
-                            ResponsePolicy::OnApplied => {}
+                            ResponsePolicy::OnApplied => (None, None),
                             ResponsePolicy::OnCommitted => {
                                 let pr1 = pr.take().unwrap();
                                 let sched = scheduler.clone();
-                                committed_cb = Some(Box::new(move || {
+                                // Currently, the only case that response is returned after finishing
+                                // commit is async applying prewrites for async commit transactions.
+                                let committed_cb = Box::new(move || {
                                     let cb = sched.inner.take_task_cb(cid).unwrap();
                                     Self::early_response(
                                         cid,
@@ -679,10 +662,31 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                         tag,
                                         metrics::CommandStageKind::resp_on_commit,
                                     );
-                                }))
+                                });
+                                is_async_apply_prewrite = true;
+                                (None, Some(committed_cb))
                             }
-                        }
-                    };
+                            ResponsePolicy::OnProposed => {
+                                let pr1 = pr.take().unwrap();
+                                let sched = scheduler.clone();
+                                // Currently, the only case that response is returned after finishing
+                                // proposed phase is pipelined pessimistic lock.
+                                // TODO: Unify the code structure of pipelined pessimistic lock and
+                                // async apply prewrite.
+                                let proposed_cb = Box::new(move || {
+                                    fail_point!("scheduler_pipelined_write_finish");
+                                    let cb = sched.inner.take_task_cb(cid).unwrap();
+                                    Self::early_response(
+                                        cid,
+                                        cb,
+                                        pr1,
+                                        tag,
+                                        metrics::CommandStageKind::pipelined_write,
+                                    );
+                                });
+                                (Some(proposed_cb), None)
+                            }
+                        };
 
                     let sched = scheduler.clone();
                     let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
@@ -698,6 +702,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     result,
                                     lock_guards,
                                     pipelined,
+                                    is_async_apply_prewrite,
                                     tag,
                                 );
                                 KV_COMMAND_KEYWRITE_HISTOGRAM_VEC

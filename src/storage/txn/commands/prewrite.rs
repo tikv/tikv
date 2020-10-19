@@ -241,7 +241,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             };
             (pr, WriteData::default(), 0, self.ctx, None, vec![])
         };
-        let response_policy = if async_commit_ts.is_zero() {
+        let response_policy = if async_commit_ts.is_zero() && context.async_apply_prewrite {
             ResponsePolicy::OnApplied
         } else {
             ResponsePolicy::OnCommitted
@@ -450,6 +450,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            async_apply_prewrite: false,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         if let ProcessResult::PrewriteResult {
@@ -491,6 +492,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            async_apply_prewrite: false,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -515,6 +517,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            async_apply_prewrite: false,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;

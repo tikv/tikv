@@ -333,10 +333,21 @@ struct ReleasedLocks {
     pessimistic: bool,
 }
 
+/// Represents for a scheduler command, when should the response sent to the client.
+/// For most cases, the response should be sent after the result being successfully applied to
+/// the storage (if needed). But in some special cases, some optimizations allows the response to be
+/// returned at an earlier phase.
+/// 
+/// Note that this doesn't affect latch releasing. The latch and the memory lock (if any) are always
+/// released after applying, regardless of when the response is sent.
 #[derive(Clone, Copy, Debug)]
 pub enum ResponsePolicy {
+    /// Return the response to the client when the command has finished applying.
     OnApplied,
+    /// Return the response after finishing Raft committing.
     OnCommitted,
+    /// Return the response after finishing raft porposing.
+    OnProposed,
 }
 
 pub struct WriteResult {
@@ -440,6 +451,7 @@ pub struct WriteContext<'a, L: LockManager> {
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub pipelined_pessimistic_lock: bool,
+    pub async_apply_prewrite: bool,
 }
 
 impl Command {
