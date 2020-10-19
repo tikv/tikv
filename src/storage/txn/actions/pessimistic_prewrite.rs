@@ -17,6 +17,7 @@ pub fn pessimistic_prewrite<S: Snapshot>(
     for_update_ts: TimeStamp,
     txn_size: u64,
     mut min_commit_ts: TimeStamp,
+    max_commit_ts: TimeStamp,
     pipelined_pessimistic_lock: bool,
 ) -> MvccResult<TimeStamp> {
     if mutation.should_not_write() {
@@ -80,6 +81,7 @@ pub fn pessimistic_prewrite<S: Snapshot>(
         for_update_ts,
         txn_size,
         min_commit_ts,
+        max_commit_ts,
     )
 }
 
@@ -111,6 +113,7 @@ pub mod tests {
             0,
             TimeStamp::default(),
             0,
+            TimeStamp::default(),
             TimeStamp::default(),
             false,
         )?;
