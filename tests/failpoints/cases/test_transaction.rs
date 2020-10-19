@@ -1,14 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::mpsc::channel, thread, time::Duration};
-
 use futures::executor::block_on;
 use kvproto::kvrpcpb::Context;
+use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc;
+use tikv::storage::txn::commands;
+use tikv::storage::txn::tests::{must_prewrite_put, must_prewrite_put_err};
 use tikv::storage::TestEngineBuilder;
 use tikv::storage::{self, txn::tests::must_commit};
 use tikv::storage::{lock_manager::DummyLockManager, TestStorageBuilder};
-use tikv::storage::{mvcc::tests::*, txn::commands};
 use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]
@@ -153,3 +153,83 @@ fn test_update_max_ts_before_scan_memory_locks() {
     let res = prewrite_rx.recv().unwrap().unwrap();
     assert_eq!(res.min_commit_ts, 101.into());
 }
+
+/// Generates a test that checks the correct behavior of holding and dropping locks,
+/// during the process of a single prewrite command.
+macro_rules! lock_release_test {
+    ($test_name:ident, $lock_exists:ident, $before_actions:expr, $middle_actions:expr, $after_actions:expr, $should_succeed:expr) => {
+        #[test]
+        fn $test_name() {
+            let engine = TestEngineBuilder::new().build().unwrap();
+            let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+                engine,
+                DummyLockManager {},
+            )
+            .build()
+            .unwrap();
+
+            let key = Key::from_raw(b"k");
+            let cm = storage.get_concurrency_manager();
+            let $lock_exists = || cm.read_key_check(&key, |_| Err(())).is_err();
+
+            $before_actions;
+
+            let (prewrite_tx, prewrite_rx) = channel();
+            storage
+                .sched_txn_command(
+                    commands::Prewrite::new(
+                        vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                        b"k".to_vec(),
+                        10.into(),
+                        20000,
+                        false,
+                        1,
+                        TimeStamp::default(),
+                        Some(vec![]),
+                        Context::default(),
+                    ),
+                    Box::new(move |res| {
+                        prewrite_tx.send(res).unwrap();
+                    }),
+                )
+                .unwrap();
+            $middle_actions;
+            let res = prewrite_rx.recv();
+            assert_eq!(res.unwrap().is_ok(), $should_succeed);
+            $after_actions;
+        }
+    };
+}
+
+// Must release lock after prewrite fails.
+lock_release_test!(
+    test_lock_lifetime_on_prewrite_failure,
+    lock_exists,
+    {
+        fail::cfg(
+            "rockskv_async_write",
+            "return(Err(KvError::from(KvErrorInner::EmptyRequest)))",
+        )
+        .unwrap();
+        assert!(!lock_exists());
+    },
+    {},
+    assert!(!lock_exists()),
+    false
+);
+
+// Must hold lock until prewrite ends. Must release lock after prewrite succeeds.
+lock_release_test!(
+    test_lock_lifetime_on_prewrite_success,
+    lock_exists,
+    {
+        fail::cfg("rockskv_async_write", "sleep(500)").unwrap();
+        assert!(!lock_exists());
+    },
+    {
+        thread::sleep(Duration::from_millis(200));
+        assert!(lock_exists());
+    },
+    assert!(!lock_exists()),
+    true
+);
