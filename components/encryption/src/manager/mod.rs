@@ -4,7 +4,7 @@ use std::collections::hash_map::Entry;
 use std::fs::File;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{atomic::AtomicU64, atomic::Ordering, Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
@@ -23,9 +23,11 @@ const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
 
 struct Dicts {
-    file_dict: RwLock<FileDictionary>,
+    file_dict: Mutex<FileDictionary>,
+    file_lock: Mutex<()>,
     key_dict: Mutex<KeyDictionary>,
-    write_lock: Mutex<()>,
+    key_lock: Mutex<()>,
+    current_key_id: AtomicU64,
     rotation_period: Duration,
     base: PathBuf,
 }
@@ -33,12 +35,14 @@ struct Dicts {
 impl Dicts {
     fn new(path: &str, rotation_period: Duration) -> Dicts {
         Dicts {
-            file_dict: RwLock::new(FileDictionary::default()),
+            file_dict: Mutex::new(FileDictionary::default()),
             key_dict: Mutex::new(KeyDictionary {
                 current_key_id: 0,
                 ..Default::default()
             }),
-            write_lock: Mutex::new(()),
+            current_key_id: AtomicU64::new(0),
+            file_lock: Mutex::new(()),
+            key_lock: Mutex::new(()),
             rotation_period,
             base: Path::new(path).to_owned(),
         }
@@ -67,15 +71,18 @@ impl Dicts {
                 let mut file_dict = FileDictionary::default();
                 file_dict.merge_from_bytes(&file_bytes)?;
                 let mut key_dict = KeyDictionary::default();
+                let current_key_id = AtomicU64::new(key_dict.current_key_id);
                 key_dict.merge_from_bytes(&key_bytes)?;
 
                 ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
                 ENCRYPTION_FILE_NUM_GAUGE.set(file_dict.files.len() as _);
 
                 Ok(Some(Dicts {
-                    file_dict: RwLock::new(file_dict),
+                    file_dict: Mutex::new(file_dict),
                     key_dict: Mutex::new(key_dict),
-                    write_lock: Mutex::new(()),
+                    current_key_id,
+                    file_lock: Mutex::new(()),
+                    key_lock: Mutex::new(()),
                     rotation_period,
                     base: base.to_owned(),
                 }))
@@ -108,7 +115,9 @@ impl Dicts {
                 value.was_exposed = true
             }
         }
+        key_dict.current_key_id = self.current_key_id.load(Ordering::Relaxed);
         let key_bytes = key_dict.write_to_bytes()?;
+        let _lock = self.key_lock.lock().unwrap();
         file.write(&key_bytes, master_key)?;
 
         ENCRYPTION_FILE_SIZE_GAUGE
@@ -120,11 +129,11 @@ impl Dicts {
     }
 
     fn save_file_dict(&self) -> Result<()> {
-        let file_dict = self.file_dict.read().unwrap();
+        let file_dict = self.file_dict.lock().unwrap();
         let file = EncryptedFile::new(&self.base, FILE_DICT_NAME);
         let file_bytes = file_dict.write_to_bytes()?;
         // File dict is saved in plaintext.
-        let _lock = self.write_lock.lock().unwrap();
+        let _lock = self.file_lock.lock().unwrap();
         file.write(&file_bytes, &PlaintextBackend::default())?;
 
         ENCRYPTION_FILE_SIZE_GAUGE
@@ -137,11 +146,12 @@ impl Dicts {
 
     fn current_data_key(&self) -> (u64, DataKey) {
         let key_dict = self.key_dict.lock().unwrap();
+        let current_key_id = self.current_key_id.load(Ordering::Relaxed);
         (
-            key_dict.current_key_id,
+            current_key_id,
             key_dict
                 .keys
-                .get(&key_dict.current_key_id)
+                .get(&current_key_id)
                 .cloned()
                 .unwrap_or_else(|| {
                     panic!(
@@ -153,7 +163,7 @@ impl Dicts {
     }
 
     fn get_file(&self, fname: &str) -> FileInfo {
-        let dict = self.file_dict.read().unwrap();
+        let dict = self.file_dict.lock().unwrap();
         let file_info = dict.files.get(fname);
         match file_info {
             None => {
@@ -170,9 +180,9 @@ impl Dicts {
         let iv = Iv::new_ctr();
         let mut file = FileInfo::default();
         file.iv = iv.as_slice().to_vec();
-        file.key_id = self.key_dict.lock().unwrap().current_key_id;
+        file.key_id = self.current_key_id.load(Ordering::Relaxed);
         file.method = compat(method);
-        let mut file_dict = self.file_dict.write().unwrap();
+        let mut file_dict = self.file_dict.lock().unwrap();
         file_dict.files.insert(fname.to_owned(), file.clone());
         drop(file_dict);
         self.save_file_dict()?;
@@ -189,7 +199,7 @@ impl Dicts {
     }
 
     fn delete_file(&self, fname: &str) -> Result<()> {
-        let mut file_dict = self.file_dict.write().unwrap();
+        let mut file_dict = self.file_dict.lock().unwrap();
         let file = match file_dict.files.remove(fname) {
             Some(file_info) => file_info,
             None => {
@@ -211,7 +221,7 @@ impl Dicts {
     }
 
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let mut file_dict = self.file_dict.write().unwrap();
+        let mut file_dict = self.file_dict.lock().unwrap();
         let file = match file_dict.files.get(src_fname) {
             Some(file_info) => file_info.clone(),
             None => {
@@ -240,7 +250,7 @@ impl Dicts {
     }
 
     fn rename_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let mut file_dict = self.file_dict.write().unwrap();
+        let mut file_dict = self.file_dict.lock().unwrap();
         let file = match file_dict.files.remove(src_fname) {
             Some(file_info) => file_info,
             None => {
@@ -271,7 +281,7 @@ impl Dicts {
             Entry::Vacant(e) => e.insert(key),
         };
         // Update current data key id.
-        key_dict.current_key_id = key_id;
+        self.current_key_id.store(key_id, Ordering::Relaxed);
         // re-encrypt key dict file.
         self.save_key_dict(master_key, &mut key_dict).map(|()| true)
     }
@@ -283,7 +293,7 @@ impl Dicts {
     ) -> Result<()> {
         let now = SystemTime::now();
         // 0 means it's a new key dict
-        if self.key_dict.lock().unwrap().current_key_id != 0 {
+        if self.current_key_id.load(Ordering::Relaxed) != 0 {
             // It's not a new dict, then check current data key
             // creation time.
             let (_, key) = self.current_data_key();
@@ -788,7 +798,7 @@ mod tests {
         manager
             .dicts
             .file_dict
-            .write()
+            .lock()
             .unwrap()
             .files
             .insert("foo".to_owned(), file);
@@ -891,7 +901,7 @@ mod tests {
         // Create a file and a datakey.
         manager.new_file("foo").unwrap();
 
-        let files = manager.dicts.file_dict.read().unwrap().clone();
+        let files = manager.dicts.file_dict.lock().unwrap().clone();
         let keys = manager.dicts.key_dict.lock().unwrap().clone();
 
         // Close and re-open.
@@ -899,7 +909,7 @@ mod tests {
         let (_tmp, manager1) = new_tmp_key_manager(Some(tmp), None, None, None);
         let manager1 = manager1.unwrap().unwrap();
 
-        let files1 = manager1.dicts.file_dict.read().unwrap().clone();
+        let files1 = manager1.dicts.file_dict.lock().unwrap().clone();
         let keys1 = manager1.dicts.key_dict.lock().unwrap().clone();
         assert_eq!(files, files1);
         assert_eq!(keys, keys1);
