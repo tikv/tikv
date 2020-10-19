@@ -2626,7 +2626,6 @@ mod tests {
             Context::default(),
             Key::from_raw(b"x"),
             100.into(),
-            &mut Statistics::default(),
         )));
         storage
             .sched_txn_command::<()>(
@@ -2694,7 +2693,6 @@ mod tests {
             Context::default(),
             Key::from_raw(b"x"),
             105.into(),
-            &mut Statistics::default(),
         )));
     }
 
@@ -2753,7 +2751,6 @@ mod tests {
             Context::default(),
             Key::from_raw(b"x"),
             ts(230, 0),
-            &mut Statistics::default(),
         )));
     }
 
