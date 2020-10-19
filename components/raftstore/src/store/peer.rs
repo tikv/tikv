@@ -1535,7 +1535,8 @@ where
 
         if self.is_leader() {
             if let Some(hs) = ready.hs() {
-                if hs.get_commit() > self.get_store().committed_index() {
+                let pre_commit_index = self.get_store().committed_index();
+                if hs.get_commit() > pre_commit_index {
                     // The admin cmds in `CmdEpochChecker` are proposed by the current leader so we can
                     // use it to get the split/prepare-merge cmds which was committed just now.
 
@@ -1547,7 +1548,7 @@ where
                         .last_cmd_index(AdminCmdType::BatchSplit)
                         .or_else(|| self.cmd_epoch_checker.last_cmd_index(AdminCmdType::Split));
                     if let Some(idx) = last_split_idx {
-                        if idx <= hs.get_commit() {
+                        if idx > pre_commit_index && idx <= hs.get_commit() {
                             // We don't need to suspect its lease because peers of new region that
                             // in other store do not start election before theirs election timeout
                             // which is longer than the max leader lease.
@@ -1560,7 +1561,7 @@ where
                         .cmd_epoch_checker
                         .last_cmd_index(AdminCmdType::PrepareMerge);
                     if let Some(idx) = last_prepare_merge_idx {
-                        if idx <= hs.get_commit() {
+                        if idx > pre_commit_index && idx <= hs.get_commit() {
                             // We committed prepare merge, to prevent unsafe read index,
                             // we must record its index.
                             self.last_committed_prepare_merge_idx = idx;
