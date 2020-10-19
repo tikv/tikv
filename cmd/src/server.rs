@@ -85,7 +85,8 @@ pub fn run_tikv(config: TiKvConfig) {
     initial_logger(&config);
 
     // Print version information.
-    tikv::log_tikv_info();
+    let build_timestamp = option_env!("TIKV_BUILD_TIME");
+    tikv::log_tikv_info(build_timestamp);
 
     // Print resource quota.
     SysQuota::new().log_quota();

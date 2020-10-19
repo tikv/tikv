@@ -93,7 +93,6 @@ CARGO_TARGET_DIR ?= $(CURDIR)/target
 BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
 export TIKV_ENABLE_FEATURES := ${ENABLE_FEATURES}
-export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
 export TIKV_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_TAG ?= $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
@@ -242,6 +241,7 @@ run-test:
 	# rebuild starting at jemalloc-sys.
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
+        export RUST_LOG=info && \
 	export RUST_BACKTRACE=1 && \
 	cargo -Zpackage-features test --workspace \
 		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
