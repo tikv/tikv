@@ -18,6 +18,7 @@ use tikv_util::worker::Scheduler;
 use txn_types::{Key, Lock, MutationType, Value, WriteRef, WriteType};
 
 use crate::endpoint::{Deregister, OldValueCache, Task};
+use crate::metrics::*;
 use crate::{Error as CdcError, Result};
 
 /// An Observer for CDC.
@@ -300,6 +301,18 @@ impl<S: EngineSnapshot> OldValueReader<S> {
             Ok(Some(Vec::default()))
         } else {
             Ok(None)
+        }
+    }
+}
+
+impl<S: EngineSnapshot> Drop for OldValueReader<S> {
+    fn drop(&mut self) {
+        for (cf, cf_details) in self.statistics.details().iter() {
+            for (tag, count) in cf_details.iter() {
+                CDC_OLD_VALUE_SCAN_DETAILS
+                    .with_label_values(&[*cf, *tag])
+                    .inc_by(*count as i64);
+            }
         }
     }
 }

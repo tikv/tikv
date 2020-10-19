@@ -32,6 +32,7 @@ use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
+use tikv_util::time::Instant;
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
 use crate::endpoint::{OldValueCache, OldValueCallback};
@@ -612,8 +613,11 @@ impl Delegate {
 
                     if self.txn_extra_op == TxnExtraOp::ReadOldValue {
                         let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
+                        let start = Instant::now();
                         row.old_value =
                             old_value_cb.borrow_mut()(key, old_value_cache).unwrap_or_default();
+                        CDC_OLD_VALUE_DURATION_HISTOGRAM
+                            .observe(start.elapsed().as_millis() as f64);
                     }
 
                     let occupied = rows.entry(row.key.clone()).or_default();
