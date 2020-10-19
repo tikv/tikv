@@ -6,7 +6,7 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::MvccInfo;
-use crate::storage::{ScanMode, Snapshot, Statistics};
+use crate::storage::{Snapshot, Statistics};
 use txn_types::{Key, TimeStamp};
 
 command! {
@@ -35,10 +35,11 @@ impl<S: Snapshot> ReadCommand<S> for MvccByKey {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let mut reader = MvccReader::new(
             snapshot,
-            Some(ScanMode::Forward),
+            None,
             !self.ctx.get_not_fill_cache(),
             self.ctx.get_isolation_level(),
         );
+        reader.set_single_key(true);
         let result = find_mvcc_infos_by_key(&mut reader, &self.key, TimeStamp::max());
         statistics.add(reader.get_statistics());
         let (lock, writes, values) = result?;
