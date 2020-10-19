@@ -1544,7 +1544,7 @@ where
                     let last_split_idx = self
                         .cmd_epoch_checker
                         .last_cmd_index(AdminCmdType::BatchSplit)
-                        .or(self.cmd_epoch_checker.last_cmd_index(AdminCmdType::Split));
+                        .or_else(|| self.cmd_epoch_checker.last_cmd_index(AdminCmdType::Split));
                     if let Some(idx) = last_split_idx {
                         if idx <= hs.get_commit() {
                             // We don't need to suspect its lease because peers of new region that
