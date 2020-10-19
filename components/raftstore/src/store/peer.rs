@@ -1535,12 +1535,13 @@ where
 
         if self.is_leader() {
             if let Some(hs) = ready.hs() {
-                // Check the new committed entries.
                 if hs.get_commit() > self.get_store().committed_index() {
-                    // The admin cmds in `CmdEpochChecker` are proposed by the current leader so we can use
-                    // it to get the split/prepare-merge cmds which was committed just now.
+                    // The admin cmds in `CmdEpochChecker` are proposed by the current leader so we can
+                    // use it to get the split/prepare-merge cmds which was committed just now.
 
-                    // BatchSplit and Split cmd are mutually exclusive because they both change epoch's version
+                    // BatchSplit and Split cmd are mutually exclusive because they both change epoch's
+                    // version so only one of them can be proposed and the other one will be rejected
+                    // by `CmdEpochChecker`.
                     let last_split_idx = self
                         .cmd_epoch_checker
                         .last_cmd_index(AdminCmdType::BatchSplit)
