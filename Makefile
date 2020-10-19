@@ -270,8 +270,8 @@ pre-format: unset-override
 	@rustup component add rustfmt
 
 format: pre-format
-	@cargo fmt --all -- --check >/dev/null || \
-	cargo fmt --all
+	@cargo fmt -- --check >/dev/null || \
+	cargo fmt
 
 doc:
 	@cargo doc --workspace --document-private-items \
