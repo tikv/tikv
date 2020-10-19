@@ -34,6 +34,11 @@ use super::metrics::*;
 const GENERATE_POOL_SIZE: usize = 2;
 
 // used to periodically check whether we should delete a stale peer's range in region runner
+
+#[cfg(test)]
+pub const STALE_PEER_CHECK_TICK: usize = 1; // 1000 milliseconds
+
+#[cfg(not(test))]
 pub const STALE_PEER_CHECK_TICK: usize = 10; // 10000 milliseconds
 
 // used to periodically check whether schedule pending applies in region runner
@@ -568,6 +573,7 @@ where
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task<EK::Snapshot>>,
     clean_stale_tick: usize,
+    clean_stale_check_interval: Duration,
 }
 
 impl<EK, ER, R> Runner<EK, ER, R>
@@ -599,6 +605,7 @@ where
             },
             pending_applies: VecDeque::new(),
             clean_stale_tick: 0,
+            clean_stale_check_interval: Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
         }
     }
 
@@ -701,7 +708,7 @@ where
     }
 
     fn get_interval(&self) -> Duration {
-        Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL)
+        self.clean_stale_check_interval
     }
 }
 
@@ -825,7 +832,7 @@ mod tests {
         let sched = worker.scheduler();
         let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let (router, _) = mpsc::sync_channel(11);
-        let runner = RegionRunner::new(
+        let mut runner = RegionRunner::new(
             engines,
             mgr,
             0,
@@ -833,6 +840,7 @@ mod tests {
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
+        runner.clean_stale_check_interval = Duration::from_millis(100);
 
         let mut ranges = vec![];
         for i in 0..10 {

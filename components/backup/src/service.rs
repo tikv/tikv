@@ -94,8 +94,8 @@ mod tests {
     use crate::endpoint::tests::*;
     use external_storage::make_local_backend;
     use security::*;
-    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
+    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
     use txn_types::TimeStamp;
 
     fn new_rpc_suite() -> (Server, BackupClient, ReceiverWrapper<Task>) {

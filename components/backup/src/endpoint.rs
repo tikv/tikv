@@ -1465,7 +1465,7 @@ pub mod tests {
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
 
         // thread pool shutdown if not task arrive more than 100ms
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(160));
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
     }
     // TODO: region err in txn(engine(request))
