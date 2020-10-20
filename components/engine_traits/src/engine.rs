@@ -23,6 +23,7 @@ pub trait KvEngine:
     + TablePropertiesExt
     + CompactExt
     + RangePropertiesExt
+    + MvccPropertiesExt
     + MiscExt
     + Send
     + Sync
@@ -42,9 +43,7 @@ pub trait KvEngine:
     /// Flush metrics to prometheus
     ///
     /// `instance` is the label of the metric to flush.
-    ///
-    /// TODO: remove `shared_block_cache`.
-    fn flush_metrics(&self, _instance: &str, _shared_block_cache: bool) {}
+    fn flush_metrics(&self, _instance: &str) {}
 
     /// Reset internal statistics
     fn reset_statistics(&self) {}

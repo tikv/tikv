@@ -286,7 +286,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                 match group_by_result {
                     RpnStackNode::Vector { value, field_type } => {
                         value.as_ref().encode_sort_key(
-                            value.logical_rows()[logical_row_idx],
+                            value.logical_rows_struct().get_idx(logical_row_idx),
                             *field_type,
                             context,
                             &mut self.group_key_buffer,
@@ -327,7 +327,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                     RpnStackNode::Vector { value, field_type } => {
                         debug_assert!(value.as_ref().eval_type() == EvalType::Bytes);
                         value.as_ref().encode(
-                            value.logical_rows()[logical_row_idx],
+                            value.logical_rows_struct().get_idx(logical_row_idx),
                             *field_type,
                             context,
                             &mut self.group_key_buffer,

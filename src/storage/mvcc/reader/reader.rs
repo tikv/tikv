@@ -2,9 +2,7 @@
 
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
-use engine_rocks::properties::MvccProperties;
-use engine_rocks::RocksTablePropertiesCollection;
-use engine_traits::{IterOptions, TableProperties, TablePropertiesCollection};
+use engine_traits::{IterOptions, MvccProperties};
 use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::borrow::Cow;
@@ -138,10 +136,12 @@ impl<S: Snapshot> MvccReader<S> {
             self.statistics.data.get += 1;
             self.snapshot.get(&k)?
         };
-        self.statistics.data.processed += 1;
 
         match val {
-            Some(val) => Ok(val),
+            Some(val) => {
+                self.statistics.data.processed_keys += 1;
+                Ok(val)
+            }
             None => Err(default_not_found_error(key.to_raw()?, "get")),
         }
     }
@@ -167,10 +167,6 @@ impl<S: Snapshot> MvccReader<S> {
                 None => None,
             }
         };
-
-        if res.is_some() {
-            self.statistics.lock.processed += 1;
-        }
 
         Ok(res)
     }
@@ -212,7 +208,6 @@ impl<S: Snapshot> MvccReader<S> {
             return Ok(None);
         }
         let write = WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned();
-        self.statistics.write.processed += 1;
         Ok(Some((commit_ts, write)))
     }
 
@@ -220,8 +215,11 @@ impl<S: Snapshot> MvccReader<S> {
     /// Returns the blocking lock as the `Err` variant.
     fn check_lock(&mut self, key: &Key, ts: TimeStamp) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
-            return Lock::check_ts_conflict(Cow::Owned(lock), key, ts, &Default::default())
-                .map_err(From::from);
+            if let Err(e) = Lock::check_ts_conflict(Cow::Owned(lock), key, ts, &Default::default())
+            {
+                self.statistics.lock.processed_keys += 1;
+                return Err(e.into());
+            }
         }
         Ok(())
     }
@@ -382,7 +380,7 @@ impl<S: Snapshot> MvccReader<S> {
             }
             cursor.next(&mut self.statistics.lock);
         }
-        self.statistics.lock.processed += locks.len();
+        self.statistics.lock.processed_keys += locks.len();
         // If we reach here, `cursor.valid()` is `false`, so there MUST be no more locks.
         Ok((locks, false))
     }
@@ -405,7 +403,7 @@ impl<S: Snapshot> MvccReader<S> {
                 return Ok((keys, None));
             }
             if keys.len() >= limit {
-                self.statistics.write.processed += keys.len();
+                self.statistics.write.processed_keys += keys.len();
                 return Ok((keys, start));
             }
             let key =
@@ -440,20 +438,11 @@ impl<S: Snapshot> MvccReader<S> {
 
 // Returns true if it needs gc.
 // This is for optimization purpose, does not mean to be accurate.
-pub fn check_need_gc(
-    safe_point: TimeStamp,
-    ratio_threshold: f64,
-    write_properties: &RocksTablePropertiesCollection,
-) -> bool {
+pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: MvccProperties) -> bool {
     // Always GC.
     if ratio_threshold < 1.0 {
         return true;
     }
-
-    let props = match get_mvcc_properties(safe_point, write_properties) {
-        Some(v) => v,
-        None => return true,
-    };
 
     // No data older than safe_point to GC.
     if props.min_ts > safe_point {
@@ -476,44 +465,21 @@ pub fn check_need_gc(
     props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
 }
 
-fn get_mvcc_properties(
-    safe_point: TimeStamp,
-    collection: &RocksTablePropertiesCollection,
-) -> Option<MvccProperties> {
-    if collection.is_empty() {
-        return None;
-    }
-    // Aggregate MVCC properties.
-    let mut props = MvccProperties::new();
-    for (_, v) in collection.iter() {
-        let mvcc = match MvccProperties::decode(&v.user_collected_properties()) {
-            Ok(v) => v,
-            Err(_) => return None,
-        };
-        // Filter out properties after safe_point.
-        if mvcc.min_ts > safe_point {
-            continue;
-        }
-        props.add(&mvcc);
-    }
-    Some(props)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::storage::kv::Modify;
-    use crate::storage::{
-        concurrency_manager::ConcurrencyManager,
-        mvcc::{MvccReader, MvccTxn},
-    };
+    use crate::storage::mvcc::{MvccReader, MvccTxn};
+
+    use crate::storage::txn::{commit, pessimistic_prewrite, prewrite};
+    use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::raw::DB;
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{Mutable, TablePropertiesExt, WriteBatchExt};
+    use engine_traits::{Mutable, MvccPropertiesExt, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
@@ -579,8 +545,7 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
 
-            txn.prewrite(m, pk, &None, false, 0, 0, TimeStamp::default())
-                .unwrap();
+            prewrite(&mut txn, m, pk, &None, false, 0, 0, TimeStamp::default()).unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -596,7 +561,8 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
 
-            txn.pessimistic_prewrite(
+            pessimistic_prewrite(
+                &mut txn,
                 m,
                 pk,
                 &None,
@@ -639,7 +605,7 @@ mod tests {
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
-            txn.commit(Key::from_raw(pk), commit_ts.into()).unwrap();
+            commit(&mut txn, Key::from_raw(pk), commit_ts.into()).unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -762,13 +728,13 @@ mod tests {
 
         let start = keys::data_key(region.get_start_key());
         let end = keys::data_end_key(region.get_end_key());
-        let collection = db
+        let props = db
             .c()
-            .get_range_properties_cf(CF_WRITE, &start, &end)
-            .unwrap();
-        assert_eq!(check_need_gc(safe_point, 1.0, &collection), need_gc);
-
-        get_mvcc_properties(safe_point, &collection)
+            .get_mvcc_properties_cf(CF_WRITE, safe_point, &start, &end);
+        if let Some(props) = props.as_ref() {
+            assert_eq!(check_need_gc(safe_point, 1.0, props.clone()), need_gc);
+        }
+        props
     }
 
     #[test]

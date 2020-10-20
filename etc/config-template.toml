@@ -234,11 +234,6 @@
 # retry-max-count = -1
 
 [raftstore]
-## Whether to force to flush logs.
-## Set to `true` (default) for best reliability, which prevents data loss when there is a power
-## failure. Set to `false` for higher performance (ensure that you run multiple TiKV nodes!).
-# sync-log = true
-
 ## Whether to enable Raft prevote.
 ## Prevote minimizes disruption when a partitioned node rejoins the cluster by using a two phase
 ## election.
@@ -291,6 +286,10 @@
 ## When the approximate size of Raft log entries exceeds this value, GC will be forced trigger.
 ## It's recommanded to set it to 3/4 of `region-split-size`.
 # raft-log-gc-size-limit = "72MB"
+
+## Raft engine is a replaceable component. For some implementations, it's necessary to purge
+## old log files to recycle disk space ASAP.
+# raft-engine-purge-interval = "10s"
 
 ## How long the peer will be considered down and reported to PD when it hasn't been active for this
 ## time.
@@ -351,8 +350,8 @@
 # region-max-keys = 1440000
 # region-split-keys = 960000
 
-## Currently only "raw" is supported, which means the check is based raw data.
-# consistency-check-method = "raw"
+## Set to "mvcc" to do consistency check for MVCC data, or "raw" for raw data.
+# consistency-check-method = "mvcc"
 
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
@@ -782,12 +781,28 @@
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
 
+[raft-engine]
+## Enable raft-engine will ignore all settings about `raftdb`.
+# enable = false
+## Recovery mode. Candidates are `tolerate-corrupted-tail-records` and `absolute-consistency`.
+# recovery_mode = "tolerate-corrupted-tail-records"
+# bytes-per-sync = "256KB"
+# target-file-size = "128MB"
+# purge-threshold = "10GB"
+## Raft engine has builtin entry cache. `cache-limit` limits the memory usage of the cache.
+# cache-limit = "1GB"
+
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
 # ca-path = ""
 # cert-path = ""
 # key-path = ""
 # cert-allowed-cn = []
+#
+## Avoid outputing data (e.g. user keys) to info log. It currently does not avoid printing
+## user data altogether, but greatly reduce those logs.
+## Default is false.
+# redact-info-log = false
 
 # Configurations for encryption at rest. Experimental.
 [security.encryption]
@@ -874,7 +889,7 @@
 
 ## Enable pipelined pessimistic lock, only effect when processing perssimistic transactions
 ## Enabled this will improve performance, but slightly increase the transcation failure rate
-# pipelined = false
+# pipelined = true
 
 [gc]
 ## The number of keys to GC in one batch.

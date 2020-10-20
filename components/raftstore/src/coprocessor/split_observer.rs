@@ -33,9 +33,9 @@ impl SplitObserver {
             Ok(()) => Ok(key),
             Err(_) => Err(format!(
                 "key {} should be in ({}, {})",
-                hex::encode_upper(&key),
-                hex::encode_upper(region.get_start_key()),
-                hex::encode_upper(region.get_end_key()),
+                log_wrappers::Value::key(&key),
+                log_wrappers::Value::key(&region.get_start_key()),
+                log_wrappers::Value::key(&region.get_end_key()),
             )),
         }
     }
@@ -60,8 +60,8 @@ impl SplitObserver {
                             warn!(
                                 "key is not larger than previous, skip.";
                                 "region_id" => region_id,
-                                "key" => log_wrappers::Key(&key),
-                                "previous" => log_wrappers::Key(last_valid_key.as_ref().unwrap()),
+                                "key" => log_wrappers::Value::key(&key),
+                                "previous" => log_wrappers::Value::key(last_valid_key.as_ref().unwrap()),
                                 "index" => k,
                             );
                             continue;

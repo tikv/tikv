@@ -51,7 +51,7 @@ fn stale_read_during_splitting(right_derive: bool) {
     fail::cfg(apply_split, "pause").unwrap();
 
     // Split the first region.
-    cluster.split_region(&region1, key2, Callback::Write(Box::new(move |_| {})));
+    cluster.split_region(&region1, key2, Callback::write(Box::new(move |_| {})));
 
     // Sleep for a while.
     // The TiKVs that have followers of the old region will elected a leader
@@ -268,7 +268,7 @@ fn test_stale_read_during_merging() {
 
     //             merge into
     // region1000 ------------> region1
-    cluster.try_merge(region1000.get_id(), region1.get_id());
+    cluster.must_try_merge(region1000.get_id(), region1.get_id());
 
     // Pause the apply workers except for the peer 4.
     let apply_commit_merge = "apply_before_commit_merge_except_1_4";
