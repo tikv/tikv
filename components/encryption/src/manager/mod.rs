@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicU64, atomic::Ordering, Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crossbeam::channel;
 use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 use protobuf::Message;
@@ -21,6 +22,7 @@ use crate::{Error, Result};
 
 const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
+const ROTATE_PERIOD: u64 = 600;
 
 struct Dicts {
     // Maps data file paths to key id and metadata. This file is stored as plaintext.
@@ -31,8 +33,6 @@ struct Dicts {
     // key id used to encrypt the encryption file dictionary. The content is encrypted
     // using master key.
     key_dict: Mutex<KeyDictionary>,
-    // To lock the writing of key dictionary.
-    key_lock: Mutex<()>,
     // Thread-safe version of current_key_id. Only when writing back to key_dict,
     // write it back to `key_dict`.
     current_key_id: AtomicU64,
@@ -50,7 +50,6 @@ impl Dicts {
             }),
             current_key_id: AtomicU64::new(0),
             file_lock: Mutex::new(()),
-            key_lock: Mutex::new(()),
             rotation_period,
             base: Path::new(path).to_owned(),
         }
@@ -90,7 +89,6 @@ impl Dicts {
                     key_dict: Mutex::new(key_dict),
                     current_key_id,
                     file_lock: Mutex::new(()),
-                    key_lock: Mutex::new(()),
                     rotation_period,
                     base: base.to_owned(),
                 }))
@@ -117,7 +115,6 @@ impl Dicts {
     }
 
     fn save_key_dict(&self, master_key: &dyn Backend) -> Result<()> {
-        let _lock = self.key_lock.lock().unwrap();
         let file = EncryptedFile::new(&self.base, KEY_DICT_NAME);
         let mut key_dict = self.key_dict.lock().unwrap();
         if !master_key.is_secure() {
@@ -302,11 +299,10 @@ impl Dicts {
                 Entry::Vacant(e) => e.insert(key),
             };
         };
-        // re-encrypt key dict file.
-        let ret = self.save_key_dict(master_key).map(|()| true);
         // Update current data key id.
         self.current_key_id.store(key_id, Ordering::SeqCst);
-        ret
+        // re-encrypt key dict file.
+        self.save_key_dict(master_key).map(|()| true)
     }
 
     fn maybe_rotate_data_key(
@@ -369,6 +365,30 @@ impl Dicts {
     }
 }
 
+fn run_background_rotate_work(
+    dict: Arc<Dicts>,
+    method: EncryptionMethod,
+    master_key: Arc<dyn Backend>,
+    terminal_recv: channel::Receiver<()>,
+) {
+    loop {
+        let mut sleep_num = ROTATE_PERIOD / 5;
+        while sleep_num > 0 {
+            std::thread::sleep(Duration::from_secs(5));
+            match terminal_recv.try_recv() {
+                Err(channel::TryRecvError::Empty) => {}
+                Err(channel::TryRecvError::Disconnected) | Ok(()) => {
+                    return;
+                }
+            }
+            sleep_num -= 1;
+        }
+        info!("Try to rotate data key, current method:{:?}", method);
+        dict.maybe_rotate_data_key(method, master_key.as_ref())
+            .unwrap();
+    }
+}
+
 fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
     use rand::{rngs::OsRng, RngCore};
 
@@ -381,8 +401,9 @@ fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
 
 pub struct DataKeyManager {
     master_key: Arc<dyn Backend>,
-    dicts: Dicts,
+    dicts: Arc<Dicts>,
     method: EncryptionMethod,
+    rotate_terminal: channel::Sender<()>,
 }
 
 impl DataKeyManager {
@@ -469,12 +490,21 @@ impl DataKeyManager {
         };
         dicts.maybe_rotate_data_key(method, master_key.as_ref())?;
 
+        let dicts = Arc::new(dicts);
+        let dict_clone = dicts.clone();
+        let master_key_clone = master_key.clone();
+        let (rotate_terminal, rx) = channel::bounded(1);
+        std::thread::spawn(move || {
+            run_background_rotate_work(dict_clone, method, master_key_clone, rx);
+        });
+
         ENCRYPTION_INITIALIZED_GAUGE.set(1);
 
         Ok(Some(DataKeyManager {
             dicts,
             master_key,
             method,
+            rotate_terminal,
         }))
     }
 
@@ -539,6 +569,12 @@ impl DataKeyManager {
             }
         }
         Ok(())
+    }
+}
+
+impl Drop for DataKeyManager {
+    fn drop(&mut self) {
+        self.rotate_terminal.send(()).unwrap();
     }
 }
 
@@ -872,16 +908,18 @@ mod tests {
     #[test]
     fn test_key_manager_rotate() {
         let (_tmp, manager) = new_tmp_key_manager(None, None, None, None);
-        let mut manager = manager.unwrap().unwrap();
+        let manager = manager.unwrap().unwrap();
         let (key_id, key) = {
             let (id, k) = manager.dicts.current_data_key();
             (id, k)
         };
 
         // Do not rotate.
+        let mock_config = MasterKeyConfig::Mock(Mock(Arc::new(Mutex::new(MockBackend::default()))));
+        let master_key = create_backend(&mock_config).unwrap();
         manager
             .dicts
-            .maybe_rotate_data_key(manager.method, manager.master_key.as_ref())
+            .maybe_rotate_data_key(manager.method, master_key.as_ref())
             .unwrap();
         let (current_key_id1, current_key1) = {
             let (id, k) = manager.dicts.current_data_key();
@@ -891,11 +929,16 @@ mod tests {
         assert_eq!(current_key1, key);
 
         // Change rotateion period to a smaller value, must rotate.
-        manager.dicts.rotation_period = Duration::from_millis(1);
+        unsafe {
+            let ptr: *mut Dicts = manager.dicts.as_ref() as *const Dicts as *mut Dicts;
+            let mut dict = Box::from_raw(ptr);
+            dict.rotation_period = Duration::from_millis(1);
+            Box::leak(dict);
+        }
         std::thread::sleep(Duration::from_secs(1));
         manager
             .dicts
-            .maybe_rotate_data_key(manager.method, manager.master_key.as_ref())
+            .maybe_rotate_data_key(manager.method, master_key.as_ref())
             .unwrap();
         let (current_key_id2, current_key2) = {
             let (id, k) = manager.dicts.current_data_key();
@@ -903,16 +946,6 @@ mod tests {
         };
         assert_ne!(current_key_id2, key_id);
         assert_ne!(current_key2, key);
-
-        // Sleep and must rotate when new a file.
-        std::thread::sleep(Duration::from_secs(1));
-        manager.new_file("foo").unwrap();
-        let (current_key_id3, current_key3) = {
-            let (id, k) = manager.dicts.current_data_key();
-            (id, k)
-        };
-        assert_ne!(current_key_id3, current_key_id2);
-        assert_ne!(current_key3, current_key2);
     }
 
     #[test]
@@ -941,15 +974,17 @@ mod tests {
     fn test_dcit_rotate_key_collides() {
         let (_tmp, manager) = new_tmp_key_manager(None, None, None, None);
         let manager = manager.unwrap().unwrap();
+        let mock_config = MasterKeyConfig::Mock(Mock(Arc::new(Mutex::new(MockBackend::default()))));
+        let master_key = create_backend(&mock_config).unwrap();
         let ok = manager
             .dicts
-            .rotate_key(1, DataKey::default(), manager.master_key.as_ref())
+            .rotate_key(1, DataKey::default(), master_key.as_ref())
             .unwrap();
         assert!(ok);
 
         let ok = manager
             .dicts
-            .rotate_key(1, DataKey::default(), manager.master_key.as_ref())
+            .rotate_key(1, DataKey::default(), master_key.as_ref())
             .unwrap();
         assert!(!ok);
     }
@@ -962,6 +997,7 @@ mod tests {
                 path: key_path.to_str().unwrap().to_owned(),
             },
         };
+        let master_key_backend = create_backend(&master_key).unwrap();
         let (_tmp_data_dir, manager) = new_tmp_key_manager(None, None, Some(master_key), None);
         let manager = manager.unwrap().unwrap();
         let (key_id, key) = {
@@ -972,7 +1008,7 @@ mod tests {
         // Do not rotate.
         manager
             .dicts
-            .maybe_rotate_data_key(manager.method, manager.master_key.as_ref())
+            .maybe_rotate_data_key(manager.method, master_key_backend.as_ref())
             .unwrap();
         let (current_key_id1, current_key1) = {
             let (id, k) = manager.dicts.current_data_key();
@@ -993,7 +1029,7 @@ mod tests {
             .was_exposed = true;
         manager
             .dicts
-            .maybe_rotate_data_key(manager.method, manager.master_key.as_ref())
+            .maybe_rotate_data_key(manager.method, master_key_backend.as_ref())
             .unwrap();
         let (current_key_id2, current_key2) = {
             let (id, k) = manager.dicts.current_data_key();
@@ -1012,13 +1048,14 @@ mod tests {
             },
         };
 
+        let master_key_backend = create_backend(&master_key).unwrap();
         let (_tmp_data_dir, manager) = new_tmp_key_manager(None, None, Some(master_key), None);
         let manager = manager.unwrap().unwrap();
 
         for i in 0..100 {
             let ok = manager
                 .dicts
-                .rotate_key(i, DataKey::default(), manager.master_key.as_ref())
+                .rotate_key(i, DataKey::default(), master_key_backend.as_ref())
                 .unwrap();
             assert!(ok);
         }
