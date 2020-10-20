@@ -528,11 +528,8 @@ impl<E: KvEngine> SSTWriter<E> {
         Ok(metas)
     }
 
-    // change to read only, and move file from temp to save.
+    // move file from temp to save.
     fn save(import_path: ImportPath) -> Result<()> {
-        let mut perms = fs::metadata(&import_path.temp)?.permissions();
-        perms.set_readonly(true);
-        fs::set_permissions(&import_path.temp, perms)?;
         fs::rename(import_path.temp, import_path.save)?;
         Ok(())
     }
