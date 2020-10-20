@@ -681,32 +681,36 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 (None, Some(committed_cb))
                             }
                             ResponsePolicy::OnProposed => {
-                                // The normal write process is respond to clients and release
-                                // latches after async write finished. If pipelined pessimistic
-                                // locking is enabled, the process becomes parallel and there are
-                                // two msgs for one command:
-                                //   1. Msg::PipelinedWrite: respond to clients
-                                //   2. Msg::WriteFinished: deque context and release latches
-                                // The proposed callback is not guaranteed to be invoked. So store
-                                // the `pr` to the tctx instead of capturing it to the closure.
-                                self.inner.store_pr(cid, pr.take().unwrap());
-                                let sched = scheduler.clone();
-                                // Currently, the only case that response is returned after finishing
-                                // proposed phase is pipelined pessimistic lock.
-                                // TODO: Unify the code structure of pipelined pessimistic lock and
-                                // async apply prewrite.
-                                let proposed_cb = Box::new(move || {
-                                    fail_point!("scheduler_pipelined_write_finish");
-                                    let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
-                                    Self::early_response(
-                                        cid,
-                                        cb.unwrap(),
-                                        pr.unwrap(),
-                                        tag,
-                                        metrics::CommandStageKind::pipelined_write,
-                                    );
-                                });
-                                (Some(proposed_cb), None)
+                                if pipelined {
+                                    // The normal write process is respond to clients and release
+                                    // latches after async write finished. If pipelined pessimistic
+                                    // locking is enabled, the process becomes parallel and there are
+                                    // two msgs for one command:
+                                    //   1. Msg::PipelinedWrite: respond to clients
+                                    //   2. Msg::WriteFinished: deque context and release latches
+                                    // The proposed callback is not guaranteed to be invoked. So store
+                                    // the `pr` to the tctx instead of capturing it to the closure.
+                                    self.inner.store_pr(cid, pr.take().unwrap());
+                                    let sched = scheduler.clone();
+                                    // Currently, the only case that response is returned after finishing
+                                    // proposed phase is pipelined pessimistic lock.
+                                    // TODO: Unify the code structure of pipelined pessimistic lock and
+                                    // async apply prewrite.
+                                    let proposed_cb = Box::new(move || {
+                                        fail_point!("scheduler_pipelined_write_finish");
+                                        let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
+                                        Self::early_response(
+                                            cid,
+                                            cb.unwrap(),
+                                            pr.unwrap(),
+                                            tag,
+                                            metrics::CommandStageKind::pipelined_write,
+                                        );
+                                    });
+                                    (Some(proposed_cb), None)
+                                } else {
+                                    (None, None)
+                                }
                             }
                         };
 
