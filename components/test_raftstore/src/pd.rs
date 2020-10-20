@@ -1285,6 +1285,19 @@ impl PdClient for TestPdClient {
         }
     }
 
+    fn get_region_leader_by_id(
+        &self,
+        region_id: u64,
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::pin(err(e));
+        }
+        match self.cluster.rl().get_region_by_id(region_id) {
+            Ok(resp) => Box::pin(ok(resp.map(|r| (r, metapb::Peer::default())))),
+            Err(e) => Box::pin(err(e)),
+        }
+    }
+
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
         self.check_bootstrap()?;
         Ok(self.cluster.rl().meta.clone())

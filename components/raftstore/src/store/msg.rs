@@ -315,6 +315,12 @@ pub enum CasualMessage<EK: KvEngine> {
 
     /// A message to access peer's internal state.
     AccessPeer(Box<dyn FnOnce(&mut dyn AbstractPeer) + Send + 'static>),
+
+    /// Region info from PD
+    QueryRegionLeaderResp {
+        region: metapb::Region,
+        leader: metapb::Peer,
+    },
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -359,6 +365,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
             CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
+            CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
         }
     }
 }
