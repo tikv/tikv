@@ -418,17 +418,7 @@ where
                     _ => return Err(Error::InvalidChunk),
                 };
 
-                let name = import.get_path(&meta);
-
-                let default = <E as SstExt>::SstWriterBuilder::new()
-                    .set_db(&engine)
-                    .set_cf(CF_DEFAULT)
-                    .build(&name.to_str().unwrap())?;
-                let write = <E as SstExt>::SstWriterBuilder::new()
-                    .set_db(&engine)
-                    .set_cf(CF_WRITE)
-                    .build(&name.to_str().unwrap())?;
-                let writer = match import.new_writer::<E>(default, write, meta) {
+                let writer = match import.new_writer::<E>(&engine, meta) {
                     Ok(w) => w,
                     Err(e) => {
                         error!("build writer failed {:?}", e);
