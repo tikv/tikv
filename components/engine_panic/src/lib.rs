@@ -39,3 +39,5 @@ mod write_batch;
 pub use crate::write_batch::*;
 pub mod range_properties;
 pub use crate::range_properties::*;
+pub mod mvcc_properties;
+pub use crate::mvcc_properties::*;
