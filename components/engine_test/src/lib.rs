@@ -163,25 +163,25 @@ pub mod ctor {
     }
 
     #[derive(Clone)]
-    pub enum CryptoOpts {
+    pub enum CryptoOptions {
         None,
         DefaultCtrEncryptedEnv(Vec<u8>),
     }
 
     #[derive(Clone)]
     pub struct DBOptions {
-        encryption: CryptoOpts,
+        encryption: CryptoOptions,
     }
 
     impl DBOptions {
         pub fn new() -> DBOptions {
             DBOptions {
-                encryption: CryptoOpts::None,
+                encryption: CryptoOptions::None,
             }
         }
 
         pub fn with_default_ctr_encrypted_env(&mut self, ciphertext: Vec<u8>) {
-            self.encryption = CryptoOpts::DefaultCtrEncryptedEnv(ciphertext);
+            self.encryption = CryptoOptions::DefaultCtrEncryptedEnv(ciphertext);
         }
     }
 
@@ -308,7 +308,7 @@ pub mod ctor {
     }
 
     mod rocks {
-        use super::{CFOptions, ColumnFamilyOptions, CryptoOpts, DBOptions, EngineConstructorExt};
+        use super::{CFOptions, ColumnFamilyOptions, CryptoOptions, DBOptions, EngineConstructorExt};
 
         use engine_traits::{ColumnFamilyOptions as ColumnFamilyOptionsTrait, Result};
 
@@ -413,8 +413,8 @@ pub mod ctor {
         fn get_rocks_db_opts(db_opts: DBOptions) -> Result<RocksDBOptions> {
             let mut rocks_db_opts = RawRocksDBOptions::new();
             match db_opts.encryption {
-                CryptoOpts::None => (),
-                CryptoOpts::DefaultCtrEncryptedEnv(ciphertext) => {
+                CryptoOptions::None => (),
+                CryptoOptions::DefaultCtrEncryptedEnv(ciphertext) => {
                     let env = Arc::new(Env::new_default_ctr_encrypted_env(&ciphertext)?);
                     rocks_db_opts.set_env(env);
                 }
