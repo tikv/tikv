@@ -17,6 +17,8 @@ use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapsh
 pub struct Cursor<I: Iterator> {
     iter: I,
     scan_mode: ScanMode,
+    // prefix_seek doesn't support seek_to_first and seek_to_last.
+    prefix_seek: bool,
     // the data cursor can be seen will be
     min_key: Option<Vec<u8>>,
     max_key: Option<Vec<u8>>,
@@ -41,10 +43,11 @@ macro_rules! near_loop {
 }
 
 impl<I: Iterator> Cursor<I> {
-    pub fn new(iter: I, mode: ScanMode) -> Self {
+    pub fn new(iter: I, mode: ScanMode, prefix_seek: bool) -> Self {
         Self {
             iter,
             scan_mode: mode,
+            prefix_seek,
             min_key: None,
             max_key: None,
 
@@ -135,8 +138,13 @@ impl<I: Iterator> Cursor<I> {
                     self.next(statistics);
                 }
             } else {
-                assert!(self.seek_to_first(statistics));
-                return Ok(true);
+                // prefix_seek doesn't support seek_to_first.
+                if self.prefix_seek {
+                    return self.seek(key, statistics);
+                } else {
+                    assert!(self.seek_to_first(statistics));
+                    return Ok(true);
+                }
             }
         } else {
             // ord == Less
@@ -228,8 +236,12 @@ impl<I: Iterator> Cursor<I> {
                     self.prev(statistics);
                 }
             } else {
-                assert!(self.seek_to_last(statistics));
-                return Ok(true);
+                if self.prefix_seek {
+                    return self.seek_for_prev(key, statistics);
+                } else {
+                    assert!(self.seek_to_last(statistics));
+                    return Ok(true);
+                }
             }
         } else {
             near_loop!(
@@ -297,6 +309,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
+        assert!(!self.prefix_seek);
         statistics.seek += 1;
         self.mark_unread();
         let before = PerfContext::get().internal_delete_skipped_count() as usize;
@@ -308,6 +321,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
+        assert!(!self.prefix_seek);
         statistics.seek += 1;
         self.mark_unread();
         let before = PerfContext::get().internal_delete_skipped_count() as usize;
@@ -513,6 +527,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         if let Some(ts) = self.hint_max_ts {
             iter_opt.set_hint_max_ts(Bound::Included(ts.into_inner()));
         }
+        // prefix_seek is only used for single key, so set prefix_same_as_start for safety.
         if self.prefix_seek {
             iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
         }
@@ -565,7 +580,7 @@ mod tests {
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv.clone(), region);
         let mut statistics = CfStatistics::default();
         let it = snap.iter(IterOptions::default());
-        let mut iter = Cursor::new(it, ScanMode::Mixed);
+        let mut iter = Cursor::new(it, ScanMode::Mixed, false);
         assert!(!iter
             .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
             .unwrap());
@@ -615,7 +630,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv, region);
         let it = snap.iter(IterOptions::default());
-        let mut iter = Cursor::new(it, ScanMode::Mixed);
+        let mut iter = Cursor::new(it, ScanMode::Mixed, false);
         assert!(!iter
             .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
             .unwrap());

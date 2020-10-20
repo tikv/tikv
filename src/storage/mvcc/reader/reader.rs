@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
+use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
 use engine_rocks::properties::MvccProperties;
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{IterOptions, TableProperties, TablePropertiesCollection};
-use engine_traits::{CF_LOCK, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::borrow::Cow;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
@@ -81,10 +81,9 @@ pub struct MvccReader<S: Snapshot> {
 
     /// True means following operations are performed on keys with the same prefix, i.e.,
     /// different versions of the same key. It can use prefix seek to speed up reads from write-cf.
-    /// The `scan_mode` should be none otherwise it's ignored.
+    /// The `scan_mode` is ignored if it's true.
     single_key: bool,
-    // Records the current key for single key mode.
-    // Will Reset the write cursor when switching to another key.
+    // Records the current key for single key mode. Will Reset the write cursor when switching to another key.
     current_key: Option<Key>,
 
     fill_cache: bool,
@@ -138,9 +137,8 @@ impl<S: Snapshot> MvccReader<S> {
         if let Some(val) = write.short_value {
             return Ok(val);
         }
-        if self.scan_mode.is_some() && self.data_cursor.is_none() {
-            let iter_opt = IterOptions::new(None, None, self.fill_cache);
-            self.data_cursor = Some(self.snapshot.iter(iter_opt, self.get_scan_mode(true))?);
+        if self.scan_mode.is_some() {
+            self.create_data_cursor()?;
         }
 
         let k = key.clone().append_ts(write.start_ts);
@@ -163,12 +161,8 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
-        if self.scan_mode.is_some() && self.lock_cursor.is_none() {
-            let iter_opt = IterOptions::new(None, None, true);
-            let iter = self
-                .snapshot
-                .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
-            self.lock_cursor = Some(iter);
+        if self.scan_mode.is_some() {
+            self.create_lock_cursor()?;
         }
 
         let res = if let Some(ref mut cursor) = self.lock_cursor {
@@ -188,6 +182,11 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     fn get_scan_mode(&self, allow_backward: bool) -> ScanMode {
+        // Ignore the scan mode in single key mode.
+        if self.single_key {
+            assert!(self.scan_mode.is_none());
+            return ScanMode::Mixed;
+        }
         match self.scan_mode {
             Some(ScanMode::Forward) => ScanMode::Forward,
             Some(ScanMode::Backward) if allow_backward => ScanMode::Backward,
@@ -196,29 +195,18 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
-        if self.scan_mode.is_some() {
-            if self.write_cursor.is_none() {
-                let iter_opt = IterOptions::new(None, None, self.fill_cache);
-                let iter = self
-                    .snapshot
-                    .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
-                self.write_cursor = Some(iter);
+        // When it switches to another key in single key mode or in point get mode,
+        // creates a new cursor to guarantee a total order of all keys due to prefix seek.
+        if self.single_key {
+            if self.current_key.as_ref().map_or(true, |k| k != key) {
+                self.current_key = Some(key.clone());
+                self.write_cursor.take();
             }
-        } else {
-            // If it's not in single key mode or switches to another key, it needs to create a new cursor
-            // to guarantee a total order of all keys.
-            if !self.single_key || self.current_key.as_ref().map(|k| k != key).unwrap_or(true) {
-                if self.single_key {
-                    self.current_key = Some(key.clone());
-                }
-                let iter_opt = IterOptions::new(None, None, self.fill_cache)
-                    .use_prefix_seek()
-                    .set_prefix_same_as_start(true);
-                let iter = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
-                self.write_cursor = Some(iter);
-            }
+        } else if self.scan_mode.is_none() {
+            self.write_cursor.take();
         }
 
+        self.create_write_cursor()?;
         let cursor = self.write_cursor.as_mut().unwrap();
         let ok = cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?;
         if !ok {
@@ -318,31 +306,35 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_data_cursor(&mut self) -> Result<()> {
         if self.data_cursor.is_none() {
-            let iter_opt = IterOptions::new(None, None, true);
-            let iter = self.snapshot.iter(iter_opt, self.get_scan_mode(true))?;
-            self.data_cursor = Some(iter);
+            let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
+                .fill_cache(self.fill_cache)
+                .scan_mode(self.get_scan_mode(true))
+                .build()?;
+            self.data_cursor = Some(cursor);
         }
         Ok(())
     }
 
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
-            let iter_opt = IterOptions::new(None, None, true);
-            let iter = self
-                .snapshot
-                .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
-            self.write_cursor = Some(iter);
+            let cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
+                .fill_cache(self.fill_cache)
+                // Only use prefix seek in single key mode or point get mode.
+                .prefix_seek(self.single_key || self.scan_mode.is_none())
+                .scan_mode(self.get_scan_mode(true))
+                .build()?;
+            self.write_cursor = Some(cursor);
         }
         Ok(())
     }
 
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
-            let iter_opt = IterOptions::new(None, None, true);
-            let iter = self
-                .snapshot
-                .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
-            self.lock_cursor = Some(iter);
+            let cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
+                .fill_cache(self.fill_cache)
+                .scan_mode(self.get_scan_mode(true))
+                .build()?;
+            self.lock_cursor = Some(cursor);
         }
         Ok(())
     }
@@ -1651,7 +1643,7 @@ mod tests {
         engine.rollback(b"k0", 10);
         engine.rollback(b"k0", 20);
 
-        for &single_key in &[true, false] {
+        for &single_key in &[true] {
             let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
             let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
             reader.set_single_key(single_key);

@@ -365,8 +365,9 @@ impl Snapshot for Arc<RocksSnapshot> {
 
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create iterator");
+        let use_prefix_seek = !iter_opt.total_order_seek_used();
         let iter = self.iterator_opt(iter_opt)?;
-        Ok(Cursor::new(iter, mode))
+        Ok(Cursor::new(iter, mode, use_prefix_seek))
     }
 
     fn iter_cf(
@@ -376,8 +377,9 @@ impl Snapshot for Arc<RocksSnapshot> {
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create cf iterator");
+        let use_prefix_seek = !iter_opt.total_order_seek_used();
         let iter = self.iterator_cf_opt(cf, iter_opt)?;
-        Ok(Cursor::new(iter, mode))
+        Ok(Cursor::new(iter, mode, use_prefix_seek))
     }
 }
 
