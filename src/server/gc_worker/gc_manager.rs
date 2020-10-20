@@ -274,7 +274,9 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         let res: Result<_> = ThreadBuilder::new()
             .name(thd_name!("gc-manager"))
             .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
                 self.run();
+                tikv_alloc::remove_thread_memory_accessor();
             })
             .map_err(|e| box_err!("failed to start gc manager: {:?}", e));
         res.map(|join_handle| GcManagerHandle {
@@ -347,7 +349,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             Ok(res) => res,
             // Return false directly so we will check it a while later.
             Err(e) => {
-                error!("failed to get safe point from pd"; "err" => ?e);
+                error!(?e; "failed to get safe point from pd");
                 return false;
             }
         };
@@ -544,7 +546,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         ) {
             // Ignore the error and continue, since it's useless to retry this.
             // TODO: Find a better way to handle errors. Maybe we should retry.
-            error!("failed gc"; "start_key" => &hex_start, "end_key" => &hex_end, "err" => ?e);
+            warn!("failed gc"; "start_key" => &hex_start, "end_key" => &hex_end, "err" => ?e);
         }
 
         *processed_regions += 1;
@@ -580,9 +582,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         );
 
         if let Err(e) = res {
-            error!(
-                "gc_worker: failed to get next region information"; "err" => ?e
-            );
+            error!(?e; "gc_worker: failed to get next region information");
             return (None, None);
         };
 
@@ -626,7 +626,6 @@ mod tests {
     use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
     use tikv_util::worker::{FutureRunnable, FutureWorker};
-    use tokio_core::reactor::Handle;
 
     fn take_callback(t: &mut GcTask) -> Callback<()> {
         let callback = match t {
@@ -673,7 +672,7 @@ mod tests {
     }
 
     impl FutureRunnable<GcTask> for MockGcRunner {
-        fn run(&mut self, mut t: GcTask, _handle: &Handle) {
+        fn run(&mut self, mut t: GcTask) {
             let cb = take_callback(&mut t);
             self.tx.send(t).unwrap();
             cb(Ok(()));

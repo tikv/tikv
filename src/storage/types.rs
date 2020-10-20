@@ -88,27 +88,18 @@ pub enum TxnStatus {
     LockNotExist,
     /// The txn haven't yet been committed.
     Uncommitted {
-        lock_ttl: u64,
-        min_commit_ts: TimeStamp,
-        use_async_commit: bool,
-        secondaries: Vec<Vec<u8>>,
+        lock: Lock,
+        min_commit_ts_pushed: bool,
     },
     /// The txn was committed.
     Committed { commit_ts: TimeStamp },
 }
 
 impl TxnStatus {
-    pub fn uncommitted(
-        lock_ttl: u64,
-        min_commit_ts: TimeStamp,
-        use_async_commit: bool,
-        secondaries: Vec<Vec<u8>>,
-    ) -> Self {
+    pub fn uncommitted(lock: Lock, min_commit_ts_pushed: bool) -> Self {
         Self::Uncommitted {
-            lock_ttl,
-            min_commit_ts,
-            use_async_commit,
-            secondaries,
+            lock,
+            min_commit_ts_pushed,
         }
     }
 
@@ -141,6 +132,22 @@ impl PessimisticLockRes {
         match self {
             PessimisticLockRes::Values(v) => v.into_iter().map(Option::unwrap_or_default).collect(),
             PessimisticLockRes::Empty => vec![],
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum SecondaryLocksStatus {
+    Locked(Vec<kvrpcpb::LockInfo>),
+    Committed(TimeStamp),
+    RolledBack,
+}
+
+impl SecondaryLocksStatus {
+    pub fn push(&mut self, lock: kvrpcpb::LockInfo) {
+        match self {
+            SecondaryLocksStatus::Locked(v) => v.push(lock),
+            _ => panic!("unexpected SecondaryLocksStatus"),
         }
     }
 }
@@ -181,6 +188,7 @@ storage_callback! {
     TxnStatus(TxnStatus) ProcessResult::TxnStatus { txn_status } => txn_status,
     Prewrite(PrewriteResult) ProcessResult::PrewriteResult { result } => result,
     PessimisticLock(Result<PessimisticLockRes>) ProcessResult::PessimisticLockRes { res } => res,
+    SecondaryLocksStatus(SecondaryLocksStatus) ProcessResult::SecondaryLocksStatus { status } => status,
 }
 
 pub trait StorageCallbackType: Sized {

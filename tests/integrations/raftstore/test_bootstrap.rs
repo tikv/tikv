@@ -8,8 +8,9 @@ use tempfile::Builder;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{KvEngines, Peekable, ALL_CFS, CF_RAFT};
+use engine_traits::{Engines, Peekable, ALL_CFS, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::{bootstrap_store, fsm, AutoSplitController, SnapManager};
@@ -51,11 +52,9 @@ fn test_node_bootstrap_with_prepared_data() {
         engine_rocks::raw_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None)
             .unwrap(),
     );
-    let shared_block_cache = false;
-    let engines = KvEngines::new(
+    let engines = Engines::new(
         RocksEngine::from_db(Arc::clone(&engine)),
         RocksEngine::from_db(Arc::clone(&raft_engine)),
-        shared_block_cache,
     );
     let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
 
@@ -66,7 +65,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::clone(&pd_client),
         Arc::default(),
     );
-    let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
+    let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap());
     let pd_worker = FutureWorker::new("test-pd-worker");
 
     // assume there is a node has bootstrapped the cluster and add region in pd successfully
@@ -107,6 +106,7 @@ fn test_node_bootstrap_with_prepared_data() {
         importer,
         Worker::new("split"),
         AutoSplitController::default(),
+        ConcurrencyManager::new(1.into()),
     )
     .unwrap();
     assert!(Arc::clone(&engine)

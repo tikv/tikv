@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_traits::{KvEngine, Snapshot};
+use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -13,18 +13,15 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
-use txn_types::TxnExtra;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
-use crate::store::fsm::PeerFsm;
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
-use engine_rocks::CompactedEvent;
 use tikv_util::escape;
 
-use super::RegionSnapshot;
+use super::{AbstractPeer, RegionSnapshot};
 
 #[derive(Debug)]
 pub struct ReadResponse<S: Snapshot> {
@@ -56,6 +53,7 @@ where
 
 pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
+pub type ExtCallback = Box<dyn FnOnce() + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callback for read only requests including `StatusRequest`,
@@ -68,13 +66,27 @@ pub enum Callback<S: Snapshot> {
     /// Read callback.
     Read(ReadCallback<S>),
     /// Write callback.
-    Write(WriteCallback),
+    Write {
+        cb: WriteCallback,
+        /// `proposed_cb` is called after a request is proposed to the raft group successfully.
+        /// It's used to notify the caller to move on early because it's very likely the request
+        /// will be applied to the raftstore.
+        proposed_cb: Option<ExtCallback>,
+    },
 }
 
 impl<S> Callback<S>
 where
     S: Snapshot,
 {
+    pub fn write(cb: WriteCallback) -> Self {
+        Self::write_ext(cb, None)
+    }
+
+    pub fn write_ext(cb: WriteCallback, proposed_cb: Option<ExtCallback>) -> Self {
+        Callback::Write { cb, proposed_cb }
+    }
+
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
             Callback::None => (),
@@ -86,9 +98,17 @@ where
                 };
                 read(resp);
             }
-            Callback::Write(write) => {
+            Callback::Write { cb, .. } => {
                 let resp = WriteResponse { response: resp };
-                write(resp);
+                cb(resp);
+            }
+        }
+    }
+
+    pub fn invoke_proposed(&mut self) {
+        if let Callback::Write { proposed_cb, .. } = self {
+            if let Some(cb) = proposed_cb.take() {
+                cb()
             }
         }
     }
@@ -116,7 +136,7 @@ where
         match *self {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
-            Callback::Write(_) => write!(fmt, "Callback::Write(..)"),
+            Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
         }
     }
 }
@@ -145,6 +165,17 @@ impl PeerTicks {
             _ => unreachable!(),
         }
     }
+    pub fn get_all_ticks() -> &'static [PeerTicks] {
+        const TICKS: &[PeerTicks] = &[
+            PeerTicks::RAFT,
+            PeerTicks::RAFT_LOG_GC,
+            PeerTicks::SPLIT_REGION_CHECK,
+            PeerTicks::PD_HEARTBEAT,
+            PeerTicks::CHECK_MERGE,
+            PeerTicks::CHECK_PEER_STALE_STATE,
+        ];
+        TICKS
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -155,6 +186,7 @@ pub enum StoreTick {
     CompactLockCf,
     ConsistencyCheck,
     CleanupImportSST,
+    RaftEnginePurge,
 }
 
 impl StoreTick {
@@ -167,6 +199,7 @@ impl StoreTick {
             StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
             StoreTick::CleanupImportSST => RaftEventDurationType::cleanup_import_sst,
+            StoreTick::RaftEnginePurge => RaftEventDurationType::raft_engine_purge,
         }
     }
 }
@@ -231,11 +264,7 @@ where
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
-pub enum CasualMessage<EK, ER>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+pub enum CasualMessage<EK: KvEngine> {
     /// Split the target region into several partitions.
     SplitRegion {
         region_epoch: RegionEpoch,
@@ -248,6 +277,7 @@ where
     /// Hash result of ComputeHash command.
     ComputeHashResult {
         index: u64,
+        context: Vec<u8>,
         hash: Vec<u8>,
     },
 
@@ -279,21 +309,26 @@ where
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
 
+    /// Generally Raft leader keeps as more as possible logs for followers,
+    /// however `ForceCompactRaftLogs` only cares the leader itself.
+    ForceCompactRaftLogs,
+
     /// A message to access peer's internal state.
-    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<EK, ER>) + Send + 'static>),
+    AccessPeer(Box<dyn FnOnce(&mut dyn AbstractPeer) + Send + 'static>),
 }
 
-impl<EK, ER> fmt::Debug for CasualMessage<EK, ER>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CasualMessage::ComputeHashResult { index, ref hash } => write!(
-                fmt,
-                "ComputeHashResult [index: {}, hash: {}]",
+            CasualMessage::ComputeHashResult {
                 index,
+                context,
+                ref hash,
+            } => write!(
+                fmt,
+                "ComputeHashResult [index: {}, context: {}, hash: {}]",
+                index,
+                log_wrappers::Value::key(&context),
                 escape(hash)
             ),
             CasualMessage::SplitRegion { ref split_keys, .. } => write!(
@@ -322,6 +357,7 @@ where
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
+            CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
         }
     }
@@ -334,35 +370,21 @@ pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
-    pub txn_extra: TxnExtra,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
     #[inline]
-    pub fn with_txn_extra(
-        request: RaftCmdRequest,
-        callback: Callback<S>,
-        txn_extra: TxnExtra,
-    ) -> RaftCommand<S> {
+    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
         RaftCommand {
             request,
             callback,
-            txn_extra,
             send_time: Instant::now(),
         }
-    }
-
-    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
-        Self::with_txn_extra(request, callback, TxnExtra::default())
     }
 }
 
 /// Message that can be sent to a peer.
-pub enum PeerMsg<EK, ER>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
@@ -384,18 +406,14 @@ where
     /// A message only used to notify a peer.
     Noop,
     /// Message that is not important and can be dropped occasionally.
-    CasualMessage(CasualMessage<EK, ER>),
+    CasualMessage(CasualMessage<EK>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
 }
 
-impl<EK, ER> fmt::Debug for PeerMsg<EK, ER>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
@@ -416,7 +434,10 @@ where
     }
 }
 
-pub enum StoreMsg {
+pub enum StoreMsg<EK>
+where
+    EK: KvEngine,
+{
     RaftMessage(RaftMessage),
 
     ValidateSSTResult {
@@ -434,7 +455,7 @@ pub enum StoreMsg {
     },
 
     // Compaction finished event
-    CompactedEvent(CompactedEvent),
+    CompactedEvent(EK::CompactedEvent),
     Tick(StoreTick),
     Start {
         store: metapb::Store,
@@ -447,14 +468,17 @@ pub enum StoreMsg {
     UpdateReplicationMode(ReplicationStatus),
 }
 
-impl fmt::Debug for StoreMsg {
+impl<EK> fmt::Debug for StoreMsg<EK>
+where
+    EK: KvEngine,
+{
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             StoreMsg::StoreUnreachable { store_id } => {
                 write!(fmt, "Store {}  is unreachable", store_id)
             }
-            StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
+            StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
             StoreMsg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
             StoreMsg::ClearRegionSizeInRange {
                 ref start_key,

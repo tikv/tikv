@@ -6,6 +6,7 @@ use prometheus_static_metric::*;
 make_static_metric! {
     pub label_enum MvccConflictKind {
         prewrite_write_conflict,
+        rolled_back,
         commit_lock_not_found,
         rollback_committed,
         acquire_pessimistic_lock_conflict,
@@ -50,6 +51,12 @@ lazy_static! {
         "tikv_storage_mvcc_gc_delete_versions",
         "Histogram of versions deleted by gc for each key",
         exponential_buckets(1.0, 2.0, 30).unwrap()
+    )
+    .unwrap();
+    pub static ref CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_concurrency_manager_lock_duration",
+        "Histogram of the duration of lock key in the concurrency manager",
+        exponential_buckets(1e-7, 2.0, 20).unwrap() // 100ns ~ 100ms
     )
     .unwrap();
     pub static ref MVCC_CONFLICT_COUNTER: MvccConflictCounterVec = {

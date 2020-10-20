@@ -1,5 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! There are multiple [`Engine`](kv::Engine) implementations, [`RaftKv`](crate::server::raftkv::RaftKv)
+//! is used by the [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
+//! [`RocksEngine`](RocksEngine) are used for testing only.
+
 mod btree_engine;
 mod cursor;
 mod perf_context;
@@ -11,13 +15,13 @@ use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use engine_rocks::{RocksEngine as BaseRocksEngine, RocksTablePropertiesCollection};
+use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{CfName, CF_DEFAULT};
-use engine_traits::{IterOptions, ReadOptions};
-use futures03::prelude::*;
+use engine_traits::{IterOptions, KvEngine as LocalEngine, MvccProperties, ReadOptions};
+use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
-use txn_types::{Key, TxnExtra, Value};
+use txn_types::{Key, TimeStamp, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -26,6 +30,7 @@ pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot, TestE
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
 use tikv_util::time::ThreadReadId;
 
@@ -33,6 +38,7 @@ pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 pub type Callback<T> = Box<dyn FnOnce((CbContext, Result<T>)) + Send>;
+pub type ExtCallback = Box<dyn FnOnce() + Send>;
 pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug)]
@@ -93,13 +99,14 @@ impl WriteData {
 
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
+    type Local: LocalEngine;
 
-    /// Key/value storage engine.
-    fn kv_engine(&self) -> BaseRocksEngine;
+    /// Local storage engine.
+    fn kv_engine(&self) -> Self::Local;
 
     fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap>;
 
-    /// Write modifications into internal kv engine directly.
+    /// Write modifications into internal local engine directly.
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
 
     fn async_snapshot(
@@ -109,7 +116,21 @@ pub trait Engine: Send + Clone + 'static {
         cb: Callback<Self::Snap>,
     ) -> Result<()>;
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
+    fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()>;
+
+    /// Writes data to the engine asynchronously with some extensions.
+    ///
+    /// When the write request is proposed successfully, the `proposed_cb` is invoked.
+    /// When the write request is finished, the `write_cb` is invoked.
+    fn async_write_ext(
+        &self,
+        ctx: &Context,
+        batch: WriteData,
+        write_cb: Callback<()>,
+        _proposed_cb: Option<ExtCallback>,
+    ) -> Result<()> {
+        self.async_write(ctx, batch, write_cb)
+    }
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
@@ -160,6 +181,16 @@ pub trait Engine: Send + Clone + 'static {
     ) -> Result<RocksTablePropertiesCollection> {
         Err(box_err!("no user properties"))
     }
+
+    fn get_mvcc_properties_cf(
+        &self,
+        _: CfName,
+        _safe_point: TimeStamp,
+        _start: &[u8],
+        _end: &[u8],
+    ) -> Option<MvccProperties> {
+        None
+    }
 }
 
 pub trait Snapshot: Sync + Send + Clone {
@@ -193,6 +224,12 @@ pub trait Snapshot: Sync + Send + Clone {
     #[inline]
     fn get_data_version(&self) -> Option<u64> {
         None
+    }
+
+    fn is_max_ts_synced(&self) -> bool {
+        // If the snapshot does not come from a multi-raft engine, max ts
+        // needn't be updated.
+        true
     }
 }
 
@@ -301,6 +338,17 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     }
 }
 
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Request(e) => e.error_code(),
+            ErrorInner::Timeout(_) => error_code::storage::TIMEOUT,
+            ErrorInner::EmptyRequest => error_code::storage::EMPTY_REQUEST,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
+        }
+    }
+}
+
 thread_local! {
     // A pointer to thread local engine. Use raw pointer and `UnsafeCell` to reduce runtime check.
     static TLS_ENGINE_ANY: UnsafeCell<*mut ()> = UnsafeCell::new(ptr::null_mut());
@@ -362,7 +410,7 @@ pub fn snapshot<E: Engine>(
     ctx: &Context,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let (callback, future) =
-        tikv_util::future::paired_must_called_std_future_callback(drop_snapshot_callback::<E>);
+        tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
     let val = engine.async_snapshot(ctx, read_id, callback);
     // make engine not cross yield point
     async move {
@@ -370,6 +418,7 @@ pub fn snapshot<E: Engine>(
         let (_ctx, result) = future
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
             .await?;
+        fail_point!("after-snapshot");
         result
     }
 }

@@ -53,11 +53,19 @@ pub trait Scanner: Send {
     fn next(&mut self) -> Result<Option<(Key, Value)>>;
 
     /// Get the next [`KvPair`](KvPair)s up to `limit` if they exist.
-    fn scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
+    /// If `sample_step` is greater than 0, skips `sample_step - 1` number of keys after each returned key.
+    fn scan(&mut self, limit: usize, sample_step: usize) -> Result<Vec<Result<KvPair>>> {
+        let mut row_count = 0;
         let mut results = Vec::with_capacity(limit);
         while results.len() < limit {
             match self.next() {
                 Ok(Some((k, v))) => {
+                    if sample_step > 0 {
+                        row_count += 1;
+                        if (row_count - 1) % sample_step != 0 {
+                            continue;
+                        }
+                    }
                     results.push(Ok((k.to_raw()?, v)));
                 }
                 Ok(None) => break,
@@ -582,10 +590,11 @@ mod tests {
         TestEngineBuilder, WriteData,
     };
     use crate::storage::mvcc::{Mutation, MvccTxn};
+    use crate::storage::txn::{commit, prewrite};
+    use concurrency_manager::ConcurrencyManager;
     use engine_traits::CfName;
     use engine_traits::{IterOptions, ReadOptions};
     use kvproto::kvrpcpb::Context;
-    use pd_client::DummyPdClient;
     use std::sync::Arc;
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -622,17 +631,15 @@ mod tests {
         fn init_data(&mut self) {
             let primary_key = format!("{}{}", KEY_PREFIX, START_ID);
             let pk = primary_key.as_bytes();
+
             // do prewrite.
             {
-                let mut txn = MvccTxn::new(
-                    self.snapshot.clone(),
-                    START_TS,
-                    true,
-                    Arc::new(DummyPdClient::new()),
-                );
+                let cm = ConcurrencyManager::new(START_TS);
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    txn.prewrite(
+                    prewrite(
+                        &mut txn,
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
                         &None,
@@ -649,15 +656,11 @@ mod tests {
             self.refresh_snapshot();
             // do commit
             {
-                let mut txn = MvccTxn::new(
-                    self.snapshot.clone(),
-                    START_TS,
-                    true,
-                    Arc::new(DummyPdClient::new()),
-                );
+                let cm = ConcurrencyManager::new(START_TS);
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();
+                    commit(&mut txn, Key::from_raw(key), COMMIT_TS).unwrap();
                 }
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 self.engine.write(&self.ctx, write_data).unwrap();
@@ -815,7 +818,7 @@ mod tests {
 
         let half = (key_num / 2) as usize;
         let expect = &store.keys[0..half];
-        let result = scanner.scan(half).unwrap();
+        let result = scanner.scan(half, 0).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
             .iter()
@@ -838,7 +841,7 @@ mod tests {
             .scanner(true, false, false, None, Some(start_key))
             .unwrap();
 
-        let result = scanner.scan(half).unwrap();
+        let result = scanner.scan(half, 0).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
 
         let mut expect: Vec<Option<KvPair>> = expect
@@ -1381,7 +1384,7 @@ mod benches {
                     test::black_box(None),
                 )
                 .unwrap();
-            test::black_box(scanner.scan(1000).unwrap());
+            test::black_box(scanner.scan(1000, 0).unwrap());
         })
     }
 }

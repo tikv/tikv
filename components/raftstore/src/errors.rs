@@ -10,6 +10,7 @@ use crossbeam::TrySendError;
 use prost::{DecodeError, EncodeError};
 use protobuf::ProtobufError;
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
 use tikv_util::codec;
 
@@ -49,10 +50,10 @@ quick_error! {
         }
         KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
             display("key {} is not in region key range [{}, {}) for region {}",
-                    hex::encode_upper(key),
-                    hex::encode_upper(region.get_start_key()),
-                    hex::encode_upper(region.get_end_key()),
-                    region.get_id())
+                log_wrappers::Value::key(key),
+                log_wrappers::Value::key(region.get_start_key()),
+                log_wrappers::Value::key(region.get_end_key()),
+                region.get_id())
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
@@ -233,5 +234,39 @@ impl From<prost::EncodeError> for Error {
 impl From<prost::DecodeError> for Error {
     fn from(err: prost::DecodeError) -> Error {
         Error::ProstDecode(err.into())
+    }
+}
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::RaftEntryTooLarge(_, _) => error_code::raftstore::ENTRY_TOO_LARGE,
+            Error::StoreNotMatch(_, _) => error_code::raftstore::STORE_NOT_MATCH,
+            Error::RegionNotFound(_) => error_code::raftstore::REGION_NOT_FOUND,
+            Error::NotLeader(_, _) => error_code::raftstore::NOT_LEADER,
+            Error::StaleCommand => error_code::raftstore::STALE_COMMAND,
+            Error::RegionNotInitialized(_) => error_code::raftstore::REGION_NOT_INITIALIZED,
+            Error::KeyNotInRegion(_, _) => error_code::raftstore::KEY_NOT_IN_REGION,
+            Error::Io(_) => error_code::raftstore::IO,
+            Error::Engine(e) => e.error_code(),
+            Error::Protobuf(_) => error_code::raftstore::PROTOBUF,
+            Error::Codec(e) => e.error_code(),
+            Error::AddrParse(_) => error_code::raftstore::ADDR_PARSE,
+            Error::Pd(e) => e.error_code(),
+            Error::Raft(e) => e.error_code(),
+            Error::Timeout(_) => error_code::raftstore::TIMEOUT,
+            Error::EpochNotMatch(_, _) => error_code::raftstore::EPOCH_NOT_MATCH,
+            Error::Coprocessor(e) => e.error_code(),
+            Error::Transport(_) => error_code::raftstore::TRANSPORT,
+            Error::Snapshot(e) => e.error_code(),
+            Error::SstImporter(e) => e.error_code(),
+            Error::Encryption(e) => e.error_code(),
+            #[cfg(feature = "prost-codec")]
+            Error::ProstDecode(_) => error_code::raftstore::PROTOBUF,
+            #[cfg(feature = "prost-codec")]
+            Error::ProstEncode(_) => error_code::raftstore::PROTOBUF,
+
+            Error::Other(_) => error_code::raftstore::UNKNOWN,
+        }
     }
 }

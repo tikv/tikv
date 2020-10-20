@@ -2,9 +2,7 @@ use std::sync::atomic::*;
 use std::sync::Arc;
 
 use futures::channel::mpsc;
-use futures::compat::Compat;
-use futures::StreamExt;
-use futures_01::{future::Future, sink::Sink, stream::Stream};
+use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::backup::*;
 use security::{check_common_name, SecurityManager};
@@ -34,7 +32,7 @@ impl Backup for Service {
         &mut self,
         ctx: RpcContext,
         req: BackupRequest,
-        sink: ServerStreamingSink<BackupResponse>,
+        mut sink: ServerStreamingSink<BackupResponse>,
     ) {
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
@@ -55,37 +53,35 @@ impl Backup for Service {
             )),
         } {
             error!("backup task initiate failed"; "error" => ?status);
-            ctx.spawn(sink.fail(status).map_err(|e| {
-                error!("backup failed to send error"; "error" => ?e);
-            }));
+            ctx.spawn(
+                sink.fail(status)
+                    .unwrap_or_else(|e| error!("backup failed to send error"; "error" => ?e)),
+            );
             return;
         };
 
-        let send_resp = sink.send_all(Compat::new(rx.map(Ok)).then(
-            |resp: Result<BackupResponse>| match resp {
-                Ok(resp) => Ok((resp, WriteFlags::default())),
-                Err(e) => {
-                    error!("backup send failed"; "error" => ?e);
-                    Err(grpcio::Error::RpcFailure(RpcStatus::new(
-                        RpcStatusCode::UNKNOWN,
-                        Some(format!("{:?}", e)),
-                    )))
-                }
-            },
-        ));
-        ctx.spawn(
-            send_resp
-                .map(|_s /* the sink */| {
+        let send_task = async move {
+            let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
+            sink.send_all(&mut s).await?;
+            sink.close().await?;
+            Ok(())
+        }
+        .map(|res: Result<()>| {
+            match res {
+                Ok(_) => {
                     info!("backup send half closed");
-                })
-                .map_err(move |e| {
+                }
+                Err(e) => {
                     if let Some(c) = cancel {
                         // Cancel the running task.
                         c.store(true, Ordering::SeqCst);
                     }
                     error!("backup canceled"; "error" => ?e);
-                }),
-        );
+                }
+            }
+        });
+
+        ctx.spawn(send_task);
     }
 }
 
@@ -98,7 +94,7 @@ mod tests {
     use crate::endpoint::tests::*;
     use external_storage::make_local_backend;
     use security::*;
-    use tikv::storage::mvcc::tests::*;
+    use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::mpsc::Receiver;
     use txn_types::TimeStamp;
 
@@ -163,9 +159,11 @@ mod tests {
 
         // Set an unique path to avoid AlreadyExists error.
         req.set_storage_backend(make_local_backend(&tmp.path().join(alloc_ts().to_string())));
-        let stream = client.backup(&req).unwrap();
+        let mut stream = client.backup(&req).unwrap();
         // Drop steam once it received something.
-        client.spawn(stream.into_future().then(|_res| Ok(())));
+        client.spawn(async move {
+            let _ = stream.next().await;
+        });
         let task = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         // A stopped remote must not cause panic.
         endpoint.handle_backup_task(task.unwrap());

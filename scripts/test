@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# This script runs cargo test with the most common testing configurations.
+# Arguments given will be passed through to "cargo test"
+# This runs in the Makefile environment via "make run"
+
+set -euo pipefail
+
+# Run from the Makefile environment
+MAKEFILE_RUN=${MAKEFILE_RUN:-""}
+if [[ -z $MAKEFILE_RUN ]] ; then
+  COMMAND="$0 $*" exec make run
+fi
+SHELL_DEBUG=${SHELL_DEBUG:-""}
+if [[ -n "$SHELL_DEBUG" ]] ; then
+  set -x
+fi
+
+DYLD_LIBRARY_PATH=${DYLD_LIBRARY_PATH:-""}
+LOCAL_DIR=${LOCAL_DIR:-""}
+TIKV_ENABLE_FEATURES=${TIKV_ENABLE_FEATURES:-""}
+# EXTRA_CARGO_ARGS is unecessary now: this can just be given as arguments to ./scripts/test-all or ./scripts/test
+EXTRA_CARGO_ARGS=${EXTRA_CARGO_ARGS:-""}
+
+# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
+# again here. LOCAL_DIR is defined in .travis.yml.
+export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib"
+export LOG_LEVEL=DEBUG
+export RUST_BACKTRACE=1
+
+cargo -Zpackage-features test --workspace \
+    --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+    --features "${TIKV_ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} "$@"

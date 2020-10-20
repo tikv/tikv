@@ -3,14 +3,14 @@
 use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::iter::Iterator;
+use std::time::Instant;
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt};
-use futures::Future;
+use engine_traits::{Engines, KvEngine, RaftEngine, WriteBatchExt};
+use error_code::ErrorCodeExt;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -29,11 +29,11 @@ use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
+use tikv_util::collections::HashMap;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
-use tikv_util::{escape, is_zero_duration};
-use txn_types::TxnExtra;
+use tikv_util::{escape, is_zero_duration, Either};
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
@@ -43,19 +43,19 @@ use crate::store::fsm::{
 };
 use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::metrics::*;
-use crate::store::msg::Callback;
+use crate::store::msg::{Callback, ExtCallback};
 use crate::store::peer::{ConsistencyState, Peer, StaleState};
 use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
-use crate::store::util::KeysInfoFormatter;
+use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
     CleanupSSTTask, CleanupTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask,
     SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks, RaftCommand, SignificantMsg,
-    SnapKey, StoreMsg,
+    util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks, RaftCommand,
+    SignificantMsg, SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
@@ -64,7 +64,6 @@ const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
-    pub async_remove: bool,
     pub region_id: u64,
     pub peer: metapb::Peer,
 }
@@ -87,7 +86,7 @@ pub enum GroupState {
 pub struct PeerFsm<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub peer: Peer<EK, ER>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
@@ -105,29 +104,32 @@ where
     has_ready: bool,
     early_apply: bool,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
-    pub receiver: Receiver<PeerMsg<EK, ER>>,
+    pub receiver: Receiver<PeerMsg<EK>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
+    /// Sometimes applied raft logs won't be compacted in time, because less compact means less
+    /// sync-log in apply threads. Stale logs will be deleted if the skip time reaches this
+    /// `skip_gc_raft_log_ticks`.
+    skip_gc_raft_log_ticks: usize,
 
     // Batch raft command which has the same header into an entry
-    batch_req_builder: BatchRaftCmdRequestBuilder<EK::Snapshot>,
+    batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
 }
 
-pub struct BatchRaftCmdRequestBuilder<S>
+pub struct BatchRaftCmdRequestBuilder<E>
 where
-    S: Snapshot,
+    E: KvEngine,
 {
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<S>, usize)>,
-    txn_extra: TxnExtra,
+    callbacks: Vec<(Callback<E::Snapshot>, usize)>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn drop(&mut self) {
         self.peer.stop();
@@ -148,12 +150,12 @@ where
     }
 }
 
-pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg<EK, ER>>, Box<PeerFsm<EK, ER>>);
+pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg<EK>>, Box<PeerFsm<EK, ER>>);
 
 impl<EK, ER> PeerFsm<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
@@ -162,7 +164,7 @@ where
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask<EK::Snapshot>>,
-        engines: KvEngines<EK, ER>,
+        engines: Engines<EK, ER>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match util::find_peer(region, store_id) {
@@ -195,6 +197,7 @@ where
                 mailbox: None,
                 receiver: rx,
                 skip_split_count: 0,
+                skip_gc_raft_log_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
@@ -209,7 +212,7 @@ where
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask<EK::Snapshot>>,
-        engines: KvEngines<EK, ER>,
+        engines: Engines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,
     ) -> Result<SenderFsmPair<EK, ER>> {
@@ -237,6 +240,7 @@ where
                 mailbox: None,
                 receiver: rx,
                 skip_split_count: 0,
+                skip_gc_raft_log_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
@@ -273,17 +277,16 @@ where
     }
 }
 
-impl<S> BatchRaftCmdRequestBuilder<S>
+impl<E> BatchRaftCmdRequestBuilder<E>
 where
-    S: Snapshot,
+    E: KvEngine,
 {
-    fn new(raft_entry_max_size: f64) -> BatchRaftCmdRequestBuilder<S> {
+    fn new(raft_entry_max_size: f64) -> BatchRaftCmdRequestBuilder<E> {
         BatchRaftCmdRequestBuilder {
             raft_entry_max_size,
             request: None,
             batch_req_size: 0,
             callbacks: vec![],
-            txn_extra: TxnExtra::default(),
         }
     }
 
@@ -311,12 +314,11 @@ where
         true
     }
 
-    fn add(&mut self, cmd: RaftCommand<S>, req_size: u32) {
+    fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
         let req_num = cmd.request.get_requests().len();
         let RaftCommand {
             mut request,
             callback,
-            mut txn_extra,
             ..
         } = cmd;
         if let Some(batch_req) = self.request.as_mut() {
@@ -329,7 +331,6 @@ where
         };
         self.callbacks.push((callback, req_num));
         self.batch_req_size += req_size;
-        self.txn_extra.extend(&mut txn_extra);
     }
 
     fn should_finish(&self) -> bool {
@@ -339,47 +340,61 @@ where
             if f64::from(self.batch_req_size) > self.raft_entry_max_size * 0.4 {
                 return true;
             }
-            if batch_req.get_requests().len() > RocksEngine::WRITE_BATCH_MAX_KEYS {
+            if batch_req.get_requests().len() > <E as WriteBatchExt>::WRITE_BATCH_MAX_KEYS {
                 return true;
             }
         }
         false
     }
 
-    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<S>> {
+    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<E::Snapshot>> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
                 let (cb, _) = self.callbacks.pop().unwrap();
-                return Some(RaftCommand::with_txn_extra(
-                    req,
-                    cb,
-                    std::mem::take(&mut self.txn_extra),
-                ));
+                return Some(RaftCommand::new(req, cb));
             }
             metric.batch += self.callbacks.len() - 1;
-            let cbs = std::mem::replace(&mut self.callbacks, vec![]);
-            let cb = Callback::Write(Box::new(move |resp| {
-                let mut last_index = 0;
-                let has_error = resp.response.get_header().has_error();
-                for (cb, req_num) in cbs {
-                    let next_index = last_index + req_num;
-                    let mut cmd_resp = RaftCmdResponse::default();
-                    cmd_resp.set_header(resp.response.get_header().clone());
-                    if !has_error {
-                        cmd_resp.set_responses(
-                            resp.response.get_responses()[last_index..next_index].into(),
-                        );
+            let mut cbs = std::mem::take(&mut self.callbacks);
+            let proposed_cbs: Vec<ExtCallback> = cbs
+                .iter_mut()
+                .filter_map(|cb| {
+                    if let Callback::Write { proposed_cb, .. } = &mut cb.0 {
+                        proposed_cb.take()
+                    } else {
+                        None
                     }
-                    cb.invoke_with_response(cmd_resp);
-                    last_index = next_index;
-                }
-            }));
-            return Some(RaftCommand::with_txn_extra(
-                req,
-                cb,
-                std::mem::take(&mut self.txn_extra),
-            ));
+                })
+                .collect();
+            let proposed_cb: Option<ExtCallback> = if proposed_cbs.is_empty() {
+                None
+            } else {
+                Some(Box::new(move || {
+                    for proposed_cb in proposed_cbs {
+                        proposed_cb();
+                    }
+                }))
+            };
+            let cb = Callback::write_ext(
+                Box::new(move |resp| {
+                    let mut last_index = 0;
+                    let has_error = resp.response.get_header().has_error();
+                    for (cb, req_num) in cbs {
+                        let next_index = last_index + req_num;
+                        let mut cmd_resp = RaftCmdResponse::default();
+                        cmd_resp.set_header(resp.response.get_header().clone());
+                        if !has_error {
+                            cmd_resp.set_responses(
+                                resp.response.get_responses()[last_index..next_index].into(),
+                            );
+                        }
+                        cb.invoke_with_response(cmd_resp);
+                        last_index = next_index;
+                    }
+                }),
+                proposed_cb,
+            );
+            return Some(RaftCommand::new(req, cb));
         }
         None
     }
@@ -388,9 +403,9 @@ where
 impl<EK, ER> Fsm for PeerFsm<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
-    type Message = PeerMsg<EK, ER>;
+    type Message = PeerMsg<EK>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -420,7 +435,7 @@ where
 pub struct PeerFsmDelegate<'a, EK, ER, T: 'static, C: 'static>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fsm: &'a mut PeerFsm<EK, ER>,
     ctx: &'a mut PollContext<EK, ER, T, C>,
@@ -429,7 +444,7 @@ where
 impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn new(
         fsm: &'a mut PeerFsm<EK, ER>,
@@ -438,16 +453,15 @@ where
         PeerFsmDelegate { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK, ER>>) {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(
+                        error!(%e;
                             "handle raft message err";
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
-                            "err" => %e,
                         );
                     }
                 }
@@ -465,7 +479,7 @@ where
                         }
                     } else {
                         self.propose_batch_raft_command();
-                        self.propose_raft_command(cmd.request, cmd.callback, cmd.txn_extra)
+                        self.propose_raft_command(cmd.request, cmd.callback)
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -494,7 +508,7 @@ where
             .batch_req_builder
             .build(&mut self.ctx.raft_metrics.propose)
         {
-            self.propose_raft_command(cmd.request, cmd.callback, cmd.txn_extra)
+            self.propose_raft_command(cmd.request, cmd.callback)
         }
     }
 
@@ -508,7 +522,7 @@ where
         }
     }
 
-    fn on_casual_msg(&mut self, msg: CasualMessage<EK, ER>) {
+    fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
         match msg {
             CasualMessage::SplitRegion {
                 region_epoch,
@@ -523,8 +537,12 @@ where
                 );
                 self.on_prepare_split_region(region_epoch, split_keys, callback);
             }
-            CasualMessage::ComputeHashResult { index, hash } => {
-                self.on_hash_computed(index, hash);
+            CasualMessage::ComputeHashResult {
+                index,
+                context,
+                hash,
+            } => {
+                self.on_hash_computed(index, context, hash);
             }
             CasualMessage::RegionApproximateSize { size } => {
                 self.on_approximate_region_size(size);
@@ -553,7 +571,7 @@ where
                 self.fsm.group_state = GroupState::Chaos;
                 self.register_raft_base_tick();
 
-                if self.fsm.peer.peer.get_is_learner() {
+                if is_learner(&self.fsm.peer.peer) {
                     // FIXME: should use `bcast_check_stale_peer_message` instead.
                     // Sending a new enum type msg to a old tikv may cause panic during rolling update
                     // we should change the protobuf behavior and check if properly handled in all place
@@ -565,7 +583,10 @@ where
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
-            CasualMessage::AccessPeer(cb) => cb(self.fsm),
+            CasualMessage::ForceCompactRaftLogs => {
+                self.on_raft_gc_log_tick(true);
+            }
+            CasualMessage::AccessPeer(cb) => cb(&mut self.fsm.peer as &mut dyn AbstractPeer),
         }
     }
 
@@ -582,7 +603,7 @@ where
         self.fsm.tick_registry.remove(tick);
         match tick {
             PeerTicks::RAFT => self.on_raft_base_tick(),
-            PeerTicks::RAFT_LOG_GC => self.on_raft_gc_log_tick(),
+            PeerTicks::RAFT_LOG_GC => self.on_raft_gc_log_tick(false),
             PeerTicks::PD_HEARTBEAT => self.on_pd_heartbeat_tick(),
             PeerTicks::SPLIT_REGION_CHECK => self.on_split_region_check_tick(),
             PeerTicks::CHECK_MERGE => self.on_check_merge(),
@@ -616,12 +637,11 @@ where
                 let s = match self.ctx.snap_mgr.get_snapshot_for_sending(&key) {
                     Ok(s) => s,
                     Err(e) => {
-                        error!(
+                        error!(%e;
                             "failed to load snapshot";
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "snapshot" => ?key,
-                            "err" => %e,
                         );
                         continue;
                     }
@@ -672,12 +692,11 @@ where
                 let a = match self.ctx.snap_mgr.get_snapshot_for_applying(&key) {
                     Ok(a) => a,
                     Err(e) => {
-                        error!(
+                        error!(%e;
                             "failed to load snapshot";
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "snap_file" => %key,
-                            "err" => %e,
                         );
                         continue;
                     }
@@ -721,7 +740,6 @@ where
                     },
                 )
             })),
-            TxnExtra::default(),
         );
     }
 
@@ -819,7 +837,7 @@ where
             self.region().get_region_epoch().clone(),
             self.fsm.peer.peer.clone(),
         );
-        self.propose_raft_command(msg, cb, TxnExtra::default());
+        self.propose_raft_command(msg, cb);
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {
@@ -843,11 +861,14 @@ where
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
-        if let Some(r) = res {
+        if let Some(mut r) = res {
             self.on_role_changed(&r.0);
             if !r.0.entries().is_empty() {
                 self.register_raft_gc_log_tick();
                 self.register_split_region_check_tick();
+            }
+            if self.ctx.cfg.early_apply {
+                self.handle_raft_ready_apply(&mut r.0, &r.1);
             }
             self.ctx.ready_res.push(r);
         }
@@ -915,17 +936,18 @@ where
     }
 
     #[inline]
-    fn schedule_tick(&mut self, tick: PeerTicks, timeout: Duration) {
+    fn schedule_tick(&mut self, tick: PeerTicks) {
         if self.fsm.tick_registry.contains(tick) {
             return;
         }
-        if is_zero_duration(&timeout) {
+        let idx = tick.bits() as usize;
+        if is_zero_duration(&self.ctx.tick_batch[idx].wait_duration) {
             return;
         }
         trace!(
             "schedule tick";
             "tick" => ?tick,
-            "timeout" => ?timeout,
+            "timeout" => ?self.ctx.tick_batch[idx].wait_duration,
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
         );
@@ -946,42 +968,27 @@ where
             }
         };
         let peer_id = self.fsm.peer.peer_id();
-        let f = self
-            .ctx
-            .timer
-            .delay(timeout)
-            .map(move |_| {
-                fail_point!(
-                    "on_raft_log_gc_tick_1",
-                    peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
-                    |_| unreachable!()
+        let cb = Box::new(move || {
+            // This can happen only when the peer is about to be destroyed
+            // or the node is shutting down. So it's OK to not to clean up
+            // registry.
+            if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
+                debug!(
+                    "failed to schedule peer tick";
+                    "region_id" => region_id,
+                    "peer_id" => peer_id,
+                    "tick" => ?tick,
+                    "err" => %e,
                 );
-                // This can happen only when the peer is about to be destroyed
-                // or the node is shutting down. So it's OK to not to clean up
-                // registry.
-                if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
-                    debug!(
-                        "failed to schedule peer tick";
-                        "region_id" => region_id,
-                        "peer_id" => peer_id,
-                        "tick" => ?tick,
-                        "err" => %e,
-                    );
-                }
-            })
-            .map_err(move |e| {
-                panic!(
-                    "[region {}] {} tick {:?} is lost due to timeout error: {:?}",
-                    region_id, peer_id, tick, e
-                );
-            });
-        self.ctx.future_poller.spawn(f).unwrap();
+            }
+        });
+        self.ctx.tick_batch[idx].ticks.push(cb);
     }
 
     fn register_raft_base_tick(&mut self) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
-        self.schedule_tick(PeerTicks::RAFT, self.ctx.cfg.raft_base_tick_interval.0)
+        self.schedule_tick(PeerTicks::RAFT)
     }
 
     fn on_raft_base_tick(&mut self) {
@@ -1044,8 +1051,8 @@ where
 
         // Keep ticking if there are still pending read requests or this node is within hibernate timeout.
         if res.is_none() /* hibernate_region is false */ ||
-            (self.fsm.peer.is_leader() && !self.ctx.is_hibernate_timeout()) ||
-            !self.fsm.peer.check_after_tick(self.fsm.group_state, res.unwrap())
+            !self.fsm.peer.check_after_tick(self.fsm.group_state, res.unwrap()) ||
+            (self.fsm.peer.is_leader() && !self.ctx.is_hibernate_timeout())
         {
             self.register_raft_base_tick();
             return;
@@ -1154,15 +1161,19 @@ where
             return Ok(());
         }
 
-        if let Some(key) = self.check_snapshot(&msg)? {
-            // If the snapshot file is not used again, then it's OK to
-            // delete them here. If the snapshot file will be reused when
-            // receiving, then it will fail to pass the check again, so
-            // missing snapshot files should not be noticed.
-            let s = self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
-            self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
-            return Ok(());
-        }
+        let is_snapshot = msg.get_message().has_snapshot();
+        let regions_to_destroy = match self.check_snapshot(&msg)? {
+            Either::Left(key) => {
+                // If the snapshot file is not used again, then it's OK to
+                // delete them here. If the snapshot file will be reused when
+                // receiving, then it will fail to pass the check again, so
+                // missing snapshot files should not be noticed.
+                let s = self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
+                self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
+                return Ok(());
+            }
+            Either::Right(v) => v,
+        };
 
         if !self.check_request_snapshot(&msg) {
             return Ok(());
@@ -1181,7 +1192,28 @@ where
 
         let from_peer_id = msg.get_from_peer().get_id();
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
-        self.fsm.peer.step(self.ctx, msg.take_message())?;
+
+        let result = self.fsm.peer.step(self.ctx, msg.take_message());
+
+        if is_snapshot {
+            if !self.fsm.peer.has_pending_snapshot() {
+                // This snapshot is rejected by raft-rs.
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                meta.pending_snapshot_regions
+                    .retain(|r| self.fsm.region_id() != r.get_id());
+            } else {
+                // This snapshot may be accepted by raft-rs.
+                // If it's rejected by raft-rs, the snapshot region in `pending_snapshot_regions`
+                // will be removed together with the latest snapshot region after applying that snapshot.
+                // But if `regions_to_destroy` is not empty, the pending snapshot must be this msg's snapshot
+                // because this kind of snapshot is exclusive.
+                self.destroy_regions_for_snapshot(regions_to_destroy);
+            }
+        }
+
+        if result.is_err() {
+            return result;
+        }
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
@@ -1313,7 +1345,7 @@ where
                 true
             }
             cmp::Ordering::Greater => {
-                match self.fsm.peer.maybe_destroy() {
+                match self.fsm.peer.maybe_destroy(&self.ctx) {
                     Some(job) => {
                         info!(
                             "target peer id is larger, destroying self";
@@ -1450,7 +1482,7 @@ where
             "peer_id" => self.fsm.peer_id(),
             "to_peer" => ?msg.get_to_peer(),
         );
-        match self.fsm.peer.maybe_destroy() {
+        match self.fsm.peer.maybe_destroy(&self.ctx) {
             None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
             Some(job) => {
                 self.handle_destroy_peer(job);
@@ -1458,12 +1490,22 @@ where
         }
     }
 
-    // Returns `None` if the `msg` doesn't contain a snapshot or it contains a snapshot which
-    // doesn't conflict with any other snapshots or regions. Otherwise a `SnapKey` is returned.
-    fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<Option<SnapKey>> {
+    // Returns `Vec<(u64, bool)>` indicated (source_region_id, merge_to_this_peer) if the `msg`
+    // doesn't contain a snapshot or this snapshot doesn't conflict with any other snapshots or regions.
+    // Otherwise a `SnapKey` is returned.
+    fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<Either<SnapKey, Vec<(u64, bool)>>> {
         if !msg.get_message().has_snapshot() {
-            return Ok(None);
+            return Ok(Either::Right(vec![]));
         }
+
+        let before_check_snapshot_1_2 = || {
+            fail_point!(
+                "before_check_snapshot_1_2",
+                self.fsm.region_id() == 1 && self.fsm.peer_id() == 2,
+                |_| {}
+            );
+        };
+        before_check_snapshot_1_2();
 
         let region_id = msg.get_region_id();
         let snap = msg.get_message().get_snapshot();
@@ -1488,7 +1530,7 @@ where
                 "to_peer" => ?msg.get_to_peer(),
             );
             self.ctx.raft_metrics.message_dropped.region_no_peer += 1;
-            return Ok(Some(key));
+            return Ok(Either::Left(key));
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -1500,7 +1542,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                 );
                 self.ctx.raft_metrics.message_dropped.stale_msg += 1;
-                return Ok(Some(key));
+                return Ok(Either::Left(key));
             } else {
                 panic!(
                     "{} meta corrupted: {:?} != {:?}",
@@ -1510,6 +1552,16 @@ where
                 );
             }
         }
+
+        if meta.atomic_snap_regions.contains_key(&region_id) {
+            info!(
+                "atomic snapshot is applying, skip";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return Ok(Either::Left(key));
+        }
+
         for region in &meta.pending_snapshot_regions {
             if enc_start_key(region) < snap_enc_end_key &&
                enc_end_key(region) > snap_enc_start_key &&
@@ -1524,7 +1576,7 @@ where
                     "snap" => ?snap_region,
                 );
                 self.ctx.raft_metrics.message_dropped.region_overlap += 1;
-                return Ok(Some(key));
+                return Ok(Either::Left(key));
             }
         }
 
@@ -1539,6 +1591,9 @@ where
         // 2. There is a CommitMerge pending in apply thread.
         let ready = !self.fsm.peer.is_applying_snapshot()
             && !self.fsm.peer.has_pending_snapshot()
+            // It must be ensured that all logs have been applied.
+            // Suppose apply fsm is applying a `CommitMerge` log and this snapshot is generated after
+            // merge, its corresponding source peer can not be destroy by this snapshot.
             && self.fsm.peer.ready_to_handle_pending_snap();
         for exist_region in meta
             .region_ranges
@@ -1574,7 +1629,7 @@ where
                     > exist_region.get_region_epoch().get_version()
             {
                 // If snapshot's epoch version is greater than exist region's, the exist region
-                // may has been merged already.
+                // may has been merged/splitted already.
                 let _ = self.ctx.router.force_send(
                     exist_region.get_id(),
                     PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
@@ -1583,16 +1638,53 @@ where
         }
         if is_overlapped {
             self.ctx.raft_metrics.message_dropped.region_overlap += 1;
-            return Ok(Some(key));
+            return Ok(Either::Left(key));
         }
 
         // Check if snapshot file exists.
         self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
 
+        // WARNING: The checking code must be above this line.
+        // Now all checking passed.
+
+        if self.fsm.peer.local_first_replicate && !self.fsm.peer.is_initialized() {
+            // If the peer is not initialized and passes the snapshot range check, `is_splitting` flag must
+            // be false.
+            // 1. If `is_splitting` is set to true, then the uninitialized peer is created before split is applied
+            //    and the peer id is the same as split one. So there should be no initialized peer before.
+            // 2. If the peer is also created by splitting, then the snapshot range is not overlapped with
+            //    parent peer. It means leader has applied merge and split at least one time. However,
+            //    the prerequisite of merge includes the initialization of all target peers and source peers,
+            //    which is conflict with 1.
+            let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            let status = pending_create_peers.get(&region_id).cloned();
+            if status != Some((self.fsm.peer_id(), false)) {
+                drop(pending_create_peers);
+                panic!("{} status {:?} is not expected", self.fsm.peer.tag, status);
+            }
+        }
         meta.pending_snapshot_regions.push(snap_region);
 
-        assert!(!meta.atomic_snap_regions.contains_key(&region_id));
+        Ok(Either::Right(regions_to_destroy))
+    }
+
+    fn destroy_regions_for_snapshot(&mut self, regions_to_destroy: Vec<(u64, bool)>) {
+        if regions_to_destroy.is_empty() {
+            return;
+        }
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        assert!(!meta.atomic_snap_regions.contains_key(&self.fsm.region_id()));
         for (source_region_id, merge_to_this_peer) in regions_to_destroy {
+            if !meta.regions.contains_key(&source_region_id) {
+                if merge_to_this_peer {
+                    drop(meta);
+                    panic!(
+                        "{}'s source region {} has been destroyed",
+                        self.fsm.peer.tag, source_region_id
+                    );
+                }
+                continue;
+            }
             info!(
                 "source region destroy due to target region's snapshot";
                 "region_id" => self.fsm.region_id(),
@@ -1601,7 +1693,7 @@ where
                 "need_atomic" => merge_to_this_peer,
             );
             meta.atomic_snap_regions
-                .entry(region_id)
+                .entry(self.fsm.region_id())
                 .or_default()
                 .insert(source_region_id, false);
             meta.destroyed_region_for_snap
@@ -1627,8 +1719,6 @@ where
                 )
                 .unwrap();
         }
-
-        Ok(None)
     }
 
     // Check if this peer can handle request_snapshot.
@@ -1645,24 +1735,15 @@ where
     }
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
+        // The initialized flag implicitly means whether apply fsm exists or not.
         if job.initialized {
-            // When initialized is true and async_remove is false, apply fsm doesn't need to
-            // send destroy msg to peer fsm because peer fsm has already destroyed.
-            // In this case, if apply fsm sends destroy msg, peer fsm may be destroyed twice
-            // because there are some msgs in channel so peer fsm still need to handle them (e.g. callback)
-            self.ctx.apply_router.schedule_task(
-                job.region_id,
-                ApplyTask::destroy(job.region_id, job.async_remove, false),
-            );
-        }
-        if job.async_remove {
-            info!(
-                "peer is destroyed asynchronously";
-                "region_id" => job.region_id,
-                "peer_id" => job.peer.get_id(),
-            );
+            // Destroy the apply fsm first, wait for the reply msg from apply fsm
+            self.ctx
+                .apply_router
+                .schedule_task(job.region_id, ApplyTask::destroy(job.region_id, false));
             false
         } else {
+            // Destroy the peer fsm directly
             self.destroy_peer(false);
             true
         }
@@ -1684,6 +1765,19 @@ where
         self.fsm.peer.pending_remove = true;
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
+
+        if meta.atomic_snap_regions.contains_key(&self.region_id()) {
+            drop(meta);
+            panic!(
+                "{} is applying atomic snapshot during destroying",
+                self.fsm.peer.tag
+            );
+        }
+
+        // It's possible that this region gets a snapshot then gets a stale peer msg.
+        // So the data in `pending_snapshot_regions` should be removed here.
+        meta.pending_snapshot_regions
+            .retain(|r| self.fsm.region_id() != r.get_id());
 
         // Destroy read delegates.
         if let Some(reader) = meta.readers.remove(&region_id) {
@@ -1731,6 +1825,21 @@ where
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
 
+        if self.fsm.peer.local_first_replicate {
+            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            if is_initialized {
+                assert!(pending_create_peers.get(&region_id).is_none());
+            } else {
+                // If this region's data in `pending_create_peers` is not equal to `(peer_id, false)`,
+                // it means this peer will be replaced by the split one.
+                if let Some(status) = pending_create_peers.get(&region_id) {
+                    if *status == (self.fsm.peer_id(), false) {
+                        pending_create_peers.remove(&region_id);
+                    }
+                }
+            }
+        }
+
         // Clear merge related structures.
         if let Some(&need_atomic) = meta.destroyed_region_for_snap.get(&region_id) {
             if need_atomic {
@@ -1768,13 +1877,30 @@ where
         }
     }
 
+    // Update some region infos
+    fn update_region(&mut self, mut region: metapb::Region) {
+        {
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.set_region(
+                &self.ctx.coprocessor_host,
+                region.clone(),
+                &mut self.fsm.peer,
+            );
+        }
+        for peer in region.take_peers().into_iter() {
+            if self.fsm.peer.peer_id() == peer.get_id() {
+                self.fsm.peer.peer = peer.clone();
+            }
+            self.fsm.peer.insert_peer_cache(peer);
+        }
+    }
+
     fn on_ready_change_peer(&mut self, cp: ChangePeer) {
-        if cp.conf_change.get_node_id() == raft::INVALID_ID {
+        if cp.index == raft::INVALID_INDEX {
             // Apply failed, skip.
             return;
         }
 
-        let change_type = cp.conf_change.get_change_type();
         if cp.index >= self.fsm.peer.raft_group.raft.raft_log.first_index() {
             match self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
                 Ok(_) => {}
@@ -1786,56 +1912,59 @@ where
             // Please take a look at test case test_redundant_conf_change_by_snapshot.
         }
 
-        {
-            let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.set_region(&self.ctx.coprocessor_host, cp.region, &mut self.fsm.peer);
-        }
+        self.update_region(cp.region);
 
-        let peer_id = cp.peer.get_id();
         let now = Instant::now();
-        match change_type {
-            ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
-                let peer = cp.peer.clone();
-                let group_id = self
-                    .ctx
-                    .global_replication_state
-                    .lock()
-                    .unwrap()
-                    .group
-                    .group_id(self.fsm.peer.replication_mode_version, peer.store_id);
-                if group_id.unwrap_or(0) != 0 {
-                    info!("updating group"; "peer_id" => peer.id, "group_id" => group_id.unwrap());
-                    self.fsm
-                        .peer
-                        .raft_group
-                        .raft
-                        .assign_commit_groups(&[(peer.id, group_id.unwrap())]);
+        let (mut remove_self, mut need_ping) = (false, false);
+        for mut change in cp.changes {
+            let (change_type, peer) = (change.get_change_type(), change.take_peer());
+            let (store_id, peer_id) = (peer.get_store_id(), peer.get_id());
+            match change_type {
+                ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
+                    let group_id = self
+                        .ctx
+                        .global_replication_state
+                        .lock()
+                        .unwrap()
+                        .group
+                        .group_id(self.fsm.peer.replication_mode_version, store_id);
+                    if group_id.unwrap_or(0) != 0 {
+                        info!("updating group"; "peer_id" => peer_id, "group_id" => group_id.unwrap());
+                        self.fsm
+                            .peer
+                            .raft_group
+                            .raft
+                            .assign_commit_groups(&[(peer_id, group_id.unwrap())]);
+                    }
+                    // Add this peer to peer_heartbeats.
+                    self.fsm.peer.peer_heartbeats.insert(peer_id, now);
+                    if self.fsm.peer.is_leader() {
+                        need_ping = true;
+                        self.fsm.peer.peers_start_pending_time.push((peer_id, now));
+                    }
                 }
-                if self.fsm.peer.peer_id() == peer_id && self.fsm.peer.peer.get_is_learner() {
-                    self.fsm.peer.peer = peer.clone();
+                ConfChangeType::RemoveNode => {
+                    // Remove this peer from cache.
+                    self.fsm.peer.peer_heartbeats.remove(&peer_id);
+                    if self.fsm.peer.is_leader() {
+                        self.fsm
+                            .peer
+                            .peers_start_pending_time
+                            .retain(|&(p, _)| p != peer_id);
+                    }
+                    self.fsm.peer.remove_peer_from_cache(peer_id);
+                    // We only care remove itself now.
+                    if self.store_id() == store_id {
+                        if self.fsm.peer.peer_id() == peer_id {
+                            remove_self = true;
+                        } else {
+                            panic!(
+                                "{} trying to remove unknown peer {:?}",
+                                self.fsm.peer.tag, peer
+                            );
+                        }
+                    }
                 }
-
-                // Add this peer to cache and heartbeats.
-                let id = peer.get_id();
-                self.fsm.peer.peer_heartbeats.insert(id, now);
-                if self.fsm.peer.is_leader() {
-                    // Speed up snapshot instead of waiting another heartbeat.
-                    self.fsm.peer.ping();
-                    self.fsm.has_ready = true;
-                    self.fsm.peer.peers_start_pending_time.push((id, now));
-                }
-                self.fsm.peer.insert_peer_cache(peer);
-            }
-            ConfChangeType::RemoveNode => {
-                // Remove this peer from cache.
-                self.fsm.peer.peer_heartbeats.remove(&peer_id);
-                if self.fsm.peer.is_leader() {
-                    self.fsm
-                        .peer
-                        .peers_start_pending_time
-                        .retain(|&(p, _)| p != peer_id);
-                }
-                self.fsm.peer.remove_peer_from_cache(peer_id);
             }
         }
 
@@ -1853,21 +1982,38 @@ where
                 "region" => ?self.fsm.peer.region(),
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
-        }
-        let my_peer_id = self.fsm.peer.peer_id();
 
-        let peer = cp.peer;
-
-        // We only care remove itself now.
-        if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
-            if my_peer_id == peer.get_id() {
-                self.destroy_peer(false);
-            } else {
-                panic!(
-                    "{} trying to remove unknown peer {:?}",
-                    self.fsm.peer.tag, peer
+            // Remove or demote leader will cause this raft group unavailable
+            // until new leader elected, but we can't revert this operation
+            // because its result is already persisted in apply worker
+            // TODO: should we transfer leader here?
+            let demote_self = is_learner(&self.fsm.peer.peer);
+            if remove_self || demote_self {
+                warn!(
+                    "Removing or demoting leader";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "remove" => remove_self,
+                    "demote" => demote_self,
                 );
+                if demote_self {
+                    self.fsm
+                        .peer
+                        .raft_group
+                        .raft
+                        .become_follower(self.fsm.peer.term(), raft::INVALID_ID);
+                }
+                // Don't ping to speed up leader election
+                need_ping = false;
             }
+        }
+        if need_ping {
+            // Speed up snapshot instead of waiting another heartbeat.
+            self.fsm.peer.ping();
+            self.fsm.has_ready = true;
+        }
+        if remove_self {
+            self.destroy_peer(false);
         }
     }
 
@@ -1877,14 +2023,14 @@ where
         let remain_cnt = self.fsm.peer.last_applying_idx - state.get_index() - 1;
         self.fsm.peer.raft_log_size_hint =
             self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
-        let task = RaftlogGcTask {
-            raft_engine: self.fsm.peer.get_store().get_raft_engine(),
-            region_id: self.fsm.peer.get_store().get_region_id(),
-            start_idx: self.fsm.peer.last_compacted_idx,
-            end_idx: state.get_index() + 1,
-        };
-        self.fsm.peer.last_compacted_idx = task.end_idx;
-        self.fsm.peer.mut_store().compact_to(task.end_idx);
+        let compact_to = state.get_index() + 1;
+        let task = RaftlogGcTask::gc(
+            self.fsm.peer.get_store().get_region_id(),
+            self.fsm.peer.last_compacted_idx,
+            compact_to,
+        );
+        self.fsm.peer.last_compacted_idx = compact_to;
+        self.fsm.peer.mut_store().compact_to(compact_to);
         if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
             error!(
                 "failed to schedule compact task";
@@ -1895,10 +2041,14 @@ where
         }
     }
 
-    fn on_ready_split_region(&mut self, derived: metapb::Region, regions: Vec<metapb::Region>) {
+    fn on_ready_split_region(
+        &mut self,
+        derived: metapb::Region,
+        regions: Vec<metapb::Region>,
+        new_split_regions: HashMap<u64, apply::NewSplitPeer>,
+    ) {
         self.register_split_region_check_tick();
-        let mut guard = self.ctx.store_meta.lock().unwrap();
-        let meta: &mut StoreMeta = &mut *guard;
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         let region_id = derived.get_id();
         meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
         self.fsm.peer.post_split();
@@ -1947,6 +2097,31 @@ where
                 continue;
             }
 
+            // Create new region
+            let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
+            if new_split_peer.result.is_some() {
+                if let Err(e) = self
+                    .fsm
+                    .peer
+                    .mut_store()
+                    .clear_extra_split_data(enc_start_key(&new_region), enc_end_key(&new_region))
+                {
+                    error!(?e;
+                        "failed to cleanup extra split data, may leave some dirty data";
+                        "region_id" => new_region.get_id(),
+                    );
+                }
+                continue;
+            }
+
+            {
+                let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+                assert_eq!(
+                    pending_create_peers.remove(&new_region_id),
+                    Some((new_split_peer.peer_id, true))
+                );
+            }
+
             // Insert new regions and validation
             info!(
                 "insert new region";
@@ -1960,7 +2135,7 @@ where
                 // store. After that, the old snapshot comes, followed with the last split
                 // proposal. After it's applied, the uninitialized peer will be met.
                 // We can remove this uninitialized peer directly.
-                if !r.get_peers().is_empty() {
+                if util::is_region_initialized(r) {
                     panic!(
                         "[region {}] duplicated region {:?} for split region {:?}",
                         new_region_id, r, new_region
@@ -1986,6 +2161,7 @@ where
             let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
             new_peer.peer.init_replication_mode(&mut *replication_state);
             drop(replication_state);
+
             let meta_peer = new_peer.peer.peer.clone();
 
             for p in new_region.get_peers() {
@@ -2026,20 +2202,20 @@ where
                     .pending_votes
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
-                    let _ = self
+                    if let Err(e) = self
                         .ctx
                         .router
-                        .send(new_region_id, PeerMsg::RaftMessage(msg));
+                        .force_send(new_region_id, PeerMsg::RaftMessage(msg))
+                    {
+                        warn!("handle first requset vote failed"; "region_id" => region_id, "error" => ?e);
+                    }
                 }
             }
         }
     }
 
     fn register_merge_check_tick(&mut self) {
-        self.schedule_tick(
-            PeerTicks::CHECK_MERGE,
-            self.ctx.cfg.merge_check_tick_interval.0,
-        )
+        self.schedule_tick(PeerTicks::CHECK_MERGE)
     }
 
     /// Check if merge target region is staler than the local one in kv engine.
@@ -2160,11 +2336,10 @@ where
         // Now the target peer is not in region map.
         match self.is_merge_target_region_stale(target_region) {
             Err(e) => {
-                error!(
+                error!(%e;
                     "failed to load region state, ignore";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
-                    "err" => %e,
                     "target_region_id" => target_region_id,
                 );
                 Ok(false)
@@ -2260,7 +2435,7 @@ where
             request.set_admin_request(admin);
             request
         };
-        self.propose_raft_command(req, Callback::None, TxnExtra::default());
+        self.propose_raft_command(req, Callback::None);
     }
 
     fn on_check_merge(&mut self) {
@@ -2281,33 +2456,31 @@ where
                 self.fsm
                     .peer
                     .add_want_rollback_merge_peer(self.fsm.peer_id());
-                if self.fsm.peer.want_rollback_merge_peers.len()
-                    >= raft::majority(
-                        self.fsm
-                            .peer
-                            .raft_group
-                            .status()
-                            .progress
-                            .unwrap()
-                            .voter_ids()
-                            .len(),
-                    )
+                if self
+                    .fsm
+                    .peer
+                    .raft_group
+                    .raft
+                    .prs()
+                    .has_quorum(&self.fsm.peer.want_rollback_merge_peers)
                 {
                     info!(
                         "failed to schedule merge, rollback";
                         "region_id" => self.fsm.region_id(),
                         "peer_id" => self.fsm.peer_id(),
                         "err" => %e,
+                        "error_code" => %e.error_code(),
                     );
                     self.rollback_merge();
                 }
-            } else if !self.fsm.peer.peer.get_is_learner() {
+            } else if !is_learner(&self.fsm.peer.peer) {
                 info!(
                     "want to rollback merge";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "leader_id" => self.fsm.peer.leader_id(),
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 if self.fsm.peer.leader_id() != raft::INVALID_ID {
                     self.fsm.peer.send_want_rollback_merge(
@@ -2436,6 +2609,13 @@ where
         let reader = meta.readers.remove(&source.get_id()).unwrap();
         reader.mark_invalid();
 
+        // If a follower merges into a leader, a more recent read may happen
+        // on the leader of the follower. So max ts should be updated after
+        // a region merge.
+        self.fsm
+            .peer
+            .require_updating_max_ts(&self.ctx.pd_scheduler);
+
         drop(meta);
 
         // make approximate size and keys updated in time.
@@ -2527,8 +2707,19 @@ where
                 self.fsm.peer.tag, self.fsm.peer.pending_merge_state, target, result
             );
         }
-        // If the merge succeed, all source peers is impossible in apply snapshot state
+        // Because of the checking before proposing `PrepareMerge`, which is
+        // no `CompactLog` proposal between the smallest commit index and the latest index.
+        // If the merge succeed, all source peers are impossible in apply snapshot state
         // and must be initialized.
+        {
+            let meta = self.ctx.store_meta.lock().unwrap();
+            if meta.atomic_snap_regions.contains_key(&self.region_id()) {
+                panic!(
+                    "{} is applying atomic snapshot on getting merge result, target region id {}, target peer {:?}, merge result type {:?}",
+                    self.fsm.peer.tag, target_region_id, target, result
+                );
+            }
+        }
         if self.fsm.peer.is_applying_snapshot() {
             panic!(
                 "{} is applying snapshot on getting merge result, target region id {}, target peer {:?}, merge result type {:?}",
@@ -2562,7 +2753,7 @@ where
                 // Destroy apply fsm at first
                 self.ctx.apply_router.schedule_task(
                     self.fsm.region_id(),
-                    ApplyTask::destroy(self.fsm.region_id(), true, true),
+                    ApplyTask::destroy(self.fsm.region_id(), true),
                 );
             }
             MergeResultKind::FromTargetSnapshotStep2 => {
@@ -2588,8 +2779,12 @@ where
             "target_region_id" => target_region_id,
             "merge_state" => ?self.fsm.peer.pending_merge_state,
         );
-        // It must succeed so here using `unwrap`
-        let job = self.fsm.peer.maybe_destroy().unwrap();
+        // Because of the checking before proposing `PrepareMerge`, which is
+        // no `CompactLog` proposal between the smallest commit index and the latest index.
+        // If the merge succeed, all source peers are impossible in apply snapshot state
+        // and must be initialized.
+        // So `maybe_destroy` must succeed here.
+        let job = self.fsm.peer.maybe_destroy(&self.ctx).unwrap();
         self.handle_destroy_peer(job);
     }
 
@@ -2647,8 +2842,7 @@ where
             }
         }
 
-        let initialized = !prev_region.get_peers().is_empty();
-        if initialized {
+        if util::is_region_initialized(&prev_region) {
             info!(
                 "region changed after applying snapshot";
                 "region_id" => self.fsm.region_id(),
@@ -2660,9 +2854,17 @@ where
             if prev != Some(region.get_id()) {
                 panic!(
                     "{} meta corrupted, expect {:?} got {:?}",
-                    self.fsm.peer.tag, prev_region, prev
+                    self.fsm.peer.tag, prev_region, prev,
                 );
             }
+        } else if self.fsm.peer.local_first_replicate {
+            // This peer is uninitialized previously.
+            // More accurately, the `RegionLocalState` has been persisted so the data can be removed from `pending_create_peers`.
+            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            assert_eq!(
+                pending_create_peers.remove(&self.fsm.region_id()),
+                Some((self.fsm.peer_id(), false))
+            );
         }
 
         if let Some(r) = meta
@@ -2704,9 +2906,11 @@ where
                 ExecResult::CompactLog { first_index, state } => {
                     self.on_ready_compact_log(first_index, state)
                 }
-                ExecResult::SplitRegion { derived, regions } => {
-                    self.on_ready_split_region(derived, regions)
-                }
+                ExecResult::SplitRegion {
+                    derived,
+                    regions,
+                    new_split_regions,
+                } => self.on_ready_split_region(derived, regions, new_split_regions),
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
                 }
@@ -2719,9 +2923,14 @@ where
                 ExecResult::ComputeHash {
                     region,
                     index,
+                    context,
                     snap,
-                } => self.on_ready_compute_hash(region, index, snap),
-                ExecResult::VerifyHash { index, hash } => self.on_ready_verify_hash(index, hash),
+                } => self.on_ready_compute_hash(region, index, context, snap),
+                ExecResult::VerifyHash {
+                    index,
+                    context,
+                    hash,
+                } => self.on_ready_verify_hash(index, context, hash),
                 ExecResult::DeleteRange { .. } => {
                     // TODO: clean user properties?
                 }
@@ -2887,12 +3096,7 @@ where
         }
     }
 
-    fn propose_raft_command(
-        &mut self,
-        mut msg: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
-        txn_extra: TxnExtra,
-    ) {
+    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<EK::Snapshot>) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -2924,6 +3128,7 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "message" => ?msg,
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
             cb.invoke_with_response(new_error(e));
             return;
@@ -2937,7 +3142,7 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        if self.fsm.peer.propose(self.ctx, cb, msg, resp, txn_extra) {
+        if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
             self.fsm.has_ready = true;
         }
 
@@ -2965,19 +3170,17 @@ where
     }
 
     fn register_raft_gc_log_tick(&mut self) {
-        self.schedule_tick(
-            PeerTicks::RAFT_LOG_GC,
-            self.ctx.cfg.raft_log_gc_tick_interval.0,
-        )
+        self.schedule_tick(PeerTicks::RAFT_LOG_GC)
     }
 
     #[allow(clippy::if_same_then_else)]
-    fn on_raft_gc_log_tick(&mut self) {
+    fn on_raft_gc_log_tick(&mut self, force_compact: bool) {
         if !self.fsm.peer.get_store().is_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
-        debug_assert!(!self.fsm.stopped);
+        fail_point!("on_raft_log_gc_tick_1", self.fsm.peer_id() == 1, |_| {});
         fail_point!("on_raft_gc_log_tick", |_| {});
+        debug_assert!(!self.fsm.stopped);
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we
@@ -3038,49 +3241,56 @@ where
             .peer
             .mut_store()
             .maybe_gc_cache(alive_cache_idx, applied_idx);
+
         let first_idx = self.fsm.peer.get_store().first_index();
-        let mut compact_idx;
-        if applied_idx > first_idx
-            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit
+
+        let mut compact_idx = if force_compact
+            // Too many logs between applied index and first index.
+            || (applied_idx > first_idx && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit)
+            // Raft log size ecceeds the limit.
+            || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0)
         {
-            compact_idx = applied_idx;
-        } else if self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0 {
-            compact_idx = applied_idx;
-        } else if replicated_idx < first_idx
-            || replicated_idx - first_idx <= self.ctx.cfg.raft_log_gc_threshold
+            applied_idx
+        } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
+            // In the current implementation one compaction can't delete all stale Raft logs.
+            // There will be at least 3 entries left after one compaction:
+            // |------------- entries needs to be compacted ----------|
+            // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
+            //             |-------------------- entries will be left ----------------------|
+            return;
+        } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold
+            && self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks
         {
+            // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
+            self.fsm.skip_gc_raft_log_ticks += 1;
+            self.register_raft_gc_log_tick();
             return;
         } else {
-            compact_idx = replicated_idx;
-        }
-
+            replicated_idx
+        };
+        assert!(compact_idx >= first_idx);
         // Have no idea why subtract 1 here, but original code did this by magic.
-        assert!(compact_idx > 0);
         compact_idx -= 1;
         if compact_idx < first_idx {
             // In case compact_idx == first_idx before subtraction.
             return;
         }
-
         total_gc_logs += compact_idx - first_idx;
-
-        let term = self.fsm.peer.get_index_term(compact_idx);
 
         // Create a compact log request and notify directly.
         let region_id = self.fsm.peer.region().get_id();
-        let request =
-            new_compact_log_request(region_id, self.fsm.peer.peer.clone(), compact_idx, term);
-        self.propose_raft_command(request, Callback::None, TxnExtra::default());
+        let peer = self.fsm.peer.peer.clone();
+        let term = self.fsm.peer.get_index_term(compact_idx);
+        let request = new_compact_log_request(region_id, peer, compact_idx, term);
+        self.propose_raft_command(request, Callback::None);
 
+        self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
     }
 
     fn register_split_region_check_tick(&mut self) {
-        self.schedule_tick(
-            PeerTicks::SPLIT_REGION_CHECK,
-            self.ctx.cfg.split_region_check_tick_interval.0,
-        )
+        self.schedule_tick(PeerTicks::SPLIT_REGION_CHECK)
     }
 
     #[inline]
@@ -3318,10 +3528,7 @@ where
     }
 
     fn register_pd_heartbeat_tick(&mut self) {
-        self.schedule_tick(
-            PeerTicks::PD_HEARTBEAT,
-            self.ctx.cfg.pd_heartbeat_tick_interval.0,
-        )
+        self.schedule_tick(PeerTicks::PD_HEARTBEAT)
     }
 
     fn on_check_peer_stale_state_tick(&mut self) {
@@ -3419,21 +3626,24 @@ where
     }
 
     fn register_check_peer_stale_state_tick(&mut self) {
-        self.schedule_tick(
-            PeerTicks::CHECK_PEER_STALE_STATE,
-            self.ctx.cfg.peer_stale_state_check_interval.0,
-        )
+        self.schedule_tick(PeerTicks::CHECK_PEER_STALE_STATE)
     }
 }
 
 impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
-    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EK::Snapshot) {
+    fn on_ready_compute_hash(
+        &mut self,
+        region: metapb::Region,
+        index: u64,
+        context: Vec<u8>,
+        snap: EK::Snapshot,
+    ) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
-        let task = ConsistencyCheckTask::compute_hash(region, index, snap);
+        let task = ConsistencyCheckTask::compute_hash(region, index, context, snap);
         info!(
             "schedule compute hash task";
             "region_id" => self.fsm.region_id(),
@@ -3450,12 +3660,17 @@ where
         }
     }
 
-    fn on_ready_verify_hash(&mut self, expected_index: u64, expected_hash: Vec<u8>) {
-        self.verify_and_store_hash(expected_index, expected_hash);
+    fn on_ready_verify_hash(
+        &mut self,
+        expected_index: u64,
+        context: Vec<u8>,
+        expected_hash: Vec<u8>,
+    ) {
+        self.verify_and_store_hash(expected_index, context, expected_hash);
     }
 
-    fn on_hash_computed(&mut self, index: u64, hash: Vec<u8>) {
-        if !self.verify_and_store_hash(index, hash) {
+    fn on_hash_computed(&mut self, index: u64, context: Vec<u8>, hash: Vec<u8>) {
+        if !self.verify_and_store_hash(index, context, hash) {
             return;
         }
 
@@ -3464,7 +3679,7 @@ where
             self.fsm.peer.peer.clone(),
             &self.fsm.peer.consistency_state,
         );
-        self.propose_raft_command(req, Callback::None, TxnExtra::default());
+        self.propose_raft_command(req, Callback::None);
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SstMeta>) {
@@ -3489,7 +3704,13 @@ where
     }
 
     /// Verify and store the hash to state. return true means the hash has been stored successfully.
-    fn verify_and_store_hash(&mut self, expected_index: u64, expected_hash: Vec<u8>) -> bool {
+    // TODO: Consider context in the function.
+    fn verify_and_store_hash(
+        &mut self,
+        expected_index: u64,
+        _context: Vec<u8>,
+        expected_hash: Vec<u8>,
+    ) -> bool {
         if expected_index < self.fsm.peer.consistency_state.index {
             REGION_HASH_COUNTER.verify.miss.inc();
             warn!(
@@ -3630,6 +3851,7 @@ fn new_verify_hash_request(
     let mut admin = AdminRequest::default();
     admin.set_cmd_type(AdminCmdType::VerifyHash);
     admin.mut_verify_hash().set_index(state.index);
+    admin.mut_verify_hash().set_context(state.context.clone());
     admin.mut_verify_hash().set_hash(state.hash.clone());
     request.set_admin_request(admin);
     request
@@ -3654,7 +3876,7 @@ fn new_compact_log_request(
 impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     // Handle status commands here, separate the logic, maybe we can move it
     // to another file later.
@@ -3708,9 +3930,9 @@ where
 mod tests {
     use super::BatchRaftCmdRequestBuilder;
     use crate::store::local_metrics::RaftProposeMetrics;
-    use crate::store::msg::{Callback, RaftCommand};
+    use crate::store::msg::{Callback, ExtCallback, RaftCommand};
 
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::RocksEngine;
     use kvproto::raft_cmdpb::{
         AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
         StatusRequest,
@@ -3722,7 +3944,7 @@ mod tests {
     #[test]
     fn test_batch_raft_cmd_request_builder() {
         let max_batch_size = 1000.0;
-        let mut builder = BatchRaftCmdRequestBuilder::<RocksSnapshot>::new(max_batch_size);
+        let mut builder = BatchRaftCmdRequestBuilder::<RocksEngine>::new(max_batch_size);
         let mut q = Request::default();
         let mut metric = RaftProposeMetrics::default();
 
@@ -3776,18 +3998,36 @@ mod tests {
         q.set_put(put);
         req.mut_requests().push(q);
         let mut cbs_flags = vec![];
+        let mut proposed_cbs_flags = vec![];
         let mut response = RaftCmdResponse::default();
-        for _ in 0..10 {
+        for i in 0..10 {
             let flag = Arc::new(AtomicBool::new(false));
             cbs_flags.push(flag.clone());
-            let cb = Callback::Write(Box::new(move |_resp| {
-                flag.store(true, Ordering::Release);
-            }));
+            // Some commands don't have proposed_cb.
+            let proposed_cb: Option<ExtCallback> = if i % 2 == 0 {
+                let proposed_flag = Arc::new(AtomicBool::new(false));
+                proposed_cbs_flags.push(proposed_flag.clone());
+                Some(Box::new(move || {
+                    proposed_flag.store(true, Ordering::Release);
+                }))
+            } else {
+                None
+            };
+            let cb = Callback::write_ext(
+                Box::new(move |_resp| {
+                    flag.store(true, Ordering::Release);
+                }),
+                proposed_cb,
+            );
             response.mut_responses().push(Response::default());
             let cmd = RaftCommand::new(req.clone(), cb);
             builder.add(cmd, 100);
         }
-        let cmd = builder.build(&mut metric).unwrap();
+        let mut cmd = builder.build(&mut metric).unwrap();
+        cmd.callback.invoke_proposed();
+        for flag in proposed_cbs_flags {
+            assert!(flag.load(Ordering::Acquire));
+        }
         assert_eq!(10, cmd.request.get_requests().len());
         cmd.callback.invoke_with_response(response);
         for flag in cbs_flags {

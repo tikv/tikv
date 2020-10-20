@@ -2,10 +2,10 @@
 
 use async_stream::stream;
 use engine_traits::KvEngine;
-use futures03::compat::Compat01As03;
-use futures03::executor::block_on;
-use futures03::future::{ok, poll_fn};
-use futures03::prelude::*;
+use futures::compat::Compat01As03;
+use futures::executor::block_on;
+use futures::future::{ok, poll_fn};
+use futures::prelude::*;
 use hyper::client::HttpConnector;
 use hyper::server::accept::Accept;
 use hyper::server::conn::{AddrIncoming, AddrStream};
@@ -600,7 +600,7 @@ where
         match router.send(
             id,
             CasualMessage::AccessPeer(Box::new(move |peer| {
-                if let Err(meta) = tx.send(region_meta::RegionMeta::new(&peer.peer)) {
+                if let Err(meta) = tx.send(region_meta::RegionMeta::new(peer)) {
                     error!("receiver dropped, region meta: {:?}", meta)
                 }
             })),
@@ -827,9 +827,15 @@ fn tls_incoming(
                 }
                 None => break,
             };
-            yield tokio_openssl::accept(&acceptor, stream)
-                .await
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "TLS handshake error"));
+            match tokio_openssl::accept(&acceptor, stream).await {
+                Err(_) => {
+                    error!("Status server error: TLS handshake error");
+                    continue;
+                },
+                Ok(ssl_stream) => {
+                    yield Ok(ssl_stream);
+                },
+            }
         }
     };
     TlsIncoming(s)
@@ -958,9 +964,9 @@ fn decode_json(
 
 #[cfg(test)]
 mod tests {
-    use futures03::executor::block_on;
-    use futures03::future::ok;
-    use futures03::prelude::*;
+    use futures::executor::block_on;
+    use futures::future::ok;
+    use futures::prelude::*;
     use hyper::client::HttpConnector;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
     use hyper_openssl::HttpsConnector;
@@ -985,11 +991,7 @@ mod tests {
     struct MockRouter;
 
     impl CasualRouter<RocksEngine> for MockRouter {
-        fn send(
-            &self,
-            region_id: u64,
-            _: CasualMessage<RocksEngine, RocksEngine>,
-        ) -> raftstore::Result<()> {
+        fn send(&self, region_id: u64, _: CasualMessage<RocksEngine>) -> raftstore::Result<()> {
             Err(raftstore::Error::RegionNotFound(region_id))
         }
     }
