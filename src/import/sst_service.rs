@@ -3,7 +3,7 @@
 use std::f64::INFINITY;
 use std::sync::Arc;
 
-use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT, CF_WRITE};
+use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::{TryFutureExt, TryStreamExt};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
