@@ -479,8 +479,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
 
-        // If pilelined pessimistic lock or async apply prewrite takes effect, the process result
-        // should be already sent on success, and the `pr` passed to the function is None.
+        // If pipelined pessimistic lock is enabled, the proposed callback is not guaranteed to be
+        // invoked here. So the parameter `pr` is Some here, and in case that the proposed callback
+        // is not invoked, which means `tctx.cb` is not taken, call it here, just like other kinds
+        // of commands.
+        // If async apply prewrite takes effect, and the parameter `pr` passed to the function
+        // should be None, and the `tctx.cb` must have been taken, if the result is success.
         if let Some(cb) = tctx.cb {
             let pr = match result {
                 Ok(()) => pr.unwrap(),
@@ -667,7 +671,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 (None, Some(committed_cb))
                             }
                             ResponsePolicy::OnProposed => {
-                                let pr1 = pr.take().unwrap();
+                                // The normal write process is respond to clients and release
+                                // latches after async write finished. If pipelined pessimistic
+                                // locking is enabled, the process becomes parallel and there are
+                                // two msgs for one command:
+                                //   1. Msg::PipelinedWrite: respond to clients
+                                //   2. Msg::WriteFinished: deque context and release latches
+                                // The proposed callback is not guaranteed to be invoked, so we
+                                // clone the result for each msg.
+                                let pr1 = pr.as_ref().unwrap().maybe_clone().unwrap();
                                 let sched = scheduler.clone();
                                 // Currently, the only case that response is returned after finishing
                                 // proposed phase is pipelined pessimistic lock.

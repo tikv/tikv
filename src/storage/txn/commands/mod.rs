@@ -337,7 +337,7 @@ struct ReleasedLocks {
 /// For most cases, the response should be sent after the result being successfully applied to
 /// the storage (if needed). But in some special cases, some optimizations allows the response to be
 /// returned at an earlier phase.
-/// 
+///
 /// Note that this doesn't affect latch releasing. The latch and the memory lock (if any) are always
 /// released after applying, regardless of when the response is sent.
 #[derive(Clone, Copy, Debug)]
