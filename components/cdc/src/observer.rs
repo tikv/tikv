@@ -18,7 +18,6 @@ use tikv_util::worker::Scheduler;
 use txn_types::{Key, Lock, MutationType, TxnExtra, Value, WriteRef, WriteType};
 
 use crate::endpoint::{Deregister, Task};
-use crate::metrics::CDC_OLD_VALUE_SCAN_DETAILS;
 use crate::{Error as CdcError, Result};
 
 /// An Observer for CDC.
@@ -126,7 +125,7 @@ impl CmdObserver<RocksEngine> for CdcObserver {
             // Create a snapshot here for preventing the old value was GC-ed.
             let snapshot = RegionSnapshot::from_snapshot(engine.snapshot().into_sync(), region);
             let mut reader = OldValueReader::new(snapshot);
-            let get_old_value = move |key| {
+            let get_old_value = move |key, statistics: &mut Statistics| {
                 if let Some((old_value, mutation_type)) = txn_extra.mut_old_values().remove(&key) {
                     match mutation_type {
                         MutationType::Insert => {
@@ -140,14 +139,16 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                                     let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
                                     let mut opts = ReadOptions::new();
                                     opts.set_fill_cache(false);
-                                    reader.get_value_default(&prev_key)
+                                    reader.get_value_default(&prev_key, statistics)
                                 });
                             }
                         }
                         _ => unreachable!(),
                     }
                 }
-                reader.near_seek_old_value(&key).unwrap_or_default()
+                reader
+                    .near_seek_old_value(&key, statistics)
+                    .unwrap_or_default()
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
                 multi: batches,
@@ -207,8 +208,6 @@ impl RegionChangeObserver for CdcObserver {
 struct OldValueReader<S: EngineSnapshot> {
     snapshot: S,
     write_cursor: Cursor<S::Iter>,
-    // TODO(5kbpers): add a metric here.
-    statistics: Statistics,
 }
 
 impl<S: EngineSnapshot> OldValueReader<S> {
@@ -221,14 +220,13 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         Self {
             snapshot,
             write_cursor,
-            statistics: Statistics::default(),
         }
     }
 
     // return Some(vec![]) if value is empty.
     // return None if key not exist.
-    fn get_value_default(&mut self, key: &Key) -> Option<Value> {
-        self.statistics.data.get += 1;
+    fn get_value_default(&mut self, key: &Key, statistics: &mut Statistics) -> Option<Value> {
+        statistics.data.get += 1;
         let mut opts = ReadOptions::new();
         opts.set_fill_cache(false);
         self.snapshot
@@ -237,8 +235,8 @@ impl<S: EngineSnapshot> OldValueReader<S> {
             .map(|v| v.deref().to_vec())
     }
 
-    fn check_lock(&mut self, key: &Key) -> bool {
-        self.statistics.lock.get += 1;
+    fn check_lock(&mut self, key: &Key, statistics: &mut Statistics) -> bool {
+        statistics.lock.get += 1;
         let mut opts = ReadOptions::new();
         opts.set_fill_cache(false);
         let key_slice = key.as_encoded();
@@ -255,39 +253,41 @@ impl<S: EngineSnapshot> OldValueReader<S> {
 
     // return Some(vec![]) if value is empty.
     // return None if key not exist.
-    fn near_seek_old_value(&mut self, key: &Key) -> Result<Option<Value>> {
+    fn near_seek_old_value(
+        &mut self,
+        key: &Key,
+        statistics: &mut Statistics,
+    ) -> Result<Option<Value>> {
         let user_key = Key::truncate_ts_for(key.as_encoded()).unwrap();
-        if self
-            .write_cursor
-            .near_seek(key, &mut self.statistics.write)?
-            && Key::is_user_key_eq(self.write_cursor.key(&mut self.statistics.write), user_key)
+        if self.write_cursor.near_seek(key, &mut statistics.write)?
+            && Key::is_user_key_eq(self.write_cursor.key(&mut statistics.write), user_key)
         {
-            if self.write_cursor.key(&mut self.statistics.write) == key.as_encoded().as_slice() {
+            if self.write_cursor.key(&mut statistics.write) == key.as_encoded().as_slice() {
                 // Key was committed, move cursor to the next key to seek for old value.
-                if !self.write_cursor.next(&mut self.statistics.write) {
+                if !self.write_cursor.next(&mut statistics.write) {
                     // Do not has any next key, return empty value.
                     return Ok(Some(Vec::default()));
                 }
-            } else if !self.check_lock(key) {
+            } else if !self.check_lock(key, statistics) {
                 return Ok(None);
             }
 
             // Key was not committed, check if the lock is corresponding to the key.
             let mut old_value = Some(Vec::default());
-            while Key::is_user_key_eq(self.write_cursor.key(&mut self.statistics.write), user_key) {
+            while Key::is_user_key_eq(self.write_cursor.key(&mut statistics.write), user_key) {
                 let write =
-                    WriteRef::parse(self.write_cursor.value(&mut self.statistics.write)).unwrap();
+                    WriteRef::parse(self.write_cursor.value(&mut statistics.write)).unwrap();
                 old_value = match write.write_type {
                     WriteType::Put => match write.short_value {
                         Some(short_value) => Some(short_value.to_vec()),
                         None => {
                             let key = key.clone().truncate_ts().unwrap().append_ts(write.start_ts);
-                            self.get_value_default(&key)
+                            self.get_value_default(&key, statistics)
                         }
                     },
                     WriteType::Delete => Some(Vec::default()),
                     WriteType::Rollback | WriteType::Lock => {
-                        if !self.write_cursor.next(&mut self.statistics.write) {
+                        if !self.write_cursor.next(&mut statistics.write) {
                             Some(Vec::default())
                         } else {
                             continue;
@@ -297,22 +297,10 @@ impl<S: EngineSnapshot> OldValueReader<S> {
                 break;
             }
             Ok(old_value)
-        } else if self.check_lock(key) {
+        } else if self.check_lock(key, statistics) {
             Ok(Some(Vec::default()))
         } else {
             Ok(None)
-        }
-    }
-}
-
-impl<S: EngineSnapshot> Drop for OldValueReader<S> {
-    fn drop(&mut self) {
-        for (cf, cf_details) in self.statistics.details().iter() {
-            for (tag, count) in cf_details.iter() {
-                CDC_OLD_VALUE_SCAN_DETAILS
-                    .with_label_values(&[*cf, *tag])
-                    .inc_by(*count as i64);
-            }
         }
     }
 }

@@ -31,6 +31,7 @@ use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
+use tikv::storage::Statistics;
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use tikv_util::time::Instant;
@@ -595,9 +596,18 @@ impl Delegate {
                     if self.txn_extra_op == TxnExtraOp::ReadOldValue {
                         let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
                         let start = Instant::now();
-                        row.old_value = old_value_cb.borrow_mut().as_mut()(key).unwrap_or_default();
+                        let mut statistics = Statistics::default();
+                        row.old_value = old_value_cb.borrow_mut().as_mut()(key, &mut statistics)
+                            .unwrap_or_default();
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
                             .observe(start.elapsed().as_millis() as f64);
+                        for (cf, cf_details) in statistics.details().iter() {
+                            for (tag, count) in cf_details.iter() {
+                                CDC_OLD_VALUE_SCAN_DETAILS
+                                    .with_label_values(&[*cf, *tag])
+                                    .inc_by(*count as i64);
+                            }
+                        }
                     }
 
                     let occupied = rows.entry(row.key.clone()).or_default();
