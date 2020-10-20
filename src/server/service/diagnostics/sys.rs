@@ -362,14 +362,14 @@ fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
             (
                 "fstype",
                 std::str::from_utf8(disk.get_file_system())
-                    .unwrap_or_else(|_| "unkonwn")
+                    .unwrap_or("unkonwn")
                     .to_string(),
             ),
             (
                 "path",
                 disk.get_mount_point()
                     .to_str()
-                    .unwrap_or_else(|| "unknown")
+                    .unwrap_or("unknown")
                     .to_string(),
             ),
             ("total", total.to_string()),
@@ -387,12 +387,7 @@ fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         }
         let mut item = ServerInfoItem::default();
         item.set_tp("disk".to_string());
-        item.set_name(
-            disk.get_name()
-                .to_str()
-                .unwrap_or_else(|| "disk")
-                .to_string(),
-        );
+        item.set_name(disk.get_name().to_str().unwrap_or("disk").to_string());
         item.set_pairs(pairs.into());
         collector.push(item);
     }

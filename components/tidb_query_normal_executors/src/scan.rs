@@ -21,7 +21,7 @@ pub trait InnerExecutor: Send {
         ctx: &mut EvalContext,
         key: Vec<u8>,
         value: Vec<u8>,
-        columns: Arc<Vec<ColumnInfo>>,
+        columns: Arc<[ColumnInfo]>,
     ) -> Result<Option<Row>>;
 }
 
@@ -30,7 +30,7 @@ pub struct ScanExecutor<S: Storage, T: InnerExecutor> {
     inner: T,
     context: EvalContext,
     scanner: RangesScanner<S>,
-    columns: Arc<Vec<ColumnInfo>>,
+    columns: Arc<[ColumnInfo]>,
 }
 
 pub struct ScanExecutorOptions<S, T> {
@@ -79,7 +79,7 @@ impl<S: Storage, T: InnerExecutor> ScanExecutor<S, T> {
             inner,
             context,
             scanner,
-            columns: Arc::new(columns),
+            columns: columns.into(),
         })
     }
 }

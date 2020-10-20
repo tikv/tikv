@@ -95,5 +95,8 @@ vlog = "0.1.4"
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
 
+[build-dependencies]
+time = "0.1"
+
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
