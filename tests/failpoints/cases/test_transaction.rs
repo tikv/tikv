@@ -274,6 +274,9 @@ fn test_no_memory_locks_after_max_commit_ts_error() {
         )
         .unwrap();
     thread::sleep(Duration::from_millis(200));
+    assert!(cm
+        .read_key_check(&Key::from_raw(b"k1"), |_| Err(()))
+        .is_err());
     cm.update_max_ts(200.into());
 
     let res = prewrite_rx.recv().unwrap();
