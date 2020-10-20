@@ -91,6 +91,7 @@ struct TaskContext {
 
     lock: Lock,
     cb: Option<StorageCallback>,
+    pr: Option<ProcessResult>,
     write_bytes: usize,
     tag: metrics::CommandKind,
     // How long it waits on latches.
@@ -118,6 +119,7 @@ impl TaskContext {
             task: Some(task),
             lock,
             cb: Some(cb),
+            pr: None,
             write_bytes,
             tag,
             latch_timer: Instant::now_coarse(),
@@ -216,11 +218,20 @@ impl<L: LockManager> SchedulerInner<L> {
         tctx
     }
 
-    fn take_task_cb(&self, cid: u64) -> Option<StorageCallback> {
+    fn take_task_cb_and_pr(&self, cid: u64) -> (Option<StorageCallback>, Option<ProcessResult>) {
         self.task_contexts[id_index(cid)]
             .lock()
             .get_mut(&cid)
-            .and_then(|tctx| tctx.cb.take())
+            .map(|tctx| (tctx.cb.take(), tctx.pr.take()))
+            .unwrap_or((None, None))
+    }
+
+    fn store_pr(&self, cid: u64, pr: ProcessResult) {
+        self.task_contexts[id_index(cid)]
+            .lock()
+            .get_mut(&cid)
+            .unwrap()
+            .pr = Some(pr);
     }
 
     fn too_busy(&self) -> bool {
@@ -479,15 +490,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
 
-        // If pipelined pessimistic lock is enabled, the proposed callback is not guaranteed to be
-        // invoked here. So the parameter `pr` is Some here, and in case that the proposed callback
-        // is not invoked, which means `tctx.cb` is not taken, call it here, just like other kinds
-        // of commands.
-        // If async apply prewrite takes effect, and the parameter `pr` passed to the function
-        // should be None, and the `tctx.cb` must have been taken, if the result is success.
+        // If pipelined pessimistic lock or async apply prewrite takes effect, it's not guaranteed
+        // that the proposed or committed callback is surely invoked, which takes and invokes
+        // `tctx.cb(tctx.pr)`.
         if let Some(cb) = tctx.cb {
             let pr = match result {
-                Ok(()) => pr.unwrap(),
+                Ok(()) => pr.or(tctx.pr).unwrap(),
                 Err(e) => ProcessResult::Failed {
                     err: StorageError::from(e),
                 },
@@ -653,16 +661,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         match response_policy {
                             ResponsePolicy::OnApplied => (None, None),
                             ResponsePolicy::OnCommitted => {
-                                let pr1 = pr.take().unwrap();
+                                self.inner.store_pr(cid, pr.take().unwrap());
                                 let sched = scheduler.clone();
                                 // Currently, the only case that response is returned after finishing
                                 // commit is async applying prewrites for async commit transactions.
+                                // The committed callback is not guaranteed to be invoked. So store
+                                // the `pr` to the tctx instead of capturing it to the closure.
                                 let committed_cb = Box::new(move || {
-                                    let cb = sched.inner.take_task_cb(cid).unwrap();
+                                    let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
                                     Self::early_response(
                                         cid,
-                                        cb,
-                                        pr1,
+                                        cb.unwrap(),
+                                        pr.unwrap(),
                                         tag,
                                         metrics::CommandStageKind::resp_on_commit,
                                     );
@@ -677,9 +687,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 // two msgs for one command:
                                 //   1. Msg::PipelinedWrite: respond to clients
                                 //   2. Msg::WriteFinished: deque context and release latches
-                                // The proposed callback is not guaranteed to be invoked, so we
-                                // clone the result for each msg.
-                                let pr1 = pr.as_ref().unwrap().maybe_clone().unwrap();
+                                // The proposed callback is not guaranteed to be invoked. So store
+                                // the `pr` to the tctx instead of capturing it to the closure.
+                                self.inner.store_pr(cid, pr.take().unwrap());
                                 let sched = scheduler.clone();
                                 // Currently, the only case that response is returned after finishing
                                 // proposed phase is pipelined pessimistic lock.
@@ -687,11 +697,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 // async apply prewrite.
                                 let proposed_cb = Box::new(move || {
                                     fail_point!("scheduler_pipelined_write_finish");
-                                    let cb = sched.inner.take_task_cb(cid).unwrap();
+                                    let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
                                     Self::early_response(
                                         cid,
-                                        cb,
-                                        pr1,
+                                        cb.unwrap(),
+                                        pr.unwrap(),
                                         tag,
                                         metrics::CommandStageKind::pipelined_write,
                                     );
