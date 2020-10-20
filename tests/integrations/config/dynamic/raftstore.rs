@@ -17,8 +17,8 @@ use tikv::import::SSTImporter;
 
 use engine::Engines;
 use engine_traits::ALL_CFS;
-use pd_client::PdClient;
 use tempfile::TempDir;
+use test_raftstore::TestPdClient;
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{FutureWorker, Worker};
 
@@ -32,9 +32,6 @@ impl Transport for MockTransport {
         unimplemented!()
     }
 }
-
-struct MockPdClient;
-impl PdClient for MockPdClient {}
 
 fn create_tmp_engine(dir: &TempDir) -> Engines {
     let db = Arc::new(
@@ -94,7 +91,7 @@ fn start_raftstore(
             cfg_track,
             engines,
             MockTransport,
-            Arc::new(MockPdClient),
+            Arc::new(TestPdClient::new(0, true)),
             snap_mgr,
             pd_worker,
             store_meta,

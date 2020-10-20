@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use futures::{stream, Future, Sink, Stream};
 use grpcio::*;
-use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event};
+use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event, ResolvedTs};
+use protobuf::Message;
 use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
@@ -31,14 +32,28 @@ impl ConnID {
     }
 }
 
+pub enum CdcEvent {
+    ResolvedTs(ResolvedTs),
+    Event(Event),
+}
+
+impl CdcEvent {
+    pub fn size(&self) -> usize {
+        match self {
+            CdcEvent::ResolvedTs(r) => r.compute_size() as usize,
+            CdcEvent::Event(ref e) => e.compute_size() as usize,
+        }
+    }
+}
+
 pub struct Conn {
     id: ConnID,
-    sink: BatchSender<(usize, Event)>,
+    sink: BatchSender<CdcEvent>,
     downstreams: HashMap<u64, DownstreamID>,
 }
 
 impl Conn {
-    pub fn new(sink: BatchSender<(usize, Event)>) -> Conn {
+    pub fn new(sink: BatchSender<CdcEvent>) -> Conn {
         Conn {
             id: ConnID::new(),
             sink,
@@ -54,7 +69,7 @@ impl Conn {
         self.downstreams
     }
 
-    pub fn get_sink(&self) -> BatchSender<(usize, Event)> {
+    pub fn get_sink(&self) -> BatchSender<CdcEvent> {
         self.sink.clone()
     }
 
@@ -159,21 +174,35 @@ impl ChangeData for Service {
                 // The size of the response should not exceed CDC_MAX_RESP_SIZE.
                 // Split the events into multiple responses by CDC_MAX_RESP_SIZE here.
                 let events_len = events.len();
-                let mut event_vecs = vec![Vec::with_capacity(events_len)];
+                let mut resp_vecs = Vec::with_capacity(events_len);
+                resp_vecs.push(ChangeDataEvent::default());
                 let mut current_events_size = 0;
-                for (size, event) in events {
-                    if current_events_size + size >= CDC_MAX_RESP_SIZE {
-                        event_vecs.push(Vec::with_capacity(events_len));
+                for event in events {
+                    if current_events_size >= CDC_MAX_RESP_SIZE {
+                        resp_vecs.push(ChangeDataEvent::default());
                         current_events_size = 0;
                     }
-                    current_events_size += size;
-                    event_vecs.last_mut().unwrap().push(event);
+                    let event_size = event.size();
+                    match event {
+                        CdcEvent::Event(e) => {
+                            resp_vecs.last_mut().unwrap().mut_events().push(e);
+                            current_events_size += event_size;
+                        }
+                        CdcEvent::ResolvedTs(r) => {
+                            // Set resolved ts as an individual event.
+                            let events = resp_vecs.last_mut().unwrap().take_events();
+                            let mut change_data_event = ChangeDataEvent::default();
+                            change_data_event.set_events(events);
+
+                            resp_vecs.last_mut().unwrap().set_resolved_ts(r);
+                            resp_vecs.push(change_data_event);
+                        }
+                    }
                 }
-                let resps = event_vecs.into_iter().map(|events| {
-                    let mut resp = ChangeDataEvent::default();
-                    resp.set_events(events.into());
-                    (resp, WriteFlags::default())
-                });
+                let resps = resp_vecs
+                    .into_iter()
+                    .filter(|e| e.has_resolved_ts() || !e.events.is_empty())
+                    .map(|resp| (resp, WriteFlags::default()));
                 stream::iter_ok(resps)
             })
             .flatten()
