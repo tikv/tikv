@@ -9,16 +9,15 @@ use std::sync::Arc;
 use crossbeam::atomic::AtomicCell;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
-    error::DuplicateRequest as ErrorDuplicateRequest,
     event::{
         row::OpType as EventRowOpType, Entries as EventEntries, Event as Event_oneof_event,
         LogType as EventLogType, Row as EventRow,
     },
-    Error as EventError, Event,
+    DuplicateRequest, Error as EventError, Event,
 };
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
-    Error as EventError, ErrorDuplicateRequest, Event, EventEntries, EventLogType, EventRow,
+    DuplicateRequest, Error as EventError, Event, EventEntries, EventLogType, EventRow,
     EventRowOpType, Event_oneof_event,
 };
 use kvproto::errorpb;
@@ -137,7 +136,7 @@ impl Downstream {
     pub fn sink_duplicate_error(&self, region_id: u64) {
         let mut change_data_event = Event::default();
         let mut cdc_err = EventError::default();
-        let mut err = ErrorDuplicateRequest::default();
+        let mut err = DuplicateRequest::default();
         err.set_region_id(region_id);
         cdc_err.set_duplicate_request(err);
         change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
