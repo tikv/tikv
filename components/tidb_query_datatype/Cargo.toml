@@ -22,6 +22,7 @@ boolinator = "2.4.0"
 chrono = "0.4"
 chrono-tz = "0.5.1"
 codec = { path = "../codec" }
+error_code = { path = "../error_code" }
 failure = "0.1"
 hex = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }

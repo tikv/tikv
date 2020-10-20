@@ -125,18 +125,21 @@ impl BackupWriter {
         name: &str,
         limiter: Limiter,
         compression_type: Option<SstCompressionType>,
+        compression_level: i32,
     ) -> Result<BackupWriter> {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
             .set_db(RocksEngine::from_ref(&db))
             .set_compression_type(compression_type)
+            .set_compression_level(compression_level)
             .build(name)?;
         let write = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_WRITE)
             .set_db(RocksEngine::from_ref(&db))
             .set_compression_type(compression_type)
+            .set_compression_level(compression_level)
             .build(name)?;
         let name = name.to_owned();
         Ok(BackupWriter {
@@ -225,12 +228,14 @@ impl BackupRawKVWriter {
         cf: CfName,
         limiter: Limiter,
         compression_type: Option<SstCompressionType>,
+        compression_level: i32,
     ) -> Result<BackupRawKVWriter> {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(cf)
             .set_db(RocksEngine::from_ref(&db))
             .set_compression_type(compression_type)
+            .set_compression_level(compression_level)
             .build(name)?;
         Ok(BackupRawKVWriter {
             name: name.to_owned(),
@@ -284,7 +289,6 @@ impl BackupRawKVWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_rocks::Compat;
     use engine_traits::Iterable;
     use std::collections::BTreeMap;
     use std::f64::INFINITY;
@@ -305,24 +309,24 @@ mod tests {
 
         let opt = engine_rocks::raw::IngestExternalFileOptions::new();
         for (cf, sst) in ssts {
-            let handle = db.cf_handle(cf).unwrap();
-            db.ingest_external_file_cf(handle, &opt, &[sst.to_str().unwrap()])
+            let handle = db.as_inner().cf_handle(cf).unwrap();
+            db.as_inner()
+                .ingest_external_file_cf(handle, &opt, &[sst.to_str().unwrap()])
                 .unwrap();
         }
         for (cf, kv) in kvs {
             let mut map = BTreeMap::new();
-            db.c()
-                .scan_cf(
-                    cf,
-                    keys::DATA_MIN_KEY,
-                    keys::DATA_MAX_KEY,
-                    false,
-                    |key, value| {
-                        map.insert(key.to_owned(), value.to_owned());
-                        Ok(true)
-                    },
-                )
-                .unwrap();
+            db.scan_cf(
+                cf,
+                keys::DATA_MIN_KEY,
+                keys::DATA_MAX_KEY,
+                false,
+                |key, value| {
+                    map.insert(key.to_owned(), value.to_owned());
+                    Ok(true)
+                },
+            )
+            .unwrap();
             assert_eq!(map.len(), kv.len(), "{} {:?} {:?}", cf, map, kv);
             for (k, v) in *kv {
                 assert_eq!(&v.to_vec(), map.get(&k.to_vec()).unwrap());
@@ -348,13 +352,13 @@ mod tests {
 
         // Test empty file.
         let mut writer =
-            BackupWriter::new(db.clone(), "foo", Limiter::new(INFINITY), None).unwrap();
+            BackupWriter::new(db.get_sync_db(), "foo", Limiter::new(INFINITY), None, 0).unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
         let mut writer =
-            BackupWriter::new(db.clone(), "foo1", Limiter::new(INFINITY), None).unwrap();
+            BackupWriter::new(db.get_sync_db(), "foo1", Limiter::new(INFINITY), None, 0).unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {
@@ -380,7 +384,8 @@ mod tests {
         );
 
         // Test write and default.
-        let mut writer = BackupWriter::new(db, "foo2", Limiter::new(INFINITY), None).unwrap();
+        let mut writer =
+            BackupWriter::new(db.get_sync_db(), "foo2", Limiter::new(INFINITY), None, 0).unwrap();
         writer
             .write(
                 vec![

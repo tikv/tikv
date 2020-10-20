@@ -7,8 +7,10 @@ use kvproto::import_sstpb::SstMeta;
 
 use crate::store::util::is_epoch_stale;
 use crate::store::{StoreMsg, StoreRouter};
+use engine_traits::KvEngine;
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
+use std::marker::PhantomData;
 use tikv_util::worker::Runnable;
 
 pub enum Task {
@@ -25,25 +27,36 @@ impl fmt::Display for Task {
     }
 }
 
-pub struct Runner<C, S> {
+pub struct Runner<EK, C, S>
+where
+    EK: KvEngine,
+    S: StoreRouter<EK>,
+{
     store_id: u64,
     store_router: S,
     importer: Arc<SSTImporter>,
     pd_client: Arc<C>,
+    _engine: PhantomData<EK>,
 }
 
-impl<C: PdClient, S: StoreRouter> Runner<C, S> {
+impl<EK, C, S> Runner<EK, C, S>
+where
+    EK: KvEngine,
+    C: PdClient,
+    S: StoreRouter<EK>,
+{
     pub fn new(
         store_id: u64,
         store_router: S,
         importer: Arc<SSTImporter>,
         pd_client: Arc<C>,
-    ) -> Runner<C, S> {
+    ) -> Runner<EK, C, S> {
         Runner {
             store_id,
             store_router,
             importer,
             pd_client,
+            _engine: PhantomData,
         }
     }
 
@@ -77,7 +90,7 @@ impl<C: PdClient, S: StoreRouter> Runner<C, S> {
                     invalid_ssts.push(sst);
                 }
                 Err(e) => {
-                    error!("get region failed"; "err" => %e);
+                    error!(%e; "get region failed");
                 }
             }
         }
@@ -87,12 +100,19 @@ impl<C: PdClient, S: StoreRouter> Runner<C, S> {
         // destroyed.
         let msg = StoreMsg::ValidateSSTResult { invalid_ssts };
         if let Err(e) = self.store_router.send(msg) {
-            error!("send validate sst result failed"; "err" => %e);
+            error!(%e; "send validate sst result failed");
         }
     }
 }
 
-impl<C: PdClient, S: StoreRouter> Runnable<Task> for Runner<C, S> {
+impl<EK, C, S> Runnable for Runner<EK, C, S>
+where
+    EK: KvEngine,
+    C: PdClient,
+    S: StoreRouter<EK>,
+{
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::DeleteSST { ssts } => {

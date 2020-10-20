@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::{max, Ordering};
+use std::cmp::{max, min, Ordering};
 use std::str;
 
 use tidb_query_codegen::rpn_fn;
@@ -11,7 +11,7 @@ use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::EvalContext;
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn compare<C: Comparer>(lhs: Option<&C::T>, rhs: Option<&C::T>) -> Result<Option<i64>>
 where
@@ -20,7 +20,7 @@ where
     C::compare(lhs, rhs)
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn compare_json<F: CmpOp>(lhs: Option<JsonRef>, rhs: Option<JsonRef>) -> Result<Option<i64>> {
     Ok(match (lhs, rhs) {
@@ -30,7 +30,7 @@ pub fn compare_json<F: CmpOp>(lhs: Option<JsonRef>, rhs: Option<JsonRef>) -> Res
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn compare_bytes<C: Collator, F: CmpOp>(
     lhs: Option<BytesRef>,
@@ -225,7 +225,7 @@ impl CmpOp for CmpOpNullEQ {
     }
 }
 
-#[rpn_fn(varg)]
+#[rpn_fn(nullable, varg)]
 #[inline]
 pub fn coalesce<T: Evaluable + EvaluableRet>(args: &[Option<&T>]) -> Result<Option<T>> {
     for arg in args {
@@ -236,7 +236,7 @@ pub fn coalesce<T: Evaluable + EvaluableRet>(args: &[Option<&T>]) -> Result<Opti
     Ok(None)
 }
 
-#[rpn_fn(varg)]
+#[rpn_fn(nullable, varg)]
 #[inline]
 pub fn coalesce_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     for arg in args {
@@ -247,7 +247,7 @@ pub fn coalesce_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     Ok(None)
 }
 
-#[rpn_fn(varg)]
+#[rpn_fn(nullable, varg)]
 #[inline]
 pub fn coalesce_json(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     for arg in args {
@@ -258,19 +258,87 @@ pub fn coalesce_json(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     Ok(None)
 }
 
-#[rpn_fn(varg, min_args = 2)]
+#[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
 pub fn greatest_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
     do_get_extremum(args, max)
 }
 
-#[rpn_fn(varg, min_args = 2)]
+#[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
-pub fn greatest_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
-    do_get_extremum(args, |x, y| x.max(y))
+pub fn least_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
+    do_get_extremum(args, min)
 }
 
-#[rpn_fn(varg, min_args = 2, capture = [ctx])]
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn interval_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
+    let target = match args[0] {
+        None => return Ok(Some(-1)),
+        Some(v) => Some(v),
+    };
+
+    let arr = &args[1..];
+
+    match arr.binary_search(&target) {
+        Ok(pos) => Ok(Some(pos as Int + 1)),
+        Err(pos) => Ok(Some(pos as Int)),
+    }
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn greatest_decimal(args: &[Option<&Decimal>]) -> Result<Option<Decimal>> {
+    do_get_extremum(args, max)
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn least_decimal(args: &[Option<&Decimal>]) -> Result<Option<Decimal>> {
+    do_get_extremum(args, min)
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn greatest_string(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+    do_get_extremum(args, max)
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn least_string(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+    do_get_extremum(args, min)
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn greatest_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
+    do_get_extremum(args, max)
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn least_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
+    do_get_extremum(args, min)
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn interval_real(args: &[Option<&Real>]) -> Result<Option<Int>> {
+    let target = match args[0] {
+        None => return Ok(Some(-1)),
+        Some(v) => Some(v),
+    };
+
+    let arr = &args[1..];
+
+    match arr.binary_search(&target) {
+        Ok(pos) => Ok(Some(pos as Int + 1)),
+        Err(pos) => Ok(Some(pos as Int)),
+    }
+}
+
+#[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
 #[inline]
 pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     let mut greatest = None;
@@ -303,28 +371,67 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result
     Ok(greatest.map(|time| time.to_string().into_bytes()))
 }
 
+#[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
 #[inline]
-fn do_get_extremum<T, E>(args: &[Option<&T>], chooser: E) -> Result<Option<T>>
+pub fn least_time(mut ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+    // Max datetime range defined at https://dev.mysql.com/doc/refman/8.0/en/datetime.html
+    let mut least = Some(Time::parse_datetime(
+        &mut ctx,
+        "9999-12-31 23:59:59",
+        0,
+        true,
+    )?);
+    for arg in args {
+        match arg {
+            Some(arg_val) => {
+                let s = match str::from_utf8(arg_val) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::Encoding(err))
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
+                    Ok(t) => least = min(least, Some(t)),
+                    Err(_) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .map(|_| Ok(None))?;
+                    }
+                }
+            }
+            None => {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(least.map(|time| time.to_string().into_bytes()))
+}
+
+#[inline]
+fn do_get_extremum<'a, T, E>(args: &[Option<&'a T>], chooser: E) -> Result<Option<T::Owned>>
 where
-    T: Ord + Copy,
-    E: Fn(T, T) -> T,
+    T: Ord + ToOwned + ?Sized,
+    E: Fn(&'a T, &'a T) -> &'a T,
 {
     let first = args[0];
     match first {
         None => Ok(None),
         Some(first_val) => {
-            let mut res = *first_val;
+            let mut res = first_val;
             for arg in &args[1..] {
                 match arg {
                     None => {
                         return Ok(None);
                     }
                     Some(v) => {
-                        res = chooser(res, **v);
+                        res = chooser(res, *v);
                     }
                 }
             }
-            Ok(Some(res))
+            Ok(Some(res.to_owned()))
         }
     }
 }
@@ -785,12 +892,14 @@ mod tests {
                     Ordering::Less,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
             (
                 "a",
                 "b",
                 [
+                    Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
@@ -805,6 +914,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
             (
@@ -815,6 +925,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
             (
@@ -823,6 +934,7 @@ mod tests {
                 [
                     Ordering::Less,
                     Ordering::Less,
+                    Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
                 ],
@@ -835,12 +947,14 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
             (
                 "À\t",
                 "A",
                 [
+                    Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
@@ -855,12 +969,14 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
+                    Ordering::Greater,
                 ],
             ),
             (
                 "a bc",
                 "ab ",
                 [
+                    Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
@@ -875,6 +991,7 @@ mod tests {
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
             (
@@ -884,6 +1001,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
+                    Ordering::Less,
                     Ordering::Less,
                 ],
             ),
@@ -895,6 +1013,18 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Equal,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "aa",
+                "AA۝۝۝۝۝۝۝۝۝",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Less,
+                    Ordering::Equal,
                 ],
             ),
         ];
@@ -903,6 +1033,7 @@ mod tests {
             (Collation::Utf8Mb4BinNoPadding, 1),
             (Collation::Utf8Mb4Bin, 2),
             (Collation::Utf8Mb4GeneralCi, 3),
+            (Collation::Utf8Mb4UnicodeCi, 4),
         ];
 
         for (str_a, str_b, ordering_in_collations) in cases {
@@ -976,6 +1107,75 @@ mod tests {
     }
 
     #[test]
+    fn test_least_int() {
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Some(1), Some(1)], Some(1)),
+            (vec![Some(1), Some(-1), None], None),
+            (vec![Some(-2), Some(-1), Some(1), Some(2)], Some(-2)),
+            (
+                vec![Some(i64::MIN), Some(0), Some(-1), Some(i64::MAX)],
+                Some(i64::MIN),
+            ),
+            (vec![Some(0), Some(4), Some(8), Some(8)], Some(0)),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::LeastInt)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_interval_int() {
+        let cases = vec![
+            (vec![Some(1), None], Some(1)),
+            (vec![Some(1), Some(-10)], Some(1)),
+            (vec![Some(1), Some(2)], Some(0)),
+            (vec![Some(1), Some(1), Some(2)], Some(1)),
+            (vec![Some(1), Some(0), Some(1), Some(2)], Some(2)),
+            (vec![Some(1), Some(0), Some(1), Some(2), Some(5)], Some(2)),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::IntervalInt)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_interval_real() {
+        let cases = vec![
+            (vec![Some(1f64), None], Some(1)),
+            (vec![Some(1f64), Some(-10f64)], Some(1)),
+            (vec![Some(1f64), Some(2f64)], Some(0)),
+            (vec![Some(1f64), Some(1f64), Some(2f64)], Some(1)),
+            (
+                vec![Some(1f64), Some(0f64), Some(1f64), Some(2f64)],
+                Some(2),
+            ),
+            (
+                vec![Some(1f64), Some(0f64), Some(1f64), Some(2f64), Some(5f64)],
+                Some(2),
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::IntervalReal)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
     fn test_greatest_real() {
         let cases = vec![
             (vec![None, None], None),
@@ -1013,6 +1213,95 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
                 .evaluate(ScalarFuncSig::GreatestReal)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_string() {
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Some(b"aaa".to_owned().to_vec()),
+                    Some(b"bbb".to_owned().to_vec()),
+                ],
+                Some(b"bbb".to_owned().to_vec()),
+            ),
+            (vec![Some(b"aaa".to_owned().to_vec()), None], None),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestString)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_least_string() {
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Some(b"aaa".to_owned().to_vec()),
+                    Some(b"bbb".to_owned().to_vec()),
+                ],
+                Some(b"aaa".to_owned().to_vec()),
+            ),
+            (vec![Some(b"aaa".to_owned().to_vec()), None], None),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::LeastString)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_least_real() {
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Real::new(1.0).ok(), Real::new(-1.0).ok(), None], None),
+            (
+                vec![
+                    Real::new(1.0).ok(),
+                    Real::new(-1.0).ok(),
+                    Real::new(-2.0).ok(),
+                    Real::new(0f64).ok(),
+                ],
+                Real::new(-2.0).ok(),
+            ),
+            (
+                vec![
+                    Real::new(f64::MAX).ok(),
+                    Real::new(f64::MIN).ok(),
+                    Real::new(0f64).ok(),
+                ],
+                Real::new(f64::MIN).ok(),
+            ),
+            (vec![Real::new(f64::NAN).ok(), Real::new(0f64).ok()], None),
+            (
+                vec![
+                    Real::new(f64::INFINITY).ok(),
+                    Real::new(f64::NEG_INFINITY).ok(),
+                    Real::new(f64::MAX).ok(),
+                    Real::new(f64::MIN).ok(),
+                ],
+                Real::new(f64::NEG_INFINITY).ok(),
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::LeastReal)
                 .unwrap();
             assert_eq!(output, expected);
         }
@@ -1074,5 +1363,87 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expected);
         }
+    }
+
+    #[test]
+    fn test_least_time() {
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
+                ],
+                Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
+                    Some(b"invalid_time".to_owned().to_vec()),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-12 12:00:38.12003800000".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39.120050".to_owned().to_vec()),
+                    Some(b"2018-04-03 00:00:00.000000".to_owned().to_vec()),
+                ],
+                Some(b"2012-12-12 12:00:38.120038".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(vec![0, 159, 146, 150]), // Invalid utf-8 bytes
+                ],
+                None,
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::LeastTime)
+                .unwrap() as Option<Vec<u8>>;
+
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_do_get_extrenum() {
+        let ints = [Some(1), Some(2), Some(3)];
+        let ints_ref = ints.iter().map(|it| it.as_ref()).collect::<Vec<_>>();
+
+        let ints_max = do_get_extremum(&ints_ref, max);
+        let ints_min = do_get_extremum(&ints_ref, min);
+        assert_eq!(ints_max.unwrap(), Some(3));
+        assert_eq!(ints_min.unwrap(), Some(1));
+
+        // If any item in the array is None, result should be none
+        let ints_with_none = [Some(1), None, Some(3)];
+        let ints_ref = ints_with_none
+            .iter()
+            .map(|it| it.as_ref())
+            .collect::<Vec<_>>();
+
+        let ints_max = do_get_extremum(&ints_ref, max);
+        let ints_min = do_get_extremum(&ints_ref, min);
+        assert_eq!(ints_max.unwrap(), None);
+        assert_eq!(ints_min.unwrap(), None);
     }
 }

@@ -6,23 +6,11 @@ use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
+pub use tidb_query_datatype::codec::data_type::{
+    LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS,
+};
 use tidb_query_datatype::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
 use tidb_query_datatype::expr::EvalContext;
-
-// TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
-pub const BATCH_MAX_SIZE: usize = 1024;
-
-/// Identical logical row is a special case in expression evaluation that
-/// the rows in physical_value are continuous and in order.
-static IDENTICAL_LOGICAL_ROWS: [usize; BATCH_MAX_SIZE] = {
-    let mut logical_rows = [0; BATCH_MAX_SIZE];
-    let mut row = 0;
-    while row < logical_rows.len() {
-        logical_rows[row] = row;
-        row += 1;
-    }
-    logical_rows
-};
 
 /// Represents a vector value node in the RPN stack.
 ///
@@ -54,13 +42,19 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     }
 
     /// Gets a reference to the logical rows.
-    pub fn logical_rows(&self) -> &[usize] {
+    pub fn logical_rows_struct(&self) -> LogicalRows {
         match self {
-            RpnStackNodeVectorValue::Generated { physical_value } => {
-                &IDENTICAL_LOGICAL_ROWS[0..physical_value.len()]
-            }
-            RpnStackNodeVectorValue::Ref { logical_rows, .. } => logical_rows,
+            RpnStackNodeVectorValue::Generated { physical_value } => LogicalRows::Ref {
+                logical_rows: &IDENTICAL_LOGICAL_ROWS[0..physical_value.len()],
+            },
+
+            RpnStackNodeVectorValue::Ref { logical_rows, .. } => LogicalRows::Ref { logical_rows },
         }
+    }
+
+    /// Gets a reference to the logical rows.
+    pub fn logical_rows(&self) -> &[usize] {
+        self.logical_rows_struct().as_slice()
     }
 }
 
@@ -139,8 +133,9 @@ impl<'a> RpnStackNode<'a> {
         match self {
             RpnStackNode::Vector { value, .. } => {
                 let physical_vector = value.as_ref();
-                let logical_rows = value.logical_rows();
-                physical_vector.get_scalar_ref(logical_rows[logical_index])
+                let logical_rows = value.logical_rows_struct();
+                let idx = logical_rows.get_idx(logical_index);
+                physical_vector.get_scalar_ref(idx)
             }
             RpnStackNode::Scalar { value, .. } => value.as_scalar_value_ref(),
         }
@@ -192,7 +187,7 @@ impl RpnExpression {
                 input_physical_columns[*offset].ensure_decoded(
                     ctx,
                     &schema[*offset],
-                    input_logical_rows,
+                    LogicalRows::from_slice(input_logical_rows),
                 )?;
             }
         }
@@ -435,7 +430,7 @@ mod tests {
     /// Single function call node (i.e. nullary function)
     #[test]
     fn test_eval_single_fn_call_node() {
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo() -> Result<Option<i64>> {
             Ok(Some(42))
         }
@@ -460,7 +455,7 @@ mod tests {
     #[test]
     fn test_eval_unary_function_scalar() {
         /// foo(v) performs v * 2.
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo(v: Option<&Real>) -> Result<Option<Real>> {
             Ok(v.map(|v| *v * 2.0))
         }
@@ -490,7 +485,7 @@ mod tests {
     #[test]
     fn test_eval_unary_function_vector() {
         /// foo(v) performs v + 5.
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo(v: Option<&i64>) -> Result<Option<i64>> {
             Ok(v.map(|v| v + 5))
         }
@@ -524,7 +519,7 @@ mod tests {
     #[test]
     fn test_eval_unary_function_raw_column() {
         /// foo(v) performs v + 5.
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo(v: Option<&i64>) -> Result<Option<i64>> {
             Ok(Some(v.unwrap() + 5))
         }
@@ -575,7 +570,7 @@ mod tests {
     #[test]
     fn test_eval_binary_function_scalar_scalar() {
         /// foo(v) performs v1 + float(v2) - 1.
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo(v1: Option<&Real>, v2: Option<&i64>) -> Result<Option<Real>> {
             Ok(Some(*v1.unwrap() + *v2.unwrap() as f64 - 1.0))
         }
@@ -606,7 +601,7 @@ mod tests {
     #[test]
     fn test_eval_binary_function_vector_scalar() {
         /// foo(v) performs v1 - v2.
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo(v1: Option<&Real>, v2: Option<&Real>) -> Result<Option<Real>> {
             Ok(Some(*v1.unwrap() - *v2.unwrap()))
         }
@@ -644,7 +639,7 @@ mod tests {
     #[test]
     fn test_eval_binary_function_scalar_vector() {
         /// foo(v) performs v1 - float(v2).
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo(v1: Option<&Real>, v2: Option<&i64>) -> Result<Option<Real>> {
             Ok(Some(*v1.unwrap() - *v2.unwrap() as f64))
         }
@@ -682,7 +677,7 @@ mod tests {
     #[test]
     fn test_eval_binary_function_vector_vector() {
         /// foo(v) performs int(v1*2.5 - float(v2)*3.5).
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo(v1: Option<&Real>, v2: Option<&i64>) -> Result<Option<i64>> {
             Ok(Some(
                 (v1.unwrap().into_inner() * 2.5 - (*v2.unwrap() as f64) * 3.5) as i64,
@@ -734,7 +729,7 @@ mod tests {
     #[test]
     fn test_eval_binary_function_raw_column() {
         /// foo(v1, v2) performs v1 * v2.
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo(v1: Option<&i64>, v2: Option<&i64>) -> Result<Option<i64>> {
             Ok(Some(v1.unwrap() * v2.unwrap()))
         }
@@ -786,7 +781,7 @@ mod tests {
     #[test]
     fn test_eval_ternary_function() {
         /// foo(v) performs v1 - v2 * v3.
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo(v1: Option<&i64>, v2: Option<&i64>, v3: Option<&i64>) -> Result<Option<i64>> {
             Ok(Some(v1.unwrap() - v2.unwrap() * v3.unwrap()))
         }
@@ -832,25 +827,25 @@ mod tests {
     #[test]
     fn test_eval_comprehensive() {
         /// fn_a(v1, v2, v3) performs v1 * v2 - v3.
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn fn_a(v1: Option<&Real>, v2: Option<&Real>, v3: Option<&Real>) -> Result<Option<Real>> {
             Ok(Some(*v1.unwrap() * *v2.unwrap() - *v3.unwrap()))
         }
 
         /// fn_b() returns 42.0.
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn fn_b() -> Result<Option<Real>> {
             Ok(Real::new(42.0).ok())
         }
 
         /// fn_c(v1, v2) performs float(v2 - v1).
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn fn_c(v1: Option<&i64>, v2: Option<&i64>) -> Result<Option<Real>> {
             Ok(Real::new((v2.unwrap() - v1.unwrap()) as f64).ok())
         }
 
         /// fn_d(v1, v2) performs v1 + v2 * 2.
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn fn_d(v1: Option<&i64>, v2: Option<&i64>) -> Result<Option<i64>> {
             Ok(Some(v1.unwrap() + v2.unwrap() * 2))
         }
@@ -910,7 +905,7 @@ mod tests {
     /// Unary function, but supplied zero arguments. Should panic.
     #[test]
     fn test_eval_fail_1() {
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo(_v: Option<&i64>) -> Result<Option<i64>> {
             unreachable!()
         }
@@ -930,7 +925,7 @@ mod tests {
     #[test]
     fn test_eval_fail_2() {
         /// foo(v) performs v * 2.
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo(v: Option<&Real>) -> Result<Option<Real>> {
             Ok(v.map(|v| *v * 2.0))
         }
@@ -955,7 +950,7 @@ mod tests {
     #[test]
     fn test_eval_fail_3() {
         /// Expects real argument, receives int argument.
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo(v: Option<&Real>) -> Result<Option<Real>> {
             Ok(v.map(|v| *v * 2.5))
         }
@@ -987,25 +982,25 @@ mod tests {
         //      )
 
         /// fn_a(a: int, b: float, c: int) performs: float(a) - b * float(c)
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn fn_a(a: Option<&i64>, b: Option<&Real>, c: Option<&i64>) -> Result<Option<Real>> {
             Ok(Real::new(*a.unwrap() as f64 - b.unwrap().into_inner() * *c.unwrap() as f64).ok())
         }
 
         /// fn_b(a: float, b: int) performs: a * (float(b) - 1.5)
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn fn_b(a: Option<&Real>, b: Option<&i64>) -> Result<Option<Real>> {
             Ok(Real::new(a.unwrap().into_inner() * (*b.unwrap() as f64 - 1.5)).ok())
         }
 
         /// fn_c() returns: int(42)
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn fn_c() -> Result<Option<i64>> {
             Ok(Some(42))
         }
 
         /// fn_d(a: float) performs: int(a)
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn fn_d(a: Option<&Real>) -> Result<Option<i64>> {
             Ok(Some(a.unwrap().into_inner() as i64))
         }
@@ -1085,12 +1080,12 @@ mod tests {
 
         #[allow(clippy::trivially_copy_pass_by_ref)]
         #[rpn_fn(capture = [metadata], metadata_mapper = prepare_a::<T>)]
-        fn fn_a<T: Evaluable + EvaluableRet>(
+        fn fn_a_nonnull<T: Evaluable + EvaluableRet>(
             metadata: &i64,
-            v: Option<&Int>,
+            v: &Int,
         ) -> Result<Option<Int>> {
             assert_eq!(*metadata, 42);
-            Ok(v.map(|v| v + *metadata))
+            Ok(Some(v + *metadata))
         }
 
         fn prepare_a<T: Evaluable>(_expr: &mut Expr) -> Result<i64> {
@@ -1098,7 +1093,7 @@ mod tests {
         }
 
         #[allow(clippy::trivially_copy_pass_by_ref, clippy::ptr_arg)]
-        #[rpn_fn(varg, capture = [metadata], metadata_mapper = prepare_b::<T>)]
+        #[rpn_fn(nullable, varg, capture = [metadata], metadata_mapper = prepare_b::<T>)]
         fn fn_b<T: Evaluable + EvaluableRet>(
             metadata: &String,
             v: &[Option<&T>],
@@ -1112,7 +1107,7 @@ mod tests {
         }
 
         #[allow(clippy::trivially_copy_pass_by_ref)]
-        #[rpn_fn(raw_varg, capture = [metadata], metadata_mapper = prepare_c::<T>)]
+        #[rpn_fn(nullable, raw_varg, capture = [metadata], metadata_mapper = prepare_c::<T>)]
         fn fn_c<T: Evaluable>(
             _data: &std::marker::PhantomData<T>,
             args: &[ScalarValueRef<'_>],
@@ -1129,7 +1124,7 @@ mod tests {
             // fn_b: CastIntAsReal
             // fn_c: CastIntAsString
             Ok(match expr.get_sig() {
-                ScalarFuncSig::CastIntAsInt => fn_a_fn_meta::<Real>(),
+                ScalarFuncSig::CastIntAsInt => fn_a_nonnull_fn_meta::<Real>(),
                 ScalarFuncSig::CastIntAsReal => fn_b_fn_meta::<Real>(),
                 ScalarFuncSig::CastIntAsString => fn_c_fn_meta::<Int>(),
                 _ => unreachable!(),
@@ -1170,6 +1165,52 @@ mod tests {
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+    }
+
+    #[test]
+    fn test_merge_nulls_constant_null() {
+        /// Expects real argument, receives int argument.
+        #[rpn_fn]
+        fn foo(v: &Real) -> Result<Option<Real>> {
+            Ok(Some(*v * 2.5))
+        }
+
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_constant_for_test(ScalarValue::Real(None))
+            .push_fn_call_for_test(foo_fn_meta(), 1, FieldTypeTp::Double)
+            .build_for_test();
+        let mut ctx = EvalContext::default();
+        let mut columns = LazyBatchColumnVec::empty();
+        let val = exp.eval(&mut ctx, &[], &mut columns, &[], 10).unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_real_vec(),
+            (0..10).map(|_| None).collect::<Vec<Option<Real>>>()
+        );
+    }
+
+    #[test]
+    fn test_merge_nulls_constant() {
+        /// Expects real argument, receives int argument.
+        #[rpn_fn]
+        fn foo(v: &Real) -> Result<Option<Real>> {
+            Ok(Some(*v * 2.5))
+        }
+
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_constant_for_test(ScalarValue::Real(Real::new(10.0).ok()))
+            .push_fn_call_for_test(foo_fn_meta(), 1, FieldTypeTp::Double)
+            .build_for_test();
+        let mut ctx = EvalContext::default();
+        let mut columns = LazyBatchColumnVec::empty();
+        let val = exp.eval(&mut ctx, &[], &mut columns, &[], 10).unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_real_vec(),
+            (0..10)
+                .map(|_| Real::new(25.0).ok())
+                .collect::<Vec<Option<Real>>>()
+        );
     }
 
     #[bench]
@@ -1277,5 +1318,165 @@ mod tests {
             assert!(result.is_ok());
         });
         profiler::stop();
+    }
+}
+
+#[cfg(test)]
+mod benches {
+    use super::*;
+
+    use crate::RpnExpressionBuilder;
+    use tidb_query_codegen::rpn_fn;
+    use tidb_query_common::Result;
+    use tidb_query_datatype::codec::batch::LazyBatchColumn;
+    use tidb_query_datatype::codec::data_type::*;
+    use tidb_query_datatype::expr::EvalContext;
+    use tidb_query_datatype::{EvalType, FieldTypeTp};
+
+    #[bench]
+    fn bench_int_eval(b: &mut test::Bencher) {
+        /// Expects real argument, receives 3 real arguments.
+        #[rpn_fn]
+        fn foo(u: &Real, v: &Real, w: &Real) -> Result<Option<Real>> {
+            Ok(Some(*u * 2.5 + *v * 2.5 + *w * 2.5))
+        }
+
+        let mut columns = LazyBatchColumnVec::from(vec![
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Real);
+                for _i in 0..256 {
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                }
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Real);
+                for _i in 0..256 {
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(None);
+                }
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Real);
+                for _i in 0..256 {
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(None);
+                    col.mut_decoded().push_real(Real::new(233.0).ok());
+                    col.mut_decoded().push_real(None);
+                }
+                col
+            },
+        ]);
+
+        let input_logical_rows: Vec<usize> = (0..1024).collect();
+
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_column_ref_for_test(1)
+            .push_column_ref_for_test(2)
+            .push_fn_call_for_test(foo_fn_meta(), 3, FieldTypeTp::Double)
+            .build_for_test();
+
+        let schema = &[
+            FieldTypeTp::Double.into(),
+            FieldTypeTp::Double.into(),
+            FieldTypeTp::Double.into(),
+        ];
+
+        b.iter(|| {
+            let mut ctx = EvalContext::default();
+            exp.eval(
+                &mut ctx,
+                schema,
+                &mut columns,
+                input_logical_rows.as_slice(),
+                input_logical_rows.len(),
+            )
+            .unwrap();
+        });
+    }
+
+    #[bench]
+    fn bench_bytes_eval(b: &mut test::Bencher) {
+        /// Expects real argument, receives 3 real arguments.
+        #[rpn_fn(writer)]
+        fn foo(u: BytesRef, v: BytesRef, w: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+            let mut partial = writer.begin();
+            partial.partial_write(u);
+            partial.partial_write(v);
+            partial.partial_write(w);
+            Ok(partial.finish())
+        }
+
+        let mut bytes_vec: Vec<u8> = vec![];
+        for _i in 0..10 {
+            bytes_vec.append(&mut b"2333333333".to_vec());
+        }
+
+        let mut columns = LazyBatchColumnVec::from(vec![
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Bytes);
+                for _i in 0..256 {
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                }
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Bytes);
+                for _i in 0..256 {
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(None);
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                }
+                col
+            },
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Bytes);
+                for _i in 0..256 {
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(None);
+                    col.mut_decoded().push_bytes(Some(bytes_vec.clone()));
+                    col.mut_decoded().push_bytes(None);
+                }
+                col
+            },
+        ]);
+
+        let input_logical_rows: Vec<usize> = (0..1024).collect();
+
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_column_ref_for_test(1)
+            .push_column_ref_for_test(2)
+            .push_fn_call_for_test(foo_fn_meta(), 3, FieldTypeTp::String)
+            .build_for_test();
+
+        let schema = &[
+            FieldTypeTp::String.into(),
+            FieldTypeTp::String.into(),
+            FieldTypeTp::String.into(),
+        ];
+
+        b.iter(|| {
+            let mut ctx = EvalContext::default();
+            exp.eval(
+                &mut ctx,
+                schema,
+                &mut columns,
+                input_logical_rows.as_slice(),
+                input_logical_rows.len(),
+            )
+            .unwrap();
+        });
     }
 }

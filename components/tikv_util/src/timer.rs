@@ -88,6 +88,7 @@ fn start_global_timer() -> Handle {
     Builder::new()
         .name(thd_name!("timer"))
         .spawn(move || {
+            tikv_alloc::add_thread_memory_accessor();
             let mut timer = tokio_timer::Timer::default();
             tx.send(timer.handle()).unwrap();
             loop {
@@ -203,7 +204,8 @@ fn start_global_steady_timer() -> SteadyTimer {
 mod tests {
     use super::*;
     use crate::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
-    use futures::Future;
+    use futures::compat::Future01CompatExt;
+    use futures::executor::block_on;
     use std::sync::mpsc::RecvTimeoutError;
     use std::sync::mpsc::{self, Sender};
 
@@ -219,7 +221,9 @@ mod tests {
         ch: Sender<&'static str>,
     }
 
-    impl Runnable<&'static str> for Runner {
+    impl Runnable for Runner {
+        type Task = &'static str;
+
         fn run(&mut self, msg: &'static str) {
             self.ch.send(msg).unwrap();
         }
@@ -228,7 +232,9 @@ mod tests {
         }
     }
 
-    impl RunnableWithTimer<&'static str, Task> for Runner {
+    impl RunnableWithTimer for Runner {
+        type TimeoutTask = Task;
+
         fn on_timeout(&mut self, timer: &mut Timer<Task>, task: Task) {
             let timeout = match task {
                 Task::A => {
@@ -315,7 +321,7 @@ mod tests {
         let delay =
             handle.delay(::std::time::Instant::now() + std::time::Duration::from_millis(100));
         let timer = Instant::now();
-        delay.wait().unwrap();
+        block_on(delay.compat()).unwrap();
         assert!(timer.elapsed() >= Duration::from_millis(100));
     }
 
@@ -324,7 +330,7 @@ mod tests {
         let t = SteadyTimer::default();
         let timer = t.clock.now();
         let delay = t.delay(Duration::from_millis(100));
-        delay.wait().unwrap();
+        block_on(delay.compat()).unwrap();
         assert!(timer.elapsed() >= Duration::from_millis(100));
     }
 }

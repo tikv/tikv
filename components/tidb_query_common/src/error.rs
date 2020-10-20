@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use failure::Fail;
 
 #[derive(Fail, Debug)]
@@ -43,6 +44,19 @@ impl From<tikv_util::deadline::DeadlineError> for EvaluateError {
     #[inline]
     fn from(_: tikv_util::deadline::DeadlineError) -> Self {
         EvaluateError::DeadlineExceeded
+    }
+}
+
+impl ErrorCodeExt for EvaluateError {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            EvaluateError::DeadlineExceeded => error_code::coprocessor::DEADLINE_EXCEEDED,
+            EvaluateError::InvalidCharacterString { .. } => {
+                error_code::coprocessor::INVALID_CHARACTER_STRING
+            }
+            EvaluateError::Custom { .. } => error_code::coprocessor::EVAL,
+            EvaluateError::Other(_) => error_code::UNKNOWN,
+        }
     }
 }
 
@@ -106,3 +120,12 @@ impl<T: Into<EvaluateError>> From<T> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Storage(_) => error_code::coprocessor::STORAGE_ERROR,
+            ErrorInner::Evaluate(e) => e.error_code(),
+        }
+    }
+}

@@ -11,34 +11,29 @@ use tidb_query_datatype::codec::mysql::json::*;
 
 #[rpn_fn]
 #[inline]
-fn json_depth(arg: Option<JsonRef>) -> Result<Option<i64>> {
-    match arg {
-        Some(j) => Ok(Some(j.depth()?)),
-        None => Ok(None),
-    }
+fn json_depth(arg: JsonRef) -> Result<Option<i64>> {
+    Ok(Some(arg.depth()?))
 }
 
-#[rpn_fn]
+#[rpn_fn(writer)]
 #[inline]
-fn json_type(arg: Option<JsonRef>) -> Result<Option<Bytes>> {
-    Ok(arg
-        .as_ref()
-        .map(|json_arg| Bytes::from(json_arg.json_type())))
+fn json_type(arg: JsonRef, writer: BytesWriter) -> Result<BytesGuard> {
+    Ok(writer.write(Some(Bytes::from(arg.json_type()))))
 }
 
-#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_modify_validator)]
+#[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_modify_validator)]
 #[inline]
 fn json_set(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     json_modify(args, ModifyType::Set)
 }
 
-#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_modify_validator)]
+#[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_modify_validator)]
 #[inline]
 fn json_insert(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     json_modify(args, ModifyType::Insert)
 }
 
-#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_modify_validator)]
+#[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_modify_validator)]
 #[inline]
 fn json_replace(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     json_modify(args, ModifyType::Replace)
@@ -87,7 +82,7 @@ fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
     Ok(())
 }
 
-#[rpn_fn(varg)]
+#[rpn_fn(nullable, varg)]
 #[inline]
 fn json_array(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     let mut jsons = vec![];
@@ -115,7 +110,7 @@ fn json_object_validator(expr: &tipb::Expr) -> Result<()> {
 }
 
 /// Required args like `&[(Option<&Byte>, Option<JsonRef>)]`.
-#[rpn_fn(raw_varg, extra_validator = json_object_validator)]
+#[rpn_fn(nullable, raw_varg, extra_validator = json_object_validator)]
 #[inline]
 fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     let mut pairs = BTreeMap::new();
@@ -143,7 +138,7 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
 
 // According to mysql 5.7,
 // arguments of json_merge should not be less than 2.
-#[rpn_fn(varg, min_args = 2)]
+#[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
 pub fn json_merge(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     // min_args = 2, so it's ok to call args[0]
@@ -161,7 +156,7 @@ pub fn json_merge(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     Ok(Some(Json::merge(jsons)?))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn json_unquote(arg: Option<JsonRef>) -> Result<Option<Bytes>> {
     arg.as_ref().map_or(Ok(None), |json_arg| {
@@ -185,7 +180,7 @@ fn valid_paths(expr: &tipb::Expr) -> Result<()> {
     Ok(())
 }
 
-#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
+#[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
 #[inline]
 fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
@@ -206,7 +201,7 @@ fn json_with_path_validator(expr: &tipb::Expr) -> Result<()> {
     valid_paths(expr)
 }
 
-#[rpn_fn(raw_varg,min_args= 1, max_args = 2, extra_validator = json_with_path_validator)]
+#[rpn_fn(nullable, raw_varg,min_args= 1, max_args = 2, extra_validator = json_with_path_validator)]
 #[inline]
 fn json_keys(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(!args.is_empty() && args.len() <= 2);
@@ -218,7 +213,7 @@ fn json_keys(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     Ok(None)
 }
 
-#[rpn_fn(raw_varg,min_args= 1, max_args = 2, extra_validator = json_with_path_validator)]
+#[rpn_fn(nullable, raw_varg,min_args= 1, max_args = 2, extra_validator = json_with_path_validator)]
 #[inline]
 fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
     assert!(!args.is_empty() && args.len() <= 2);
@@ -233,7 +228,7 @@ fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
     })
 }
 
-#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
+#[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
 #[inline]
 fn json_remove(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(args.len() >= 2);

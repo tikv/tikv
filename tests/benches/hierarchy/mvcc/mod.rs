@@ -1,10 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use concurrency_manager::ConcurrencyManager;
 use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, WriteData};
 use tikv::storage::mvcc::{self, MvccReader, MvccTxn};
+use tikv::storage::txn::{commit, prewrite};
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
@@ -20,7 +22,9 @@ where
 {
     let ctx = Context::default();
     let snapshot = engine.snapshot(&ctx).unwrap();
-    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+    let start_ts = start_ts.into();
+    let cm = ConcurrencyManager::new(start_ts);
+    let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
 
     let kvs = KvGenerator::with_seed(
         config.key_length,
@@ -29,9 +33,11 @@ where
     )
     .generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
-        txn.prewrite(
+        prewrite(
+            &mut txn,
             Mutation::Put((Key::from_raw(&k), v.clone())),
             &k.clone(),
+            &None,
             false,
             0,
             0,
@@ -49,6 +55,7 @@ where
 fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> = KvGenerator::with_seed(
@@ -65,9 +72,18 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
         },
         |(mutations, snapshot)| {
             for (mutation, primary) in mutations {
-                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true);
-                txn.prewrite(mutation, &primary, false, 0, 0, TimeStamp::default())
-                    .unwrap();
+                let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
+                prewrite(
+                    &mut txn,
+                    mutation,
+                    &primary,
+                    &None,
+                    false,
+                    0,
+                    0,
+                    TimeStamp::default(),
+                )
+                .unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -76,12 +92,13 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
 
 fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || setup_prewrite(&engine, &config, 1),
         |(snapshot, keys)| {
             for key in keys {
-                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true);
-                black_box(txn.commit(key, 1.into())).unwrap();
+                let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
+                black_box(commit(&mut txn, key, 1.into())).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -93,11 +110,12 @@ fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || setup_prewrite(&engine, &config, 1),
         |(snapshot, keys)| {
             for key in keys {
-                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true);
+                let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
                 black_box(txn.rollback(key)).unwrap();
             }
         },
@@ -110,11 +128,12 @@ fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || setup_prewrite(&engine, &config, 2),
         |(snapshot, keys)| {
             for key in keys {
-                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true);
+                let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
                 black_box(txn.rollback(key)).unwrap();
             }
         },
@@ -128,6 +147,7 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
 ) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || {
             let kvs = KvGenerator::with_seed(
@@ -142,7 +162,7 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
         },
         |(snapshot, keys)| {
             for key in keys {
-                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true);
+                let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
                 black_box(txn.rollback(key)).unwrap();
             }
         },

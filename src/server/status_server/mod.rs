@@ -1,11 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use async_stream::stream;
-use engine_traits::Snapshot;
-use futures03::compat::Compat01As03;
-use futures03::executor::block_on;
-use futures03::future::{ok, poll_fn};
-use futures03::prelude::*;
+use engine_traits::KvEngine;
+use futures::compat::Compat01As03;
+use futures::executor::block_on;
+use futures::future::{ok, poll_fn};
+use futures::prelude::*;
 use hyper::client::HttpConnector;
 use hyper::server::accept::Accept;
 use hyper::server::conn::{AddrIncoming, AddrStream};
@@ -88,7 +88,7 @@ static MISSING_ACTIONS: &[u8] = b"Missing param actions";
 #[cfg(feature = "failpoints")]
 static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 
-pub struct StatusServer<S, R> {
+pub struct StatusServer<E, R> {
     thread_pool: Runtime,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
@@ -98,7 +98,7 @@ pub struct StatusServer<S, R> {
     cfg_controller: ConfigController,
     router: R,
     security_config: Arc<SecurityConfig>,
-    _snap: PhantomData<S>,
+    _snap: PhantomData<E>,
 }
 
 impl StatusServer<(), ()> {
@@ -139,9 +139,9 @@ impl StatusServer<(), ()> {
     }
 }
 
-impl<S, R> StatusServer<S, R>
+impl<E, R> StatusServer<E, R>
 where
-    S: 'static,
+    E: 'static,
     R: 'static + Send,
 {
     pub fn new(
@@ -561,10 +561,10 @@ where
     }
 }
 
-impl<S, R> StatusServer<S, R>
+impl<E, R> StatusServer<E, R>
 where
-    S: Snapshot,
-    R: 'static + Send + CasualRouter<S> + Clone,
+    E: KvEngine,
+    R: 'static + Send + CasualRouter<E> + Clone,
 {
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
@@ -600,7 +600,7 @@ where
         match router.send(
             id,
             CasualMessage::AccessPeer(Box::new(move |peer| {
-                if let Err(meta) = tx.send(region_meta::RegionMeta::new(&peer.peer)) {
+                if let Err(meta) = tx.send(region_meta::RegionMeta::new(peer)) {
                     error!("receiver dropped, region meta: {:?}", meta)
                 }
             })),
@@ -827,9 +827,15 @@ fn tls_incoming(
                 }
                 None => break,
             };
-            yield tokio_openssl::accept(&acceptor, stream)
-                .await
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "TLS handshake error"));
+            match tokio_openssl::accept(&acceptor, stream).await {
+                Err(_) => {
+                    error!("Status server error: TLS handshake error");
+                    continue;
+                },
+                Ok(ssl_stream) => {
+                    yield Ok(ssl_stream);
+                },
+            }
         }
     };
     TlsIncoming(s)
@@ -958,9 +964,9 @@ fn decode_json(
 
 #[cfg(test)]
 mod tests {
-    use futures03::executor::block_on;
-    use futures03::future::ok;
-    use futures03::prelude::*;
+    use futures::executor::block_on;
+    use futures::future::ok;
+    use futures::prelude::*;
     use hyper::client::HttpConnector;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
     use hyper_openssl::HttpsConnector;
@@ -974,7 +980,7 @@ mod tests {
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
     use configuration::Configuration;
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::RocksEngine;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
     use security::SecurityConfig;
@@ -984,8 +990,8 @@ mod tests {
     #[derive(Clone)]
     struct MockRouter;
 
-    impl CasualRouter<RocksSnapshot> for MockRouter {
-        fn send(&self, region_id: u64, _: CasualMessage<RocksSnapshot>) -> raftstore::Result<()> {
+    impl CasualRouter<RocksEngine> for MockRouter {
+        fn send(&self, region_id: u64, _: CasualMessage<RocksEngine>) -> raftstore::Result<()> {
             Err(raftstore::Error::RegionNotFound(region_id))
         }
     }

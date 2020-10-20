@@ -3,7 +3,8 @@
 use std::path::Path;
 use std::sync::*;
 
-use futures::{future, Future, Stream};
+use futures::executor::block_on;
+use futures::{future, TryStreamExt};
 use grpcio::{Error, RpcStatusCode};
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
@@ -11,6 +12,7 @@ use kvproto::raft_serverpb::*;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::Writable;
 use engine_rocks::Compat;
 use engine_traits::Peekable;
@@ -22,6 +24,7 @@ use tempfile::Builder;
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
+use tikv::server::gc_worker::sync_gc;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
 use tikv_util::worker::{FutureWorker, Worker};
 use tikv_util::HandyRwLock;
@@ -264,7 +267,7 @@ fn test_mvcc_rollback_and_cleanup() {
 fn test_mvcc_resolve_lock_gc_and_delete() {
     use kvproto::kvrpcpb::*;
 
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
@@ -345,13 +348,9 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 
     // GC `k` at the latest ts.
     ts += 1;
-    let gc_safe_ponit = ts;
-    let mut gc_req = GcRequest::default();
-    gc_req.set_context(ctx.clone());
-    gc_req.safe_point = gc_safe_ponit;
-    let gc_resp = client.kv_gc(&gc_req).unwrap();
-    assert!(!gc_resp.has_region_error());
-    assert!(!gc_resp.has_error());
+    let gc_safe_ponit = TimeStamp::from(ts);
+    let gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
+    sync_gc(&gc_scheduler, 0, vec![], vec![], gc_safe_ponit).unwrap();
 
     // the `k` at the old ts should be none.
     let get_version2 = commit_version + 1;
@@ -734,12 +733,12 @@ fn test_debug_scan_mvcc() {
     req.set_limit(1);
 
     let receiver = debug_client.scan_mvcc(&req).unwrap();
-    let future = receiver.fold(Vec::new(), |mut keys, mut resp| {
+    let future = receiver.try_fold(Vec::new(), |mut keys, mut resp| {
         let key = resp.take_key();
         keys.push(key);
         future::ok::<_, Error>(keys)
     });
-    let keys = future.wait().unwrap();
+    let keys = block_on(future).unwrap();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0], keys::data_key(b"meta_lock_1"));
 }
@@ -757,7 +756,7 @@ fn test_double_run_node() {
     let pd_worker = FutureWorker::new("test-pd-worker");
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
-    let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), None);
+    let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
     let coprocessor_host = CoprocessorHost::new(router);
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
@@ -776,6 +775,7 @@ fn test_double_run_node() {
             importer,
             Worker::new("split"),
             AutoSplitController::default(),
+            ConcurrencyManager::new(1.into()),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

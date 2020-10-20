@@ -1,10 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod bit_vec;
+mod chunked_vec_bytes;
+mod chunked_vec_common;
+mod chunked_vec_json;
 mod chunked_vec_sized;
-mod not_chunked_vec;
+mod logical_rows;
 mod scalar;
 mod vector;
+pub use logical_rows::{LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS};
 
 // Concrete eval types without a nullable wrapper.
 pub type Int = i64;
@@ -12,10 +16,10 @@ pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub type BytesRef<'a> = &'a [u8];
 pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
+pub use bit_vec::{BitAndIterator, BitVec};
+pub use chunked_vec_bytes::{BytesGuard, BytesWriter, ChunkedVecBytes, PartialBytesWriter};
+pub use chunked_vec_json::ChunkedVecJson;
 pub use chunked_vec_sized::ChunkedVecSized;
-use not_chunked_vec::NotChunkedVec;
-pub type ChunkedVecBytes = NotChunkedVec<Bytes>;
-pub type ChunkedVecJson = NotChunkedVec<Json>;
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
@@ -115,6 +119,8 @@ pub macro match_template_evaluable($t:tt, $($tail:tt)*) {
 
 pub trait ChunkRef<'a, T: EvaluableRef<'a>>: Copy + Clone + std::fmt::Debug + Send + Sync {
     fn get_option_ref(self, idx: usize) -> Option<T>;
+
+    fn get_bit_vec(self) -> &'a BitVec;
 
     fn phantom_data(self) -> Option<T>;
 }
@@ -306,7 +312,7 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     }
 
     #[inline]
-    fn borrow_vector_value(v: &'a VectorValue) -> &'a NotChunkedVec<Bytes> {
+    fn borrow_vector_value(v: &'a VectorValue) -> &'a ChunkedVecBytes {
         match v {
             VectorValue::Bytes(x) => x,
             _ => unimplemented!(),
@@ -358,7 +364,7 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     }
 
     #[inline]
-    fn borrow_vector_value(v: &VectorValue) -> &NotChunkedVec<Json> {
+    fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecJson {
         match v {
             VectorValue::Json(x) => x,
             _ => unimplemented!(),

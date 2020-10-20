@@ -2,6 +2,7 @@
 
 use super::bit_vec::BitVec;
 use super::{ChunkRef, ChunkedVec, Evaluable, EvaluableRet, UnsafeRefInto};
+use crate::impl_chunked_vec_common;
 
 /// A vector storing `Option<T>` with a compact layout.
 ///
@@ -21,13 +22,7 @@ pub struct ChunkedVecSized<T: Sized> {
 }
 
 impl<T: Sized + Clone> ChunkedVecSized<T> {
-    pub fn from_slice(slice: &[Option<T>]) -> Self {
-        let mut x = Self::with_capacity(slice.len());
-        for i in slice {
-            x.push(i.clone());
-        }
-        x
-    }
+    impl_chunked_vec_common! { T }
 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
@@ -37,38 +32,20 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
         }
     }
 
-    pub fn from_vec(data: Vec<Option<T>>) -> Self {
-        let mut x = Self::with_capacity(data.len());
-        for element in data {
-            x.push(element);
-        }
-        x
-    }
-
+    #[inline]
     pub fn push_data(&mut self, value: T) {
         self.bitmap.push(true);
         self.data.push(value);
     }
 
+    #[inline]
     pub fn push_null(&mut self) {
         self.bitmap.push(false);
         self.data.push(unsafe { std::mem::zeroed() });
     }
 
-    pub fn push(&mut self, value: Option<T>) {
-        if let Some(x) = value {
-            self.push_data(x);
-        } else {
-            self.push_null();
-        }
-    }
-
     pub fn len(&self) -> usize {
         self.data.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     pub fn truncate(&mut self, len: usize) {
@@ -85,6 +62,7 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
         self.bitmap.append(&mut other.bitmap);
     }
 
+    #[inline]
     pub fn get(&self, idx: usize) -> Option<&T> {
         assert!(idx < self.data.len());
         if self.bitmap.get(idx) {
@@ -107,16 +85,24 @@ impl<T: Clone> ChunkedVec<T> for ChunkedVecSized<T> {
     fn chunked_with_capacity(capacity: usize) -> Self {
         Self::with_capacity(capacity)
     }
+
+    #[inline]
     fn chunked_push(&mut self, value: Option<T>) {
         self.push(value)
     }
 }
 
 impl<'a, T: Evaluable + EvaluableRet> ChunkRef<'a, &'a T> for &'a ChunkedVecSized<T> {
+    #[inline]
     fn get_option_ref(self, idx: usize) -> Option<&'a T> {
         self.get(idx)
     }
 
+    fn get_bit_vec(self) -> &'a BitVec {
+        &self.bitmap
+    }
+
+    #[inline]
     fn phantom_data(self) -> Option<&'a T> {
         None
     }
@@ -135,7 +121,7 @@ impl<'a, T: Evaluable> UnsafeRefInto<&'static ChunkedVecSized<T>> for &'a Chunke
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use crate::codec::data_type::*;
 
@@ -278,5 +264,39 @@ mod test {
                 None,
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod benches {
+    use super::*;
+
+    #[bench]
+    fn bench_append(b: &mut test::Bencher) {
+        b.iter(|| {
+            let mut chunked_vec_int = ChunkedVecSized::with_capacity(10000);
+            for _i in 0..5000 {
+                chunked_vec_int.push(Some(233));
+                chunked_vec_int.push(None);
+            }
+        });
+    }
+
+    #[bench]
+    fn bench_iterate(b: &mut test::Bencher) {
+        let mut chunked_vec_int = ChunkedVecSized::with_capacity(10000);
+        for _i in 0..5000 {
+            chunked_vec_int.push(Some(233));
+            chunked_vec_int.push(None);
+        }
+        b.iter(|| {
+            let mut sum = 0;
+            for i in 0..10000 {
+                if let Some(x) = chunked_vec_int.get(i) {
+                    sum += *x
+                }
+            }
+            sum
+        });
     }
 }

@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::*;
-use std::{fs, io, thread};
+use std::{fs, io, mem, thread};
 
 use raft::eraftpb::MessageType;
 
@@ -56,19 +56,16 @@ fn test_overlap_cleanup() {
 // stay in Snapshot forever.
 #[test]
 fn test_server_snapshot_on_resolve_failure() {
-    let mut cluster = new_server_cluster(1, 4);
+    let mut cluster = new_server_cluster(1, 2);
     configure_for_snapshot(&mut cluster);
 
-    let on_resolve_fp = "transport_snapshot_on_resolve";
-    let on_send_store_fp = "transport_on_send_store";
+    let on_send_store_fp = "transport_on_send_snapshot";
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_operator();
-    cluster.run();
+    cluster.run_conf_change();
 
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    pd_client.must_remove_peer(1, new_peer(4, 4));
     cluster.must_put(b"k1", b"v1");
 
     let ready_notify = Arc::default();
@@ -82,50 +79,19 @@ fn test_server_snapshot_on_resolve_failure() {
         )),
     );
 
-    let (drop_snapshot_tx, drop_snapshot_rx) = mpsc::channel();
-    cluster
-        .sim
-        .write()
-        .unwrap()
-        .add_recv_filter(4, Box::new(DropSnapshotFilter::new(drop_snapshot_tx)));
-
-    pd_client.add_peer(1, new_peer(4, 5));
-
-    // The leader is trying to send snapshots, but the filter drops snapshots.
-    drop_snapshot_rx
-        .recv_timeout(Duration::from_secs(3))
-        .unwrap();
-
-    // "return(4)" those failure occurs if TiKV resolves or sends to store 4.
-    fail::cfg(on_resolve_fp, "return(4)").unwrap();
-    fail::cfg(on_send_store_fp, "return(4)").unwrap();
+    // "return(2)" those failure occurs if TiKV resolves or sends to store 2.
+    fail::cfg(on_send_store_fp, "return(2)").unwrap();
+    pd_client.add_peer(1, new_learner_peer(2, 2));
 
     // We are ready to recv notify.
     ready_notify.store(true, Ordering::SeqCst);
     notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
-    let engine4 = cluster.get_engine(4);
-    must_get_none(&engine4, b"k1");
-    cluster.sim.write().unwrap().clear_recv_filters(4);
+    let engine2 = cluster.get_engine(2);
+    must_get_none(&engine2, b"k1");
 
-    // Remove the on_send_store_fp.
-    // Now it will resolve the store 4's address via heartbeat messages,
-    // so snapshots works fine.
-    //
-    // But keep the on_resolve_fp.
-    // Any snapshot messages that has been sent before will meet the
-    // injected resolve failure eventually.
-    // It perverts a race condition, remove the on_resolve_fp before snapshot
-    // messages meet the failpoint, that fails the test.
-    fail::remove(on_send_store_fp);
-
+    // If snapshot status is reported correctly, sending snapshot should be retried.
     notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-    cluster.must_put(b"k2", b"v2");
-    must_get_equal(&engine4, b"k1", b"v1");
-    must_get_equal(&engine4, b"k2", b"v2");
-
-    // Clean up.
-    fail::remove(on_resolve_fp);
 }
 
 #[test]
@@ -235,7 +201,7 @@ fn test_node_request_snapshot_on_split() {
     cluster.split_region(
         &region,
         b"k1",
-        Callback::Write(Box::new(move |_| {
+        Callback::write(Box::new(move |_| {
             split_tx.send(()).unwrap();
         })),
     );
@@ -278,11 +244,11 @@ fn test_node_request_snapshot_on_split() {
 // A peer on store 3 is isolated and is applying snapshot. (add failpoint so it's always pending)
 // Then two conf change happens, this peer is removed and a new peer is added on store 3.
 // Then isolation clear, this peer will be destroyed because of a bigger peer id in msg.
-// Peerfsm can be destroyed synchronously because snapshot state is pending and can be canceled.
-// I.e. async_remove is false.
+// In previous implementation, peer fsm can be destroyed synchronously because snapshot state is
+// pending and can be canceled, but panic may happen if the applyfsm runs very slow.
 #[test]
 fn test_destroy_peer_on_pending_snapshot() {
-    let mut cluster = new_server_cluster(0, 4);
+    let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -311,24 +277,28 @@ fn test_destroy_peer_on_pending_snapshot() {
     sleep_ms(100);
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
+    // Don't send check stale msg to PD
+    let peer_check_stale_state_fp = "peer_check_stale_state";
+    fail::cfg(peer_check_stale_state_fp, "return()").unwrap();
 
     pd_client.must_remove_peer(r1, new_peer(3, 3));
-    pd_client.must_add_peer(r1, new_peer(4, 4));
+    pd_client.must_add_peer(r1, new_peer(3, 4));
 
-    pd_client.must_remove_peer(r1, new_peer(4, 4));
-    pd_client.must_add_peer(r1, new_peer(3, 5));
+    let before_handle_normal_3_fp = "before_handle_normal_3";
+    fail::cfg(before_handle_normal_3_fp, "pause").unwrap();
 
-    let destroy_peer_fp = "destroy_peer";
-    fail::cfg(destroy_peer_fp, "pause").unwrap();
     cluster.clear_send_filters();
     // Wait for leader send msg to peer 3.
-    // Then destroy peer 3 and create peer 5.
+    // Then destroy peer 3 and create peer 4.
     sleep_ms(100);
-    fail::remove(destroy_peer_fp);
 
     fail::remove(apply_snapshot_fp);
-    // After peer 5 has applied snapshot, data should be got.
-    must_get_equal(&cluster.get_engine(3), b"k119", b"v1");
+
+    fail::remove(before_handle_normal_3_fp);
+
+    cluster.must_put(b"k120", b"v1");
+    // After peer 4 has applied snapshot, data should be got.
+    must_get_equal(&cluster.get_engine(3), b"k120", b"v1");
 }
 
 #[test]
@@ -373,4 +343,96 @@ fn test_shutdown_when_snap_gc() {
     if dir.count() == 0 {
         panic!("store 2 snap dir must not be empty");
     }
+}
+
+// Test if a peer handle the old snapshot properly.
+#[test]
+fn test_receive_old_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+
+    // Bypass the snapshot gc because the snapshot may be used twice.
+    let peer_2_handle_snap_mgr_gc_fp = "peer_2_handle_snap_mgr_gc";
+    fail::cfg(peer_2_handle_snap_mgr_gc_fp, "return()").unwrap();
+
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    cluster.must_transfer_leader(r1, new_peer(1, 1));
+
+    cluster.must_put(b"k00", b"v1");
+    // Ensure peer 2 is initialized.
+    must_get_equal(&cluster.get_engine(2), b"k00", b"v1");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+
+    for i in 0..20 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(r1, 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgSnapshot)
+            .reserve_dropped(Arc::clone(&dropped_msgs)),
+    );
+    cluster.sim.wl().add_recv_filter(2, recv_filter);
+
+    cluster.clear_send_filters();
+
+    for _ in 0..20 {
+        let guard = dropped_msgs.lock().unwrap();
+        if !guard.is_empty() {
+            break;
+        }
+        drop(guard);
+        sleep_ms(10);
+    }
+    let msgs = {
+        let mut guard = dropped_msgs.lock().unwrap();
+        if guard.is_empty() {
+            drop(guard);
+            panic!("do not receive snapshot msg in 200ms");
+        }
+        mem::replace(guard.as_mut(), vec![])
+    };
+
+    cluster.sim.wl().clear_recv_filters(2);
+
+    for i in 20..40 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+    must_get_equal(&cluster.get_engine(2), b"k39", b"v1");
+
+    let router = cluster.sim.wl().get_router(2).unwrap();
+    // Send the old snapshot
+    for raft_msg in msgs {
+        router.send_raft_message(raft_msg).unwrap();
+    }
+
+    cluster.must_put(b"k40", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k40", b"v1");
+
+    pd_client.must_remove_peer(r1, new_peer(2, 2));
+
+    must_get_none(&cluster.get_engine(2), b"k40");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k5");
+
+    let left = cluster.get_region(b"k1");
+    pd_client.must_add_peer(left.get_id(), new_peer(2, 4));
+
+    cluster.must_put(b"k11", b"v1");
+    // If peer 2 handles previous old snapshot properly and does not leave over metadata
+    // in `pending_snapshot_regions`, peer 4 should be created normally.
+    must_get_equal(&cluster.get_engine(2), b"k11", b"v1");
+
+    fail::remove(peer_2_handle_snap_mgr_gc_fp);
 }
