@@ -421,12 +421,10 @@ where
                 let name = import.get_path(&meta);
 
                 let default = <E as SstExt>::SstWriterBuilder::new()
-                    .set_in_memory(true)
                     .set_db(&engine)
                     .set_cf(CF_DEFAULT)
                     .build(&name.to_str().unwrap())?;
                 let write = <E as SstExt>::SstWriterBuilder::new()
-                    .set_in_memory(true)
                     .set_db(&engine)
                     .set_cf(CF_WRITE)
                     .build(&name.to_str().unwrap())?;

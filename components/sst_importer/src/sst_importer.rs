@@ -23,8 +23,8 @@ use uuid::{Builder as UuidBuilder, Uuid};
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksSstReader};
 use engine_traits::{
-    EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstExt,
-    SstReader, SstWriter, CF_DEFAULT, CF_WRITE,
+    EncryptionKeyManager, ExternalSstFileInfo, IngestExternalFileOptions, Iterator, KvEngine,
+    SeekKey, SstReader, SstWriter, CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
 use tikv_util::time::Limiter;
@@ -506,13 +506,13 @@ impl<E: KvEngine> SSTWriter<E> {
         let (p1, p2) = (self.default_path.clone(), self.write_path.clone());
         let (w1, w2) = (self.default, self.write);
         if default_entries > 0 {
-            let (_, sst_reader) = w1.finish_read()?;
-            Self::save(sst_reader, p1)?;
+            let file_info = w1.finish()?;
+            Self::save(file_info.file_path(), p1)?;
             metas.push(default_meta);
         }
         if write_entries > 0 {
-            let (_, sst_reader) = w2.finish_read()?;
-            Self::save(sst_reader, p2)?;
+            let file_info = w2.finish()?;
+            Self::save(file_info.file_path(), p2)?;
             metas.push(write_meta);
         }
         info!("finish write to sst";
@@ -522,16 +522,11 @@ impl<E: KvEngine> SSTWriter<E> {
         Ok(metas)
     }
 
-    fn save(
-        mut sst_reader: <<E as SstExt>::SstWriter as SstWriter>::ExternalSstFileReader,
-        import_path: ImportPath,
-    ) -> Result<()> {
-        let tmp_path = import_path.temp;
-        let mut tmp_f = File::create(&tmp_path)?;
-        std::io::copy(&mut sst_reader, &mut tmp_f)?;
-        tmp_f.metadata()?.permissions().set_readonly(true);
-        tmp_f.sync_all()?;
-        fs::rename(tmp_path, import_path.save)?;
+    fn save<P: AsRef<Path>>(path: P, import_path: ImportPath) -> Result<()> {
+        let mut perms = fs::metadata(&path)?.permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&path, perms)?;
+        fs::rename(path, import_path.save)?;
         Ok(())
     }
 }
