@@ -23,10 +23,18 @@ const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
 
 struct Dicts {
+    // Maps data file paths to key id and metadata. This file is stored as plaintext.
     file_dict: Mutex<FileDictionary>,
+    // To lock the writing of file dictionary.
     file_lock: Mutex<()>,
+    // Maps data key id to data keys, together with metadata. Also stores the data
+    // key id used to encrypt the encryption file dictionary. The content is encrypted
+    // using master key.
     key_dict: Mutex<KeyDictionary>,
+    // To lock the writing of key dictionary.
     key_lock: Mutex<()>,
+    // Thread-safe version of current_key_id. Only when writing back to key_dict,
+    // write it back to `key_dict`.
     current_key_id: AtomicU64,
     rotation_period: Duration,
     base: PathBuf,
@@ -108,45 +116,50 @@ impl Dicts {
         }
     }
 
-    fn save_key_dict(&self, master_key: &dyn Backend, key_dict: &mut KeyDictionary) -> Result<()> {
+    fn save_key_dict(&self, master_key: &dyn Backend) -> Result<()> {
+        let _lock = self.key_lock.lock().unwrap();
         let file = EncryptedFile::new(&self.base, KEY_DICT_NAME);
+        let mut key_dict = self.key_dict.lock().unwrap();
         if !master_key.is_secure() {
             for value in key_dict.keys.values_mut() {
                 value.was_exposed = true
             }
         }
-        key_dict.current_key_id = self.current_key_id.load(Ordering::Relaxed);
+        key_dict.current_key_id = self.current_key_id.load(Ordering::SeqCst);
+        let keys_len = key_dict.keys.len() as _;
         let key_bytes = key_dict.write_to_bytes()?;
-        let _lock = self.key_lock.lock().unwrap();
+        drop(key_dict);
         file.write(&key_bytes, master_key)?;
 
         ENCRYPTION_FILE_SIZE_GAUGE
             .with_label_values(&["key_dictionary"])
             .set(key_bytes.len() as _);
-        ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
+        ENCRYPTION_DATA_KEY_GAUGE.set(keys_len);
 
         Ok(())
     }
 
     fn save_file_dict(&self) -> Result<()> {
+        let _lock = self.file_lock.lock().unwrap();
         let file_dict = self.file_dict.lock().unwrap();
         let file = EncryptedFile::new(&self.base, FILE_DICT_NAME);
         let file_bytes = file_dict.write_to_bytes()?;
+        let file_num = file_dict.files.len() as _;
+        drop(file_dict);
         // File dict is saved in plaintext.
-        let _lock = self.file_lock.lock().unwrap();
         file.write(&file_bytes, &PlaintextBackend::default())?;
 
         ENCRYPTION_FILE_SIZE_GAUGE
             .with_label_values(&["file_dictionary"])
             .set(file_bytes.len() as _);
-        ENCRYPTION_FILE_NUM_GAUGE.set(file_dict.files.len() as _);
+        ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         Ok(())
     }
 
     fn current_data_key(&self) -> (u64, DataKey) {
         let key_dict = self.key_dict.lock().unwrap();
-        let current_key_id = self.current_key_id.load(Ordering::Relaxed);
+        let current_key_id = self.current_key_id.load(Ordering::SeqCst);
         (
             current_key_id,
             key_dict
@@ -180,7 +193,7 @@ impl Dicts {
         let iv = Iv::new_ctr();
         let mut file = FileInfo::default();
         file.iv = iv.as_slice().to_vec();
-        file.key_id = self.current_key_id.load(Ordering::Relaxed);
+        file.key_id = self.current_key_id.load(Ordering::SeqCst);
         file.method = compat(method);
         {
             let mut file_dict = self.file_dict.lock().unwrap();
@@ -282,10 +295,11 @@ impl Dicts {
             Entry::Occupied(_) => return Ok(false),
             Entry::Vacant(e) => e.insert(key),
         };
+        drop(key_dict);
         // Update current data key id.
-        self.current_key_id.store(key_id, Ordering::Relaxed);
+        self.current_key_id.store(key_id, Ordering::SeqCst);
         // re-encrypt key dict file.
-        self.save_key_dict(master_key, &mut key_dict).map(|()| true)
+        self.save_key_dict(master_key).map(|()| true)
     }
 
     fn maybe_rotate_data_key(
@@ -295,7 +309,7 @@ impl Dicts {
     ) -> Result<()> {
         let now = SystemTime::now();
         // 0 means it's a new key dict
-        if self.current_key_id.load(Ordering::Relaxed) != 0 {
+        if self.current_key_id.load(Ordering::SeqCst) != 0 {
             // It's not a new dict, then check current data key
             // creation time.
             let (_, key) = self.current_data_key();
@@ -437,10 +451,8 @@ impl DataKeyManager {
                         ))
                     })?;
                 // Rewrite key_dict after replace master key.
-                {
-                    let mut key_dict = dicts.key_dict.lock().unwrap();
-                    dicts.save_key_dict(master_key.as_ref(), &mut key_dict)?;
-                }
+                dicts.save_key_dict(master_key.as_ref())?;
+
                 info!("encryption: persisted result after replace master key.");
 
                 dicts
