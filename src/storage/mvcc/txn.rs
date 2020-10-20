@@ -345,8 +345,8 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     // Pessimistic transactions only acquire pessimistic locks on row keys.
-    // The corrsponding index keys are not locked until pessimistic prewrite.
-    // It's possible that lock conflict occours on them, but the isolation is
+    // The corresponding index keys are not locked until pessimistic prewrite.
+    // It's possible that lock conflict occurs on them, but the isolation is
     // guaranteed by pessimistic locks on row keys, so let TiDB resolves these
     // locks immediately.
     pub(crate) fn handle_non_pessimistic_lock_conflict(&self, key: Key, lock: Lock) -> Result<()> {

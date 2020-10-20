@@ -236,6 +236,7 @@ impl<I: Iterator> Cursor<I> {
                     self.prev(statistics);
                 }
             } else {
+                // prefix_seek doesn't support seek_to_last.
                 if self.prefix_seek {
                     return self.seek_for_prev(key, statistics);
                 } else {
