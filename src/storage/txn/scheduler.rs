@@ -22,7 +22,7 @@
 
 use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
@@ -161,7 +161,7 @@ struct SchedulerInner<L: LockManager> {
 
     concurrency_manager: ConcurrencyManager,
 
-    pipelined_pessimistic_lock: bool,
+    pipelined_pessimistic_lock: Arc<AtomicBool>,
 }
 
 #[inline]
@@ -248,7 +248,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
-        pipelined_pessimistic_lock: bool,
+        pipelined_pessimistic_lock: Arc<AtomicBool>,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -586,14 +586,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
-        let pipelined = self.inner.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
+        let pipelined_pessimistic_lock = self
+            .inner
+            .pipelined_pessimistic_lock
+            .load(Ordering::Relaxed);
+        let pipelined = pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
 
         let context = WriteContext {
             lock_mgr: &self.inner.lock_mgr,
             concurrency_manager: self.inner.concurrency_manager.clone(),
             extra_op: task.extra_op,
             statistics,
-            pipelined_pessimistic_lock: self.inner.pipelined_pessimistic_lock,
+            pipelined_pessimistic_lock,
         };
 
         match task.cmd.process_write(snapshot, context) {

@@ -71,7 +71,7 @@ impl Column {
     }
 
     #[inline]
-    pub fn eval_duration<'a>(&self, row: &'a [Datum]) -> Result<Option<Duration>> {
+    pub fn eval_duration(&self, row: &[Datum]) -> Result<Option<Duration>> {
         row[self.offset].as_duration()
     }
 
