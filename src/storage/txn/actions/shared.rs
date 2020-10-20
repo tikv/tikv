@@ -1,6 +1,7 @@
 use crate::storage::mvcc::metrics::CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM;
 use crate::storage::mvcc::{ErrorInner, Lock, LockType, MvccTxn, Result as MvccResult, TimeStamp};
 use crate::storage::Snapshot;
+use fail::fail_point;
 use std::cmp;
 use txn_types::{is_short_value, Key, Value};
 
@@ -71,7 +72,9 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
 
         txn.guards.push(key_guard);
     }
-
     txn.put_lock(key, &lock);
+
+    fail_point!("after_prewrite_one_key");
+
     Ok(async_commit_ts)
 }

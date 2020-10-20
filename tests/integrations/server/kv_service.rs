@@ -240,4 +240,6 @@ fn test_prewrite_check_max_commit_ts() {
             .get_commit_ts(),
         101
     );
+    // There shouldn't be locks remaining in the lock table.
+    assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
 }
