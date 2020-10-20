@@ -8,9 +8,6 @@ impl CFHandleExt for PanicEngine {
     type CFHandle = PanicCFHandle;
     type ColumnFamilyOptions = PanicColumnFamilyOptions;
 
-    fn cf_handle(&self, name: &str) -> Result<&Self::CFHandle> {
-        panic!()
-    }
     fn get_options_cf(&self, cf: &str) -> Result<Self::ColumnFamilyOptions> {
         panic!()
     }

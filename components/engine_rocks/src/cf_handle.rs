@@ -4,29 +4,23 @@ use crate::cf_options::RocksColumnFamilyOptions;
 use crate::engine::RocksEngine;
 use engine_traits::CFHandle;
 use engine_traits::CFHandleExt;
-use engine_traits::{Error, Result};
+use engine_traits::{Result};
 use rocksdb::CFHandle as RawCFHandle;
+use crate::util;
 
 impl CFHandleExt for RocksEngine {
     type CFHandle = RocksCFHandle;
     type ColumnFamilyOptions = RocksColumnFamilyOptions;
 
-    fn cf_handle(&self, name: &str) -> Result<&Self::CFHandle> {
-        self.as_inner()
-            .cf_handle(name)
-            .map(RocksCFHandle::from_raw)
-            .ok_or_else(|| Error::CFName(name.to_string()))
-    }
-
     fn get_options_cf(&self, cf: &str) -> Result<Self::ColumnFamilyOptions> {
-        let handle = self.cf_handle(cf)?;
-        Ok(RocksColumnFamilyOptions::from_raw(self.as_inner().get_options_cf(handle.as_inner())))
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(RocksColumnFamilyOptions::from_raw(self.as_inner().get_options_cf(handle)))
     }
 
     fn set_options_cf(&self, cf: &str, options: &[(&str, &str)]) -> Result<()> {
-        let handle = self.cf_handle(cf)?;
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
         self.as_inner()
-            .set_options_cf(handle.as_inner(), options)
+            .set_options_cf(handle, options)
             .map_err(|e| box_err!(e))
     }
 }
