@@ -1084,6 +1084,7 @@ mod tests {
     use test_raftstore::TestPdClient;
     use tikv::storage::kv::Engine;
     use tikv::storage::mvcc::tests::*;
+    use tikv::storage::txn::tests::must_prewrite_put;
     use tikv::storage::TestEngineBuilder;
     use tikv_util::collections::HashSet;
     use tikv_util::config::ReadableDuration;
@@ -1442,7 +1443,7 @@ mod tests {
         });
         let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
         if let CdcEvent::ResolvedTs(mut r) = cdc_event {
-            r.regions.as_mut_slice().sort();
+            r.regions.as_mut_slice().sort_unstable();
             assert_eq!(r.regions, vec![1, 2]);
             assert_eq!(r.ts, 2);
         } else {
@@ -1475,7 +1476,7 @@ mod tests {
         });
         let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
         if let CdcEvent::ResolvedTs(mut r) = cdc_event {
-            r.regions.as_mut_slice().sort();
+            r.regions.as_mut_slice().sort_unstable();
             // Although region 3 is not register in the first conn, batch resolved ts
             // sends all region ids.
             assert_eq!(r.regions, vec![1, 2, 3]);

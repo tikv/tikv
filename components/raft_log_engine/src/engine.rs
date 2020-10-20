@@ -8,8 +8,7 @@ use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 use raft_engine::{EntryExt, Error as RaftEngineError, LogBatch, RaftLogEngine as RawRaftEngine};
 
-pub use raft_engine::config::RecoveryMode;
-pub use raft_engine::Config as RaftEngineConfig;
+pub use raft_engine::{Config as RaftEngineConfig, RecoveryMode};
 
 #[derive(Clone)]
 pub struct EntryExtTyped;
@@ -157,7 +156,7 @@ impl RaftEngine for RaftLogEngine {
     }
     /// Flush current cache stats.
     fn flush_stats(&self) -> Option<CacheStats> {
-        let stat = self.0.flush_stats();
+        let stat = self.0.flush_cache_stats();
         Some(engine_traits::CacheStats {
             hit: stat.hit,
             miss: stat.miss,

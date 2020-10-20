@@ -120,8 +120,6 @@ pub struct Storage<E: Engine, L: LockManager> {
 
     concurrency_manager: ConcurrencyManager,
 
-    enable_async_commit: bool,
-
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
     // TODO: This should be implemented in thread pool and worker.
@@ -147,7 +145,6 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
             concurrency_manager: self.concurrency_manager.clone(),
-            enable_async_commit: self.enable_async_commit,
         }
     }
 }
@@ -192,7 +189,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         read_pool: ReadPoolHandle,
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
-        pipelined_pessimistic_lock: bool,
+        pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -202,7 +199,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
             pipelined_pessimistic_lock,
-            config.enable_async_commit,
         );
 
         info!("Storage started.");
@@ -214,7 +210,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             concurrency_manager,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
-            enable_async_commit: config.enable_async_commit,
         })
     }
 
@@ -263,7 +258,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let enable_async_commit = self.enable_async_commit;
         let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
@@ -283,16 +277,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
 
-                if enable_async_commit {
-                    // Update max_ts and check the in-memory lock table before getting the snapshot
-                    async_commit_check_keys(
-                        &concurrency_manager,
-                        iter::once(&key),
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        &bypass_locks,
-                    )?;
-                }
+                // Update max_ts and check the in-memory lock table before getting the snapshot
+                async_commit_check_keys(
+                    &concurrency_manager,
+                    iter::once(&key),
+                    start_ts,
+                    ctx.get_isolation_level(),
+                    &bypass_locks,
+                )?;
 
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
@@ -347,7 +339,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
-        let enable_async_commit = self.enable_async_commit;
         let concurrency_manager = self.concurrency_manager.clone();
         let res =
             self.read_pool.spawn_handle(
@@ -376,18 +367,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let fill_cache = !ctx.get_not_fill_cache();
                         let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                         let region_id = ctx.get_region_id();
-                        if enable_async_commit {
-                            // Update max_ts and check the in-memory lock table before getting the snapshot
-                            if let Err(e) = async_commit_check_keys(
-                                &concurrency_manager,
-                                iter::once(&key),
-                                start_ts,
-                                ctx.get_isolation_level(),
-                                &bypass_locks,
-                            ) {
-                                req_snaps.push(Err(e));
-                                continue;
-                            }
+                        // Update max_ts and check the in-memory lock table before getting the snapshot
+                        if let Err(e) = async_commit_check_keys(
+                            &concurrency_manager,
+                            iter::once(&key),
+                            start_ts,
+                            ctx.get_isolation_level(),
+                            &bypass_locks,
+                        ) {
+                            req_snaps.push(Err(e));
+                            continue;
                         }
 
                         let snap = Self::with_tls_engine(|engine| {
@@ -472,7 +461,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let enable_async_commit = self.enable_async_commit;
         let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
@@ -494,16 +482,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
-                if enable_async_commit {
-                    // Update max_ts and check the in-memory lock table before getting the snapshot
-                    async_commit_check_keys(
-                        &concurrency_manager,
-                        &keys,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        &bypass_locks,
-                    )?;
-                }
+                // Update max_ts and check the in-memory lock table before getting the snapshot
+                async_commit_check_keys(
+                    &concurrency_manager,
+                    &keys,
+                    start_ts,
+                    ctx.get_isolation_level(),
+                    &bypass_locks,
+                )?;
 
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
@@ -581,7 +567,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let enable_async_commit = self.enable_async_commit;
         let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
@@ -611,21 +596,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
-                if enable_async_commit {
-                    // Update max_ts and check the in-memory lock table before getting the snapshot
-                    concurrency_manager.update_max_ts(start_ts);
-                    if ctx.get_isolation_level() == IsolationLevel::Si {
-                        concurrency_manager
-                            .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
-                                Lock::check_ts_conflict(
-                                    Cow::Borrowed(lock),
-                                    &key,
-                                    start_ts,
-                                    &bypass_locks,
-                                )
-                            })
-                            .map_err(mvcc::Error::from)?;
-                    }
+                // Update max_ts and check the in-memory lock table before getting the snapshot
+                concurrency_manager.update_max_ts(start_ts);
+                if ctx.get_isolation_level() == IsolationLevel::Si {
+                    concurrency_manager
+                        .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
+                            Lock::check_ts_conflict(
+                                Cow::Borrowed(lock),
+                                &key,
+                                start_ts,
+                                &bypass_locks,
+                            )
+                        })
+                        .map_err(mvcc::Error::from)?;
                 }
 
                 let snapshot =
@@ -1503,22 +1486,18 @@ fn async_commit_check_keys<'a>(
 pub struct TestStorageBuilder<E: Engine, L: LockManager> {
     engine: E,
     config: Config,
-    pipelined_pessimistic_lock: bool,
+    pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
     lock_mgr: L,
 }
 
 impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     /// Build `Storage<RocksEngine>`.
     pub fn new(lock_mgr: DummyLockManager) -> Self {
-        // Enable async commit in tests by default
-        let config = Config {
-            enable_async_commit: true,
-            ..Default::default()
-        };
+        let config = Config::default();
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config,
-            pipelined_pessimistic_lock: false,
+            pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
             lock_mgr,
         }
     }
@@ -1526,15 +1505,11 @@ impl TestStorageBuilder<RocksEngine, DummyLockManager> {
 
 impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L) -> Self {
-        // Enable async commit in tests by default
-        let config = Config {
-            enable_async_commit: true,
-            ..Default::default()
-        };
+        let config = Config::default();
         Self {
             engine,
             config,
-            pipelined_pessimistic_lock: false,
+            pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
             lock_mgr,
         }
     }
@@ -1547,8 +1522,9 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         self
     }
 
-    pub fn set_pipelined_pessimistic_lock(mut self, enabled: bool) -> Self {
-        self.pipelined_pessimistic_lock = enabled;
+    pub fn set_pipelined_pessimistic_lock(self, enabled: bool) -> Self {
+        self.pipelined_pessimistic_lock
+            .store(enabled, atomic::Ordering::Relaxed);
         self
     }
 
@@ -2188,10 +2164,10 @@ mod tests {
             let cfg_rocksdb = db_config;
             let cache = BlockCacheConfig::default().build_shared_cache();
             let cfs_opts = vec![
-                CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
-                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
-                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None)),
+                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache, None)),
+                CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache, None)),
             ];
             RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
         }
@@ -3945,6 +3921,7 @@ mod tests {
                     false,
                     3,
                     TimeStamp::default(),
+                    TimeStamp::default(),
                     None,
                     Context::default(),
                 ),
@@ -4521,6 +4498,7 @@ mod tests {
                     false,
                     3,
                     ts(10, 1),
+                    TimeStamp::default(),
                     Some(vec![b"k1".to_vec(), b"k2".to_vec()]),
                     Context::default(),
                 ),
@@ -4652,6 +4630,7 @@ mod tests {
                     false,
                     2,
                     TimeStamp::zero(),
+                    TimeStamp::default(),
                     None,
                     Context::default(),
                 ),
@@ -4724,6 +4703,7 @@ mod tests {
                     false,
                     2,
                     TimeStamp::zero(),
+                    TimeStamp::default(),
                     None,
                     Context::default(),
                 ),
@@ -4840,6 +4820,7 @@ mod tests {
                     10.into(),
                     1,
                     TimeStamp::zero(),
+                    TimeStamp::default(),
                     None,
                     Context::default(),
                 ),
@@ -5511,6 +5492,7 @@ mod tests {
                     false,
                     3,
                     TimeStamp::default(),
+                    TimeStamp::default(),
                     Some(vec![b"a".to_vec(), b"b".to_vec()]),
                     Context::default(),
                 ),
@@ -5553,6 +5535,7 @@ mod tests {
                     400.into(),
                     2,
                     401.into(),
+                    TimeStamp::default(),
                     Some(vec![b"e".to_vec()]),
                     Context::default(),
                 ),

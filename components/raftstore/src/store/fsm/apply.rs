@@ -18,7 +18,9 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{KvEngine, RaftEngine, Snapshot, WriteBatch};
+use engine_traits::{
+    DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
+};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -1480,44 +1482,33 @@ where
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
         if !notify_only {
+            let range = vec![EngineRange::new(&start_key, &end_key)];
+            let fail_f = |e: engine_traits::Error, strategy: DeleteStrategy| {
+                panic!(
+                    "{} failed to delete {:?} in ranges [{}, {}): {:?}",
+                    self.tag,
+                    strategy,
+                    hex::encode_upper(&start_key),
+                    hex::encode_upper(&end_key),
+                    e
+                )
+            };
             engine
-                .delete_files_in_range_cf(cf, &start_key, &end_key, /* include_end */ false)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete files in range [{}, {}): {:?}",
-                        self.tag,
-                        log_wrappers::Value::key(&start_key),
-                        log_wrappers::Value::key(&end_key),
-                        e
-                    )
-                });
+                .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
+                .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
 
+            let strategy = if use_delete_range {
+                DeleteStrategy::DeleteByRange
+            } else {
+                DeleteStrategy::DeleteByKey
+            };
             // Delete all remaining keys.
             engine
-                .delete_all_in_range_cf(cf, &start_key, &end_key, use_delete_range)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                        self.tag,
-                        log_wrappers::Value::key(&start_key),
-                        log_wrappers::Value::key(&end_key),
-                        cf,
-                        e
-                    );
-                });
+                .delete_ranges_cf(cf, strategy.clone(), &range)
+                .unwrap_or_else(move |e| fail_f(e, strategy));
             engine
-                .delete_blob_files_in_range_cf(
-                    cf, &start_key, &end_key, /* include_end */ false,
-                )
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete blob files in range [{}, {}): {:?}",
-                        self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
-                        e
-                    )
-                });
+                .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
+                .unwrap_or_else(move |e| fail_f(e, DeleteStrategy::DeleteBlobs));
         }
 
         // TODO: Should this be executed when `notify_only` is set?
@@ -4032,7 +4023,7 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
             })),
         );
@@ -4060,7 +4051,7 @@ mod tests {
                 false,
                 4,
                 4,
-                Callback::Write(Box::new(move |write: WriteResponse| {
+                Callback::write(Box::new(move |write: WriteResponse| {
                     cc_tx.send(write.response).unwrap();
                 })),
             ),
@@ -4148,7 +4139,7 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
             })),
         );
@@ -4182,7 +4173,7 @@ mod tests {
             false,
             idx,
             term,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 tx.send(resp.response).unwrap();
             })),
         )
@@ -4642,7 +4633,7 @@ mod tests {
                         false,
                         10,
                         3,
-                        Callback::Write(Box::new(move |resp: WriteResponse| {
+                        Callback::write(Box::new(move |resp: WriteResponse| {
                             // Sleep until yield timeout.
                             thread::sleep(Duration::from_millis(500));
                             capture_tx_clone.send(resp.response).unwrap();

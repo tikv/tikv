@@ -126,7 +126,7 @@ impl<R: Runnable> RunnableWithTimer for DefaultRunnerWithTimer<R> {
 
 /// Scheduler provides interface to schedule task to underlying workers.
 pub struct Scheduler<T> {
-    name: Arc<String>,
+    name: Arc<str>,
     counter: Arc<AtomicUsize>,
     sender: Sender<Option<T>>,
     metrics_pending_task_count: IntGauge,
@@ -135,12 +135,12 @@ pub struct Scheduler<T> {
 impl<T: Display> Scheduler<T> {
     fn new<S>(name: S, counter: AtomicUsize, sender: Sender<Option<T>>) -> Scheduler<T>
     where
-        S: Into<String>,
+        S: Into<Arc<str>>,
     {
         let name = name.into();
         Scheduler {
             metrics_pending_task_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
-            name: Arc::new(name),
+            name,
             counter: Arc::new(counter),
             sender,
         }
@@ -192,13 +192,13 @@ pub fn dummy_scheduler<T: Display>() -> (Scheduler<T>, Receiver<Option<T>>) {
 }
 
 #[derive(Copy, Clone)]
-pub struct Builder<S: Into<String>> {
+pub struct Builder<S: Into<Arc<str>>> {
     name: S,
     batch_size: usize,
     pending_capacity: usize,
 }
 
-impl<S: Into<String>> Builder<S> {
+impl<S: Into<Arc<str>>> Builder<S> {
     pub fn new(name: S) -> Self {
         Builder {
             name,
@@ -318,7 +318,7 @@ fn fill_task_batch<T>(
 
 impl<T: Display + Send + 'static> Worker<T> {
     /// Creates a worker.
-    pub fn new<S: Into<String>>(name: S) -> Worker<T> {
+    pub fn new<S: Into<Arc<str>>>(name: S) -> Worker<T> {
         Builder::new(name).create()
     }
 
@@ -376,7 +376,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     }
 
     pub fn name(&self) -> &str {
-        self.scheduler.name.as_str()
+        &self.scheduler.name
     }
 
     /// Stops the worker thread.

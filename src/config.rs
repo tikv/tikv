@@ -29,8 +29,9 @@ use engine_rocks::util::{
     FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
 use engine_rocks::{
-    RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener, RocksdbLogger,
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
+    RocksSstPartitionerFactory, RocksdbLogger, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
@@ -38,9 +39,9 @@ use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
 use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
 use raft_log_engine::RaftLogEngine;
-use raftstore::coprocessor::Config as CopConfig;
+use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
 use raftstore::store::Config as RaftstoreConfig;
-use raftstore::store::SplitConfig;
+use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
 use security::SecurityConfig;
 use tikv_util::config::{
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
@@ -243,6 +244,12 @@ macro_rules! cf_config {
             pub prop_keys_index_distance: u64,
             #[config(skip)]
             pub enable_doubly_skiplist: bool,
+            #[config(skip)]
+            pub enable_compaction_guard: bool,
+            #[config(skip)]
+            pub compaction_guard_min_output_file_size: ReadableSize,
+            #[config(skip)]
+            pub compaction_guard_max_output_file_size: ReadableSize,
             #[config(submodule)]
             pub titan: TitanCfConfig,
         }
@@ -379,7 +386,7 @@ macro_rules! write_into_metrics {
 }
 
 macro_rules! build_cf_opt {
-    ($opt:ident, $cache:ident) => {{
+    ($opt:ident, $cache:ident, $region_info_accessor:ident) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
         block_base_opts.set_no_block_cache($opt.disable_block_cache);
@@ -428,6 +435,19 @@ macro_rules! build_cf_opt {
         if $opt.enable_doubly_skiplist {
             cf_opts.set_doubly_skiplist();
         }
+        if $opt.enable_compaction_guard {
+            if let Some(accessor) = $region_info_accessor {
+                cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(
+                    CompactionGuardGeneratorFactory::new(
+                        accessor.clone(),
+                        $opt.compaction_guard_min_output_file_size.0,
+                        $opt.compaction_guard_max_output_file_size.0,
+                    ),
+                ));
+            } else {
+                warn!("compaction guard is disabled due to region info accessor not available")
+            }
+        }
         cf_opts
     }};
 }
@@ -461,7 +481,7 @@ impl Default for DefaultCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
-            target_file_size_base: ReadableSize::mb(8),
+            target_file_size_base: ReadableSize::mb(128),
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: 20,
             level0_stop_writes_trigger: 36,
@@ -474,18 +494,25 @@ impl Default for DefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: true,
+            force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: false,
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
         }
     }
 }
 
 impl DefaultCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, cache);
+    pub fn build_opt(
+        &self,
+        cache: &Option<Cache>,
+        region_info_accessor: Option<&RegionInfoAccessor>,
+    ) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache, region_info_accessor);
         let f = Box::new(RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
@@ -528,7 +555,7 @@ impl Default for WriteCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
-            target_file_size_base: ReadableSize::mb(8),
+            target_file_size_base: ReadableSize::mb(128),
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: 20,
             level0_stop_writes_trigger: 36,
@@ -541,18 +568,25 @@ impl Default for WriteCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: true,
+            force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: false,
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
         }
     }
 }
 
 impl WriteCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, cache);
+    pub fn build_opt(
+        &self,
+        cache: &Option<Cache>,
+        region_info_accessor: Option<&RegionInfoAccessor>,
+    ) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache, region_info_accessor);
         // Prefix extractor(trim the timestamp at tail) for write cf.
         let e = Box::new(FixedSuffixSliceTransform::new(8));
         cf_opts
@@ -568,13 +602,13 @@ impl WriteCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
             .set_compaction_filter_factory(
                 "write_compaction_filter_factory",
                 Box::new(WriteCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
             )
             .unwrap();
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -616,18 +650,25 @@ impl Default for LockCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: true,
+            force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: false,
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
         }
     }
 }
 
 impl LockCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, cache);
+    pub fn build_opt(
+        &self,
+        cache: &Option<Cache>,
+        region_info_accessor: Option<&RegionInfoAccessor>,
+    ) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache, region_info_accessor);
         let f = Box::new(NoopSliceTransform);
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
@@ -680,18 +721,25 @@ impl Default for RaftCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: true,
+            force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: false,
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
         }
     }
 }
 
 impl RaftCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, cache);
+    pub fn build_opt(
+        &self,
+        cache: &Option<Cache>,
+        region_info_accessor: Option<&RegionInfoAccessor>,
+    ) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache, region_info_accessor);
         let f = Box::new(NoopSliceTransform);
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
@@ -744,18 +792,25 @@ impl Default for VersionCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: true,
+            force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: false,
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
         }
     }
 }
 
 impl VersionCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, cache);
+    pub fn build_opt(
+        &self,
+        cache: &Option<Cache>,
+        region_info_accessor: Option<&RegionInfoAccessor>,
+    ) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache, region_info_accessor);
         let f = Box::new(RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
@@ -974,24 +1029,27 @@ impl DbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
+    pub fn build_cf_opts(
+        &self,
+        cache: &Option<Cache>,
+        region_info_accessor: Option<&RegionInfoAccessor>,
+    ) -> Vec<CFOptions<'_>> {
         vec![
-            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
-            CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
-            CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
+            CFOptions::new(
+                CF_DEFAULT,
+                self.defaultcf.build_opt(cache, region_info_accessor),
+            ),
+            CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache, region_info_accessor)),
+            CFOptions::new(
+                CF_WRITE,
+                self.writecf.build_opt(cache, region_info_accessor),
+            ),
             // TODO: remove CF_RAFT.
-            CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
-            CFOptions::new(CF_VER_DEFAULT, self.ver_defaultcf.build_opt(cache)),
-        ]
-    }
-
-    pub fn build_cf_opts_v2(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
-        vec![
-            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
-            CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
-            CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
-            CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
-            CFOptions::new(CF_VER_DEFAULT, self.ver_defaultcf.build_opt(cache)),
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache, region_info_accessor)),
+            CFOptions::new(
+                CF_VER_DEFAULT,
+                self.ver_defaultcf.build_opt(cache, region_info_accessor),
+            ),
         ]
     }
 
@@ -1064,18 +1122,25 @@ impl Default for RaftDefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: true,
+            force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: false,
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
         }
     }
 }
 
 impl RaftDefaultCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, cache);
+    pub fn build_opt(
+        &self,
+        cache: &Option<Cache>,
+        region_info_accessor: Option<&RegionInfoAccessor>,
+    ) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache, region_info_accessor);
         let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
@@ -1222,8 +1287,15 @@ impl RaftDbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
-        vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache))]
+    pub fn build_cf_opts(
+        &self,
+        cache: &Option<Cache>,
+        region_info_accessor: Option<&RegionInfoAccessor>,
+    ) -> Vec<CFOptions<'_>> {
+        vec![CFOptions::new(
+            CF_DEFAULT,
+            self.defaultcf.build_opt(cache, region_info_accessor),
+        )]
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
@@ -1434,9 +1506,16 @@ fn config_value_to_string(config_change: Vec<(String, ConfigValue)>) -> Vec<(Str
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct MetricConfig {
-    pub interval: ReadableDuration,
-    pub address: String,
     pub job: String,
+
+    // Push is deprecated.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub interval: ReadableDuration,
+
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub address: String,
 }
 
 impl Default for MetricConfig {
@@ -3097,7 +3176,7 @@ mod tests {
                 &cfg.storage.data_dir,
                 cfg.rocksdb.build_opt(),
                 cfg.rocksdb
-                    .build_cf_opts(&cfg.storage.block_cache.build_shared_cache()),
+                    .build_cf_opts(&cfg.storage.block_cache.build_shared_cache(), None),
             )
             .unwrap(),
         ));

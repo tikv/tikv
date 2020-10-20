@@ -939,52 +939,82 @@ fn cast_duration_as_duration(
     }
 }
 
-macro_rules! cast_as_duration {
-    ($ty:ty, $as_uint_fn:ident, $extra:expr) => {
-        #[rpn_fn(nullable, capture = [ctx, extra])]
-        #[inline]
-        fn $as_uint_fn(
-            ctx: &mut EvalContext,
-            extra: &RpnFnCallExtra,
-            val: Option<$ty>,
-        ) -> Result<Option<Duration>> {
-            match val {
-                None => Ok(None),
-                Some(val) => {
-                    let result =
-                        Duration::parse(ctx, $extra, extra.ret_field_type.get_decimal() as i8);
-                    match result {
-                        Ok(dur) => Ok(Some(dur)),
-                        Err(e) => match e.code() {
-                            ERR_DATA_OUT_OF_RANGE => {
-                                ctx.handle_overflow_err(e)?;
-                                Ok(None)
-                            }
-                            ERR_TRUNCATE_WRONG_VALUE => {
-                                ctx.handle_truncate_err(e)?;
-                                Ok(None)
-                            }
-                            _ => Err(e.into()),
-                        },
-                    }
-                }
-            }
+// TODO: use this macro to simplify all other place
+macro_rules! skip_none {
+    ($val:expr) => {
+        match $val {
+            None => return Ok(None),
+            Some(v) => v,
         }
     };
 }
 
-cast_as_duration!(
-    &Real,
-    cast_real_as_duration,
-    val.into_inner().to_string().as_bytes()
-);
-cast_as_duration!(BytesRef, cast_bytes_as_duration, val);
-cast_as_duration!(
-    &Decimal,
-    cast_decimal_as_duration,
-    val.to_string().as_bytes()
-);
-cast_as_duration!(JsonRef, cast_json_as_duration, val.unquote()?.as_bytes());
+#[inline]
+fn cast_bytes_like_as_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &[u8],
+) -> Result<Option<Duration>> {
+    let result = Duration::parse(ctx, val, extra.ret_field_type.get_decimal() as i8);
+    match result {
+        Ok(dur) => Ok(Some(dur)),
+        Err(e) => match e.code() {
+            ERR_DATA_OUT_OF_RANGE => {
+                ctx.handle_overflow_err(e)?;
+                Ok(None)
+            }
+            ERR_TRUNCATE_WRONG_VALUE => {
+                ctx.handle_truncate_err(e)?;
+                Ok(None)
+            }
+            _ => Err(e.into()),
+        },
+    }
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+pub fn cast_real_as_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<&Real>,
+) -> Result<Option<Duration>> {
+    let v = skip_none!(val).into_inner().to_string();
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+pub fn cast_bytes_as_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<BytesRef>,
+) -> Result<Option<Duration>> {
+    let v = skip_none!(val);
+    cast_bytes_like_as_duration(ctx, extra, v)
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+pub fn cast_decimal_as_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<&Decimal>,
+) -> Result<Option<Duration>> {
+    let v = skip_none!(val).to_string();
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+pub fn cast_json_as_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<JsonRef>,
+) -> Result<Option<Duration>> {
+    let v = skip_none!(val).unquote()?;
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+}
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
 fn cast_int_as_time(
@@ -1075,9 +1105,9 @@ fn cast_decimal_as_time(
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
         // Convert `val` to a string first and then parse it as a string.
-        Time::parse(
+        Time::parse_from_decimal(
             ctx,
-            val.to_string().as_str(),
+            val,
             extra.ret_field_type.as_accessor().tp().try_into()?,
             extra.ret_field_type.get_decimal() as i8,
             // Enable round
@@ -1692,17 +1722,11 @@ mod tests {
         }
         impl Cond {
             fn in_union(&self) -> bool {
-                if let Cond::InUnionAndUnsigned = self {
-                    true
-                } else {
-                    false
-                }
+                matches!(self, Cond::InUnionAndUnsigned)
             }
+
             fn is_unsigned(&self) -> bool {
-                match self {
-                    Cond::InUnionAndUnsigned | Cond::Unsigned => true,
-                    _ => false,
-                }
+                matches!(self, Cond::InUnionAndUnsigned | Cond::Unsigned)
             }
         }
 
@@ -1833,8 +1857,8 @@ mod tests {
                 .iter()
                 .map(|w| w.get_code())
                 .collect::<Vec<i32>>();
-            got_warnings.sort();
-            err_code.sort();
+            got_warnings.sort_unstable();
+            err_code.sort_unstable();
             assert_eq!(
                 ctx.warnings.warning_cnt,
                 err_code.len(),
@@ -2049,6 +2073,7 @@ mod tests {
             ("2059-12-31 00:00:00", 591_231),
             ("1970-01-01 00:00:00", 700_101),
             ("1999-12-31 00:00:00", 991_231),
+            ("1000-01-00 00:00:00", 10_000_100),
             ("2000-01-01 00:00:00", 101_000_000),
             ("2069-12-31 23:59:59", 691_231_235_959),
             ("1970-01-01 00:00:00", 700_101_000_000),
@@ -2069,15 +2094,7 @@ mod tests {
             assert_eq!(actual.to_string(), expected);
         }
 
-        let should_fail = vec![
-            -11111,
-            1,
-            100,
-            700_100,
-            10_000_100,
-            100_000_000,
-            100_000_101_000_000,
-        ];
+        let should_fail = vec![-11111, 1, 100, 700_100, 100_000_000, 100_000_101_000_000];
 
         for case in should_fail {
             let actual = RpnFnScalarEvaluator::new()
@@ -2227,18 +2244,22 @@ mod tests {
         let cases = vec![
             ("2019-09-16 10:11:12", "20190916101112", 0),
             ("2019-09-16 10:11:12", "190916101112", 0),
-            ("2019-09-16 10:11:01", "19091610111", 0),
-            ("2019-09-16 10:11:00", "1909161011", 0),
-            ("2019-09-16 10:01:00", "190916101", 0),
             ("1909-12-10 00:00:00", "19091210", 0),
             ("2020-02-29 10:00:00", "20200229100000", 0),
-            ("2019-09-16 01:00:00", "1909161", 0),
             ("2019-09-16 00:00:00", "190916", 0),
-            ("2019-09-01 00:00:00", "19091", 0),
             ("2019-09-16 10:11:12.111", "190916101112.111", 3),
             ("2019-09-16 10:11:12.111", "20190916101112.111", 3),
             ("2019-09-16 10:11:12.67", "20190916101112.666", 2),
             ("2019-09-16 10:11:13.0", "20190916101112.999", 1),
+            ("2001-11-11 00:00:00.0000", "11111.1111", 4),
+            ("0102-11-21 14:11:05.4324", "1021121141105.4324", 4),
+            ("2002-11-21 14:11:05.101", "21121141105.101", 3),
+            ("2000-11-21 14:11:05.799055", "1121141105.799055", 6),
+            ("2000-01-21 14:11:05.123", "121141105.123", 3),
+            ("0114-11-05 00:00:00", "1141105", 0),
+            ("2004-11-05 00:00:00.00", "41105.11", 2),
+            ("2000-11-05 00:00:00.0", "1105.3", 1),
+            ("2000-01-05 00:00:00", "105", 0),
         ];
 
         for (expected, decimal, fsp) in cases {
@@ -2256,6 +2277,29 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(actual.to_string(), expected);
+        }
+
+        let should_fail = vec![
+            "19091610111",
+            "1909161011",
+            "190916101",
+            "1909161",
+            "19091",
+            "201705051315111.22",
+            "2011110859.1111",
+            "2011110859.1111",
+            "191203081.1111",
+            "43128.121105",
+        ];
+
+        for case in should_fail {
+            let case: Decimal = case.parse().unwrap();
+            let actual = RpnFnScalarEvaluator::new()
+                .push_param(case)
+                .return_field_type(FieldTypeBuilder::new().tp(FieldTypeTp::DateTime).build())
+                .evaluate::<Time>(ScalarFuncSig::CastDecimalAsTime)
+                .unwrap();
+            assert!(actual.is_none());
         }
     }
 
@@ -2651,7 +2695,7 @@ mod tests {
                 .iter()
                 .map(|w| w.get_code())
                 .collect::<Vec<i32>>();
-            got_warnings.sort();
+            got_warnings.sort_unstable();
             assert_eq!(got_warnings, warnings);
         }
 
@@ -2833,7 +2877,7 @@ mod tests {
                 .iter()
                 .map(|w| w.get_code())
                 .collect::<Vec<i32>>();
-            got_warnings.sort();
+            got_warnings.sort_unstable();
             assert_eq!(
                 ctx.warnings.warning_cnt, warning_cnt,
                 "input:{:?}, expected:{:?}, flen:{:?}, decimal:{:?}, truncated:{:?}, overflow:{:?}, in_union:{:?}, warnings:{:?}",

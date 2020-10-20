@@ -59,7 +59,7 @@ fn compute_hash_on_raw<S: Snapshot>(region: &Region, snap: &S) -> Result<u32> {
     let region_id = region.get_id();
     let mut digest = crc32fast::Hasher::new();
     let mut cf_names = snap.cf_names();
-    cf_names.sort();
+    cf_names.sort_unstable();
 
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
