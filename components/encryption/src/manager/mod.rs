@@ -140,12 +140,13 @@ impl Dicts {
     }
 
     fn save_file_dict(&self) -> Result<()> {
-        let _lock = self.file_lock.lock().unwrap();
-        let file_dict = self.file_dict.lock().unwrap();
         let file = EncryptedFile::new(&self.base, FILE_DICT_NAME);
-        let file_bytes = file_dict.write_to_bytes()?;
-        let file_num = file_dict.files.len() as _;
-        drop(file_dict);
+        let (file_bytes, file_num) = {
+            let file_dict = self.file_dict.lock().unwrap();
+            let file_bytes = file_dict.write_to_bytes()?;
+            let file_num = file_dict.files.len() as _;
+            (file_bytes, file_num)
+        };
         // File dict is saved in plaintext.
         file.write(&file_bytes, &PlaintextBackend::default())?;
 
@@ -190,6 +191,7 @@ impl Dicts {
     }
 
     fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
+        let _lock = self.file_lock.lock().unwrap();
         let iv = Iv::new_ctr();
         let mut file = FileInfo::default();
         file.iv = iv.as_slice().to_vec();
@@ -213,6 +215,7 @@ impl Dicts {
     }
 
     fn delete_file(&self, fname: &str) -> Result<()> {
+        let _lock = self.file_lock.lock().unwrap();
         let file = {
             let mut file_dict = self.file_dict.lock().unwrap();
             match file_dict.files.remove(fname) {
@@ -236,6 +239,7 @@ impl Dicts {
     }
 
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
+        let _lock = self.file_lock.lock().unwrap();
         let mut file_dict = self.file_dict.lock().unwrap();
         let file = match file_dict.files.get(src_fname) {
             Some(file_info) => file_info.clone(),
@@ -265,6 +269,7 @@ impl Dicts {
     }
 
     fn rename_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
+        let _lock = self.file_lock.lock().unwrap();
         let mut file_dict = self.file_dict.lock().unwrap();
         let file = match file_dict.files.remove(src_fname) {
             Some(file_info) => file_info,
@@ -289,17 +294,19 @@ impl Dicts {
 
     fn rotate_key(&self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<bool> {
         info!("encryption: rotate data key."; "key_id" => key_id);
-        let mut key_dict = self.key_dict.lock().unwrap();
-        match key_dict.keys.entry(key_id) {
-            // key id collides
-            Entry::Occupied(_) => return Ok(false),
-            Entry::Vacant(e) => e.insert(key),
+        {
+            let mut key_dict = self.key_dict.lock().unwrap();
+            match key_dict.keys.entry(key_id) {
+                // key id collides
+                Entry::Occupied(_) => return Ok(false),
+                Entry::Vacant(e) => e.insert(key),
+            };
         };
-        drop(key_dict);
+        // re-encrypt key dict file.
+        let ret = self.save_key_dict(master_key).map(|()| true);
         // Update current data key id.
         self.current_key_id.store(key_id, Ordering::SeqCst);
-        // re-encrypt key dict file.
-        self.save_key_dict(master_key).map(|()| true)
+        ret
     }
 
     fn maybe_rotate_data_key(
