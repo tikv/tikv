@@ -137,7 +137,7 @@ mod tests {
         )
         .unwrap();
         let raft_engine =
-            engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+            engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, CF_DEFAULT, None)
                 .unwrap();
         let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
         let region = initial_region(1, 1, 1);

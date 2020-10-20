@@ -73,17 +73,20 @@ pub mod raft {
     pub fn new_engine(
         path: &str,
         db_opt: Option<DBOptions>,
-        cfs: &[&str],
-        opts: Option<Vec<CFOptions>>,
+        cf: &str,
+        opt: Option<CFOptions>,
     ) -> Result<RaftTestEngine> {
+        let cfs = &[cf];
+        let opts = opt.map(|o| vec![o]);
         RaftTestEngine::new_engine(path, db_opt, cfs, opts)
     }
 
     pub fn new_engine_opt(
         path: &str,
         db_opt: DBOptions,
-        cfs_opts: Vec<CFOptions>,
+        cf_opt: CFOptions,
     ) -> Result<RaftTestEngine> {
+        let cfs_opts = vec![cf_opt];
         RaftTestEngine::new_engine_opt(path, db_opt, cfs_opts)
     }
 }
@@ -443,7 +446,7 @@ pub fn new_temp_engine(
         crate::raft::new_engine(
             raft_path.to_str().unwrap(),
             None,
-            &[engine_traits::CF_DEFAULT],
+            engine_traits::CF_DEFAULT,
             None,
         )
         .unwrap(),
