@@ -85,7 +85,8 @@ pub fn run_tikv(config: TiKvConfig) {
     initial_logger(&config);
 
     // Print version information.
-    tikv::log_tikv_info();
+    let build_timestamp = option_env!("TIKV_BUILD_TIME");
+    tikv::log_tikv_info(build_timestamp);
 
     // Print resource quota.
     SysQuota::new().log_quota();
@@ -457,7 +458,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .engine
             .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
-        let lock_mgr = LockManager::new();
+        let lock_mgr = LockManager::new(self.config.pessimistic_txn.pipelined);
         cfg_controller.register(
             tikv::config::Module::PessimisticTxn,
             Box::new(lock_mgr.config_manager()),
@@ -508,7 +509,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             storage_read_pool_handle,
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
-            self.config.pessimistic_txn.pipelined,
+            lock_mgr.get_pipelined(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 

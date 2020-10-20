@@ -4898,6 +4898,7 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
+ "time 0.1.42",
  "tokio",
  "toml",
  "txn_types",
@@ -4944,6 +4945,7 @@ dependencies = [
  "clap",
  "server",
  "tikv",
+ "time 0.1.42",
  "toml",
 ]
 

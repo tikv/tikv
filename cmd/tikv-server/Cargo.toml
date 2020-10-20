@@ -21,3 +21,6 @@ clap = "2.32"
 server = { path = "../../components/server", default-features = false }
 tikv = { path = "../../", default-features = false }
 toml = "0.4"
+
+[build-dependencies]
+time = "0.1"
