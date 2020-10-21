@@ -114,7 +114,6 @@ impl Dicts {
         }
     }
 
-    // Require `key_lock` being held.
     fn save_key_dict(&self, master_key: &dyn Backend) -> Result<()> {
         let file = EncryptedFile::new(&self.base, KEY_DICT_NAME);
         let (keys_len, key_bytes) = {
