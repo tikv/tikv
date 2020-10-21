@@ -6,7 +6,7 @@ use crate::server::CONFIG_ROCKSDB_GAUGE;
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use engine_rocks::RocksEngine;
-use engine_traits::{CFHandleExt, ColumnFamilyOptions, CF_DEFAULT};
+use engine_traits::{CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
 use libc::c_int;
 use std::error::Error;
 use tikv_util::config::{self, OptionReadableSize, ReadableSize};
