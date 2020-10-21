@@ -304,10 +304,10 @@ impl Dicts {
         };
 
         // re-encrypt key dict file.
-        self.save_key_dict(master_key).map(|()| {
-            // Update current data key id.
-            self.current_key_id.store(key_id, Ordering::SeqCst);
-        })
+        self.save_key_dict(master_key)?;
+        // Update current data key id.
+        self.current_key_id.store(key_id, Ordering::SeqCst);
+        Ok(())
     }
 
     fn maybe_rotate_data_key(
@@ -371,7 +371,7 @@ fn run_background_rotate_work(
             recv(tick(check_period)) -> _ => {
                 info!("Try to rotate data key, current method:{:?}", method);
                 dict.maybe_rotate_data_key(method, master_key.as_ref())
-                    .unwrap();
+                    .expect("Rotating key operation encountered error in the background worker");
             },
             recv(terminal_recv) -> _ => {
                 info!("Key rotate worker has been cancelled.");
