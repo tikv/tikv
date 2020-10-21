@@ -94,6 +94,8 @@ pub struct StoreMeta {
     pub regions: HashMap<u64, Region>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
+    /// region_id -> (term, leader)
+    pub leaders: HashMap<u64, (u64, metapb::Peer)>,
     /// `MsgRequestPreVote` or `MsgRequestVote` messages from newly split Regions shouldn't be dropped if there is no
     /// such Region in this store now. So the messages are recorded temporarily and will be handled later.
     pub pending_votes: RingQueue<RaftMessage>,
@@ -122,6 +124,7 @@ impl StoreMeta {
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
             readers: HashMap::default(),
+            leaders: HashMap::default(),
             pending_votes: RingQueue::with_capacity(vote_capacity),
             pending_snapshot_regions: Vec::default(),
             pending_merge_targets: HashMap::default(),

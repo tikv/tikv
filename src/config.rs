@@ -2118,6 +2118,7 @@ impl Default for BackupConfig {
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub old_value_cache_size: usize,
+    pub compatible_hibernate_region: bool,
 }
 
 impl Default for CdcConfig {
@@ -2125,6 +2126,7 @@ impl Default for CdcConfig {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
             old_value_cache_size: 1024,
+            compatible_hibernate_region: true,
         }
     }
 }
