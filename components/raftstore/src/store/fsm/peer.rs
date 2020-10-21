@@ -607,7 +607,6 @@ where
                     .any(|p| p.get_id() == self.fsm.peer_id())
                 {
                     self.fsm.peer.send_wake_up_message(&mut self.ctx, &leader);
-                    self.fsm.peer.insert_peer_cache(leader);
                 }
             }
         }
@@ -1253,6 +1252,11 @@ where
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if self.fsm.group_state == GroupState::Idle {
                     self.reset_raft_tick(GroupState::Ordered);
+                }
+                if msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+                    && self.fsm.peer.is_leader()
+                {
+                    self.fsm.peer.raft_group.raft.ping();
                 }
             }
             ExtraMessageType::MsgWantRollbackMerge => {
