@@ -484,6 +484,14 @@ trait DebugExecutor {
     /// Recreate the region with metadata from pd, but alloc new id for it.
     fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64);
 
+    fn recreate_region_with_range(
+        &self,
+        sec_mgr: Arc<SecurityManager>,
+        pd_cfg: &PdConfig,
+        start: &str,
+        end: &str,
+    );
+
     fn check_region_consistency(&self, _: u64);
 
     fn check_local_mode(&self);
@@ -725,7 +733,7 @@ impl DebugExecutor for DebugClient {
         self.check_local_mode();
     }
 
-    fn recreate_region_with_range(&self, _: Arc<SecurityManager>, _: &PdConfig, _: &[u8], _: &[u8]) {
+    fn recreate_region_with_range(&self, _: Arc<SecurityManager>, _: &PdConfig, _: &str, _: &str) {
         self.check_local_mode();
     }
 
@@ -950,7 +958,13 @@ impl DebugExecutor for Debugger {
         v1!("success");
     }
 
-    fn recreate_region_with_range(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, start: &[u8], end: &[u8]) {
+    fn recreate_region_with_range(
+        &self,
+        mgr: Arc<SecurityManager>,
+        pd_cfg: &PdConfig,
+        start: &str,
+        end: &str,
+    ) {
         let rpc_client =
             RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
@@ -973,12 +987,15 @@ impl DebugExecutor for Debugger {
         peer.set_store_id(store_id);
         region.mut_peers().push(peer);
 
-        region.set_start_key(hex::decode(start));
-        region.set_end_key(hex::decode(end));
+        region.set_start_key(hex::decode(start).unwrap());
+        region.set_end_key(hex::decode(end).unwrap());
 
         v1!(
-            "initing empty region {} with peer_id {}, start: {}, end: {}...",
-            new_region_id, new_peer_id, start, end,
+            "initing empty region {} with peer_id {}, start: {:?}, end: {:?}...",
+            new_region_id,
+            new_peer_id,
+            start,
+            end,
         );
         self.recreate_region(region)
             .unwrap_or_else(|e| perror_and_exit("Debugger::recreate_region", e));
