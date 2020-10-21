@@ -1292,8 +1292,16 @@ impl PdClient for TestPdClient {
         if let Err(e) = self.check_bootstrap() {
             return Box::pin(err(e));
         }
-        match self.cluster.rl().get_region_by_id(region_id) {
-            Ok(resp) => Box::pin(ok(resp.map(|r| (r, metapb::Peer::default())))),
+        let cluster = self.cluster.rl();
+        match cluster.get_region_by_id(region_id) {
+            Ok(resp) => {
+                let leader = cluster
+                    .leaders
+                    .get(&region_id)
+                    .cloned()
+                    .unwrap_or(metapb::Peer::default());
+                Box::pin(ok(resp.map(|r| (r, leader))))
+            }
             Err(e) => Box::pin(err(e)),
         }
     }
