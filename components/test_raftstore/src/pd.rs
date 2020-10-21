@@ -1295,11 +1295,7 @@ impl PdClient for TestPdClient {
         let cluster = self.cluster.rl();
         match cluster.get_region_by_id(region_id) {
             Ok(resp) => {
-                let leader = cluster
-                    .leaders
-                    .get(&region_id)
-                    .cloned()
-                    .unwrap_or(metapb::Peer::default());
+                let leader = cluster.leaders.get(&region_id).cloned().unwrap_or_default();
                 Box::pin(ok(resp.map(|r| (r, leader))))
             }
             Err(e) => Box::pin(err(e)),
