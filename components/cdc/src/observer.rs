@@ -14,10 +14,12 @@ use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
 use tikv::storage::{Cursor, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use tikv_util::collections::HashMap;
+use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
 use txn_types::{Key, Lock, MutationType, TxnExtra, Value, WriteRef, WriteType};
 
 use crate::endpoint::{Deregister, Task};
+use crate::metrics::*;
 use crate::{Error as CdcError, Result};
 
 /// An Observer for CDC.
@@ -137,18 +139,28 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                                 let start_ts = old_value.start_ts;
                                 return old_value.short_value.or_else(|| {
                                     let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
+                                    let start = Instant::now();
                                     let mut opts = ReadOptions::new();
                                     opts.set_fill_cache(false);
-                                    reader.get_value_default(&prev_key, statistics)
+                                    let value = reader.get_value_default(&prev_key, statistics);
+                                    CDC_OLD_VALUE_DURATION_HISTOGRAM
+                                        .with_label_values(&["get"])
+                                        .observe(start.elapsed().as_millis() as f64);
+                                    value
                                 });
                             }
                         }
                         _ => unreachable!(),
                     }
                 }
-                reader
+                let start = Instant::now();
+                let value = reader
                     .near_seek_old_value(&key, statistics)
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                CDC_OLD_VALUE_DURATION_HISTOGRAM
+                    .with_label_values(&["seek"])
+                    .observe(start.elapsed().as_millis() as f64);
+                value
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
                 multi: batches,

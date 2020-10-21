@@ -600,6 +600,7 @@ impl Delegate {
                         row.old_value = old_value_cb.borrow_mut().as_mut()(key, &mut statistics)
                             .unwrap_or_default();
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
+                            .with_label_values(&["all"])
                             .observe(start.elapsed().as_millis() as f64);
                         for (cf, cf_details) in statistics.details().iter() {
                             for (tag, count) in cf_details.iter() {
