@@ -2,10 +2,9 @@
 
 use crate::cf_options::PanicColumnFamilyOptions;
 use crate::engine::PanicEngine;
-use engine_traits::{CFHandle, CFHandleExt, Result};
+use engine_traits::{CFHandleExt, Result};
 
 impl CFHandleExt for PanicEngine {
-    type CFHandle = PanicCFHandle;
     type ColumnFamilyOptions = PanicColumnFamilyOptions;
 
     fn get_options_cf(&self, cf: &str) -> Result<Self::ColumnFamilyOptions> {
@@ -15,7 +14,3 @@ impl CFHandleExt for PanicEngine {
         panic!()
     }
 }
-
-pub struct PanicCFHandle;
-
-impl CFHandle for PanicCFHandle {}
