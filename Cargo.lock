@@ -1082,6 +1082,8 @@ name = "engine_panic"
 version = "0.0.1"
 dependencies = [
  "engine_traits",
+ "kvproto",
+ "raft",
  "tikv_alloc",
  "tikv_util",
  "txn_types",
@@ -1115,6 +1117,18 @@ dependencies = [
  "time 0.1.42",
  "toml",
  "txn_types",
+]
+
+[[package]]
+name = "engine_test"
+version = "0.0.1"
+dependencies = [
+ "engine_panic",
+ "engine_rocks",
+ "engine_traits",
+ "tempfile",
+ "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
@@ -3079,6 +3093,7 @@ dependencies = [
  "encryption",
  "engine_panic",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "error_code",
  "fail 0.4.0",
@@ -4710,6 +4725,7 @@ dependencies = [
  "encryption",
  "engine_panic",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "error_code",
  "fail 0.4.0",
