@@ -33,6 +33,7 @@ command! {
             /// How many keys this transaction involved.
             txn_size: u64,
             min_commit_ts: TimeStamp,
+            max_commit_ts: TimeStamp,
             /// All secondary keys in the whole transaction (i.e., as sent to all nodes, not only
             /// this node). Only present if using async commit.
             secondary_keys: Option<Vec<Vec<u8>>>,
@@ -113,6 +114,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
                 self.for_update_ts,
                 self.txn_size,
                 self.min_commit_ts,
+                self.max_commit_ts,
                 context.pipelined_pessimistic_lock,
             ) {
                 Ok(ts) => {

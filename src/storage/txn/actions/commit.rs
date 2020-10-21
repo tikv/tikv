@@ -266,6 +266,7 @@ pub mod tests {
             ts(60, 0),
             1,
             ts(60, 1),
+            TimeStamp::zero(),
             false,
         );
         // The min_commit_ts is ts(70, 0) other than ts(60, 1) in prewrite request.

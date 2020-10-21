@@ -3704,7 +3704,7 @@ mod tests {
 
     #[test]
     fn test_cmd_epoch_checker() {
-        use engine_rocks::RocksSnapshot;
+        use engine_test::kv::KvTestSnapshot;
         fn new_admin_request(cmd_type: AdminCmdType) -> RaftCmdRequest {
             let mut request = RaftCmdRequest::default();
             request.mut_admin_request().set_cmd_type(cmd_type);
@@ -3717,7 +3717,7 @@ mod tests {
         let prepare_merge_admin = new_admin_request(AdminCmdType::PrepareMerge);
         let change_peer_admin = new_admin_request(AdminCmdType::ChangePeer);
 
-        let mut epoch_checker = CmdEpochChecker::<RocksSnapshot>::default();
+        let mut epoch_checker = CmdEpochChecker::<KvTestSnapshot>::default();
 
         assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
         assert_eq!(epoch_checker.term, 10);

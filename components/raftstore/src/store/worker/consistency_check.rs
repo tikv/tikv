@@ -129,8 +129,7 @@ mod tests {
         BoxConsistencyCheckObserver, ConsistencyCheckMethod, RawConsistencyCheckObserver,
     };
     use byteorder::{BigEndian, WriteBytesExt};
-    use engine_rocks::util::new_engine;
-    use engine_rocks::{RocksEngine, RocksSnapshot};
+    use engine_test::kv::{new_engine, KvTestEngine};
     use engine_traits::{KvEngine, SyncMutable, CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
     use std::sync::mpsc;
@@ -153,7 +152,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut host = CoprocessorHost::<RocksEngine>::new(tx.clone());
+        let mut host = CoprocessorHost::<KvTestEngine>::new(tx.clone());
         host.registry.register_consistency_check_observer(
             100,
             BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
@@ -172,7 +171,7 @@ mod tests {
         // hash should also contains region state key.
         digest.update(&keys::region_state_key(region.get_id()));
         let sum = digest.finalize();
-        runner.run(Task::<RocksSnapshot>::ComputeHash {
+        runner.run(Task::<<KvTestEngine as KvEngine>::Snapshot>::ComputeHash {
             index: 10,
             context: vec![ConsistencyCheckMethod::Raw as u8],
             region: region.clone(),
