@@ -2,9 +2,7 @@
 
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
-use engine_rocks::properties::MvccProperties;
-use engine_rocks::RocksTablePropertiesCollection;
-use engine_traits::{IterOptions, TableProperties, TablePropertiesCollection};
+use engine_traits::{IterOptions, MvccProperties};
 use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::borrow::Cow;
@@ -440,20 +438,11 @@ impl<S: Snapshot> MvccReader<S> {
 
 // Returns true if it needs gc.
 // This is for optimization purpose, does not mean to be accurate.
-pub fn check_need_gc(
-    safe_point: TimeStamp,
-    ratio_threshold: f64,
-    write_properties: &RocksTablePropertiesCollection,
-) -> bool {
+pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: MvccProperties) -> bool {
     // Always GC.
     if ratio_threshold < 1.0 {
         return true;
     }
-
-    let props = match get_mvcc_properties(safe_point, write_properties) {
-        Some(v) => v,
-        None => return true,
-    };
 
     // No data older than safe_point to GC.
     if props.min_ts > safe_point {
@@ -476,29 +465,6 @@ pub fn check_need_gc(
     props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
 }
 
-fn get_mvcc_properties(
-    safe_point: TimeStamp,
-    collection: &RocksTablePropertiesCollection,
-) -> Option<MvccProperties> {
-    if collection.is_empty() {
-        return None;
-    }
-    // Aggregate MVCC properties.
-    let mut props = MvccProperties::new();
-    for (_, v) in collection.iter() {
-        let mvcc = match MvccProperties::decode(&v.user_collected_properties()) {
-            Ok(v) => v,
-            Err(_) => return None,
-        };
-        // Filter out properties after safe_point.
-        if mvcc.min_ts > safe_point {
-            continue;
-        }
-        props.add(&mvcc);
-    }
-    Some(props)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,14 +472,14 @@ mod tests {
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
 
-    use crate::storage::txn::{commit, prewrite};
+    use crate::storage::txn::{commit, pessimistic_prewrite, prewrite};
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::raw::DB;
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{Mutable, TablePropertiesExt, WriteBatchExt};
+    use engine_traits::{Mutable, MvccPropertiesExt, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
@@ -595,7 +561,8 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
 
-            txn.pessimistic_prewrite(
+            pessimistic_prewrite(
+                &mut txn,
                 m,
                 pk,
                 &None,
@@ -761,13 +728,13 @@ mod tests {
 
         let start = keys::data_key(region.get_start_key());
         let end = keys::data_end_key(region.get_end_key());
-        let collection = db
+        let props = db
             .c()
-            .get_range_properties_cf(CF_WRITE, &start, &end)
-            .unwrap();
-        assert_eq!(check_need_gc(safe_point, 1.0, &collection), need_gc);
-
-        get_mvcc_properties(safe_point, &collection)
+            .get_mvcc_properties_cf(CF_WRITE, safe_point, &start, &end);
+        if let Some(props) = props.as_ref() {
+            assert_eq!(check_need_gc(safe_point, 1.0, props.clone()), need_gc);
+        }
+        props
     }
 
     #[test]

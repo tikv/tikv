@@ -401,7 +401,7 @@ impl MvccInfoObserver for MvccChecksum {
         }
 
         if !self.committed_txns_sorted {
-            self.committed_txns.sort();
+            self.committed_txns.sort_unstable();
             self.committed_txns_sorted = true;
         }
 
@@ -418,8 +418,8 @@ impl MvccInfoObserver for MvccChecksum {
 mod tests {
     use super::*;
     use crate::storage::kv::TestEngineBuilder;
-    use crate::storage::mvcc::tests::{must_prewrite_delete, must_prewrite_put, must_rollback};
-    use crate::storage::txn::tests::must_commit;
+    use crate::storage::mvcc::tests::must_rollback;
+    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_rocks::RocksEngine;
 
     #[test]

@@ -217,7 +217,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "pd_client",
- "prometheus 0.8.0",
+ "prometheus",
  "raft",
  "raftstore",
  "rand 0.7.3",
@@ -459,7 +459,7 @@ dependencies = [
  "lazy_static",
  "panic_hook",
  "pd_client",
- "prometheus 0.8.0",
+ "prometheus",
  "prost",
  "protobuf",
  "raft",
@@ -551,15 +551,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cloudabi"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4344512281c643ae7638bbabc3af17a11307803ec8f0fcad9fae512a8bf36467"
-dependencies = [
- "bitflags",
-]
-
-[[package]]
 name = "cmake"
 version = "0.1.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -593,7 +584,7 @@ dependencies = [
  "log_wrappers",
  "nix 0.11.1",
  "pd_client",
- "prometheus 0.8.0",
+ "prometheus",
  "promptly",
  "protobuf",
  "raft",
@@ -609,6 +600,7 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
+ "time 0.1.42",
  "tokio",
  "toml",
  "txn_types",
@@ -638,8 +630,9 @@ version = "0.0.1"
 dependencies = [
  "criterion",
  "crossbeam-skiplist",
+ "fail 0.4.0",
  "futures 0.3.5",
- "parking_lot 0.10.0",
+ "parking_lot",
  "rand 0.7.3",
  "tikv_alloc",
  "tokio",
@@ -1062,7 +1055,7 @@ dependencies = [
  "lazy_static",
  "matches",
  "openssl",
- "prometheus 0.8.0",
+ "prometheus",
  "protobuf",
  "rand 0.7.3",
  "rusoto_core",
@@ -1091,6 +1084,7 @@ dependencies = [
  "engine_traits",
  "tikv_alloc",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -1105,7 +1099,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "num_cpus",
- "prometheus 0.8.0",
+ "prometheus",
  "prometheus-static-metric",
  "protobuf",
  "raft",
@@ -1137,6 +1131,7 @@ dependencies = [
  "slog-global",
  "tikv_alloc",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -1556,7 +1551,7 @@ dependencies = [
  "grpcio-sys",
  "libc",
  "log",
- "parking_lot 0.10.0",
+ "parking_lot",
  "prost",
  "protobuf",
 ]
@@ -1796,15 +1791,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "instant"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63312a18f7ea8760cdd0a7c5aac1a619752a246b833545e3e36d1f81f7cd9e66"
-dependencies = [
- "cfg-if",
-]
-
-[[package]]
 name = "into_other"
 version = "0.0.1"
 dependencies = [
@@ -1976,7 +1962,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#95f66baeec7f28cf30aca7874f30115e04e98b8f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#488fb4181c063d7328308049cced6d4ef9616ba7"
 dependencies = [
  "cc",
  "cmake",
@@ -1985,7 +1971,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#95f66baeec7f28cf30aca7874f30115e04e98b8f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#488fb4181c063d7328308049cced6d4ef9616ba7"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2005,7 +1991,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#95f66baeec7f28cf30aca7874f30115e04e98b8f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#488fb4181c063d7328308049cced6d4ef9616ba7"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2049,15 +2035,6 @@ name = "lock_api"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "79b2de95ecb4691949fea4716ca53cdbcfccb2c612e19644a8bad05edcf9f47b"
-dependencies = [
- "scopeguard 1.1.0",
-]
-
-[[package]]
-name = "lock_api"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28247cc5a5be2f05fbcd76dd0cf2c7d3b5400cb978a28042abcd4fa0b3f8261c"
 dependencies = [
  "scopeguard 1.1.0",
 ]
@@ -2579,19 +2556,8 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92e98c49ab0b7ce5b222f2cc9193fc4efe11c6d0bd4f648e374684a6857b1cfc"
 dependencies = [
- "lock_api 0.3.3",
- "parking_lot_core 0.7.0",
-]
-
-[[package]]
-name = "parking_lot"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4893845fa2ca272e647da5d0e46660a314ead9c2fdd9a883aabc32e481a8733"
-dependencies = [
- "instant",
- "lock_api 0.4.1",
- "parking_lot_core 0.8.0",
+ "lock_api",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -2601,22 +2567,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7582838484df45743c8434fbff785e8edf260c28748353d44bc0da32e0ceabf1"
 dependencies = [
  "cfg-if",
- "cloudabi 0.0.3",
- "libc",
- "redox_syscall",
- "smallvec",
- "winapi 0.3.8",
-]
-
-[[package]]
-name = "parking_lot_core"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c361aa727dd08437f2f1447be8b59a33b0edd15e0fcee698f935613d9efbca9b"
-dependencies = [
- "cfg-if",
- "cloudabi 0.1.0",
- "instant",
+ "cloudabi",
  "libc",
  "redox_syscall",
  "smallvec",
@@ -2663,7 +2614,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log",
- "prometheus 0.8.0",
+ "prometheus",
  "quick-error",
  "security",
  "semver 0.10.0",
@@ -2924,21 +2875,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "prometheus"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30d70cf4412832bcac9cffe27906f4a66e450d323525e977168c70d1b36120ae"
-dependencies = [
- "cfg-if",
- "fnv",
- "lazy_static",
- "libc",
- "parking_lot 0.11.0",
- "regex",
- "thiserror",
-]
-
-[[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
 source = "git+https://github.com/tikv/rust-prometheus.git?rev=fd122caa03de8e7e5e4fae9372583aebf19e39f6#fd122caa03de8e7e5e4fae9372583aebf19e39f6"
@@ -3083,7 +3019,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine#db60d28d46eceab10a94915507c3d5090401bc88"
+source = "git+https://github.com/tikv/raft-engine#8452ee10d0b287f12053ba25183a9a65d014e423"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3093,7 +3029,6 @@ dependencies = [
  "log",
  "lz4-sys",
  "nix 0.18.0",
- "prometheus 0.10.0",
  "protobuf",
  "serde",
  "thiserror",
@@ -3160,7 +3095,7 @@ dependencies = [
  "openssl",
  "panic_hook",
  "pd_client",
- "prometheus 0.8.0",
+ "prometheus",
  "prometheus-static-metric",
  "prost",
  "protobuf",
@@ -3316,7 +3251,7 @@ version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b75f676a1e053fc562eafbb47838d67c84801e38fc1ba459e8f180deabd5071"
 dependencies = [
- "cloudabi 0.0.3",
+ "cloudabi",
  "fuchsia-cprng",
  "libc",
  "rand_core 0.4.2",
@@ -3515,7 +3450,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#95f66baeec7f28cf30aca7874f30115e04e98b8f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#488fb4181c063d7328308049cced6d4ef9616ba7"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4066,7 +4001,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
- "prometheus 0.8.0",
+ "prometheus",
  "quick-error",
  "serde",
  "serde_derive",
@@ -4287,8 +4222,8 @@ dependencies = [
  "base64 0.11.0",
  "chrono",
  "http",
- "lock_api 0.3.3",
- "parking_lot 0.10.0",
+ "lock_api",
+ "parking_lot",
  "ring",
  "serde",
  "serde_json",
@@ -4588,7 +4523,7 @@ dependencies = [
  "hex 0.3.2",
  "kvproto",
  "lazy_static",
- "prometheus 0.8.0",
+ "prometheus",
  "prometheus-static-metric",
  "tikv_util",
  "time 0.1.42",
@@ -4806,13 +4741,13 @@ dependencies = [
  "num_cpus",
  "openssl",
  "panic_hook",
- "parking_lot 0.10.0",
+ "parking_lot",
  "pd_client",
  "pin-project",
  "pnet_datalink",
  "pprof",
  "procinfo",
- "prometheus 0.8.0",
+ "prometheus",
  "prometheus-static-metric",
  "prost",
  "protobuf",
@@ -4939,7 +4874,7 @@ dependencies = [
  "panic_hook",
  "procfs",
  "procinfo",
- "prometheus 0.8.0",
+ "prometheus",
  "protobuf",
  "quick-error",
  "rand 0.7.3",
@@ -5506,8 +5441,8 @@ dependencies = [
  "fail 0.3.0",
  "lazy_static",
  "num_cpus",
- "parking_lot_core 0.7.0",
- "prometheus 0.8.0",
+ "parking_lot_core",
+ "prometheus",
  "rand 0.7.3",
 ]
 
