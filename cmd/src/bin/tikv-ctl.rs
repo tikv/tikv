@@ -725,6 +725,10 @@ impl DebugExecutor for DebugClient {
         self.check_local_mode();
     }
 
+    fn recreate_region_with_range(&self, _: Arc<SecurityManager>, _: &PdConfig, _: &[u8], _: &[u8]) {
+        self.check_local_mode();
+    }
+
     fn check_region_consistency(&self, region_id: u64) {
         let mut req = RegionConsistencyCheckRequest::default();
         req.set_region_id(region_id);
@@ -940,6 +944,41 @@ impl DebugExecutor for Debugger {
             "initing empty region {} with peer_id {}...",
             new_region_id,
             new_peer_id
+        );
+        self.recreate_region(region)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recreate_region", e));
+        v1!("success");
+    }
+
+    fn recreate_region_with_range(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, start: &[u8], end: &[u8]) {
+        let rpc_client =
+            RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+
+        let new_region_id = rpc_client
+            .alloc_id()
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::alloc_id", e));
+        let new_peer_id = rpc_client
+            .alloc_id()
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::alloc_id", e));
+
+        let store_id = self.get_store_id().expect("get store id");
+
+        let mut region = Region::default();
+        region.set_id(new_region_id);
+        region.mut_region_epoch().set_version(12345);
+        region.mut_region_epoch().set_conf_ver(12345);
+
+        let mut peer = Peer::default();
+        peer.set_id(new_peer_id);
+        peer.set_store_id(store_id);
+        region.mut_peers().push(peer);
+
+        region.set_start_key(hex::decode(start));
+        region.set_end_key(hex::decode(end));
+
+        v1!(
+            "initing empty region {} with peer_id {}, start: {}, end: {}...",
+            new_region_id, new_peer_id, start, end,
         );
         self.recreate_region(region)
             .unwrap_or_else(|e| perror_and_exit("Debugger::recreate_region", e));
@@ -1521,6 +1560,33 @@ fn main() {
                         ),
         )
         .subcommand(
+            SubCommand::with_name("recreate-region-with-range")
+                .about("Recreate a region with given metadata, but alloc new id for it")
+                .arg(
+                    Arg::with_name("pd")
+                        .required(true)
+                        .short("p")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .help("PD endpoints"),
+                )
+                .arg(
+                    Arg::with_name("start")
+                        .required(true)
+                        .takes_value(true)
+                        .help("hex region start key"),
+                )
+                .arg(
+                    Arg::with_name("end")
+                        .required(true)
+                        .takes_value(true)
+                        .help("hex region end key"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("metrics")
                 .about("Print the metrics")
                 .arg(
@@ -2044,6 +2110,12 @@ fn main() {
         pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.recreate_region(mgr, &pd_cfg, region_id);
+    } else if let Some(matches) = matches.subcommand_matches("recreate-region-with-range") {
+        let mut pd_cfg = PdConfig::default();
+        pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
+        let start = matches.value_of("start").unwrap();
+        let end = matches.value_of("end").unwrap();
+        debug_executor.recreate_region_with_range(mgr, &pd_cfg, start, end);
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.check_region_consistency(region_id);
