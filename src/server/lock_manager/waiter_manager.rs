@@ -1298,7 +1298,7 @@ pub mod tests {
             .add_waiter(dummy_waiter(10.into(), 20.into(), 10000));
         let hashes: Vec<u64> = (0..1000).collect();
         b.iter(|| {
-            test::black_box(|| waiter_mgr.handle_wake_up(20.into(), hashes.clone(), 30.into()));
+            waiter_mgr.handle_wake_up(20.into(), hashes.clone(), 30.into());
         });
     }
 }

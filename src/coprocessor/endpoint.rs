@@ -47,8 +47,6 @@ pub struct Endpoint<E: Engine> {
 
     concurrency_manager: ConcurrencyManager,
 
-    check_memory_locks: bool,
-
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     ///
     /// Note that this limit is ignored if we are using Prost.
@@ -96,7 +94,6 @@ impl<E: Engine> Endpoint<E> {
             read_pool,
             semaphore,
             concurrency_manager,
-            check_memory_locks: cfg.end_point_check_memory_locks,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
@@ -111,10 +108,6 @@ impl<E: Engine> Endpoint<E> {
         req_ctx: &ReqContext,
         key_ranges: &[coppb::KeyRange],
     ) -> Result<()> {
-        if !self.check_memory_locks {
-            return Ok(());
-        }
-
         let start_ts = req_ctx.txn_start_ts;
         self.concurrency_manager.update_max_ts(start_ts);
         if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
@@ -1500,10 +1493,7 @@ mod tests {
             ));
         });
 
-        let config = Config {
-            end_point_check_memory_locks: true,
-            ..Default::default()
-        };
+        let config = Config::default();
         let cop = Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm);
 
         let mut req = coppb::Request::default();

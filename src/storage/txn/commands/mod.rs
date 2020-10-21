@@ -129,6 +129,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_skip_constraint_check(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
+                req.get_max_commit_ts().into(),
                 secondary_keys,
                 req.take_context(),
             )
@@ -148,6 +149,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 for_update_ts.into(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
+                req.get_max_commit_ts().into(),
                 secondary_keys,
                 req.take_context(),
             )
@@ -433,7 +435,6 @@ pub struct WriteContext<'a, L: LockManager> {
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub pipelined_pessimistic_lock: bool,
-    pub enable_async_commit: bool,
 }
 
 impl Command {
