@@ -90,7 +90,7 @@ mod basic_read_write {
 
     use super::{default_engine, engine_cfs};
     use engine_traits::{Peekable, SyncMutable};
-    use engine_traits::{ALL_CFS, CF_DEFAULT};
+    use engine_traits::{CF_WRITE, ALL_CFS, CF_DEFAULT};
 
     #[test]
     fn get_value_none() {
@@ -100,15 +100,31 @@ mod basic_read_write {
     }
 
     #[test]
-    fn put_value_get_value() {
+    fn put_get() {
         let db = default_engine();
-        let expected = b"bar";
-        db.engine.put(b"foo", expected).unwrap();
-        let actual = db.engine.get_value(b"foo").unwrap();
-        let actual = actual.expect("value");
-        assert_eq!(expected, &*actual);
+        db.engine.put(b"foo", b"bar").unwrap();
+        let value = db.engine.get_value(b"foo").unwrap();
+        let value = value.expect("value");
+        assert_eq!(b"bar", &*value);
     }
 
+    #[test]
+    fn get_value_cf_none() {
+        let db = engine_cfs(&[CF_WRITE]);
+        let value = db.engine.get_value_cf(CF_WRITE, b"foo").unwrap();
+        assert!(value.is_none());
+    }
+
+    #[test]
+    fn put_get_cf() {
+        let db = engine_cfs(&[CF_WRITE]);
+        db.engine.put_cf(CF_WRITE, b"foo", b"bar").unwrap();
+        let value = db.engine.get_value_cf(CF_WRITE, b"foo").unwrap();
+        let value = value.expect("value");
+        assert_eq!(b"bar", &*value);
+    }
+
+    // Store using put; load using get_cf(CF_DEFAULT)
     #[test]
     fn non_cf_methods_are_default_cf() {
         let db = engine_cfs(ALL_CFS);
@@ -119,12 +135,61 @@ mod basic_read_write {
         let value = value.expect("value");
         assert_eq!(b"bar", &*value);
     }
+
+    #[test]
+    fn non_cf_methods_implicit_default_cf() {
+        let db = engine_cfs(&[CF_WRITE]);
+        db.engine.put(b"foo", b"bar").unwrap();
+        let value = db.engine.get_value(b"foo").unwrap();
+        let value = value.expect("value");
+        assert_eq!(b"bar", &*value);
+        // CF_DEFAULT always exists
+        let value = db.engine.get_value_cf(CF_DEFAULT, b"foo").unwrap();
+        let value = value.expect("value");
+        assert_eq!(b"bar", &*value);
+    }
+
+    #[test]
+    fn delete_none() {
+        let db = default_engine();
+        let res = db.engine.delete(b"foo");
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn delete_cf_none() {
+        let db = engine_cfs(ALL_CFS);
+        let res = db.engine.delete_cf(CF_WRITE, b"foo");
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn delete() {
+        let db = default_engine();
+        db.engine.put(b"foo", b"bar").unwrap();
+        let value = db.engine.get_value(b"foo").unwrap();
+        assert!(value.is_some());
+        db.engine.delete(b"foo").unwrap();
+        let value = db.engine.get_value(b"foo").unwrap();
+        assert!(value.is_none());
+    }
+
+    #[test]
+    fn delete_cf() {
+        let db = engine_cfs(ALL_CFS);
+        db.engine.put_cf(CF_WRITE, b"foo", b"bar").unwrap();
+        let value = db.engine.get_value_cf(CF_WRITE, b"foo").unwrap();
+        assert!(value.is_some());
+        db.engine.delete_cf(CF_WRITE, b"foo").unwrap();
+        let value = db.engine.get_value_cf(CF_WRITE, b"foo").unwrap();
+        assert!(value.is_none());
+    }
 }
 
 mod cf_names {
     use super::{default_engine, engine_cfs};
     use engine_traits::CFNamesExt;
-    use engine_traits::{CF_DEFAULT, ALL_CFS};
+    use engine_traits::{CF_DEFAULT, ALL_CFS, CF_WRITE};
 
     #[test]
     fn default_names() {
@@ -142,6 +207,14 @@ mod cf_names {
         for cf in ALL_CFS {
             assert!(names.contains(cf));
         }
+    }
+
+    #[test]
+    fn implicit_default_cf() {
+        let db = engine_cfs(&[CF_WRITE]);
+        let names = db.engine.cf_names();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&CF_DEFAULT));
     }
 }
 
@@ -165,12 +238,12 @@ mod engine_iter {
         assert!(panic::catch_unwind(AssertUnwindSafe(|| {
             let _ = iter.next();
         })).is_err());
-        assert!(panic::catch_unwind(|| {
+        assert!(panic::catch_unwind(AssertUnwindSafe(|| {
             iter.key();
-        }).is_err());
-        assert!(panic::catch_unwind(|| {
+        })).is_err());
+        assert!(panic::catch_unwind(AssertUnwindSafe(|| {
             iter.value();
-        }).is_err());
+        })).is_err());
 
         assert_eq!(iter.seek(SeekKey::Start).unwrap(), false);
         assert_eq!(iter.seek(SeekKey::End).unwrap(), false);
