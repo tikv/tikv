@@ -113,7 +113,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
                 self.for_update_ts,
                 self.txn_size,
                 self.min_commit_ts,
-                context.pipelined_pessimistic_lock,
             ) {
                 Ok(ts) => {
                     if secondaries.is_some() && async_commit_ts < ts {

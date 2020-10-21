@@ -17,7 +17,6 @@ pub fn pessimistic_prewrite<S: Snapshot>(
     for_update_ts: TimeStamp,
     txn_size: u64,
     mut min_commit_ts: TimeStamp,
-    pipelined_pessimistic_lock: bool,
 ) -> MvccResult<TimeStamp> {
     if mutation.should_not_write() {
         return Err(box_err!(
@@ -64,7 +63,7 @@ pub fn pessimistic_prewrite<S: Snapshot>(
             min_commit_ts = std::cmp::max(min_commit_ts, lock.min_commit_ts);
         }
     } else if is_pessimistic_lock {
-        txn.amend_pessimistic_lock(pipelined_pessimistic_lock, &key)?;
+        txn.amend_pessimistic_lock(&key)?;
     }
 
     txn.check_extra_op(&key, mutation_type, None)?;
@@ -112,7 +111,6 @@ pub mod tests {
             TimeStamp::default(),
             0,
             TimeStamp::default(),
-            false,
         )?;
         Ok(())
     }

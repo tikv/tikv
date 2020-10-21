@@ -189,7 +189,6 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
                 },
             )
             .unwrap();
@@ -224,7 +223,6 @@ pub mod tests {
                         concurrency_manager: cm.clone(),
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
-                        pipelined_pessimistic_lock: false,
                     },
                 )
                 .unwrap();

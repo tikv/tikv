@@ -443,7 +443,6 @@ mod tests {
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
-            pipelined_pessimistic_lock: false,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         if let ProcessResult::PrewriteResult {
@@ -484,7 +483,6 @@ mod tests {
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
-            pipelined_pessimistic_lock: false,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -508,7 +506,6 @@ mod tests {
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
-            pipelined_pessimistic_lock: false,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;

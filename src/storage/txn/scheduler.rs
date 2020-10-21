@@ -597,7 +597,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             concurrency_manager: self.inner.concurrency_manager.clone(),
             extra_op: task.extra_op,
             statistics,
-            pipelined_pessimistic_lock,
         };
 
         match task.cmd.process_write(snapshot, context) {
