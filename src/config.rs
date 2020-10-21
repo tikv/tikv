@@ -880,6 +880,8 @@ pub struct DbConfig {
     pub max_total_wal_size: ReadableSize,
     pub max_background_jobs: i32,
     #[config(skip)]
+    pub max_background_flushes: i32,
+    #[config(skip)]
     pub max_manifest_file_size: ReadableSize,
     #[config(skip)]
     pub create_if_missing: bool,
@@ -945,6 +947,7 @@ impl Default for DbConfig {
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
             max_background_jobs,
+            max_background_flushes: -1,
             max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
@@ -989,6 +992,17 @@ impl DbConfig {
         opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
         opts.set_max_total_wal_size(self.max_total_wal_size.0);
         opts.set_max_background_jobs(self.max_background_jobs);
+        let sanitized_background_flushes = if self.max_background_flushes == 0 {
+            1
+        } else {
+            self.max_background_flushes
+        };
+        if sanitized_background_flushes > 0 {
+            opts.set_max_background_flushes(sanitized_background_flushes);
+            opts.set_max_background_compactions(
+                self.max_background_jobs - sanitized_background_flushes,
+            );
+        }
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
@@ -1170,6 +1184,8 @@ pub struct RaftDbConfig {
     pub max_total_wal_size: ReadableSize,
     pub max_background_jobs: i32,
     #[config(skip)]
+    pub max_background_flushes: i32,
+    #[config(skip)]
     pub max_manifest_file_size: ReadableSize,
     #[config(skip)]
     pub create_if_missing: bool,
@@ -1221,6 +1237,7 @@ impl Default for RaftDbConfig {
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
             max_background_jobs,
+            max_background_flushes: -1,
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
@@ -1256,6 +1273,17 @@ impl RaftDbConfig {
         opts.set_wal_ttl_seconds(self.wal_ttl_seconds);
         opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
         opts.set_max_background_jobs(self.max_background_jobs);
+        let sanitized_background_flushes = if self.max_background_flushes == 0 {
+            1
+        } else {
+            self.max_background_flushes
+        };
+        if sanitized_background_flushes > 0 {
+            opts.set_max_background_flushes(sanitized_background_flushes);
+            opts.set_max_background_compactions(
+                self.max_background_jobs - sanitized_background_flushes,
+            );
+        }
         opts.set_max_total_wal_size(self.max_total_wal_size.0);
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
@@ -1408,6 +1436,29 @@ impl DBConfigManger {
         Ok(())
     }
 
+    fn set_max_background_flushes(
+        &self,
+        max_background_flushes: i32,
+    ) -> Result<(), Box<dyn Error>> {
+        let sanitized = if max_background_flushes < 0 {
+            1
+        } else {
+            max_background_flushes
+        };
+        self.set_db_config(&[("max_background_flushes", &sanitized.to_string())])?;
+        let max_background_compactions = self
+            .db
+            .as_inner()
+            .get_db_options()
+            .get_max_background_jobs()
+            - max_background_flushes;
+        self.set_db_config(&[(
+            "max_background_compactions",
+            &max_background_compactions.to_string(),
+        )])?;
+        Ok(())
+    }
+
     fn validate_cf(&self, cf: &str) -> Result<(), Box<dyn Error>> {
         match (self.db_type, cf) {
             (DBType::Kv, CF_DEFAULT)
@@ -1453,6 +1504,14 @@ impl ConfigManager for DBConfigManger {
         {
             let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
             self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
+        }
+
+        if let Some(background_flushes_config) = change
+            .drain_filter(|(name, _)| name == "max_background_flushes")
+            .next()
+        {
+            let max_background_flushes = background_flushes_config.1.into();
+            self.set_max_background_flushes(max_background_flushes)?;
         }
 
         if !change.is_empty() {
@@ -3196,7 +3255,8 @@ mod tests {
     #[test]
     fn test_change_rocksdb_config() {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
-        cfg.rocksdb.max_background_jobs = 2;
+        cfg.rocksdb.max_background_jobs = 4;
+        cfg.rocksdb.max_background_flushes = 2;
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
@@ -3207,12 +3267,21 @@ mod tests {
 
         // update max_background_jobs
         let db_opts = db.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 2);
+        assert_eq!(db_opts.get_max_background_jobs(), 4);
 
         cfg_controller
             .update_config("rocksdb.max-background-jobs", "8")
             .unwrap();
         assert_eq!(db.get_db_options().get_max_background_jobs(), 8);
+
+        // update max_background_flushes
+        let db_opts = db.get_db_options();
+        assert_eq!(db_opts.get_max_background_flushes(), -1);
+
+        cfg_controller
+            .update_config("rocksdb.max-background-flushes", "4")
+            .unwrap();
+        assert_eq!(db.get_db_options().get_max_background_flushes(), 4);
 
         // update rate_bytes_per_sec
         let db_opts = db.get_db_options();
