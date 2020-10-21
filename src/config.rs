@@ -1300,6 +1300,7 @@ impl ConfigManager for DBConfigManger {
         Ok(())
     }
 }
+
 fn config_to_slice(config_change: &[(String, String)]) -> Vec<(&str, &str)> {
     config_change
         .iter()
