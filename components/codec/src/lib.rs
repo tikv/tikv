@@ -2,7 +2,6 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(core_intrinsics)]
-#![feature(ptr_offset_from)]
 #![feature(min_specialization)]
 
 #[macro_use]

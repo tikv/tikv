@@ -25,7 +25,7 @@ use std::io;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, thread, u64};
 
@@ -547,6 +547,10 @@ pub fn check_environment_variables() {
 #[inline]
 pub fn is_zero_duration(d: &Duration) -> bool {
     d.as_secs() == 0 && d.subsec_nanos() == 0
+}
+
+pub fn empty_shared_slice<T>() -> Arc<[T]> {
+    Vec::new().into()
 }
 
 #[cfg(test)]
