@@ -121,10 +121,7 @@ where
     }
 
     pub fn is_none(&self) -> bool {
-        match self {
-            Callback::None => true,
-            _ => false,
-        }
+        matches!(self, Callback::None)
     }
 }
 

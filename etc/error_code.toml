@@ -538,6 +538,11 @@ error = 'KV-Storage-PessimisticLockNotFound'
 description = ''
 workaround = ''
 
+[error.KV-Storage-CommitTsTooLarge]
+error = 'KV-Storage-CommitTsTooLarge'
+description = ''
+workaround = ''
+
 [error.KV-Storage-Unknown]
 error = 'KV-Storage-Unknown'
 description = ''
