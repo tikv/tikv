@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::Ordering, mpsc::channel, Arc};
+use std::sync::{atomic::Ordering, mpsc::channel, mpsc::RecvTimeoutError, Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -441,6 +441,170 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
     check_max_timestamp_not_synced(false);
 }
 
+fn test_async_apply_prewrite_impl<E: Engine>(
+    storage: &Storage<E, DummyLockManager>,
+    ctx: Context,
+    key: &[u8],
+    value: &[u8],
+    start_ts: u64,
+    commit_ts: Option<u64>,
+    is_pessimistic: bool,
+    need_lock: bool,
+    use_async_commit: bool,
+    expect_async_apply: bool,
+) {
+    let on_handle_apply = "on_handle_apply";
+
+    let expect_locked = |err, key: &[u8], lock_ts: TimeStamp| {
+        let lock_info = extract_key_error(&err).take_locked();
+        assert_eq!(lock_info.get_key(), key);
+        assert_eq!(lock_info.get_lock_version(), lock_ts.into_inner());
+    };
+
+    let start_ts = TimeStamp::from(start_ts);
+
+    // Acquire the pessimistic lock if needed
+    if need_lock {
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::AcquirePessimisticLock::new(
+                    vec![(Key::from_raw(key), false)],
+                    key.to_vec(),
+                    start_ts,
+                    0,
+                    true,
+                    start_ts,
+                    None,
+                    false,
+                    0.into(),
+                    ctx.clone(),
+                ),
+                Box::new(move |r| tx.send(r).unwrap()),
+            )
+            .unwrap();
+        rx.recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    // Prewrite and block it at apply phase.
+    fail::cfg(on_handle_apply, "pause").unwrap();
+    let (tx, rx) = channel();
+    let secondaries = if use_async_commit { Some(vec![]) } else { None };
+    if !is_pessimistic {
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                    key.to_vec(),
+                    start_ts,
+                    0,
+                    false,
+                    1,
+                    0.into(),
+                    secondaries,
+                    ctx.clone(),
+                ),
+                Box::new(move |r| tx.send(r).unwrap()),
+            )
+            .unwrap();
+    } else {
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![(
+                        Mutation::Put((Key::from_raw(key), value.to_vec())),
+                        need_lock,
+                    )],
+                    key.to_vec(),
+                    start_ts,
+                    0,
+                    start_ts,
+                    1,
+                    0.into(),
+                    secondaries,
+                    ctx.clone(),
+                ),
+                Box::new(move |r| tx.send(r).unwrap()),
+            )
+            .unwrap();
+    }
+
+    if expect_async_apply {
+        // The result should be able to be returned.
+        let res = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        assert_eq!(res.locks.len(), 0);
+        assert!(use_async_commit);
+        assert!(commit_ts.is_none());
+        let min_commit_ts = res.min_commit_ts;
+        assert!(
+            min_commit_ts > start_ts,
+            "min_commit_ts({}) not greater than start_ts({})",
+            min_commit_ts,
+            start_ts
+        );
+
+        // The memory lock is not released so reading will encounter the lock.
+        thread::sleep(Duration::from_millis(300));
+        let err = block_on(storage.get(ctx.clone(), Key::from_raw(key), min_commit_ts.next()))
+            .unwrap_err();
+        expect_locked(err, key, start_ts);
+
+        // Commit command will be blocked.
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(key)],
+                    start_ts,
+                    min_commit_ts,
+                    ctx.clone(),
+                ),
+                Box::new(move |r| tx.send(r).unwrap()),
+            )
+            .unwrap();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(300)).unwrap_err(),
+            RecvTimeoutError::Timeout
+        );
+
+        // Continue applying and then the commit command can continue.
+        fail::remove(on_handle_apply);
+        rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+
+        let got_value =
+            block_on(storage.get(ctx.clone(), Key::from_raw(key), min_commit_ts.next())).unwrap();
+        assert_eq!(got_value.unwrap().as_slice(), value);
+    } else {
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(300)).unwrap_err(),
+            RecvTimeoutError::Timeout
+        );
+
+        fail::remove(on_handle_apply);
+        let res = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        assert_eq!(res.locks.len(), 0);
+        assert_eq!(res.min_commit_ts, 0.into());
+
+        // Commit it.
+        let commit_ts = commit_ts.unwrap().into();
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(vec![Key::from_raw(key)], start_ts, commit_ts, ctx.clone()),
+                Box::new(move |r| tx.send(r).unwrap()),
+            )
+            .unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+
+        let got_value =
+            block_on(storage.get(ctx.clone(), Key::from_raw(key), commit_ts.next())).unwrap();
+        assert_eq!(got_value.unwrap().as_slice(), value);
+    }
+}
+
 #[test]
 fn test_async_apply_prewrite() {
     let mut cluster = new_server_cluster(0, 1);
@@ -458,6 +622,7 @@ fn test_async_apply_prewrite() {
         engine.clone(),
         DummyLockManager {},
     )
+    .set_async_apply_prewrite(true)
     .build()
     .unwrap();
 
@@ -466,131 +631,77 @@ fn test_async_apply_prewrite() {
     ctx.set_region_epoch(cluster.get_region_epoch(1));
     ctx.set_peer(cluster.leader_of_region(1).unwrap());
 
-    let on_handle_apply = "on_handle_apply";
+    test_async_apply_prewrite_impl(
+        &storage,
+        ctx.clone(),
+        b"key",
+        b"value1",
+        10,
+        None,
+        false,
+        false,
+        true,
+        true,
+    );
+    test_async_apply_prewrite_impl(
+        &storage,
+        ctx.clone(),
+        b"key",
+        b"value2",
+        20,
+        None,
+        true,
+        false,
+        true,
+        true,
+    );
+    test_async_apply_prewrite_impl(
+        &storage,
+        ctx.clone(),
+        b"key",
+        b"value3",
+        30,
+        None,
+        true,
+        true,
+        true,
+        true,
+    );
 
-    let expect_locked = |err, key: &[u8], lock_ts: TimeStamp| {
-        let lock_info = extract_key_error(&err).take_locked();
-        assert_eq!(lock_info.get_key(), key);
-        assert_eq!(lock_info.get_lock_version(), lock_ts.into_inner());
-    };
-
-    let test_impl =
-        |key: &[u8], value: &[u8], start_ts: u64, is_pessimistic: bool, need_lock: bool| {
-            let start_ts = TimeStamp::from(start_ts);
-
-            // Acquire the pessimistic lock if needed
-            if need_lock {
-                let (tx, rx) = channel();
-                storage
-                    .sched_txn_command(
-                        commands::AcquirePessimisticLock::new(
-                            vec![(Key::from_raw(key), false)],
-                            key.to_vec(),
-                            start_ts,
-                            0,
-                            true,
-                            start_ts,
-                            None,
-                            false,
-                            0.into(),
-                            ctx.clone(),
-                        ),
-                        Box::new(move |r| tx.send(r).unwrap()),
-                    )
-                    .unwrap();
-                rx.recv_timeout(Duration::from_secs(5))
-                    .unwrap()
-                    .unwrap()
-                    .unwrap();
-            }
-
-            // Prewrite and block it at apply phase.
-            fail::cfg(on_handle_apply, "pause").unwrap();
-            let (tx, rx) = channel();
-            if !is_pessimistic {
-                storage
-                    .sched_txn_command(
-                        commands::Prewrite::new(
-                            vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
-                            key.to_vec(),
-                            start_ts,
-                            0,
-                            false,
-                            1,
-                            0.into(),
-                            /*sedondary_keys*/ Some(vec![]),
-                            ctx.clone(),
-                        ),
-                        Box::new(move |r| tx.send(r).unwrap()),
-                    )
-                    .unwrap();
-            } else {
-                storage
-                    .sched_txn_command(
-                        commands::PrewritePessimistic::new(
-                            vec![(
-                                Mutation::Put((Key::from_raw(key), value.to_vec())),
-                                need_lock,
-                            )],
-                            key.to_vec(),
-                            start_ts,
-                            0,
-                            start_ts,
-                            1,
-                            0.into(),
-                            /*sedondary_keys*/ Some(vec![]),
-                            ctx.clone(),
-                        ),
-                        Box::new(move |r| tx.send(r).unwrap()),
-                    )
-                    .unwrap();
-            }
-            // The result should be able to be returned.
-            let res = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
-            assert_eq!(res.locks.len(), 0);
-            let min_commit_ts = res.min_commit_ts;
-            assert!(
-                min_commit_ts > start_ts,
-                "min_commit_ts({}) not greater than start_ts({})",
-                min_commit_ts,
-                start_ts
-            );
-
-            // The memory lock is not released so reading will encounter the lock.
-            thread::sleep(Duration::from_millis(200));
-            let err = block_on(storage.get(ctx.clone(), Key::from_raw(key), min_commit_ts.next()))
-                .unwrap_err();
-            expect_locked(err, key, start_ts);
-
-            // Commit command will be blocked.
-            let (tx, rx) = channel();
-            storage
-                .sched_txn_command(
-                    commands::Commit::new(
-                        vec![Key::from_raw(key)],
-                        start_ts,
-                        min_commit_ts,
-                        ctx.clone(),
-                    ),
-                    Box::new(move |r| tx.send(r).unwrap()),
-                )
-                .unwrap();
-            assert_eq!(
-                rx.recv_timeout(Duration::from_millis(500)).unwrap_err(),
-                std::sync::mpsc::RecvTimeoutError::Timeout
-            );
-
-            // Continue applying and then the commit command can continue.
-            fail::remove(on_handle_apply);
-            rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
-
-            let got_value =
-                block_on(storage.get(ctx.clone(), Key::from_raw(key), min_commit_ts.next()))
-                    .unwrap();
-            assert_eq!(got_value.unwrap().as_slice(), value);
-        };
-
-    test_impl(b"key", b"value1", 10, false, false);
-    test_impl(b"key", b"value2", 20, true, false);
-    test_impl(b"key", b"value3", 30, true, true);
+    test_async_apply_prewrite_impl(
+        &storage,
+        ctx.clone(),
+        b"key",
+        b"value1",
+        40,
+        Some(45),
+        false,
+        false,
+        false,
+        false,
+    );
+    test_async_apply_prewrite_impl(
+        &storage,
+        ctx.clone(),
+        b"key",
+        b"value2",
+        50,
+        Some(55),
+        true,
+        false,
+        false,
+        false,
+    );
+    test_async_apply_prewrite_impl(
+        &storage,
+        ctx.clone(),
+        b"key",
+        b"value3",
+        60,
+        Some(65),
+        true,
+        true,
+        false,
+        false,
+    );
 }
