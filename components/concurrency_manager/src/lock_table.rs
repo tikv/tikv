@@ -71,7 +71,7 @@ impl LockTable {
     }
 
     /// Gets the handle of the key.
-    pub fn get<'m>(&'m self, key: &Key) -> Option<Arc<KeyHandle>> {
+    pub fn get(&self, key: &Key) -> Option<Arc<KeyHandle>> {
         self.0.get(key).and_then(|e| e.value().upgrade())
     }
 

@@ -3405,16 +3405,16 @@ fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderReques
 fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
     if msg.has_admin_request() {
         let req = msg.get_admin_request();
-        return match req.get_cmd_type() {
+        return matches!(
+            req.get_cmd_type(),
             AdminCmdType::ChangePeer
-            | AdminCmdType::ChangePeerV2
-            | AdminCmdType::Split
-            | AdminCmdType::BatchSplit
-            | AdminCmdType::PrepareMerge
-            | AdminCmdType::CommitMerge
-            | AdminCmdType::RollbackMerge => true,
-            _ => false,
-        };
+                | AdminCmdType::ChangePeerV2
+                | AdminCmdType::Split
+                | AdminCmdType::BatchSplit
+                | AdminCmdType::PrepareMerge
+                | AdminCmdType::CommitMerge
+                | AdminCmdType::RollbackMerge
+        );
     }
 
     msg.get_header().get_sync_log()
@@ -3429,18 +3429,18 @@ fn is_request_urgent(req: &RaftCmdRequest) -> bool {
         return false;
     }
 
-    match req.get_admin_request().get_cmd_type() {
+    matches!(
+        req.get_admin_request().get_cmd_type(),
         AdminCmdType::Split
-        | AdminCmdType::BatchSplit
-        | AdminCmdType::ChangePeer
-        | AdminCmdType::ChangePeerV2
-        | AdminCmdType::ComputeHash
-        | AdminCmdType::VerifyHash
-        | AdminCmdType::PrepareMerge
-        | AdminCmdType::CommitMerge
-        | AdminCmdType::RollbackMerge => true,
-        _ => false,
-    }
+            | AdminCmdType::BatchSplit
+            | AdminCmdType::ChangePeer
+            | AdminCmdType::ChangePeerV2
+            | AdminCmdType::ComputeHash
+            | AdminCmdType::VerifyHash
+            | AdminCmdType::PrepareMerge
+            | AdminCmdType::CommitMerge
+            | AdminCmdType::RollbackMerge
+    )
 }
 
 fn make_transfer_leader_response() -> RaftCmdResponse {
@@ -3704,7 +3704,7 @@ mod tests {
 
     #[test]
     fn test_cmd_epoch_checker() {
-        use engine_rocks::RocksSnapshot;
+        use engine_test::kv::KvTestSnapshot;
         fn new_admin_request(cmd_type: AdminCmdType) -> RaftCmdRequest {
             let mut request = RaftCmdRequest::default();
             request.mut_admin_request().set_cmd_type(cmd_type);
@@ -3717,7 +3717,7 @@ mod tests {
         let prepare_merge_admin = new_admin_request(AdminCmdType::PrepareMerge);
         let change_peer_admin = new_admin_request(AdminCmdType::ChangePeer);
 
-        let mut epoch_checker = CmdEpochChecker::<RocksSnapshot>::default();
+        let mut epoch_checker = CmdEpochChecker::<KvTestSnapshot>::default();
 
         assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
         assert_eq!(epoch_checker.term, 10);
