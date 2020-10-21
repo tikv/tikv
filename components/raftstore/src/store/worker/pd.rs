@@ -139,6 +139,9 @@ where
         initial_status: u64,
         max_ts_sync_status: Arc<AtomicU64>,
     },
+    QueryRegionLeader {
+        region_id: u64,
+    },
 }
 
 pub struct StoreStat {
@@ -265,6 +268,11 @@ where
             Task::UpdateMaxTimestamp { region_id, ..} => write!(
                 f,
                 "update the max timestamp for region {} in the concurrency manager",
+                region_id
+            ),
+            Task::QueryRegionLeader { region_id } => write!(
+                f,
+                "query the leader of region {}",
                 region_id
             ),
         }
@@ -952,6 +960,26 @@ where
         };
         spawn_local(f);
     }
+
+    fn handle_query_region_leader(&self, region_id: u64) {
+        let router = self.router.clone();
+        let resp = self.pd_client.get_region_leader_by_id(region_id);
+        let f = async move {
+            match resp.await {
+                Ok(Some((region, leader))) => {
+                    let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
+                    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
+                        error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    error!("get region failed"; "err" => ?e);
+                }
+            }
+        };
+        spawn_local(f);
+    }
 }
 
 impl<EK, ER, T> Runnable<Task<EK>> for Runner<EK, ER, T>
@@ -1112,6 +1140,7 @@ where
                 initial_status,
                 max_ts_sync_status,
             } => self.handle_update_max_timestamp(region_id, initial_status, max_ts_sync_status),
+            Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
         };
     }
 
