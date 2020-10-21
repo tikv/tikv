@@ -1,18 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
+use crate::util;
 use crate::{db_options::RocksTitanDBOptions, sst_partitioner::RocksSstPartitionerFactory};
+use engine_traits::{CFOptionsExt, Result};
 use engine_traits::{ColumnFamilyOptions, SstPartitionerFactory};
 use rocksdb::ColumnFamilyOptions as RawCFOptions;
-use engine_traits::{CFOptionsExt, Result};
-use crate::util;
 
 impl CFOptionsExt for RocksEngine {
     type ColumnFamilyOptions = RocksColumnFamilyOptions;
 
     fn get_options_cf(&self, cf: &str) -> Result<Self::ColumnFamilyOptions> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        Ok(RocksColumnFamilyOptions::from_raw(self.as_inner().get_options_cf(handle)))
+        Ok(RocksColumnFamilyOptions::from_raw(
+            self.as_inner().get_options_cf(handle),
+        ))
     }
 
     fn set_options_cf(&self, cf: &str, options: &[(&str, &str)]) -> Result<()> {

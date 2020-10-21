@@ -5,9 +5,8 @@ use crate::import::RocksIngestExternalFileOptions;
 use crate::sst::RocksSstWriterBuilder;
 use crate::{util, RocksSstWriter};
 use engine_traits::{
-    CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions,
-    Iterable, Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder,
-    WriteBatchExt, ALL_CFS,
+    CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions, Iterable,
+    Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder, WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
 use tikv_util::keybuilder::KeyBuilder;

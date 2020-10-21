@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
+use crate::util;
 use engine_traits::ImportExt;
 use engine_traits::IngestExternalFileOptions;
 use engine_traits::Result;
@@ -8,7 +9,6 @@ use rocksdb::set_external_sst_file_global_seq_no;
 use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
 use std::fs::File;
 use std::path::Path;
-use crate::util;
 
 impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;

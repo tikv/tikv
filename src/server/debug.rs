@@ -1732,9 +1732,7 @@ mod tests {
 
         let remove_region_state = |region_id: u64| {
             let key = keys::region_state_key(region_id);
-            engine
-                .delete_cf(CF_RAFT, &key)
-                .unwrap();
+            engine.delete_cf(CF_RAFT, &key).unwrap();
         };
 
         let mut region = Region::default();
