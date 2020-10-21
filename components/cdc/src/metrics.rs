@@ -54,9 +54,10 @@ lazy_static! {
         &["cf", "tag"]
     )
     .unwrap();
-    pub static ref CDC_OLD_VALUE_DURATION_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref CDC_OLD_VALUE_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_cdc_old_value_duration",
         "Bucketed histogram of cdc old value scan duration",
+        &["tag"],
         exponential_buckets(0.0001, 2.0, 20).unwrap()
     )
     .unwrap();
