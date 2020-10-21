@@ -172,7 +172,11 @@ impl WriteCompactionFilter {
 
         while valid {
             let (key, value) = (write_iter.key(), write_iter.value());
-            if !key.starts_with(prefix) {
+            if key.len() < prefix.len() {
+                valid = write_iter.next().unwrap();
+                continue;
+            }
+            if &key[..prefix.len()] > prefix {
                 break;
             }
             let write = WriteRef::parse(value).unwrap();
@@ -232,7 +236,7 @@ impl Drop for WriteCompactionFilter {
         }
 
         self.switch_key_metrics();
-        debug!(
+        info!(
             "WriteCompactionFilter has filtered all key/value pairs";
             "versions" => self.total_versions,
             "deleted" => self.total_deleted,
@@ -316,7 +320,7 @@ pub mod tests {
     use super::*;
     use crate::config::DbConfig;
     use crate::storage::kv::{RocksEngine as StorageRocksEngine, TestEngineBuilder};
-    use crate::storage::mvcc::tests::must_get_none;
+    use crate::storage::mvcc::tests::{must_get, must_get_none};
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_rocks::raw::CompactOptions;
     use engine_rocks::util::get_cf_handle;
@@ -359,7 +363,7 @@ pub mod tests {
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
         let engine = engine.get_rocksdb();
         // Put a new key-value pair to ensure compaction can be triggered correctly.
-        engine.put_cf("write", b"k1", b"v1").unwrap();
+        engine.delete_cf("write", b"not-exists-key").unwrap();
         do_gc_by_compact(&engine, None, None, safe_point, None);
     }
 
@@ -388,6 +392,37 @@ pub mod tests {
         let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
         cfg_value.compaction_filter_skip_version_check = false;
         assert!(is_compaction_filter_allowd(&cfg_value, &cluster_version));
+    }
+
+    #[test]
+    fn test_compaction_filter_basic() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let raw_engine = engine.get_rocksdb();
+        let value = vec![b'v'; 512];
+
+        // GC can't delete keys after the given safe point.
+        must_prewrite_put(&engine, b"key", &value, b"key", 100);
+        must_commit(&engine, b"key", 100, 110);
+        do_gc_by_compact(&raw_engine, None, None, 50, None);
+        must_get(&engine, b"key", 110, &value);
+
+        // GC can't delete keys before the safe ponit if they are latest versions.
+        do_gc_by_compact(&raw_engine, None, None, 200, None);
+        must_get(&engine, b"key", 110, &value);
+
+        must_prewrite_put(&engine, b"key", &value, b"key", 120);
+        must_commit(&engine, b"key", 120, 130);
+
+        // GC can't delete the latest version before the safe ponit.
+        do_gc_by_compact(&raw_engine, None, None, 115, None);
+        must_get(&engine, b"key", 110, &value);
+
+        // GC a version will also delete the key on default CF.
+        do_gc_by_compact(&raw_engine, None, None, 200, None);
+        must_get_none(&engine, b"key", 110);
+        let default_key = Key::from_encoded_slice(b"key").append_ts(100.into());
+        let default_key = default_key.into_encoded();
+        assert!(raw_engine.get_value(&default_key).unwrap().is_none());
     }
 
     // Test a key can be GCed correctly if its MVCC versions cover multiple SST files.
