@@ -311,7 +311,9 @@ pub mod ctor {
     }
 
     mod rocks {
-        use super::{CFOptions, ColumnFamilyOptions, CryptoOptions, DBOptions, EngineConstructorExt};
+        use super::{
+            CFOptions, ColumnFamilyOptions, CryptoOptions, DBOptions, EngineConstructorExt,
+        };
 
         use engine_traits::{ColumnFamilyOptions as ColumnFamilyOptionsTrait, Result};
 
