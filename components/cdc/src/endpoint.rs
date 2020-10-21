@@ -581,6 +581,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 }
             }
         }
+        info!("broadcast resolved ts"; "regions" => ?resolved_regions, "resolved_ts" => %self.min_resolved_ts);
         self.broadcast_resolved_ts(resolved_regions);
     }
 
@@ -615,6 +616,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             .then(move |tso: pd_client::Result<TimeStamp>| {
                 // Ignore get tso errors since we will retry every `min_ts_interval`.
                 let min_ts = tso.unwrap_or_default();
+                info!("register min ts event"; "regions" => ?regions);
                 // TODO: send a message to raftstore would consume too much cpu time,
                 // try to handle it outside raftstore.
                 let regions: Vec<_> = regions
@@ -656,6 +658,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                     .collect();
                     futures::future::join_all(regions).and_then(move |resps| {
                         let regions = resps.into_iter().filter_map(|resp| resp).collect::<Vec<u64>>();
+                        info!("scheduler min ts event"; "regions" => ?regions);
                         if !regions.is_empty() {
                             match scheduler.schedule(Task::MinTS { regions, min_ts }) {
                                 Ok(_) | Err(ScheduleError::Stopped(_)) => (),
