@@ -17,6 +17,9 @@ impl ColumnFamilyOptions for PanicColumnFamilyOptions {
     fn get_level_zero_stop_writes_trigger(&self) -> u32 {
         panic!()
     }
+    fn set_level_zero_file_num_compaction_trigger(&mut self, v: i32) {
+        panic!()
+    }
     fn get_soft_pending_compaction_bytes_limit(&self) -> u64 {
         panic!()
     }
@@ -33,6 +36,9 @@ impl ColumnFamilyOptions for PanicColumnFamilyOptions {
         panic!()
     }
     fn get_target_file_size_base(&self) -> u64 {
+        panic!()
+    }
+    fn set_disable_auto_compactions(&mut self, v: bool) {
         panic!()
     }
     fn get_disable_auto_compactions(&self) -> bool {

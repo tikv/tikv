@@ -1291,7 +1291,7 @@ fn send_destroy_peer_message<EK, ER>(
 #[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
-    use engine_rocks::RocksEngine;
+    use engine_test::kv::KvTestEngine;
     use std::sync::Mutex;
     use std::time::Instant;
     use tikv_util::worker::FutureWorker;
@@ -1300,13 +1300,13 @@ mod tests {
 
     struct RunnerTest {
         store_stat: Arc<Mutex<StoreStat>>,
-        stats_monitor: StatsMonitor<RocksEngine>,
+        stats_monitor: StatsMonitor<KvTestEngine>,
     }
 
     impl RunnerTest {
         fn new(
             interval: u64,
-            scheduler: Scheduler<Task<RocksEngine>>,
+            scheduler: Scheduler<Task<KvTestEngine>>,
             store_stat: Arc<Mutex<StoreStat>>,
         ) -> RunnerTest {
             let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
@@ -1334,8 +1334,8 @@ mod tests {
         }
     }
 
-    impl Runnable<Task<RocksEngine>> for RunnerTest {
-        fn run(&mut self, task: Task<RocksEngine>) {
+    impl Runnable<Task<KvTestEngine>> for RunnerTest {
+        fn run(&mut self, task: Task<KvTestEngine>) {
             if let Task::StoreInfos {
                 cpu_usages,
                 read_io_rates,

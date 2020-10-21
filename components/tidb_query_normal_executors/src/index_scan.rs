@@ -35,7 +35,7 @@ impl InnerExecutor for IndexInnerExecutor {
         ctx: &mut EvalContext,
         key: Vec<u8>,
         value: Vec<u8>,
-        columns: Arc<Vec<ColumnInfo>>,
+        columns: Arc<[ColumnInfo]>,
     ) -> Result<Option<Row>> {
         use byteorder::{BigEndian, ReadBytesExt};
         use tidb_query_datatype::codec::datum;

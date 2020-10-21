@@ -84,6 +84,9 @@ quick_error! {
         PessimisticLockNotFound { start_ts: TimeStamp, key: Vec<u8> } {
             display("pessimistic lock not found, start_ts:{}, key:{}", start_ts, hex::encode_upper(key))
         }
+        CommitTsTooLarge { start_ts: TimeStamp, min_commit_ts: TimeStamp, max_commit_ts: TimeStamp } {
+            display("min_commit_ts {} is larger than max_commit_ts {}, start_ts: {}", min_commit_ts, max_commit_ts, start_ts)
+        }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -176,6 +179,15 @@ impl ErrorInner {
                     key: key.to_owned(),
                 })
             }
+            ErrorInner::CommitTsTooLarge {
+                start_ts,
+                min_commit_ts,
+                max_commit_ts,
+            } => Some(ErrorInner::CommitTsTooLarge {
+                start_ts: *start_ts,
+                min_commit_ts: *min_commit_ts,
+                max_commit_ts: *max_commit_ts,
+            }),
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -276,6 +288,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::PessimisticLockNotFound { .. } => {
                 error_code::storage::PESSIMISTIC_LOCK_NOT_FOUND
             }
+            ErrorInner::CommitTsTooLarge { .. } => error_code::storage::COMMIT_TS_TOO_LARGE,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }
