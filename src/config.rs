@@ -1236,7 +1236,7 @@ impl DBConfigManger {
     }
 
     fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> Result<(), Box<dyn Error>> {
-        let mut opt = self.db.as_inner().get_db_options();
+        let mut opt = self.db.get_db_options();
         opt.set_rate_bytes_per_sec(rate_bytes_per_sec)?;
         Ok(())
     }
