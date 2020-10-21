@@ -1,11 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
-use std::ops::Deref;
+use std::ops::{Bound, Deref};
 use std::sync::{Arc, RwLock};
 
 use engine_rocks::RocksEngine;
-use engine_traits::{IterOptions, KvEngine, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{
+    IterOptions, KvEngine, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_KEY_PREFIX_LEN,
+};
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
@@ -16,7 +18,7 @@ use tikv::storage::{Cursor, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
-use txn_types::{Key, Lock, MutationType, Value, WriteRef, WriteType};
+use txn_types::{Key, Lock, MutationType, TimeStamp, Value, WriteRef, WriteType};
 
 use crate::endpoint::{Deregister, OldValueCache, Task};
 use crate::metrics::*;
@@ -228,9 +230,15 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         Self { snapshot }
     }
 
-    fn new_write_cursor(&self) -> Cursor<S::Iter> {
+    fn new_write_cursor(&self, key: &Key) -> Cursor<S::Iter> {
         let mut iter_opts = IterOptions::default();
+        let ts = Key::decode_ts_from(key.as_encoded()).unwrap();
+        let upper = Key::from_encoded_slice(Key::truncate_ts_for(key.as_encoded()).unwrap())
+            .append_ts(TimeStamp::max());
         iter_opts.set_fill_cache(false);
+        iter_opts.set_hint_max_ts(Bound::Excluded(ts.into_inner()));
+        iter_opts.set_lower_bound(key.as_encoded(), DATA_KEY_PREFIX_LEN);
+        iter_opts.set_upper_bound(upper.as_encoded(), DATA_KEY_PREFIX_LEN);
         self.snapshot
             .iter_cf(CF_WRITE, iter_opts, ScanMode::Mixed)
             .unwrap()
@@ -272,7 +280,7 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         statistics: &mut Statistics,
     ) -> Result<Option<Value>> {
         let user_key = Key::truncate_ts_for(key.as_encoded()).unwrap();
-        let mut write_cursor = self.new_write_cursor();
+        let mut write_cursor = self.new_write_cursor(key);
         if write_cursor.near_seek(key, &mut statistics.write)?
             && Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key)
         {
