@@ -210,14 +210,13 @@ impl<L: LockManager> SchedulerInner<L> {
 
     fn take_task_cb_and_pr(&self, cid: u64) -> (Option<StorageCallback>, Option<ProcessResult>) {
         self.get_task_slot(cid)
-            .lock()
             .get_mut(&cid)
             .map(|tctx| (tctx.cb.take(), tctx.pr.take()))
             .unwrap_or((None, None))
     }
 
     fn store_pr(&self, cid: u64, pr: ProcessResult) {
-        self.get_task_slot(cid).lock().get_mut(&cid).unwrap().pr = Some(pr);
+        self.get_task_slot(cid).get_mut(&cid).unwrap().pr = Some(pr);
     }
 
     fn too_busy(&self) -> bool {

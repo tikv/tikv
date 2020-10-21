@@ -508,6 +508,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     false,
                     1,
                     0.into(),
+                    0.into(),
                     secondaries,
                     ctx.clone(),
                 ),
@@ -527,6 +528,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     0,
                     start_ts,
                     1,
+                    0.into(),
                     0.into(),
                     secondaries,
                     ctx.clone(),
@@ -579,7 +581,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
         let got_value =
-            block_on(storage.get(ctx.clone(), Key::from_raw(key), min_commit_ts.next())).unwrap();
+            block_on(storage.get(ctx, Key::from_raw(key), min_commit_ts.next())).unwrap();
         assert_eq!(got_value.unwrap().as_slice(), value);
     } else {
         assert_eq!(
@@ -603,8 +605,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
             .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
-        let got_value =
-            block_on(storage.get(ctx.clone(), Key::from_raw(key), commit_ts.next())).unwrap();
+        let got_value = block_on(storage.get(ctx, Key::from_raw(key), commit_ts.next())).unwrap();
         assert_eq!(got_value.unwrap().as_slice(), value);
     }
 }
@@ -623,7 +624,7 @@ fn test_async_apply_prewrite() {
         .unwrap()
         .clone();
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine.clone(),
+        engine,
         DummyLockManager {},
     )
     .set_async_apply_prewrite(true)
@@ -698,7 +699,7 @@ fn test_async_apply_prewrite() {
     );
     test_async_apply_prewrite_impl(
         &storage,
-        ctx.clone(),
+        ctx,
         b"key",
         b"value3",
         60,
