@@ -165,7 +165,7 @@ struct SchedulerInner<L: LockManager> {
 
     pipelined_pessimistic_lock: Arc<AtomicBool>,
 
-    enable_async_commit_async_apply: bool,
+    enable_async_apply_prewrite: bool,
 }
 
 #[inline]
@@ -258,7 +258,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
         pipelined_pessimistic_lock: Arc<AtomicBool>,
-        enable_async_commit_async_apply: bool,
+        enable_async_apply_prewrite: bool,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -281,7 +281,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock_mgr,
             concurrency_manager,
             pipelined_pessimistic_lock,
-            enable_async_commit_async_apply,
+            enable_async_apply_prewrite,
         });
 
         slow_log!(t.elapsed(), "initialized the transaction scheduler");
@@ -616,7 +616,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             extra_op: task.extra_op,
             statistics,
             pipelined_pessimistic_lock,
-            async_apply_prewrite: self.inner.enable_async_commit_async_apply,
+            async_apply_prewrite: self.inner.enable_async_apply_prewrite,
         };
 
         match task.cmd.process_write(snapshot, context) {
