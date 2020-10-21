@@ -189,7 +189,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         read_pool: ReadPoolHandle,
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
-        pipelined_pessimistic_lock: bool,
+        pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -1486,7 +1486,7 @@ fn async_commit_check_keys<'a>(
 pub struct TestStorageBuilder<E: Engine, L: LockManager> {
     engine: E,
     config: Config,
-    pipelined_pessimistic_lock: bool,
+    pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
     lock_mgr: L,
 }
 
@@ -1497,7 +1497,7 @@ impl TestStorageBuilder<RocksEngine, DummyLockManager> {
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config,
-            pipelined_pessimistic_lock: false,
+            pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
             lock_mgr,
         }
     }
@@ -1509,7 +1509,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         Self {
             engine,
             config,
-            pipelined_pessimistic_lock: false,
+            pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
             lock_mgr,
         }
     }
@@ -1522,8 +1522,9 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         self
     }
 
-    pub fn set_pipelined_pessimistic_lock(mut self, enabled: bool) -> Self {
-        self.pipelined_pessimistic_lock = enabled;
+    pub fn set_pipelined_pessimistic_lock(self, enabled: bool) -> Self {
+        self.pipelined_pessimistic_lock
+            .store(enabled, atomic::Ordering::Relaxed);
         self
     }
 
@@ -3920,6 +3921,7 @@ mod tests {
                     false,
                     3,
                     TimeStamp::default(),
+                    TimeStamp::default(),
                     None,
                     Context::default(),
                 ),
@@ -4496,6 +4498,7 @@ mod tests {
                     false,
                     3,
                     ts(10, 1),
+                    TimeStamp::default(),
                     Some(vec![b"k1".to_vec(), b"k2".to_vec()]),
                     Context::default(),
                 ),
@@ -4627,6 +4630,7 @@ mod tests {
                     false,
                     2,
                     TimeStamp::zero(),
+                    TimeStamp::default(),
                     None,
                     Context::default(),
                 ),
@@ -4699,6 +4703,7 @@ mod tests {
                     false,
                     2,
                     TimeStamp::zero(),
+                    TimeStamp::default(),
                     None,
                     Context::default(),
                 ),
@@ -4815,6 +4820,7 @@ mod tests {
                     10.into(),
                     1,
                     TimeStamp::zero(),
+                    TimeStamp::default(),
                     None,
                     Context::default(),
                 ),
@@ -5486,6 +5492,7 @@ mod tests {
                     false,
                     3,
                     TimeStamp::default(),
+                    TimeStamp::default(),
                     Some(vec![b"a".to_vec(), b"b".to_vec()]),
                     Context::default(),
                 ),
@@ -5528,6 +5535,7 @@ mod tests {
                     400.into(),
                     2,
                     401.into(),
+                    TimeStamp::default(),
                     Some(vec![b"e".to_vec()]),
                     Context::default(),
                 ),

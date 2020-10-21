@@ -641,22 +641,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
             self.poll_ctx.need_flush_trans = false;
         }
         let ready_cnt = self.poll_ctx.ready_res.len();
-        if ready_cnt != 0 && self.poll_ctx.cfg.early_apply {
-            let mut batch_pos = 0;
-            let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, vec![]);
-            for (ready, invoke_ctx) in &mut ready_res {
-                let region_id = invoke_ctx.region_id;
-                if peers[batch_pos].region_id() == region_id {
-                } else {
-                    while peers[batch_pos].region_id() != region_id {
-                        batch_pos += 1;
-                    }
-                }
-                PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
-                    .handle_raft_ready_apply(ready, invoke_ctx);
-            }
-            self.poll_ctx.ready_res = ready_res;
-        }
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
         fail_point!("raft_before_save");
         if !self.poll_ctx.kv_wb.is_empty() {
@@ -843,12 +827,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                     fail_point!(
                         "pause_on_peer_destroy_res",
                         peer.peer_id() == 1
-                            && match msg {
-                                PeerMsg::ApplyRes {
-                                    res: ApplyTaskRes::Destroy { .. },
-                                } => true,
-                                _ => false,
-                            },
+                            && matches!(msg, PeerMsg::ApplyRes {
+                                res: ApplyTaskRes::Destroy { .. },
+                            }),
                         |_| unreachable!()
                     );
                     self.peer_msg_buf.push(msg);

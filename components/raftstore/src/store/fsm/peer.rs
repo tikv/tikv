@@ -862,11 +862,14 @@ where
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
-        if let Some(r) = res {
+        if let Some(mut r) = res {
             self.on_role_changed(&r.0);
             if !r.0.entries().is_empty() {
                 self.register_raft_gc_log_tick();
                 self.register_split_region_check_tick();
+            }
+            if self.ctx.cfg.early_apply {
+                self.handle_raft_ready_apply(&mut r.0, &r.1);
             }
             self.ctx.ready_res.push(r);
         }
@@ -3935,7 +3938,7 @@ mod tests {
     use crate::store::local_metrics::RaftProposeMetrics;
     use crate::store::msg::{Callback, ExtCallback, RaftCommand};
 
-    use engine_rocks::RocksEngine;
+    use engine_test::kv::KvTestEngine;
     use kvproto::raft_cmdpb::{
         AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
         StatusRequest,
@@ -3947,7 +3950,7 @@ mod tests {
     #[test]
     fn test_batch_raft_cmd_request_builder() {
         let max_batch_size = 1000.0;
-        let mut builder = BatchRaftCmdRequestBuilder::<RocksEngine>::new(max_batch_size);
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new(max_batch_size);
         let mut q = Request::default();
         let mut metric = RaftProposeMetrics::default();
 

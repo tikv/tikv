@@ -525,6 +525,7 @@ version = "0.0.1"
 dependencies = [
  "criterion",
  "crossbeam-skiplist",
+ "fail 0.4.0",
  "futures 0.3.5",
  "parking_lot 0.10.0",
  "rand 0.7.3",
@@ -983,8 +984,11 @@ name = "engine_panic"
 version = "0.0.1"
 dependencies = [
  "engine_traits",
+ "kvproto",
+ "raft",
  "tikv_alloc",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -1018,6 +1022,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_test"
+version = "0.0.1"
+dependencies = [
+ "engine_panic",
+ "engine_rocks",
+ "engine_traits",
+ "tempfile",
+ "tikv_alloc",
+ "tikv_util",
+]
+
+[[package]]
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
@@ -1031,6 +1047,7 @@ dependencies = [
  "slog-global",
  "tikv_alloc",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -1723,7 +1740,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#54c11254946639b975e8e9da093c515e2c84a120"
+source = "git+https://github.com/pingcap/kvproto.git#cdcb788eaebd513df2e5e98a7b8b4fe6132713cc"
 dependencies = [
  "futures 0.3.5",
  "grpcio",
@@ -2877,7 +2894,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine#45b78f8b85cf792abc2758b6e319ca015e5cc3ba"
+source = "git+https://github.com/tikv/raft-engine#8452ee10d0b287f12053ba25183a9a65d014e423"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -2895,7 +2912,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#0c53e7b85a3a81f445c4c64ffbef860d0f315445"
+source = "git+https://github.com/pingcap/raft-rs#6998aedadab120450b588170e6e36202b1af19df"
 dependencies = [
  "lazy_static",
  "prost",
@@ -2937,6 +2954,7 @@ dependencies = [
  "encryption",
  "engine_panic",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "error_code",
  "fail 0.4.0",
@@ -4449,6 +4467,7 @@ dependencies = [
  "encryption",
  "engine_panic",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "error_code",
  "fail 0.4.0",

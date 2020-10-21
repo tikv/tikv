@@ -314,8 +314,8 @@ pub mod tests {
     use super::*;
     use crate::config::DbConfig;
     use crate::storage::kv::{RocksEngine as StorageRocksEngine, TestEngineBuilder};
-    use crate::storage::mvcc::tests::{must_get_none, must_prewrite_delete, must_prewrite_put};
-    use crate::storage::txn::tests::must_commit;
+    use crate::storage::mvcc::tests::must_get_none;
+    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_rocks::raw::CompactOptions;
     use engine_rocks::util::get_cf_handle;
     use engine_rocks::RocksEngine;
