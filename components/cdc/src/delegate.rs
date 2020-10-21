@@ -601,7 +601,7 @@ impl Delegate {
                             .unwrap_or_default();
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
                             .with_label_values(&["all"])
-                            .observe(start.elapsed().as_millis() as f64);
+                            .observe(start.elapsed().as_secs_f64());
                         for (cf, cf_details) in statistics.details().iter() {
                             for (tag, count) in cf_details.iter() {
                                 CDC_OLD_VALUE_SCAN_DETAILS

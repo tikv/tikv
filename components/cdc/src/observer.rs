@@ -145,7 +145,7 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                                     let value = reader.get_value_default(&prev_key, statistics);
                                     CDC_OLD_VALUE_DURATION_HISTOGRAM
                                         .with_label_values(&["get"])
-                                        .observe(start.elapsed().as_millis() as f64);
+                                        .observe(start.elapsed().as_secs_f64());
                                     value
                                 });
                             }
@@ -159,7 +159,7 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                     .unwrap_or_default();
                 CDC_OLD_VALUE_DURATION_HISTOGRAM
                     .with_label_values(&["seek"])
-                    .observe(start.elapsed().as_millis() as f64);
+                    .observe(start.elapsed().as_secs_f64());
                 value
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
@@ -219,20 +219,19 @@ impl RegionChangeObserver for CdcObserver {
 
 struct OldValueReader<S: EngineSnapshot> {
     snapshot: S,
-    write_cursor: Cursor<S::Iter>,
 }
 
 impl<S: EngineSnapshot> OldValueReader<S> {
     fn new(snapshot: S) -> Self {
+        Self { snapshot }
+    }
+
+    fn new_write_cursor(&self) -> Cursor<S::Iter> {
         let mut iter_opts = IterOptions::default();
         iter_opts.set_fill_cache(false);
-        let write_cursor = snapshot
+        self.snapshot
             .iter_cf(CF_WRITE, iter_opts, ScanMode::Mixed)
-            .unwrap();
-        Self {
-            snapshot,
-            write_cursor,
-        }
+            .unwrap()
     }
 
     // return Some(vec![]) if value is empty.
@@ -271,12 +270,13 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         statistics: &mut Statistics,
     ) -> Result<Option<Value>> {
         let user_key = Key::truncate_ts_for(key.as_encoded()).unwrap();
-        if self.write_cursor.near_seek(key, &mut statistics.write)?
-            && Key::is_user_key_eq(self.write_cursor.key(&mut statistics.write), user_key)
+        let mut write_cursor = self.new_write_cursor();
+        if write_cursor.near_seek(key, &mut statistics.write)?
+            && Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key)
         {
-            if self.write_cursor.key(&mut statistics.write) == key.as_encoded().as_slice() {
+            if write_cursor.key(&mut statistics.write) == key.as_encoded().as_slice() {
                 // Key was committed, move cursor to the next key to seek for old value.
-                if !self.write_cursor.next(&mut statistics.write) {
+                if !write_cursor.next(&mut statistics.write) {
                     // Do not has any next key, return empty value.
                     return Ok(Some(Vec::default()));
                 }
@@ -286,9 +286,8 @@ impl<S: EngineSnapshot> OldValueReader<S> {
 
             // Key was not committed, check if the lock is corresponding to the key.
             let mut old_value = Some(Vec::default());
-            while Key::is_user_key_eq(self.write_cursor.key(&mut statistics.write), user_key) {
-                let write =
-                    WriteRef::parse(self.write_cursor.value(&mut statistics.write)).unwrap();
+            while Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
+                let write = WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
                 old_value = match write.write_type {
                     WriteType::Put => match write.short_value {
                         Some(short_value) => Some(short_value.to_vec()),
@@ -299,7 +298,7 @@ impl<S: EngineSnapshot> OldValueReader<S> {
                     },
                     WriteType::Delete => Some(Vec::default()),
                     WriteType::Rollback | WriteType::Lock => {
-                        if !self.write_cursor.next(&mut statistics.write) {
+                        if !write_cursor.next(&mut statistics.write) {
                             Some(Vec::default())
                         } else {
                             continue;
