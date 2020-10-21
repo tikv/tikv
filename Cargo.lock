@@ -1013,6 +1013,7 @@ dependencies = [
  "bytes 0.4.12",
  "configuration",
  "crc32fast",
+ "crossbeam",
  "engine_traits",
  "error_code",
  "failure",
