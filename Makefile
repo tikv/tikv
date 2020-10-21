@@ -86,6 +86,13 @@ else
 ENABLE_FEATURES += protobuf-codec
 endif
 
+# Set the storage engines used for testing
+ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
+ENABLE_FEATURES += test-engines-rocksdb
+else
+# Caller is responsible for setting up test engine features
+endif
+
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 BIN_PATH = $(CURDIR)/bin

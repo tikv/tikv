@@ -3932,7 +3932,7 @@ mod tests {
     use crate::store::local_metrics::RaftProposeMetrics;
     use crate::store::msg::{Callback, ExtCallback, RaftCommand};
 
-    use engine_rocks::RocksEngine;
+    use engine_test::kv::KvTestEngine;
     use kvproto::raft_cmdpb::{
         AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
         StatusRequest,
@@ -3944,7 +3944,7 @@ mod tests {
     #[test]
     fn test_batch_raft_cmd_request_builder() {
         let max_batch_size = 1000.0;
-        let mut builder = BatchRaftCmdRequestBuilder::<RocksEngine>::new(max_batch_size);
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new(max_batch_size);
         let mut q = Request::default();
         let mut metric = RaftProposeMetrics::default();
 
