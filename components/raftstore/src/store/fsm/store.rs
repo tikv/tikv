@@ -1632,7 +1632,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                     .router
                     .force_send(region_id, PeerMsg::RaftMessage(msg))
                 {
-                    warn!("handle first request vote failed"; "region_id" => region_id, "error" => ?e);
+                    warn!("handle first request failed"; "region_id" => region_id, "error" => ?e);
                 }
             }
         }
