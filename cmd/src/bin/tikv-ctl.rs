@@ -979,8 +979,8 @@ impl DebugExecutor for Debugger {
 
         let mut region = Region::default();
         region.set_id(new_region_id);
-        region.mut_region_epoch().set_version(12345);
-        region.mut_region_epoch().set_conf_ver(12345);
+        region.mut_region_epoch().set_version(1);
+        region.mut_region_epoch().set_conf_ver(1);
 
         let mut peer = Peer::default();
         peer.set_id(new_peer_id);
