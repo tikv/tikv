@@ -10,10 +10,11 @@ use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use grpcio::{
     DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
-    RpcStatusCode, WriteFlags,
+    RpcStatusCode, UnarySink, WriteFlags,
 };
 use kvproto::cdcpb::{
-    ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility, Event, ResolvedTs,
+    ChangeData, ChangeDataEvent, ChangeDataRequest, CheckLeaderRequest, CheckLeaderResponse,
+    Compatibility, Event, ResolvedTs,
 };
 use protobuf::Message;
 use security::{check_common_name, SecurityManager};
@@ -390,6 +391,14 @@ impl ChangeData for Service {
                 }
             }
         });
+    }
+
+    fn check_leader(
+        &mut self,
+        _: RpcContext<'_>,
+        _: CheckLeaderRequest,
+        _: UnarySink<CheckLeaderResponse>,
+    ) {
     }
 }
 

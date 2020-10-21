@@ -426,4 +426,13 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     ) {
         unimplemented!()
     }
+
+    fn sync_max_ts(
+        &mut self,
+        _: RpcContext<'_>,
+        _: SyncMaxTsRequest,
+        _: UnarySink<SyncMaxTsResponse>,
+    ) {
+        unimplemented!()
+    }
 }
