@@ -234,9 +234,9 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         let mut iter_opts = IterOptions::default();
         let ts = Key::decode_ts_from(key.as_encoded()).unwrap();
         let upper = Key::from_encoded_slice(Key::truncate_ts_for(key.as_encoded()).unwrap())
-            .append_ts(TimeStamp::max());
+            .append_ts(TimeStamp::zero());
         iter_opts.set_fill_cache(false);
-        iter_opts.set_hint_max_ts(Bound::Excluded(ts.into_inner()));
+        iter_opts.set_hint_max_ts(Bound::Included(ts.into_inner()));
         iter_opts.set_lower_bound(key.as_encoded(), DATA_KEY_PREFIX_LEN);
         iter_opts.set_upper_bound(upper.as_encoded(), DATA_KEY_PREFIX_LEN);
         self.snapshot
@@ -413,9 +413,10 @@ mod tests {
 
         let must_get_eq = |ts: u64, value| {
             let mut old_value_reader = OldValueReader::new(Arc::new(kv_engine.snapshot()));
+            let mut statistics = Statistics::default();
             assert_eq!(
                 old_value_reader
-                    .near_seek_old_value(&key.clone().append_ts(ts.into()))
+                    .near_seek_old_value(&key.clone().append_ts(ts.into()), &mut statistics)
                     .unwrap(),
                 value
             );
