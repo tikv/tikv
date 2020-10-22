@@ -67,7 +67,7 @@ codec = { path = "components/codec" }
 configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
-crossbeam = "0.7.2"
+crossbeam = "0.8"
 derive_more = "0.99.3"
 encryption = { path = "components/encryption" }
 engine = { path = "components/engine" }
