@@ -233,13 +233,8 @@ error = 'KV-Raft-RequestSnapshotDropped'
 description = ''
 workaround = ''
 
-<<<<<<< HEAD
 [error.KV-Raft-ConfChangeError]
 error = 'KV-Raft-ConfChangeError'
-=======
-[error.KV-Raftstore-Engine]
-error = 'KV-Raftstore-Engine'
->>>>>>> 624bb87ee... update statistics
 description = ''
 workaround = ''
 
@@ -538,13 +533,8 @@ error = 'KV-Storage-PessimisticLockNotFound'
 description = ''
 workaround = ''
 
-<<<<<<< HEAD
 [error.KV-Storage-CommitTsTooLarge]
 error = 'KV-Storage-CommitTsTooLarge'
-=======
-[error.KV-Storage-PessimisticTxnNotEnable]
-error = 'KV-Storage-PessimisticTxnNotEnable'
->>>>>>> 624bb87ee... update statistics
 description = ''
 workaround = ''
 
