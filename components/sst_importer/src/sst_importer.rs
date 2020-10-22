@@ -619,7 +619,6 @@ impl ImportDir {
         let start = Instant::now();
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
-        let cf = engine.cf_handle(cf).expect("bad cf name");
         super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager)?;
         let length = meta.get_length();
         let crc32 = meta.get_crc32();
