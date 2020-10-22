@@ -358,7 +358,7 @@ where
                 None => {
                     return Err(box_err!(
                         "failed to get raftstate from {}",
-                        hex::encode_upper(&state_key)
+                        log_wrappers::Value::key(&state_key)
                     ));
                 }
             };
