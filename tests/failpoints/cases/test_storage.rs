@@ -327,7 +327,7 @@ fn test_pipelined_pessimistic_lock() {
             ),
         )
         .unwrap();
-    rx.recv().unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
     fail::remove(before_pipelined_write_finish_fp);
     delete_pessimistic_lock(&storage, key, 60, 60);
 }

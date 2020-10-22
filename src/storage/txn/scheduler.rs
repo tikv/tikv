@@ -689,7 +689,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     // TODO: Unify the code structure of pipelined pessimistic lock and
                                     // async apply prewrite.
                                     let proposed_cb = Box::new(move || {
-                                        fail_point!("scheduler_pipelined_write_finish");
+                                        fail_point!("before_pipelined_write_finish", |_| {});
                                         let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
                                         Self::early_response(
                                             cid,
