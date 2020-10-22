@@ -8,14 +8,15 @@ use byteorder::{BigEndian, ByteOrder};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Version {
     V1 = 1,
+    V2 = 2,
 }
 
 impl Version {
     fn from(input: u8) -> Result<Version> {
-        if input == 1 {
-            Ok(Version::V1)
-        } else {
-            Err(box_err!("unknown version {:x}", input))
+        match input {
+            1 => Ok(Version::V1),
+            2 => Ok(Version::V2),
+            _ => Err(box_err!("unknown version {:x}", input)),
         }
     }
 }
@@ -45,15 +46,15 @@ impl Header {
     // Version (1 bytes) | Reserved  (3 bytes)
     // Crc32  (4 bytes)
     // Content size (8 bytes)
-    const SIZE: usize = 1 + 3 + 4 + 8;
+    pub const SIZE: usize = 1 + 3 + 4 + 8;
 
-    pub fn new(content: &[u8]) -> Header {
+    pub fn new(content: &[u8], version: Version) -> Header {
         let size = content.len() as u64;
         let mut digest = crc32fast::Hasher::new();
         digest.update(content);
         let crc32 = digest.finalize();
         Header {
-            version: Version::V1,
+            version,
             crc32,
             size,
         }
@@ -74,14 +75,14 @@ impl Header {
         // Content size (8 bytes)
         let size = BigEndian::read_u64(&buf[8..Header::SIZE]);
 
-        let content = &buf[Header::SIZE..];
-        if content.len() as u64 != size {
+        if buf.len() - Header::SIZE < size as usize {
             return Err(box_err!(
-                "file corrupted! content size mismatch {} != {}",
-                size,
-                content.len()
+                "file corrupted! content size is too small: {}, expected: {}",
+                buf.len() - Header::SIZE,
+                size
             ));
         }
+        let content = &buf[Header::SIZE..Header::SIZE + size as usize];
 
         let mut digest = crc32fast::Hasher::new();
         digest.update(content);
@@ -141,7 +142,7 @@ mod tests {
     #[test]
     fn test_crc32_size() {
         let content = [5; 32];
-        let header = Header::new(&content);
+        let header = Header::new(&content, Version::V1);
 
         {
             let mut bytes = header.to_bytes();
