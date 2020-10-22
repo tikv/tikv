@@ -88,7 +88,7 @@ impl SSTImporter {
                 Ok(())
             }
             Err(e) => {
-                error!(%e; "ingest failed"; "meta" => ?meta,);
+                error!(%e; "ingest failed"; "meta" => ?meta, );
                 Err(e)
             }
         }
@@ -363,7 +363,7 @@ impl SSTImporter {
                     .map_err(|e| {
                         Error::BadFormat(format!(
                             "key {}: {}",
-                            hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
+                            log_wrappers::Value::key(keys::origin_key(iter.key())),
                             e
                         ))
                     })?
@@ -373,7 +373,7 @@ impl SSTImporter {
                     let mut write = WriteRef::parse(iter.value()).map_err(|e| {
                         Error::BadFormat(format!(
                             "write {}: {}",
-                            hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
+                            log_wrappers::Value::key(keys::origin_key(iter.key())),
                             e
                         ))
                     })?;

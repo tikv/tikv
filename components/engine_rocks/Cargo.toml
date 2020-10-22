@@ -21,6 +21,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 lazy_static = "1.4.0"
+log_wrappers = { path = "../log_wrappers" }
 time = "0.1"
 configuration = { path = "../configuration" }
 serde = "1.0"
