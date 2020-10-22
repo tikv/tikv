@@ -12,6 +12,8 @@
 #![feature(specialization)]
 #![feature(const_fn)]
 #![feature(decl_macro)]
+#![feature(const_fn_fn_ptr_basics)]
+#![feature(const_mut_refs)]
 
 #[macro_use(box_try, warn)]
 extern crate tikv_util;
