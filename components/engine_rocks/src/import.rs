@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
+use crate::util;
 use engine_traits::ImportExt;
 use engine_traits::IngestExternalFileOptions;
 use engine_traits::Result;
@@ -14,11 +15,11 @@ impl ImportExt for RocksEngine {
 
     fn ingest_external_file_cf(
         &self,
-        cf: &Self::CFHandle,
+        cf: &str,
         opts: &Self::IngestExternalFileOptions,
         files: &[&str],
     ) -> Result<()> {
-        let cf = cf.as_inner();
+        let cf = util::get_cf_handle(self.as_inner(), cf)?;
         // This is calling a specially optimized version of
         // ingest_external_file_cf. In cases where the memtable needs to be
         // flushed it avoids blocking writers while doing the flush. The unused
@@ -33,7 +34,7 @@ impl ImportExt for RocksEngine {
     // TODO: rename it to `reset_global_seq`.
     fn validate_sst_for_ingestion<P: AsRef<Path>>(
         &self,
-        cf: &Self::CFHandle,
+        cf: &str,
         path: P,
         _expected_size: u64,
         _expected_checksum: u32,
@@ -42,7 +43,7 @@ impl ImportExt for RocksEngine {
         let f = File::open(path)?;
 
         // RocksDB may have modified the global seqno.
-        let cf = cf.as_inner();
+        let cf = util::get_cf_handle(self.as_inner(), cf)?;
         set_external_sst_file_global_seq_no(&self.as_inner(), cf, path, 0)?;
         f.sync_all()
             .map_err(|e| format!("sync {}: {:?}", path, e))?;
