@@ -373,6 +373,12 @@ where
     }
 
     pub fn flush(&mut self) {
+        if let Some(t) = self.current_time.take() {
+            let dur = (monotonic_raw_now() - t).to_std().unwrap();
+            self.raft_metrics
+                .append_log
+                .observe(duration_to_sec(dur) as f64);
+        }
         self.raft_metrics.flush();
         self.store_stat.flush();
     }

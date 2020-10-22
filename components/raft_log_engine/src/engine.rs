@@ -1,9 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use futures::executor::block_on;
 use futures::future::BoxFuture;
 use std::fs;
 use std::path::Path;
 
+use engine_traits::metrics::*;
 use engine_traits::{CacheStats, RaftEngine, RaftLogBatch as RaftLogBatchTrait, Result};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
@@ -175,6 +177,41 @@ impl RaftEngine for RaftLogEngine {
 
     fn stop(&self) {
         self.0.stop();
+    }
+
+    fn flush_metrics(&self, instance: &str) {
+        let name_enum = match instance {
+            "kv" => TickerName::kv,
+            "raft" => TickerName::raft,
+            unexpected => panic!(format!("unexpected name {}", unexpected)),
+        };
+
+        if let Ok(statistic) = block_on(self.0.async_get_metric()) {
+            STORE_ENGINE_WAL_FILE_SYNCED
+                .get(name_enum)
+                .inc_by(statistic.freq as i64);
+
+            STORE_ENGINE_WRITE_VEC
+                .with_label_values(&[instance, "write_average"])
+                .set(statistic.avg_write_cost as f64);
+            STORE_ENGINE_WRITE_VEC
+                .with_label_values(&[instance, "write_max"])
+                .set(statistic.max_write_cost as f64);
+
+            STORE_ENGINE_WRITE_WAL_TIME_VEC
+                .with_label_values(&[instance, "write_wal_micros_average"])
+                .set((statistic.wal_cost / statistic.freq) as f64);
+            STORE_ENGINE_WRITE_WAL_TIME_VEC
+                .with_label_values(&[instance, "write_wal_micros_max"])
+                .set(statistic.max_wal_cost as f64);
+
+            STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[instance, "wal_file_sync_average"])
+                .set((statistic.sync_cost / statistic.freq) as f64);
+            STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[instance, "wal_file_sync_max"])
+                .set(statistic.max_sync_cost as f64);
+        }
     }
 
     fn dump_stats(&self) -> Result<String> {
