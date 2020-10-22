@@ -43,6 +43,14 @@ else ifeq ($(SYSTEM_ALLOC),1)
 # no feature needed for system allocator
 else
 ENABLE_FEATURES += jemalloc
+
+# Only tested on Linux
+ifeq ($(shell uname -s),Linux)
+ENABLE_FEATURES += mem-profiling
+# According to jemalloc/jemalloc#585, enabling it on some platform or some
+# versions of glibc can cause deadlock.
+# export JEMALLOC_SYS_WITH_MALLOC_CONF = prof:true,prof_active:false
+endif
 endif
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
