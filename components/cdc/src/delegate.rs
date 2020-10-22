@@ -362,12 +362,13 @@ impl Delegate {
             self.region_id,
             change_data_event,
         );
-        for i in 0..downstreams.len() - 1 {
-            if normal_only && downstreams[i].state.load() != DownstreamState::Normal {
+        for curr_downstream in downstreams.iter().take(downstreams.len() - 1) {
+            if normal_only && curr_downstream.state.load() != DownstreamState::Normal {
                 continue;
             }
-            downstreams[i].sink_event(change_data_event.clone());
+            curr_downstream.sink_event(change_data_event.clone());
         }
+        // TODO: also check here ? normal_only and state
         downstreams.last().unwrap().sink_event(change_data_event);
     }
 

@@ -174,8 +174,8 @@ fn json_with_paths_validator(expr: &tipb::Expr) -> Result<()> {
 fn valid_paths(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
     super::function::validate_expr_return_type(&children[0], EvalType::Json)?;
-    for i in 1..children.len() {
-        super::function::validate_expr_return_type(&children[i], EvalType::Bytes)?;
+    for child in children.iter().skip(1) {
+        super::function::validate_expr_return_type(&child, EvalType::Bytes)?;
     }
     Ok(())
 }

@@ -896,8 +896,8 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
         assert!(engine.kv.get_value(b"k1").unwrap().is_none());
         assert_eq!(engine.kv.get_value(b"k2").unwrap().unwrap(), b"v2");
-        for i in 0..9 {
-            assert!(engine.kv.get_value(&ranges[i]).unwrap().is_none());
+        for range in ranges.iter().take(9) {
+            assert!(engine.kv.get_value(&range).unwrap().is_none());
         }
     }
 
