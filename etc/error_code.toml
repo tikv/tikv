@@ -1,550 +1,550 @@
 ["KV-Codec-Io"]
-error = ```
+error = '''
 KV-Codec-Io
-```
+'''
 
 ["KV-Codec-BadPadding"]
-error = ```
+error = '''
 KV-Codec-BadPadding
-```
+'''
 
 ["KV-Codec-KeyLength"]
-error = ```
+error = '''
 KV-Codec-KeyLength
-```
+'''
 
 ["KV-Codec-KeyNotFound"]
-error = ```
+error = '''
 KV-Codec-KeyNotFound
-```
+'''
 
 ["KV-Coprocessor-Locked"]
-error = ```
+error = '''
 KV-Coprocessor-Locked
-```
+'''
 
 ["KV-Coprocessor-DeadlineExceeded"]
-error = ```
+error = '''
 KV-Coprocessor-DeadlineExceeded
-```
+'''
 
 ["KV-Coprocessor-MaxPendingTasksExceeded"]
-error = ```
+error = '''
 KV-Coprocessor-MaxPendingTasksExceeded
-```
+'''
 
 ["KV-Coprocessor-InvalidDataType"]
-error = ```
+error = '''
 KV-Coprocessor-InvalidDataType
-```
+'''
 
 ["KV-Coprocessor-Encoding"]
-error = ```
+error = '''
 KV-Coprocessor-Encoding
-```
+'''
 
 ["KV-Coprocessor-ColumnOffset"]
-error = ```
+error = '''
 KV-Coprocessor-ColumnOffset
-```
+'''
 
 ["KV-Coprocessor-UnknownSignature"]
-error = ```
+error = '''
 KV-Coprocessor-UnknownSignature
-```
+'''
 
 ["KV-Coprocessor-Eval"]
-error = ```
+error = '''
 KV-Coprocessor-Eval
-```
+'''
 
 ["KV-Coprocessor-StorageError"]
-error = ```
+error = '''
 KV-Coprocessor-StorageError
-```
+'''
 
 ["KV-Coprocessor-InvalidCharacterString"]
-error = ```
+error = '''
 KV-Coprocessor-InvalidCharacterString
-```
+'''
 
 ["KV-Encryption-Rocks"]
-error = ```
+error = '''
 KV-Encryption-Rocks
-```
+'''
 
 ["KV-Encryption-IO"]
-error = ```
+error = '''
 KV-Encryption-IO
-```
+'''
 
 ["KV-Encryption-Crypter"]
-error = ```
+error = '''
 KV-Encryption-Crypter
-```
+'''
 
 ["KV-Encryption-Proto"]
-error = ```
+error = '''
 KV-Encryption-Proto
-```
+'''
 
 ["KV-Encryption-UnknownEncryption"]
-error = ```
+error = '''
 KV-Encryption-UnknownEncryption
-```
+'''
 
 ["KV-Encryption-WrongMasterKey"]
-error = ```
+error = '''
 KV-Encryption-WrongMasterKey
-```
+'''
 
 ["KV-Encryption-BothMasterKeyFail"]
-error = ```
+error = '''
 KV-Encryption-BothMasterKeyFail
-```
+'''
 
 ["KV-Engine-Engine"]
-error = ```
+error = '''
 KV-Engine-Engine
-```
+'''
 
 ["KV-Engine-NotInRange"]
-error = ```
+error = '''
 KV-Engine-NotInRange
-```
+'''
 
 ["KV-Engine-Protobuf"]
-error = ```
+error = '''
 KV-Engine-Protobuf
-```
+'''
 
 ["KV-Engine-IO"]
-error = ```
+error = '''
 KV-Engine-IO
-```
+'''
 
 ["KV-Engine-CFName"]
-error = ```
+error = '''
 KV-Engine-CFName
-```
+'''
 
 ["KV-Engine-Codec"]
-error = ```
+error = '''
 KV-Engine-Codec
-```
+'''
 
 ["KV-Engine-DataLoss"]
-error = ```
+error = '''
 KV-Engine-DataLoss
-```
+'''
 
 ["KV-Engine-DataCompacted"]
-error = ```
+error = '''
 KV-Engine-DataCompacted
-```
+'''
 
 ["KV-PD-IO"]
-error = ```
+error = '''
 KV-PD-IO
-```
+'''
 
 ["KV-PD-ClusterBootstraped"]
-error = ```
+error = '''
 KV-PD-ClusterBootstraped
-```
+'''
 
 ["KV-PD-ClusterNotBootstraped"]
-error = ```
+error = '''
 KV-PD-ClusterNotBootstraped
-```
+'''
 
 ["KV-PD-Imcompatible"]
-error = ```
+error = '''
 KV-PD-Imcompatible
-```
+'''
 
 ["KV-PD-gRPC"]
-error = ```
+error = '''
 KV-PD-gRPC
-```
+'''
 
 ["KV-PD-RegionNotFound"]
-error = ```
+error = '''
 KV-PD-RegionNotFound
-```
+'''
 
 ["KV-PD-StoreTombstone"]
-error = ```
+error = '''
 KV-PD-StoreTombstone
-```
+'''
 
 ["KV-PD-Unknown"]
-error = ```
+error = '''
 KV-PD-Unknown
-```
+'''
 
 ["KV-Raft-Io"]
-error = ```
+error = '''
 KV-Raft-Io
-```
+'''
 
 ["KV-Raft-Store"]
-error = ```
+error = '''
 KV-Raft-Store
-```
+'''
 
 ["KV-Raft-StepLocalMsg"]
-error = ```
+error = '''
 KV-Raft-StepLocalMsg
-```
+'''
 
 ["KV-Raft-StepPeerNotFound"]
-error = ```
+error = '''
 KV-Raft-StepPeerNotFound
-```
+'''
 
 ["KV-Raft-ProposalDropped"]
-error = ```
+error = '''
 KV-Raft-ProposalDropped
-```
+'''
 
 ["KV-Raft-ConfigInvalid"]
-error = ```
+error = '''
 KV-Raft-ConfigInvalid
-```
+'''
 
 ["KV-Raft-CodecError"]
-error = ```
+error = '''
 KV-Raft-CodecError
-```
+'''
 
 ["KV-Raft-Exists"]
-error = ```
+error = '''
 KV-Raft-Exists
-```
+'''
 
 ["KV-Raft-NotExists"]
-error = ```
+error = '''
 KV-Raft-NotExists
-```
+'''
 
 ["KV-Raft-RequestSnapshotDropped"]
-error = ```
+error = '''
 KV-Raft-RequestSnapshotDropped
-```
+'''
 
 ["KV-Raft-ConfChangeError"]
-error = ```
+error = '''
 KV-Raft-ConfChangeError
-```
+'''
 
 ["KV-Raftstore-EntryTooLarge"]
-error = ```
+error = '''
 KV-Raftstore-EntryTooLarge
-```
+'''
 
 ["KV-Raftstore-NotLeader"]
-error = ```
+error = '''
 KV-Raftstore-NotLeader
-```
+'''
 
 ["KV-Raftstore-StoreNotMatch"]
-error = ```
+error = '''
 KV-Raftstore-StoreNotMatch
-```
+'''
 
 ["KV-Raftstore-RegionNotFound"]
-error = ```
+error = '''
 KV-Raftstore-RegionNotFound
-```
+'''
 
 ["KV-Raftstore-RegionNotInitialized"]
-error = ```
+error = '''
 KV-Raftstore-RegionNotInitialized
-```
+'''
 
 ["KV-Raftstore-KeyNotInRegion"]
-error = ```
+error = '''
 KV-Raftstore-KeyNotInRegion
-```
+'''
 
 ["KV-Raftstore-StaleCommand"]
-error = ```
+error = '''
 KV-Raftstore-StaleCommand
-```
+'''
 
 ["KV-Raftstore-Transport"]
-error = ```
+error = '''
 KV-Raftstore-Transport
-```
+'''
 
 ["KV-Raftstore-Coprocessor"]
-error = ```
+error = '''
 KV-Raftstore-Coprocessor
-```
+'''
 
 ["KV-Raftstore-IO"]
-error = ```
+error = '''
 KV-Raftstore-IO
-```
+'''
 
 ["KV-Raftstore-Protobuf"]
-error = ```
+error = '''
 KV-Raftstore-Protobuf
-```
+'''
 
 ["KV-Raftstore-AddressParse"]
-error = ```
+error = '''
 KV-Raftstore-AddressParse
-```
+'''
 
 ["KV-Raftstore-Timeout"]
-error = ```
+error = '''
 KV-Raftstore-Timeout
-```
+'''
 
 ["KV-Raftstore-EpochNotMatch"]
-error = ```
+error = '''
 KV-Raftstore-EpochNotMatch
-```
+'''
 
 ["KV-Raftstore-Unknown"]
-error = ```
+error = '''
 KV-Raftstore-Unknown
-```
+'''
 
 ["KV-Raftstore-ServerIsBusy"]
-error = ```
+error = '''
 KV-Raftstore-ServerIsBusy
-```
+'''
 
 ["KV-Raftstore-SnapAbort"]
-error = ```
+error = '''
 KV-Raftstore-SnapAbort
-```
+'''
 
 ["KV-Raftstore-SnapTooMany"]
-error = ```
+error = '''
 KV-Raftstore-SnapTooMany
-```
+'''
 
 ["KV-Raftstore-SnapUnknown"]
-error = ```
+error = '''
 KV-Raftstore-SnapUnknown
-```
+'''
 
 ["KV-SSTImporter-Io"]
-error = ```
+error = '''
 KV-SSTImporter-Io
-```
+'''
 
 ["KV-SSTImporter-gRPC"]
-error = ```
+error = '''
 KV-SSTImporter-gRPC
-```
+'''
 
 ["KV-SSTImporter-Uuid"]
-error = ```
+error = '''
 KV-SSTImporter-Uuid
-```
+'''
 
 ["KV-SSTImporter-Future"]
-error = ```
+error = '''
 KV-SSTImporter-Future
-```
+'''
 
 ["KV-SSTImporter-RocksDB"]
-error = ```
+error = '''
 KV-SSTImporter-RocksDB
-```
+'''
 
 ["KV-SSTImporter-ParseIntError"]
-error = ```
+error = '''
 KV-SSTImporter-ParseIntError
-```
+'''
 
 ["KV-SSTImporter-FileExists"]
-error = ```
+error = '''
 KV-SSTImporter-FileExists
-```
+'''
 
 ["KV-SSTImporter-FileCorrupted"]
-error = ```
+error = '''
 KV-SSTImporter-FileCorrupted
-```
+'''
 
 ["KV-SSTImporter-InvalidSSTPath"]
-error = ```
+error = '''
 KV-SSTImporter-InvalidSSTPath
-```
+'''
 
 ["KV-SSTImporter-InvalidChunk"]
-error = ```
+error = '''
 KV-SSTImporter-InvalidChunk
-```
+'''
 
 ["KV-SSTImporter-Engine"]
-error = ```
+error = '''
 KV-SSTImporter-Engine
-```
+'''
 
 ["KV-SSTImporter-CannotReadExternalStorage"]
-error = ```
+error = '''
 KV-SSTImporter-CannotReadExternalStorage
-```
+'''
 
 ["KV-SSTImporter-WrongKeyPrefix"]
-error = ```
+error = '''
 KV-SSTImporter-WrongKeyPrefix
-```
+'''
 
 ["KV-SSTImporter-BadFormat"]
-error = ```
+error = '''
 KV-SSTImporter-BadFormat
-```
+'''
 
 ["KV-Storage-Timeout"]
-error = ```
+error = '''
 KV-Storage-Timeout
-```
+'''
 
 ["KV-Storage-EmptyRequest"]
-error = ```
+error = '''
 KV-Storage-EmptyRequest
-```
+'''
 
 ["KV-Storage-Closed"]
-error = ```
+error = '''
 KV-Storage-Closed
-```
+'''
 
 ["KV-Storage-Io"]
-error = ```
+error = '''
 KV-Storage-Io
-```
+'''
 
 ["KV-Storage-SchedTooBusy"]
-error = ```
+error = '''
 KV-Storage-SchedTooBusy
-```
+'''
 
 ["KV-Storage-GcWorkerTooBusy"]
-error = ```
+error = '''
 KV-Storage-GcWorkerTooBusy
-```
+'''
 
 ["KV-Storage-KeyTooLarge"]
-error = ```
+error = '''
 KV-Storage-KeyTooLarge
-```
+'''
 
 ["KV-Storage-InvalidCF"]
-error = ```
+error = '''
 KV-Storage-InvalidCF
-```
+'''
 
 ["KV-Storage-Protobuf"]
-error = ```
+error = '''
 KV-Storage-Protobuf
-```
+'''
 
 ["KV-Storage-INVALIDTXNTSO"]
-error = ```
+error = '''
 KV-Storage-INVALIDTXNTSO
-```
+'''
 
 ["KV-Storage-InvalidReqRange"]
-error = ```
+error = '''
 KV-Storage-InvalidReqRange
-```
+'''
 
 ["KV-Storage-BadFormatLock"]
-error = ```
+error = '''
 KV-Storage-BadFormatLock
-```
+'''
 
 ["KV-Storage-BadFormatWrite"]
-error = ```
+error = '''
 KV-Storage-BadFormatWrite
-```
+'''
 
 ["KV-Storage-KeyIsLocked"]
-error = ```
+error = '''
 KV-Storage-KeyIsLocked
-```
+'''
 
 ["KV-Storage-MaxTimestampNotSynced"]
-error = ```
+error = '''
 KV-Storage-MaxTimestampNotSynced
-```
+'''
 
 ["KV-Storage-Committed"]
-error = ```
+error = '''
 KV-Storage-Committed
-```
+'''
 
 ["KV-Storage-PessimisticLockRolledBack"]
-error = ```
+error = '''
 KV-Storage-PessimisticLockRolledBack
-```
+'''
 
 ["KV-Storage-TxnLockNotFound"]
-error = ```
+error = '''
 KV-Storage-TxnLockNotFound
-```
+'''
 
 ["KV-Storage-TxnNotFound"]
-error = ```
+error = '''
 KV-Storage-TxnNotFound
-```
+'''
 
 ["KV-Storage-LockTypeNotMatch"]
-error = ```
+error = '''
 KV-Storage-LockTypeNotMatch
-```
+'''
 
 ["KV-Storage-WriteConflict"]
-error = ```
+error = '''
 KV-Storage-WriteConflict
-```
+'''
 
 ["KV-Storage-Deadlock"]
-error = ```
+error = '''
 KV-Storage-Deadlock
-```
+'''
 
 ["KV-Storage-AlreadyExist"]
-error = ```
+error = '''
 KV-Storage-AlreadyExist
-```
+'''
 
 ["KV-Storage-DefaultNotFound"]
-error = ```
+error = '''
 KV-Storage-DefaultNotFound
-```
+'''
 
 ["KV-Storage-CommitTsExpired"]
-error = ```
+error = '''
 KV-Storage-CommitTsExpired
-```
+'''
 
 ["KV-Storage-KeyVersion"]
-error = ```
+error = '''
 KV-Storage-KeyVersion
-```
+'''
 
 ["KV-Storage-PessimisticLockNotFound"]
-error = ```
+error = '''
 KV-Storage-PessimisticLockNotFound
-```
+'''
 
 ["KV-Storage-CommitTsTooLarge"]
-error = ```
+error = '''
 KV-Storage-CommitTsTooLarge
-```
+'''
 
 ["KV-Storage-Unknown"]
-error = ```
+error = '''
 KV-Storage-Unknown
-```
+'''
 

@@ -19,7 +19,7 @@ fn main() {
     err_codes
         .into_iter()
         .flatten()
-        .map(|c| format!("[\"{}\"]\nerror = ```\n{}\n```\n\n", c.code, c.code))
+        .map(|c| format!("[\"{}\"]\nerror = '''\n{}\n'''\n\n", c.code, c.code))
         .for_each(|s| {
             f.write_all(s.as_bytes()).unwrap();
         });
