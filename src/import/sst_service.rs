@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use engine::rocks::util::compact_files_in_range;
 use engine::rocks::DB;
 use engine_rocks::util::ingest_maybe_slowdown_writes;
-use engine_traits::{name_to_cf, CF_DEFAULT, CF_WRITE};
+use engine_traits::{name_to_cf, CF_DEFAULT};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -403,19 +403,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                             },
                             _ => return Err(Error::InvalidChunk),
                         };
-                        let name = import.get_path(&meta);
-
-                        let default = <RocksEngine as SstExt>::SstWriterBuilder::new()
-                            .set_in_memory(true)
-                            .set_db(RocksEngine::from_ref(&engine))
-                            .set_cf(CF_DEFAULT)
-                            .build(&name.to_str().unwrap())?;
-                        let write = <RocksEngine as SstExt>::SstWriterBuilder::new()
-                            .set_in_memory(true)
-                            .set_db(RocksEngine::from_ref(&engine))
-                            .set_cf(CF_WRITE)
-                            .build(&name.to_str().unwrap())?;
-                        let writer = match import.new_writer::<RocksEngine>(default, write, meta) {
+                        let writer = match import.new_writer(RocksEngine::from_ref(&engine), meta) {
                             Ok(w) => w,
                             Err(e) => {
                                 error!("build writer failed {:?}", e);
