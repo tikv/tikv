@@ -5,7 +5,7 @@ use std::io;
 use std::net;
 use std::result;
 
-use crossbeam::TrySendError;
+use crossbeam::channel::TrySendError;
 #[cfg(feature = "prost-codec")]
 use prost::{DecodeError, EncodeError};
 use protobuf::ProtobufError;
