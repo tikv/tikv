@@ -23,7 +23,7 @@ use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
 };
 use pd_client::PdClient;
-use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
@@ -213,7 +213,7 @@ impl<T: Simulator> Cluster<T> {
 
             let engines = self.dbs.last().unwrap().clone();
             let key_mgr = self.key_managers.last().unwrap().clone();
-            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
 
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
@@ -269,7 +269,7 @@ impl<T: Simulator> Cluster<T> {
         if let Some(labels) = self.labels.get(&node_id) {
             cfg.server.labels = labels.to_owned();
         }
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         self.store_metas.insert(node_id, store_meta.clone());
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
@@ -528,7 +528,7 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
-            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
@@ -561,7 +561,7 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
-            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
