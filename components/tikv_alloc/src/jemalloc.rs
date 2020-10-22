@@ -134,7 +134,7 @@ mod profiling {
         use std::fs;
         use tempfile::Builder;
 
-        const OPT_PROF: &'static [u8] = b"opt.prof\0";
+        const OPT_PROF: &[u8] = b"opt.prof\0";
 
         fn is_profiling_on() -> bool {
             match unsafe { tikv_jemalloc_ctl::raw::read(OPT_PROF) } {
