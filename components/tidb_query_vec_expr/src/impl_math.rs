@@ -1446,8 +1446,8 @@ mod tests {
     fn test_round_int() {
         let test_cases = vec![
             (Some(Int::from(1)), Some(Int::from(1))),
-            (Some(Int::from(i64::MAX)), Some(Int::from(i64::MAX))),
-            (Some(Int::from(i64::MIN)), Some(Int::from(i64::MIN))),
+            (Some(i64::MAX), Some(i64::MAX)),
+            (Some(i64::MIN), Some(i64::MIN)),
             (None, None),
         ];
 
@@ -1504,12 +1504,12 @@ mod tests {
                 .build();
 
             let output = RpnFnScalarEvaluator::new()
-                .push_param(Some(Int::from(lhs)))
+                .push_param(Some(lhs))
                 .push_param_with_field_type(Some(rhs), rhs_field_type)
                 .evaluate::<Int>(ScalarFuncSig::TruncateInt)
                 .unwrap();
 
-            assert_eq!(output, Some(Int::from(expected)));
+            assert_eq!(output, Some(expected));
         }
     }
 
@@ -1527,10 +1527,10 @@ mod tests {
             (123.2, u64::max_value() as i64, true, 123.2),
             (-1.23, 0, false, -1.0),
             (
-                1.797693134862315708145274237317043567981e+308,
+                1.797_693_134_862_315_708_145_274_237_317_043_567_981e308,
                 2,
                 false,
-                1.797693134862315708145274237317043567981e+308,
+                1.797_693_134_862_315_708_145_274_237_317_043_567_981e308,
             ),
         ];
         for (lhs, rhs, rhs_is_unsigned, expected) in test_cases {

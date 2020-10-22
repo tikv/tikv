@@ -464,7 +464,7 @@ impl<E: Engine> Endpoint<E> {
         async move {
             let mut resp = match result_of_future {
                 Err(e) => make_error_response(e),
-                Ok(handle_fut) => handle_fut.await.unwrap_or_else(|e| make_error_response(e)),
+                Ok(handle_fut) => handle_fut.await.unwrap_or_else(make_error_response),
             };
             if let Some(collector) = collector {
                 let span_sets = collector.collect();

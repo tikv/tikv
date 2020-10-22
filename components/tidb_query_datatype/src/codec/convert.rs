@@ -1071,12 +1071,10 @@ fn no_exp_float_str_to_int_str(valid_float: &str, mut dot_idx: usize) -> Result<
             // so we need valid_float[..(dot_idx+1)] here.
             &valid_float[..=dot_idx]
         }
+    } else if dot_idx == 0 {
+        "0"
     } else {
-        if dot_idx == 0 {
-            "0"
-        } else {
-            &digits[..dot_idx]
-        }
+        &digits[..dot_idx]
     };
 
     let res = if digits.len() > dot_idx + 1 {

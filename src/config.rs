@@ -1333,7 +1333,7 @@ pub struct RaftEngineConfig {
 
 impl RaftEngineConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        self.config.validate().map_err(|e| Box::new(e))?;
+        self.config.validate().map_err(Box::new)?;
         Ok(())
     }
 

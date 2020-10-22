@@ -115,7 +115,7 @@ fn chrono_datetime<T: TimeZone>(
         .and_then(|date| date.and_hms_opt(hour, minute, second))
         .and_then(|t| t.checked_add_signed(chrono::Duration::microseconds(i64::from(micro))))
         .and_then(|datetime| time_zone.from_local_datetime(&datetime).earliest())
-        .ok_or_else(|| Error::truncated())
+        .ok_or_else(Error::truncated)
 }
 
 #[inline]
@@ -131,7 +131,7 @@ fn chrono_naive_datetime(
     NaiveDate::from_ymd_opt(year as i32, month, day)
         .and_then(|date| date.and_hms_opt(hour, minute, second))
         .and_then(|t| t.checked_add_signed(chrono::Duration::microseconds(i64::from(micro))))
-        .ok_or_else(|| Error::truncated())
+        .ok_or_else(Error::truncated)
 }
 
 /// Round `frac` with `fsp`, return if there is a carry and the result.
@@ -2737,8 +2737,8 @@ mod tests {
     #[test]
     fn test_convert_to_f64() {
         let cases = vec![
-            ("2012-12-31 11:30:45.123456", 4, 20121231113045.1235f64),
-            ("2012-12-31 11:30:45.123456", 6, 20121231113045.123456f64),
+            ("2012-12-31 11:30:45.123456", 4, 20_121_231_113_045.125_f64),
+            ("2012-12-31 11:30:45.123456", 6, 20_121_231_113_045.125_f64),
             ("2012-12-31 11:30:45.123456", 0, 20121231113045f64),
             ("2012-12-31 11:30:45.999999", 0, 20121231113046f64),
             ("2017-01-05 08:40:59.575601", 0, 20170105084100f64),

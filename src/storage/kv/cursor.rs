@@ -423,14 +423,14 @@ impl<I: Iterator> Cursor<I> {
             panic!(
                 "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
                 e,
-                self.min_key.as_ref().map(|v| hex::encode_upper(v)),
-                self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+                self.min_key.as_ref().map(hex::encode_upper),
+                self.max_key.as_ref().map(hex::encode_upper),
             );
         } else {
             error!(?e;
                 "failed to iterate";
-                "min_key" => ?self.min_key.as_ref().map(|v| hex::encode_upper(v)),
-                "max_key" => ?self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+                "min_key" => ?self.min_key.as_ref().map(hex::encode_upper),
+                "max_key" => ?self.max_key.as_ref().map(hex::encode_upper),
             );
             Err(e)
         }
