@@ -584,6 +584,7 @@ dependencies = [
  "kvproto",
  "libc",
  "log",
+ "log_wrappers",
  "nix 0.11.1",
  "pd_client",
  "prometheus",
@@ -1142,6 +1143,7 @@ dependencies = [
  "engine_traits",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "rand 0.7.3",
  "rocksdb",
@@ -1161,7 +1163,7 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "error_code",
- "hex 0.4.2",
+ "log_wrappers",
  "protobuf",
  "quick-error",
  "tikv_alloc",
@@ -2071,6 +2073,8 @@ name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
+ "kvproto",
+ "protobuf",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -2926,7 +2930,7 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?rev=b67d432c1b74350b38a5d96ddf885ac6c3ff46f5#b67d432c1b74350b38a5d96ddf885ac6c3ff46f5"
+source = "git+https://github.com/pingcap/rust-protobuf?rev=65e9df20fbcbcf2409d5ee86a2332ecd04c534f8#65e9df20fbcbcf2409d5ee86a2332ecd04c534f8"
 dependencies = [
  "heck",
  "hex 0.3.2",
@@ -2951,7 +2955,7 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?rev=b67d432c1b74350b38a5d96ddf885ac6c3ff46f5#b67d432c1b74350b38a5d96ddf885ac6c3ff46f5"
+source = "git+https://github.com/pingcap/rust-protobuf?rev=65e9df20fbcbcf2409d5ee86a2332ecd04c534f8#65e9df20fbcbcf2409d5ee86a2332ecd04c534f8"
 dependencies = [
  "heck",
  "protobuf",
@@ -3965,6 +3969,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "serde",
