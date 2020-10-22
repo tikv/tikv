@@ -197,6 +197,12 @@ impl RaftEngine for RaftLogEngine {
             STORE_ENGINE_WRITE_VEC
                 .with_label_values(&[instance, "write_max"])
                 .set(statistic.max_write_cost as f64);
+            STORE_ENGINE_WRITE_VEC
+                .with_label_values(&[instance, "write_memtable_average"])
+                .set(statistic.avg_mem_cost as f64);
+            STORE_ENGINE_WRITE_VEC
+                .with_label_values(&[instance, "write_memtable_max"])
+                .set(statistic.max_mem_cost as f64);
 
             STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
                 .with_label_values(&[instance, "wal_file_sync_max"])
