@@ -27,6 +27,7 @@ use engine_traits::{
     SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
+use tikv_util::file::sync_dir;
 use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
@@ -529,8 +530,11 @@ impl<E: KvEngine> SSTWriter<E> {
     }
 
     // move file from temp to save.
-    fn save(import_path: ImportPath) -> Result<()> {
-        fs::rename(import_path.temp, import_path.save)?;
+    fn save(mut import_path: ImportPath) -> Result<()> {
+        fs::rename(&import_path.temp, &import_path.save)?;
+        // sync the directory after rename
+        import_path.save.pop();
+        sync_dir(&import_path.save)?;
         Ok(())
     }
 }
