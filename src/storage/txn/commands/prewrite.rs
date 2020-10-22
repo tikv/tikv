@@ -40,15 +40,15 @@ command! {
             /// How many keys this transaction involved.
             txn_size: u64,
             min_commit_ts: TimeStamp,
+            /// Limits the maximum value of commit ts of async commit and 1PC, which can be used to
+            /// avoid inconsistency with schema change.
+            max_commit_ts: TimeStamp,
             /// All secondary keys in the whole transaction (i.e., as sent to all nodes, not only
             /// this node). Only present if using async commit.
             secondary_keys: Option<Vec<Vec<u8>>>,
             /// When the transaction involves only one region, it's possible to commit the
             /// transaction directly with 1PC protocol.
             try_one_pc: bool,
-            /// Limits the maximum value of commit ts of 1PC, which can be used to avoid
-            /// inconsistency with schema change.
-            one_pc_max_commit_ts: TimeStamp,
         }
 }
 
@@ -92,9 +92,9 @@ impl Prewrite {
             false,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
             None,
             false,
-            TimeStamp::zero(),
             Context::default(),
         )
     }
@@ -104,7 +104,7 @@ impl Prewrite {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: TimeStamp,
-        one_pc_max_commit_ts: TimeStamp,
+        max_commit_ts: TimeStamp,
     ) -> TypedCommand<PrewriteResult> {
         Prewrite::new(
             mutations,
@@ -114,9 +114,9 @@ impl Prewrite {
             false,
             0,
             TimeStamp::default(),
+            max_commit_ts,
             None,
             true,
-            one_pc_max_commit_ts,
             Context::default(),
         )
     }
@@ -135,6 +135,7 @@ impl Prewrite {
             lock_ttl,
             false,
             0,
+            TimeStamp::default(),
             TimeStamp::default(),
             None,
             false,
@@ -156,7 +157,8 @@ impl Prewrite {
             0,
             false,
             0,
-            TimeStamp::zero(),
+            TimeStamp::default(),
+            TimeStamp::default(),
             None,
             false,
             TimeStamp::zero(),
@@ -234,6 +236,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 self.lock_ttl,
                 self.txn_size,
                 self.min_commit_ts,
+                self.max_commit_ts,
                 self.try_one_pc,
             ) {
                 Ok(ts) => {

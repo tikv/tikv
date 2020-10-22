@@ -129,9 +129,9 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_skip_constraint_check(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
+                req.get_max_commit_ts().into(),
                 secondary_keys,
                 req.get_try_one_pc(),
-                req.get_one_pc_max_commit_ts().into(),
                 req.take_context(),
             )
         } else {
@@ -150,9 +150,9 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 for_update_ts.into(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
+                req.get_max_commit_ts().into(),
                 secondary_keys,
                 req.get_try_one_pc(),
-                req.get_one_pc_max_commit_ts().into(),
                 req.take_context(),
             )
         }

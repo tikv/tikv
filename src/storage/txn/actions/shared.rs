@@ -1,7 +1,8 @@
 use crate::storage::mvcc::metrics::CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM;
-use crate::storage::mvcc::{Lock, LockType, MvccTxn, Result as MvccResult, TimeStamp};
+use crate::storage::mvcc::{ErrorInner, Lock, LockType, MvccTxn, Result as MvccResult, TimeStamp};
 use crate::storage::txn::commands::ReleasedLocks;
 use crate::storage::Snapshot;
+use fail::fail_point;
 use std::cmp;
 use txn_types::{is_short_value, Key, Value, Write, WriteType};
 
@@ -16,6 +17,7 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
     for_update_ts: TimeStamp,
     txn_size: u64,
     min_commit_ts: TimeStamp,
+    max_commit_ts: TimeStamp,
     try_one_pc: bool,
     has_pessimistic_lock: bool,
 ) -> MvccResult<TimeStamp> {
@@ -61,9 +63,19 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
             fail_point!("before-set-lock-in-memory");
             let min_commit_ts = cmp::max(cmp::max(max_ts, txn.start_ts), for_update_ts).next();
             lock.min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
+
+            if !max_commit_ts.is_zero() && lock.min_commit_ts > max_commit_ts {
+                return Err(ErrorInner::CommitTsTooLarge {
+                    start_ts: txn.start_ts,
+                    min_commit_ts: lock.min_commit_ts,
+                    max_commit_ts,
+                })
+                .into();
+            }
+
             *l = Some(lock.clone());
-            lock.min_commit_ts
-        });
+            Ok(lock.min_commit_ts)
+        })?;
 
         txn.guards.push(key_guard);
     }
@@ -73,6 +85,9 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
     } else {
         txn.put_lock(key, &lock);
     }
+
+    fail_point!("after_prewrite_one_key");
+
     Ok(final_min_commit_ts)
 }
 

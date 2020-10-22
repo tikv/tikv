@@ -34,15 +34,15 @@ command! {
             /// How many keys this transaction involved.
             txn_size: u64,
             min_commit_ts: TimeStamp,
+            /// Limits the maximum value of commit ts of 1PC and async commit, which can be used to
+            /// avoid inconsistency with schema change.
+            max_commit_ts: TimeStamp,
             /// All secondary keys in the whole transaction (i.e., as sent to all nodes, not only
             /// this node). Only present if using async commit.
             secondary_keys: Option<Vec<Vec<u8>>>,
             /// When the transaction involves only one region, it's possible to commit the
             /// transaction directly with 1PC protocol.
             try_one_pc: bool,
-            /// Limits the maximum value of commit ts of 1PC, which can be used to avoid
-            /// inconsistency with schema change.
-            one_pc_max_commit_ts: TimeStamp,
         }
 }
 
@@ -169,6 +169,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
                 self.for_update_ts,
                 self.txn_size,
                 self.min_commit_ts,
+                self.max_commit_ts,
                 context.pipelined_pessimistic_lock,
                 self.try_one_pc,
             ) {
@@ -249,10 +250,8 @@ mod tests {
 
     #[test]
     fn test_prewrite_pessimsitic_one_pc() {
-        use crate::storage::mvcc::tests::{
-            must_acquire_pessimistic_lock, must_get, must_get_commit_ts, must_unlocked,
-        };
-
+        use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
+        use crate::storage::txn::tests::must_acquire_pessimistic_lock;
         let engine = TestEngineBuilder::new().build().unwrap();
         let key = b"k";
         let value = b"v";
