@@ -3,6 +3,15 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.7] - 2020-09-29
+
++ Improvements
+  + Support the JSON log format [#8382](https://github.com/tikv/tikv/pull/8382)
++ Bug Fixes
+  + Fix the issue of unavailable Status API when TLS handshake fails [#8649](https://github.com/tikv/tikv/pull/8649)
+  + Fix the potential undefined behaviors [#7782](https://github.com/tikv/tikv/pull/7782)
+  + Fix the possible panic caused by generating snapshots when executing `UnsafeDestroyRange` [#8681](https://github.com/tikv/tikv/pull/8681)
+
 ## [4.0.6] - 2020-09-15
 
 + Improvements

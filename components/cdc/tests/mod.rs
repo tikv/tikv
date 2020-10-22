@@ -12,16 +12,7 @@ use std::time::Duration;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
 use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    create_change_data, event::Event as Event_oneof_event, ChangeDataClient, ChangeDataEvent,
-    ChangeDataRequest, Event,
-};
-#[cfg(not(feature = "prost-codec"))]
-use kvproto::cdcpb::{
-    create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest, Event,
-    Event_oneof_event,
-};
+use kvproto::cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest};
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
@@ -46,7 +37,7 @@ pub fn new_event_feed(
 ) -> (
     ClientDuplexSender<ChangeDataRequest>,
     Rc<Cell<Option<ClientDuplexReceiver<ChangeDataEvent>>>>,
-    impl Fn(bool) -> Vec<Event>,
+    impl Fn(bool) -> ChangeDataEvent,
 ) {
     let (req_tx, resp_rx) = client.event_feed().unwrap();
     let event_feed_wrap = Rc::new(Cell::new(Some(resp_rx)));
@@ -59,20 +50,11 @@ pub fn new_event_feed(
             Err(e) => panic!("receive failed {:?}", e.0),
         };
         event_feed.set(Some(events));
-        let mut change_data = change_data.unwrap();
-        let mut events: Vec<_> = change_data.take_events().into();
-        if !keep_resolved_ts {
-            events.retain(|e| {
-                if let Event_oneof_event::ResolvedTs(_) = e.event.as_ref().unwrap() {
-                    false
-                } else {
-                    true
-                }
-            });
+        let change_data_event = change_data.unwrap();
+        if !keep_resolved_ts && change_data_event.has_resolved_ts() {
+            continue;
         }
-        if !events.is_empty() {
-            return events;
-        }
+        break change_data_event;
     };
     (req_tx, event_feed_wrap, receive_event)
 }
