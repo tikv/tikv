@@ -88,6 +88,8 @@ pub fn pessimistic_prewrite<S: Snapshot>(
 pub mod tests {
     use super::*;
     use crate::storage::mvcc::{Key, MvccTxn, Result as MvccResult, TimeStamp};
+    #[cfg(test)]
+    use crate::storage::txn::tests::must_acquire_pessimistic_lock;
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
@@ -122,8 +124,6 @@ pub mod tests {
 
     #[test]
     fn test_async_commit_pessimistic_prewrite_check_max_commit_ts() {
-        use crate::storage::mvcc::tests::must_acquire_pessimistic_lock;
-
         let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(42.into());
 
