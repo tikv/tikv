@@ -316,6 +316,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
     fn on_deregister(&mut self, deregister: Deregister) {
         info!("cdc deregister"; "deregister" => ?deregister);
+        fail_point!("cdc_before_handle_deregister", |_| {});
         match deregister {
             Deregister::Downstream {
                 region_id,
@@ -558,6 +559,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     }
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
+        fail_point!("cdc_before_handle_multi_batch", |_| {});
         let old_value_cb = Rc::new(RefCell::new(old_value_cb));
         for batch in multi {
             let region_id = batch.region_id;
@@ -724,15 +726,17 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     min_ts = min_mem_lock_ts;
                 }
             }
-
             // TODO: send a message to raftstore would consume too much cpu time,
             // try to handle it outside raftstore.
-            let regions: Vec<_> = regions.iter().copied().map(|(region_id, observe_id)| {
-                let scheduler_clone = scheduler.clone();
-                let raft_router_clone = raft_router.clone();
-                async move {
-                    let (tx, rx) = futures::channel::oneshot::channel();
-                    if let Err(e) = raft_router_clone.significant_send(
+            let regions: Vec<_> = regions
+                .iter()
+                .copied()
+                .map(|(region_id, observe_id)| {
+                    let scheduler_clone = scheduler.clone();
+                    let raft_router_clone = raft_router.clone();
+                    async move {
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        if let Err(e) = raft_router_clone.significant_send(
                         region_id,
                         SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
                             let resp = if resp.response.get_header().has_error() {
@@ -741,7 +745,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                                 Some(region_id)
                             };
                             if tx.send(resp).is_err() {
-                                error!("cdc send tso response failed");
+                                error!("cdc send tso response failed"; "region_id" => region_id);
                             }
                         }))),
                     ) {
@@ -753,12 +757,19 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                         };
                         if let Err(e) = scheduler_clone.schedule(Task::Deregister(deregister)) {
                             error!("schedule cdc task failed"; "error" => ?e);
-                            return None;
                         }
+                        return None;
                     }
-                    rx.await.unwrap_or(None)
-                }
-            }).collect();
+                        rx.await.unwrap_or(None)
+                    }
+                })
+                .collect();
+            match scheduler.schedule(Task::RegisterMinTsEvent) {
+                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                // advance normally.
+                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
+            }
             let resps = futures::future::join_all(regions).await;
             let regions = resps
                 .into_iter()
@@ -771,12 +782,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     // advance normally.
                     Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
                 }
-            }
-            match scheduler.schedule(Task::RegisterMinTsEvent) {
-                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
-                // advance normally.
-                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
             }
         };
         self.tso_worker.spawn(fut);
