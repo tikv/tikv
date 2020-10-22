@@ -198,19 +198,19 @@ impl RaftEngine for RaftLogEngine {
                 .with_label_values(&[instance, "write_max"])
                 .set(statistic.max_write_cost as f64);
 
-            STORE_ENGINE_WRITE_WAL_TIME_VEC
-                .with_label_values(&[instance, "write_wal_micros_average"])
-                .set((statistic.wal_cost / statistic.freq) as f64);
-            STORE_ENGINE_WRITE_WAL_TIME_VEC
-                .with_label_values(&[instance, "write_wal_micros_max"])
-                .set(statistic.max_wal_cost as f64);
-
-            STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
-                .with_label_values(&[instance, "wal_file_sync_average"])
-                .set((statistic.sync_cost / statistic.freq) as f64);
             STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
                 .with_label_values(&[instance, "wal_file_sync_max"])
                 .set(statistic.max_sync_cost as f64);
+            STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[instance, "wal_file_sync_average"])
+                .set(statistic.avg_sync_cost as f64);
+
+            STORE_ENGINE_WRITE_WAL_TIME_VEC
+                .with_label_values(&[instance, "write_wal_micros_max"])
+                .set(statistic.max_wal_cost as f64);
+            STORE_ENGINE_WRITE_WAL_TIME_VEC
+                .with_label_values(&[instance, "write_wal_micros_average"])
+                .set(statistic.avg_wal_cost as f64);
         }
     }
 
