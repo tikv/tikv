@@ -208,11 +208,19 @@ impl Config {
                     ));
                 }
             } else {
-                info!(
-                    "no advertise-status-addr is specified, falling back to status-addr";
-                    "status-addr" => %self.status_addr
-                );
-                self.advertise_status_addr = self.status_addr.clone();
+                if !self.status_addr.starts_with("0.0.0.0") {
+                    info!(
+                        "no advertise-status-addr is specified, falling back to status-addr";
+                        "status-addr" => %self.status_addr
+                    );
+                    self.advertise_status_addr = self.status_addr.clone();
+                } else {
+                    info!(
+                        "no advertise-status-addr is specified, and we can't falling back to \
+                        status-addr because it is invalid as advertise-status-addr";
+                        "status-addr" => %self.status_addr
+                    );
+                }
             }
         }
         if self.advertise_status_addr == self.advertise_addr {
@@ -342,16 +350,18 @@ mod tests {
 
         invalid_cfg = Config::default();
         invalid_cfg.status_addr = "0.0.0.0:1000".to_owned();
-        invalid_cfg.validate().unwrap();
+        for _ in 0..10 {
+            invalid_cfg.validate().unwrap();
+        }
         invalid_cfg.advertise_status_addr = "0.0.0.0:1000".to_owned();
         assert!(invalid_cfg.validate().is_err());
 
-        let mut invalid_cfg = cfg.clone();
+        invalid_cfg = Config::default();
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.advertise_status_addr = "127.0.0.1:1000".to_owned();
         assert!(invalid_cfg.validate().is_err());
 
-        let mut invalid_cfg = cfg.clone();
+        invalid_cfg = Config::default();
         invalid_cfg.grpc_stream_initial_window_size = ReadableSize(i32::MAX as u64 + 1);
         assert!(invalid_cfg.validate().is_err());
 
