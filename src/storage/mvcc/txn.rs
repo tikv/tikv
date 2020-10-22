@@ -1310,6 +1310,7 @@ mod tests {
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
         )
         .unwrap();
         assert!(txn.write_size() > 0);
@@ -1355,6 +1356,7 @@ mod tests {
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
         )
         .is_err());
 
@@ -1369,6 +1371,7 @@ mod tests {
             true,
             0,
             0,
+            TimeStamp::default(),
             TimeStamp::default(),
         )
         .is_ok());
@@ -1585,6 +1588,7 @@ mod tests {
                     expected_lock_info.get_lock_ttl(),
                     TimeStamp::zero(),
                     expected_lock_info.get_txn_size(),
+                    TimeStamp::zero(),
                     TimeStamp::zero(),
                     false,
                 );
@@ -1850,6 +1854,7 @@ mod tests {
                     start_ts.into(),
                     0,
                     TimeStamp::zero(),
+                    TimeStamp::zero(),
                     false,
                 )
                 .unwrap();
@@ -1862,6 +1867,7 @@ mod tests {
                     false,
                     0,
                     0,
+                    TimeStamp::default(),
                     TimeStamp::default(),
                 )
                 .unwrap();
@@ -1906,6 +1912,7 @@ mod tests {
                 false,
                 0,
                 4,
+                TimeStamp::zero(),
                 TimeStamp::zero(),
             )
             .unwrap();
@@ -1959,6 +1966,7 @@ mod tests {
                 4.into(),
                 4,
                 TimeStamp::zero(),
+                TimeStamp::zero(),
                 false,
             )
             .unwrap();
@@ -2011,6 +2019,7 @@ mod tests {
             0,
             4.into(),
             4,
+            TimeStamp::zero(),
             TimeStamp::zero(),
             false,
         )

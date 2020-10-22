@@ -1033,7 +1033,8 @@ fn main() {
     vlog::set_verbosity_level(1);
 
     let raw_key_hint: &'static str = "Raw key (generally starts with \"z\") in escaped form";
-    let version_info = tikv::tikv_version_info();
+    let build_timestamp = option_env!("TIKV_BUILD_TIME");
+    let version_info = tikv::tikv_version_info(build_timestamp);
 
     let mut app = App::new("TiKV Control (tikv-ctl)")
         .about("A tool for interacting with TiKV deployments.")

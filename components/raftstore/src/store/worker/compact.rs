@@ -10,7 +10,6 @@ use engine_traits::CF_WRITE;
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
-use engine_rocks::properties::get_range_entries_and_versions;
 
 type Key = Vec<u8>;
 
@@ -200,13 +199,12 @@ fn collect_ranges_need_compact(
     // contains too many RocksDB tombstones. TiKV will merge multiple neighboring ranges
     // that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
-    let cf = box_try!(engine.cf_handle(CF_WRITE));
     let mut compact_start = None;
     let mut compact_end = None;
     for range in ranges.windows(2) {
         // Get total entries and total versions in this range and checks if it needs to be compacted.
         if let Some((num_ent, num_ver)) =
-            get_range_entries_and_versions(engine, cf, &range[0], &range[1])
+            box_try!(engine.get_range_entries_and_versions(CF_WRITE, &range[0], &range[1]))
         {
             if need_compact(
                 num_ent,
@@ -251,25 +249,17 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
-    use engine_rocks::raw::Writable;
-    use engine_rocks::raw::DB;
-    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
-    use engine_rocks::raw_util::{new_engine, new_engine_opt, CFOptions};
-    use engine_rocks::util::get_cf_handle;
-    use engine_rocks::Compat;
-    use engine_traits::{CFHandleExt, Mutable, WriteBatchExt};
+    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
+    use engine_test::kv::KvTestEngine;
+    use engine_test::kv::{new_engine, new_engine_opt};
+    use engine_traits::{MiscExt, Mutable, SyncMutable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempfile::Builder;
 
-    use engine_rocks::get_range_entries_and_versions;
-    use engine_rocks::MvccPropertiesCollectorFactory;
     use keys::data_key;
-    use std::sync::Arc;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::*;
-
-    const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
 
     #[test]
     fn test_compact_range() {
@@ -278,36 +268,31 @@ mod tests {
             .tempdir()
             .unwrap();
         let db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
-        let db = Arc::new(db);
 
-        let mut runner = Runner::new(db.c().clone());
-
-        let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
+        let mut runner = Runner::new(db.clone());
 
         // Generate the first SST file.
-        let mut wb = db.c().write_batch();
+        let mut wb = db.write_batch();
         for i in 0..1000 {
             let k = format!("key_{}", i);
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.c().write(&wb).unwrap();
-        db.flush_cf(handle, true).unwrap();
+        db.write(&wb).unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
 
         // Generate another SST file has the same content with first SST file.
-        let mut wb = db.c().write_batch();
+        let mut wb = db.write_batch();
         for i in 0..1000 {
             let k = format!("key_{}", i);
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.c().write(&wb).unwrap();
-        db.flush_cf(handle, true).unwrap();
+        db.write(&wb).unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
 
         // Get the total SST files size.
-        let old_sst_files_size = db
-            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
-            .unwrap();
+        let old_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
 
         // Schedule compact range task.
         runner.run(Task::Compact {
@@ -318,65 +303,59 @@ mod tests {
         sleep(Duration::from_secs(5));
 
         // Get the total SST files size after compact range.
-        let new_sst_files_size = db
-            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
-            .unwrap();
+        let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
         assert!(old_sst_files_size > new_sst_files_size);
     }
 
-    fn mvcc_put(db: &DB, k: &[u8], v: &[u8], start_ts: TimeStamp, commit_ts: TimeStamp) {
-        let cf = get_cf_handle(db, CF_WRITE).unwrap();
+    fn mvcc_put(db: &KvTestEngine, k: &[u8], v: &[u8], start_ts: TimeStamp, commit_ts: TimeStamp) {
         let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
         let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
-        db.put_cf(cf, k.as_encoded(), &w.as_ref().to_bytes())
+        db.put_cf(CF_WRITE, k.as_encoded(), &w.as_ref().to_bytes())
             .unwrap();
     }
 
-    fn delete(db: &DB, k: &[u8], commit_ts: TimeStamp) {
-        let cf = get_cf_handle(db, CF_WRITE).unwrap();
+    fn delete(db: &KvTestEngine, k: &[u8], commit_ts: TimeStamp) {
         let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
-        db.delete_cf(cf, k.as_encoded()).unwrap();
+        db.delete_cf(CF_WRITE, k.as_encoded()).unwrap();
     }
 
-    fn open_db(path: &str) -> Arc<DB> {
+    fn open_db(path: &str) -> KvTestEngine {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(8);
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         let cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
             CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
             CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
-        Arc::new(new_engine_opt(path, db_opts, cfs_opts).unwrap())
+        new_engine_opt(path, db_opts, cfs_opts).unwrap()
     }
 
     #[test]
     fn test_check_space_redundancy() {
         let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
         let engine = open_db(tmp_dir.path().to_str().unwrap());
-        let cf = get_cf_handle(&engine, CF_WRITE).unwrap();
-        let cf2 = engine.c().cf_handle(CF_WRITE).unwrap();
 
         // mvcc_put 0..5
         for i in 0..5 {
             let (k, v) = (format!("k{}", i), format!("value{}", i));
             mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
         }
-        engine.flush_cf(cf, true).unwrap();
+        engine.flush_cf(CF_WRITE, true).unwrap();
 
         // gc 0..5
         for i in 0..5 {
             let k = format!("k{}", i);
             delete(&engine, k.as_bytes(), 2.into());
         }
-        engine.flush_cf(cf, true).unwrap();
+        engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (start, end) = (data_key(b"k0"), data_key(b"k5"));
-        let (entries, version) =
-            get_range_entries_and_versions(engine.c(), cf2, &start, &end).unwrap();
+        let (entries, version) = engine
+            .get_range_entries_and_versions(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
 
@@ -385,15 +364,18 @@ mod tests {
             let (k, v) = (format!("k{}", i), format!("value{}", i));
             mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
         }
-        engine.flush_cf(cf, true).unwrap();
+        engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = get_range_entries_and_versions(engine.c(), cf2, &s, &e).unwrap();
+        let (entries, version) = engine
+            .get_range_entries_and_versions(CF_WRITE, &s, &e)
+            .unwrap()
+            .unwrap();
         assert_eq!(entries, 5);
         assert_eq!(version, 5);
 
         let ranges_need_to_compact = collect_ranges_need_compact(
-            engine.c(),
+            &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
@@ -409,15 +391,18 @@ mod tests {
             let k = format!("k{}", i);
             delete(&engine, k.as_bytes(), 2.into());
         }
-        engine.flush_cf(cf, true).unwrap();
+        engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = get_range_entries_and_versions(engine.c(), cf2, &s, &e).unwrap();
+        let (entries, version) = engine
+            .get_range_entries_and_versions(CF_WRITE, &s, &e)
+            .unwrap()
+            .unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
 
         let ranges_need_to_compact = collect_ranges_need_compact(
-            engine.c(),
+            &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
