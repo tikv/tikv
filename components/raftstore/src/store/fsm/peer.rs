@@ -31,7 +31,7 @@ use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
 use raft_engine::RaftEngine;
 use tikv_util::collections::HashMap;
-use tikv_util::minitrace::Event;
+use tikv_util::minitrace::*;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -40,7 +40,7 @@ use txn_types::TxnExtra;
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
-use crate::store::fsm::store::{PollContext, StoreMeta};
+use crate::store::fsm::store::{PollContext, StoreMeta, TRACE_GUARDS};
 use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
 };
@@ -124,6 +124,7 @@ where
     request: Option<RaftCmdRequest>,
     callbacks: Vec<(Callback<E::Snapshot>, usize)>,
     txn_extra: TxnExtra,
+    trace_scopes: Vec<Scope>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -286,6 +287,7 @@ where
             batch_req_size: 0,
             callbacks: vec![],
             txn_extra: TxnExtra::default(),
+            trace_scopes: vec![],
         }
     }
 
@@ -313,7 +315,7 @@ where
         true
     }
 
-    fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
+    fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32, trace_scope: Scope) {
         let req_num = cmd.request.get_requests().len();
         let RaftCommand {
             mut request,
@@ -332,6 +334,7 @@ where
         self.callbacks.push((callback, req_num));
         self.batch_req_size += req_size;
         self.txn_extra.extend(&mut txn_extra);
+        self.trace_scopes.push(trace_scope);
     }
 
     fn should_finish(&self) -> bool {
@@ -348,15 +351,17 @@ where
         false
     }
 
-    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<E::Snapshot>> {
+    fn build(
+        &mut self,
+        metric: &mut RaftProposeMetrics,
+    ) -> Option<(RaftCommand<E::Snapshot>, Vec<Scope>)> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
                 let (cb, _) = self.callbacks.pop().unwrap();
-                return Some(RaftCommand::with_txn_extra(
-                    req,
-                    cb,
-                    std::mem::take(&mut self.txn_extra),
+                return Some((
+                    RaftCommand::with_txn_extra(req, cb, std::mem::take(&mut self.txn_extra)),
+                    std::mem::take(&mut self.trace_scopes),
                 ));
             }
             metric.batch += self.callbacks.len() - 1;
@@ -377,10 +382,9 @@ where
                     last_index = next_index;
                 }
             }));
-            return Some(RaftCommand::with_txn_extra(
-                req,
-                cb,
-                std::mem::take(&mut self.txn_extra),
+            return Some((
+                RaftCommand::with_txn_extra(req, cb, std::mem::take(&mut self.txn_extra)),
+                std::mem::take(&mut self.trace_scopes),
             ));
         }
         None
@@ -442,12 +446,10 @@ where
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMessage<EK>>) {
         for m in msgs.drain(..) {
+            TRACE_GUARDS.with(|g| g.borrow_mut().push(m.context.scope.start_scope()));
             match m.msg {
                 PeerMsg::RaftMessage(msg) => {
-                    let _g = m
-                        .context
-                        .trace_handle
-                        .trace_enable(Event::TiKvHandlePeerRaftMessage as u32);
+                    let _g = new_span("PeerMsg::RaftMessage");
                     if let Err(e) = self.on_raft_message(msg) {
                         error!(
                             "handle raft message err";
@@ -458,11 +460,8 @@ where
                         );
                     }
                 }
-                PeerMsg::RaftCommand(mut cmd) => {
-                    let _g = m
-                        .context
-                        .trace_handle
-                        .trace_enable(Event::TiKvHandlePeerRaftCommand as u32);
+                PeerMsg::RaftCommand(cmd) => {
+                    let _g = new_span("PeerMsg::RaftCommand");
                     self.ctx
                         .raft_metrics
                         .propose
@@ -470,23 +469,25 @@ where
                         .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
                     let req_size = cmd.request.compute_size();
                     if self.fsm.batch_req_builder.can_batch(&cmd.request, req_size) {
-                        // The batched command will execute in the future.
-                        // Instrument this command with a new tracing context.
-                        cmd.callback = cmd
-                            .callback
-                            .trace_instrument(Event::TiKvRaftStoreRaftCommand);
-
-                        self.fsm.batch_req_builder.add(cmd, req_size);
+                        self.fsm
+                            .batch_req_builder
+                            .add(cmd, req_size, m.context.scope.clone());
                         if self.fsm.batch_req_builder.should_finish() {
                             self.propose_batch_raft_command();
                         }
                     } else {
                         self.propose_batch_raft_command();
-                        self.propose_raft_command(cmd.request, cmd.callback, cmd.txn_extra)
+                        self.propose_raft_command(
+                            cmd.request,
+                            cmd.callback,
+                            cmd.txn_extra,
+                            vec![m.context.scope.clone()],
+                        )
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes { res } => {
+                    let _g = new_span("PeerMsg::ApplyRes");
                     self.on_apply_res(res);
                 }
                 PeerMsg::SignificantMsg(msg) => self.on_significant_msg(msg),
@@ -506,12 +507,12 @@ where
     }
 
     fn propose_batch_raft_command(&mut self) {
-        if let Some(cmd) = self
+        if let Some((cmd, trace_scopes)) = self
             .fsm
             .batch_req_builder
             .build(&mut self.ctx.raft_metrics.propose)
         {
-            self.propose_raft_command(cmd.request, cmd.callback, cmd.txn_extra)
+            self.propose_raft_command(cmd.request, cmd.callback, cmd.txn_extra, trace_scopes)
         }
     }
 
@@ -741,6 +742,8 @@ where
                 )
             })),
             TxnExtra::default(),
+            // TODO: trace scope
+            vec![],
         );
     }
 
@@ -838,7 +841,7 @@ where
             self.region().get_region_epoch().clone(),
             self.fsm.peer.peer.clone(),
         );
-        self.propose_raft_command(msg, cb, TxnExtra::default());
+        self.propose_raft_command(msg, cb, TxnExtra::default(), vec![]);
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {
@@ -873,6 +876,7 @@ where
     }
 
     #[inline]
+    #[trace("PeerFsmDelegate::handle_raft_ready_apply")]
     pub fn handle_raft_ready_apply(&mut self, ready: &mut Ready, invoke_ctx: &InvokeContext) {
         self.fsm.early_apply = ready
             .committed_entries
@@ -889,6 +893,7 @@ where
             .handle_raft_ready_apply(self.ctx, ready, invoke_ctx);
     }
 
+    #[trace("PeerFsmDelegate::post_raft_ready_append")]
     pub fn post_raft_ready_append(&mut self, mut ready: Ready, invoke_ctx: InvokeContext) {
         let is_merging = self.fsm.peer.pending_merge_state.is_some();
         if !self.fsm.early_apply {
@@ -1085,6 +1090,7 @@ where
         fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
+                let _g = new_span("ApplyTaskRes::Apply");
                 debug!(
                     "async apply finish";
                     "region_id" => self.region_id(),
@@ -1110,6 +1116,7 @@ where
                 peer_id,
                 merge_from_snapshot,
             } => {
+                let _g = new_span("ApplyTaskRes::Destroy");
                 assert_eq!(peer_id, self.fsm.peer.peer_id());
                 if !merge_from_snapshot {
                     self.destroy_peer(false);
@@ -1890,6 +1897,7 @@ where
         }
     }
 
+    #[trace("PeerFsmDelegate::on_ready_change_peer")]
     fn on_ready_change_peer(&mut self, cp: ChangePeer) {
         if cp.conf_change.get_node_id() == raft::INVALID_ID {
             // Apply failed, skip.
@@ -1993,6 +2001,7 @@ where
         }
     }
 
+    #[trace("PeerFsmDelegate::on_ready_compact_log")]
     fn on_ready_compact_log(&mut self, first_index: u64, state: RaftTruncatedState) {
         let total_cnt = self.fsm.peer.last_applying_idx - first_index;
         // the size of current CompactLog command can be ignored.
@@ -2017,6 +2026,7 @@ where
         }
     }
 
+    #[trace("PeerFsmDelegate::on_ready_split_region")]
     fn on_ready_split_region(
         &mut self,
         derived: metapb::Region,
@@ -2192,6 +2202,7 @@ where
         }
     }
 
+    #[trace("PeerFsmDelegate::register_merge_check_tick")]
     fn register_merge_check_tick(&mut self) {
         self.schedule_tick(
             PeerTicks::CHECK_MERGE,
@@ -2418,7 +2429,7 @@ where
             request.set_admin_request(admin);
             request
         };
-        self.propose_raft_command(req, Callback::None, TxnExtra::default());
+        self.propose_raft_command(req, Callback::None, TxnExtra::default(), vec![]);
     }
 
     fn on_check_merge(&mut self) {
@@ -2484,6 +2495,7 @@ where
         }
     }
 
+    #[trace("PeerFsmDelegate::on_ready_prepare_merge")]
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -2572,6 +2584,7 @@ where
         self.fsm.peer.catch_up_logs = Some(catch_up_logs);
     }
 
+    #[trace("PeerFsmDelegate::on_ready_commit_merge")]
     fn on_ready_commit_merge(&mut self, region: metapb::Region, source: metapb::Region) {
         self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -2644,6 +2657,7 @@ where
     /// If commit is 0, it means that Merge is rollbacked by a snapshot; otherwise
     /// it's rollbacked by a proposal, and its value should be equal to the commit
     /// index of previous PrepareMerge.
+    #[trace("PeerFsmDelegate::on_ready_rollback_merge")]
     fn on_ready_rollback_merge(&mut self, commit: u64, region: Option<metapb::Region>) {
         let pending_commit = self
             .fsm
@@ -2883,6 +2897,7 @@ where
         }
     }
 
+    #[trace("PeerFsmDelegate::on_ready_result")]
     fn on_ready_result(
         &mut self,
         exec_results: &mut VecDeque<ExecResult<EK::Snapshot>>,
@@ -2995,6 +3010,7 @@ where
         Ok(())
     }
 
+    #[trace("PeerFsmDelegate::pre_propose_raft_command")]
     fn pre_propose_raft_command(
         &mut self,
         msg: &RaftCmdRequest,
@@ -3085,6 +3101,7 @@ where
         mut msg: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
         txn_extra: TxnExtra,
+        trace_scopes: Vec<Scope>,
     ) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
@@ -3131,7 +3148,11 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        if self.fsm.peer.propose(self.ctx, cb, msg, resp, txn_extra) {
+        if self
+            .fsm
+            .peer
+            .propose(self.ctx, cb, msg, resp, txn_extra, trace_scopes)
+        {
             self.fsm.has_ready = true;
         }
 
@@ -3264,7 +3285,7 @@ where
         let region_id = self.fsm.peer.region().get_id();
         let request =
             new_compact_log_request(region_id, self.fsm.peer.peer.clone(), compact_idx, term);
-        self.propose_raft_command(request, Callback::None, TxnExtra::default());
+        self.propose_raft_command(request, Callback::None, TxnExtra::default(), vec![]);
 
         self.register_raft_gc_log_tick();
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
@@ -3625,6 +3646,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    #[trace("PeerFsmDelegate::on_ready_compute_hash")]
     fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EK::Snapshot) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
@@ -3644,10 +3666,12 @@ where
         }
     }
 
+    #[trace("PeerFsmDelegate::on_ready_compute_hash")]
     fn on_ready_verify_hash(&mut self, expected_index: u64, expected_hash: Vec<u8>) {
         self.verify_and_store_hash(expected_index, expected_hash);
     }
 
+    #[trace("PeerFsmDelegate::on_hash_computed")]
     fn on_hash_computed(&mut self, index: u64, hash: Vec<u8>) {
         if !self.verify_and_store_hash(index, hash) {
             return;
@@ -3658,9 +3682,10 @@ where
             self.fsm.peer.peer.clone(),
             &self.fsm.peer.consistency_state,
         );
-        self.propose_raft_command(req, Callback::None, TxnExtra::default());
+        self.propose_raft_command(req, Callback::None, TxnExtra::default(), vec![]);
     }
 
+    #[trace("PeerFsmDelegate::on_ingest_sst_result")]
     fn on_ingest_sst_result(&mut self, ssts: Vec<SstMeta>) {
         for sst in &ssts {
             self.fsm.peer.size_diff_hint += sst.get_length();
@@ -3854,6 +3879,7 @@ where
     // to another file later.
     // Unlike other commands (write or admin), status commands only show current
     // store status, so no need to handle it in raft group.
+    #[trace("PeerFsmDelegate::execute_status_command")]
     fn execute_status_command(&mut self, request: &RaftCmdRequest) -> Result<RaftCmdResponse> {
         let cmd_type = request.get_status_request().get_cmd_type();
 
@@ -3912,6 +3938,7 @@ mod tests {
     use protobuf::Message;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use tikv_util::minitrace::Scope;
 
     #[test]
     fn test_batch_raft_cmd_request_builder() {
@@ -3979,7 +4006,7 @@ mod tests {
             }));
             response.mut_responses().push(Response::default());
             let cmd = RaftCommand::new(req.clone(), cb);
-            builder.add(cmd, 100);
+            builder.add(cmd, 100, Scope::default());
         }
         let cmd = builder.build(&mut metric).unwrap();
         assert_eq!(10, cmd.request.get_requests().len());

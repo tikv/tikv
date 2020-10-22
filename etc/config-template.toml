@@ -902,7 +902,7 @@
 [tracing]
 ## Jaeger agent to report minitrace tracing results
 ## Commomly, it's set to "127.0.0.1:6831".
-# jaeger-thrift-compact-agent = ""
+jaeger-thrift-compact-agent = "127.0.0.1:6831"
 
 ## Number of threads for reporting tracing results to jaeger-agent
 ## Ignored if jaeger-agent is empty.
@@ -911,7 +911,7 @@
 ## Threshold to determine whether to report tracing results to jaeger-agent or not.
 ## The tracing results will be reported if the duration of a traced procedure larger
 ## than duration-threshold.
-# duration-threshold = "100ms"
+duration-threshold = "0ms"
 
 ## The maximum number of spans to report with each invocation. If the number of spans producing
 ## by a traced procedure greater than spans-max-length, it will be truncated to this amount.

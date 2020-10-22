@@ -55,7 +55,8 @@ use std::{
     iter,
     sync::{atomic, Arc},
 };
-use tikv_util::minitrace::{self, new_span, prelude::*, Event};
+use tikv_util::minitrace::future::FutureExt;
+use tikv_util::minitrace::*;
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
 use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
@@ -211,7 +212,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         kv::snapshot(engine, read_id, ctx)
             .map_err(txn::Error::from)
             .map_err(Error::from)
-            .trace_async(Event::TiKvSnapshot as u32)
+            .in_new_span("Storage::snapshot")
     }
 
     pub fn release_snapshot(&self) {
@@ -219,7 +220,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     #[inline]
-    #[minitrace::trace(Event::TiKvTlsEngine as u32)]
+    #[trace("Storage::with_tls_engine")]
     fn with_tls_engine<F, R>(f: F) -> R
     where
         F: FnOnce(&E) -> R,
@@ -724,7 +725,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(())
     }
 
-    #[minitrace::trace(Event::TiKvRawGetKeyValue as u32)]
+    #[trace("Storage::raw_get_key_value")]
     fn raw_get_key_value<S: Snapshot>(
         snapshot: &S,
         cf: String,
@@ -760,7 +761,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 {
-                    let _g = new_span(Event::TiKvCollectMetrics as u32);
+                    let _g = new_span("raw_get.collect_metric");
 
                     tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
                     KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -778,7 +779,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let r = Self::raw_get_key_value(&snapshot, cf, key, &mut stats);
 
                 {
-                    let _g = new_span(Event::TiKvCollectMetrics as u32);
+                    let _g = new_span("raw_get.collect_metric");
 
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
@@ -792,7 +793,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 r
             }
-            .trace_task(Event::TiKvRawGetTask as u32),
+            .in_new_scope("Storage::raw_get"),
             priority,
             thread_rng().next_u64(),
         );

@@ -17,7 +17,7 @@ use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_LEN};
 use tidb_query_datatype::codec::{datum, table};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tikv_util::minitrace::{self, Event};
+use tikv_util::minitrace::*;
 
 use DecodeHandleStrategy::*;
 
@@ -118,8 +118,8 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     }
 
     #[inline]
+    #[trace("BatchIndexScanExecutor::next_batch")]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let _guard = minitrace::new_span(Event::TiKvCoprIndexScanExecutorNextBatch as u32);
         self.0.next_batch(scan_rows)
     }
 

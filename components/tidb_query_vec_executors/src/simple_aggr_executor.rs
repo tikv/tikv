@@ -17,7 +17,7 @@ use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalConfig;
 use tidb_query_vec_aggr::*;
 use tidb_query_vec_expr::RpnStackNode;
-use tikv_util::minitrace::{self, Event};
+use tikv_util::minitrace::*;
 
 pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, SimpleAggregationImpl>,
@@ -32,8 +32,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     }
 
     #[inline]
+    #[trace("BatchSimpleAggregationExecutor::next_batch")]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let _guard = minitrace::new_span(Event::TiKvCoprSimpleAggrExecutorNextBatch as u32);
         self.0.next_batch(scan_rows)
     }
 

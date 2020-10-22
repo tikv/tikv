@@ -63,6 +63,7 @@ use super::util::{
     ADMIN_CMD_EPOCH_MAP, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
 };
 use super::DestroyPeerJob;
+use tikv_util::minitrace::*;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
@@ -1873,6 +1874,7 @@ where
         }
     }
 
+    #[trace("Peer::post_apply")]
     pub fn post_apply<T, C>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T, C>,
@@ -2023,6 +2025,7 @@ where
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
         txn_extra: TxnExtra,
+        trace_scopes: Vec<Scope>,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -2043,7 +2046,9 @@ where
                 self.read_local(ctx, req, cb);
                 return false;
             }
-            Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
+            Ok(RequestPolicy::ReadIndex) => {
+                return self.read_index(ctx, req, err_resp, cb, trace_scopes)
+            }
             Ok(RequestPolicy::ProposeNormal) => self.propose_normal(ctx, req),
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
@@ -2079,6 +2084,7 @@ where
                     cb,
                     txn_extra,
                     renew_lease_time: None,
+                    trace_scopes,
                 };
                 if let Some(cmd_type) = req_admin_cmd_type {
                     self.cmd_epoch_checker
@@ -2352,6 +2358,7 @@ where
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
         cb: Callback<EK::Snapshot>,
+        trace_scopes: Vec<Scope>,
     ) -> bool {
         if let Err(e) = self.pre_read_index() {
             debug!(
@@ -2461,6 +2468,7 @@ where
                     cb: Callback::None,
                     txn_extra: TxnExtra::default(),
                     renew_lease_time: Some(renew_lease_time),
+                    trace_scopes,
                 };
                 self.post_propose(poll_ctx, p);
             }
@@ -3639,6 +3647,7 @@ mod tests {
                 cb: Callback::None,
                 txn_extra: TxnExtra::default(),
                 renew_lease_time,
+                trace_scope: Scope::default(),
             });
         }
         for remove_i in &[0, 65, 98] {

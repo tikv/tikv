@@ -15,7 +15,6 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
-use tikv_util::minitrace::{self, prelude::*, Event};
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 
 use crate::read_pool::ReadPoolHandle;
@@ -31,6 +30,7 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
+use tikv_util::minitrace::future::FutureExt;
 use txn_types::Lock;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
@@ -434,10 +434,7 @@ impl<E: Engine> Endpoint<E> {
         self.read_pool
             .spawn_handle(
                 Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                    .trace_task_fine(
-                        Event::TiKvCoprTaskPending as u32,
-                        Event::TiKvCoprHandleRequest as u32,
-                    ),
+                    .in_new_scope("Endpoint.handle_unary_request_impl"),
                 priority,
                 task_id,
             )
@@ -454,7 +451,7 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let guard = minitrace::new_span(Event::TiKvCoprParseRequest as u32);
+        let guard = tikv_util::minitrace::new_span("Endpoint::parse_and_handle_unary_request");
         let req_builder_result = self.parse_request_and_check_memory_locks(req, peer, false);
         drop(guard);
         let result_of_future = req_builder_result

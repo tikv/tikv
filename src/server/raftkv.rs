@@ -27,7 +27,7 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
-use tikv_util::minitrace::{self, new_span, Event};
+use tikv_util::minitrace::*;
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
 
@@ -137,7 +137,7 @@ fn check_raft_cmd_response(resp: &mut RaftCmdResponse, req_cnt: usize) -> Result
     Ok(())
 }
 
-#[minitrace::trace(Event::TiKvRaftStoreOnWriteResult as u32)]
+#[trace("RaftKv::on_write_result")]
 fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
     let cb_ctx = new_ctx(&write_resp.response);
     if let Err(e) = check_raft_cmd_response(&mut write_resp.response, req_cnt) {
@@ -147,6 +147,7 @@ fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext,
     (cb_ctx, Ok(CmdRes::Resp(resps.into())))
 }
 
+#[trace("RaftKv::on_read_result")]
 fn on_read_result(
     mut read_resp: ReadResponse<RocksSnapshot>,
     req_cnt: usize,
@@ -206,7 +207,7 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
             .map_err(From::from)
     }
 
-    #[minitrace::trace(Event::TiKvRaftKvExecWriteRequests as u32)]
+    #[trace("RaftKv::exec_write_requests")]
     fn exec_write_requests(
         &self,
         ctx: &Context,
@@ -316,7 +317,7 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         write_modifies(&self.engine, modifies)
     }
 
-    #[minitrace::trace(Event::TiKvRaftKvAsyncWrite as u32)]
+    #[trace("RaftKv::async_write")]
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
         if batch.modifies.is_empty() {
@@ -367,7 +368,7 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
             reqs,
             batch.extra,
             Box::new(move |(cb_ctx, res)| {
-                let _g = new_span(Event::TiKvRaftKvExecWriteRequestsCallback as u32);
+                let _g = new_span("RaftKv::async_write.callback");
                 match res {
                     Ok(CmdRes::Resp(_)) => {
                         ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
@@ -410,22 +411,25 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
             read_id,
             ctx,
             req,
-            Box::new(move |(cb_ctx, res)| match res {
-                Ok(CmdRes::Resp(r)) => cb((
-                    cb_ctx,
-                    Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()),
-                )),
-                Ok(CmdRes::Snap(s)) => {
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .snapshot
-                        .observe(begin_instant.elapsed_secs());
-                    ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                    cb((cb_ctx, Ok(s)))
-                }
-                Err(e) => {
-                    let status_kind = get_status_kind_from_engine_error(&e);
-                    ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
-                    cb((cb_ctx, Err(e)))
+            Box::new(move |(cb_ctx, res)| {
+                let _g = new_span("RaftKv::async_snapshot.callback");
+                match res {
+                    Ok(CmdRes::Resp(r)) => cb((
+                        cb_ctx,
+                        Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()),
+                    )),
+                    Ok(CmdRes::Snap(s)) => {
+                        ASYNC_REQUESTS_DURATIONS_VEC
+                            .snapshot
+                            .observe(begin_instant.elapsed_secs());
+                        ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
+                        cb((cb_ctx, Ok(s)))
+                    }
+                    Err(e) => {
+                        let status_kind = get_status_kind_from_engine_error(&e);
+                        ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
+                        cb((cb_ctx, Err(e)))
+                    }
                 }
             }),
         )

@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
@@ -60,6 +61,7 @@ use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
 use crate::{observe_perf_context_type, report_perf_context, Error, Result};
 
 use super::metrics::*;
+use tikv_util::minitrace::*;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -451,9 +453,11 @@ where
 
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
+    #[trace("ApplyContext::write_to_db")]
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.enable_sync_log && self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
+            let _g = new_span("ApplyContext::write_to_db.kv.write_to_engine");
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
             self.kv_wb()
@@ -527,6 +531,7 @@ where
 
     /// Flush all pending writes to engines.
     /// If it returns true, all pending writes are persisted in engines.
+    #[trace("ApplyContext::flush")]
     pub fn flush(&mut self) -> bool {
         // TODO: this check is too hacky, need to be more verbose and less buggy.
         let t = match self.timer.take() {
@@ -809,6 +814,7 @@ where
     }
 
     /// Handles all the committed_entries, namely, applies the committed entries.
+    #[trace("ApplyDelegate::handle_raft_committed_entries")]
     fn handle_raft_committed_entries<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -1021,6 +1027,7 @@ where
         (None, TxnExtra::default())
     }
 
+    #[trace("ApplyDelegate::process_raft_cmd")]
     fn process_raft_cmd<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -2476,6 +2483,7 @@ where
     /// `renew_lease_time` contains the last time when a peer starts to renew lease.
     pub renew_lease_time: Option<Timespec>,
     pub txn_extra: TxnExtra,
+    pub trace_scopes: Vec<Scope>,
 }
 
 pub struct Destroy {
@@ -2756,6 +2764,7 @@ where
     }
 
     /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
+    #[trace("ApplyFsm::handle_apply")]
     fn handle_apply<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -2807,6 +2816,7 @@ where
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
+    #[trace("ApplyFsm::append_proposal")]
     fn append_proposal(&mut self, props_drainer: Drain<Proposal<EK::Snapshot>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = props_drainer.len();
@@ -3092,6 +3102,16 @@ where
         loop {
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
+                    TRACE_GUARDS.with(|g| {
+                        g.borrow_mut().extend(
+                            apply
+                                .cbs
+                                .iter()
+                                .map(|p| p.trace_scopes.iter().map(|s| s.start_scope()))
+                                .flatten(),
+                        )
+                    });
+                    let _g = new_span("apply::Msg::Apply");
                     if channel_timer.is_none() {
                         channel_timer = Some(start);
                     }
@@ -3187,6 +3207,10 @@ where
     cfg_tracker: Tracker<Config>,
 }
 
+thread_local! {
+    static TRACE_GUARDS: RefCell<Vec<LocalScopeGuard>> = RefCell::new(vec![]);
+}
+
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
 where
     EK: KvEngine,
@@ -3274,6 +3298,7 @@ where
                 fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
             }
         }
+        TRACE_GUARDS.with(|g| g.borrow_mut().clear());
     }
 }
 
@@ -3377,6 +3402,7 @@ impl<EK> ApplyRouter<EK>
 where
     EK: KvEngine,
 {
+    #[trace("ApplyRouter::schedule_task")]
     pub fn schedule_task(&self, region_id: u64, msg: Msg<EK>) {
         let reg = match self.try_send(region_id, msg) {
             Either::Left(Ok(())) => return,
@@ -3685,6 +3711,7 @@ mod tests {
             cb,
             renew_lease_time: None,
             txn_extra: TxnExtra::default(),
+            trace_scopes: vec![],
         }
     }
 
@@ -4956,7 +4983,8 @@ mod tests {
     #[test]
     fn pending_cmd_leak() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None, TxnExtra::default());
+            let _cmd =
+                PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None, TxnExtra::default(), vec![]);
         });
         res.unwrap_err();
     }
@@ -4964,7 +4992,8 @@ mod tests {
     #[test]
     fn pending_cmd_leak_dtor_not_abort() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None, TxnExtra::default());
+            let _cmd =
+                PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None, TxnExtra::default(), vec![]);
             panic!("Don't abort");
             // It would abort and fail if there was a double-panic in PendingCmd dtor.
         });

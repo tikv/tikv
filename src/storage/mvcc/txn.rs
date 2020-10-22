@@ -9,6 +9,7 @@ use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use std::{cmp, fmt};
+use tikv_util::minitrace::*;
 use txn_types::{
     is_short_value, Key, Lock, LockType, Mutation, MutationType, OldValue, TimeStamp, TxnExtra,
     Value, Write, WriteType,
@@ -703,6 +704,7 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
+    #[trace("MvccTxn::prewrite")]
     pub fn prewrite(
         &mut self,
         mutation: Mutation,
@@ -802,6 +804,7 @@ impl<S: Snapshot> MvccTxn<S> {
         )
     }
 
+    #[trace("MvccTxn::commit")]
     pub fn commit(&mut self, key: Key, commit_ts: TimeStamp) -> Result<Option<ReleasedLock>> {
         fail_point!("commit", |err| Err(make_txn_error(
             err,
@@ -897,6 +900,7 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(self.unlock_key(key, lock.is_pessimistic_txn()))
     }
 
+    #[trace("MvccTxn::rollback")]
     pub fn rollback(&mut self, key: Key) -> Result<Option<ReleasedLock>> {
         fail_point!("rollback", |err| Err(make_txn_error(
             err,

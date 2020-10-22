@@ -22,7 +22,6 @@ use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
-use tikv_util::minitrace::{self, Event};
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -75,22 +74,6 @@ impl<S> Callback<S>
 where
     S: Snapshot,
 {
-    #[inline]
-    pub fn trace_instrument(self, event: Event) -> Self {
-        let handle = minitrace::trace_binder_fine(event as u32, Event::TiKvCallbackPending as u32);
-        match self {
-            Callback::None => self,
-            Callback::Read(cb) => Callback::Read(Box::new(move |r| {
-                let _g = handle.trace_enable(event as u32);
-                cb(r)
-            })),
-            Callback::Write(cb) => Callback::Write(Box::new(move |w| {
-                let _g = handle.trace_enable(event as u32);
-                cb(w)
-            })),
-        }
-    }
-
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
             Callback::None => (),
@@ -366,7 +349,7 @@ impl<S: Snapshot> RaftCommand<S> {
 }
 
 pub struct Context {
-    pub trace_handle: minitrace::TraceHandle,
+    pub scope: tikv_util::minitrace::Scope,
 }
 
 /// Message that can be sent to a peer.
@@ -409,10 +392,7 @@ impl<EK: KvEngine> From<PeerMsg<EK>> for PeerMessage<EK> {
         Self {
             msg,
             context: Context {
-                trace_handle: minitrace::trace_binder_fine(
-                    Event::TiKvPeerMessage as u32,
-                    Event::TiKvPeerMessageDispatching as u32,
-                ),
+                scope: tikv_util::minitrace::spawn_scope("PeerMessage"),
             },
         }
     }
@@ -486,10 +466,7 @@ impl From<StoreMsg> for StoreMessage {
         Self {
             msg,
             context: Context {
-                trace_handle: minitrace::trace_binder_fine(
-                    Event::TiKvStoreMessage as u32,
-                    Event::TiKvStoreMessageDispatching as u32,
-                ),
+                scope: tikv_util::minitrace::spawn_scope("StoreMessage"),
             },
         }
     }

@@ -28,7 +28,7 @@ use crate::Result;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use tikv_util::collections::HashMap;
-use tikv_util::minitrace::{self, Event};
+use tikv_util::minitrace::*;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};
 
@@ -427,7 +427,7 @@ where
         }
     }
 
-    #[minitrace::trace(Event::TiKvProposeReadRaftCommand as u32)]
+    #[trace("LocalReader::propose_raft_command")]
     pub fn propose_raft_command(
         &mut self,
         mut read_id: Option<ThreadReadId>,

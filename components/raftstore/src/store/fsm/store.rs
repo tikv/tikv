@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
@@ -34,7 +35,6 @@ use raft_engine::{RaftEngine, RaftLogBatch};
 use sst_importer::SSTImporter;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::minitrace::Event;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
@@ -72,6 +72,7 @@ use crate::store::{
 };
 use crate::Result;
 use concurrency_manager::ConcurrencyManager;
+use tikv_util::minitrace::*;
 
 type Key = Vec<u8>;
 
@@ -555,13 +556,11 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
 
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMessage>) {
         for m in msgs.drain(..) {
+            TRACE_GUARDS.with(|g| g.borrow_mut().push(m.context.scope.start_scope()));
             match m.msg {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
-                    let _g = m
-                        .context
-                        .trace_handle
-                        .trace_enable(Event::TiKvHandleStoreRaftMessage as u32);
+                    let _g = new_span("StoreMsg::RaftMessage");
                     if let Err(e) = self.on_raft_message(msg) {
                         error!(
                             "handle raft message failed";
@@ -618,7 +617,12 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     cfg_tracker: Tracker<Config>,
 }
 
+thread_local! {
+    pub(super) static TRACE_GUARDS: RefCell<Vec<LocalScopeGuard>> = RefCell::new(vec![]);
+}
+
 impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER, T, C> {
+    #[trace("RaftPoller::handle_raft_ready")]
     fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
@@ -626,11 +630,14 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
         if self.poll_ctx.need_flush_trans
             && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
         {
+            let _g = new_span("RaftPoller::trans.flush");
             self.poll_ctx.trans.flush();
             self.poll_ctx.need_flush_trans = false;
         }
         let ready_cnt = self.poll_ctx.ready_res.len();
         if ready_cnt != 0 && self.poll_ctx.cfg.early_apply {
+            let _g = new_span("RaftPoller::handle_ready_res");
+
             let mut batch_pos = 0;
             let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, vec![]);
             for (ready, invoke_ctx) in &mut ready_res {
@@ -649,6 +656,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
         fail_point!("raft_before_save");
         if !self.poll_ctx.kv_wb.is_empty() {
+            let _g = new_span("RaftPoller::engines.kv.write_opt");
+
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             self.poll_ctx
@@ -667,6 +676,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
         }
         fail_point!("raft_between_save");
         if !self.poll_ctx.raft_wb.is_empty() {
+            let _g = new_span("RaftPoller::engines.raft.consume_and_shrink");
+
             fail_point!(
                 "raft_before_save_on_store_1",
                 self.poll_ctx.store_id() == 1,
@@ -848,6 +859,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> PollHandler<PeerFs
             .observe(duration_to_sec(self.timer.elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
+        TRACE_GUARDS.with(|g| {
+            g.borrow_mut().clear();
+        });
     }
 
     fn pause(&mut self) {

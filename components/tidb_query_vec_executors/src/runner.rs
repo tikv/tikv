@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::deadline::Deadline;
-use tikv_util::minitrace::{prelude::*, Event};
 use tipb::StreamResponse;
 use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
@@ -28,6 +27,7 @@ const BATCH_INITIAL_SIZE: usize = 32;
 
 // TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
 pub use tidb_query_vec_expr::types::BATCH_MAX_SIZE;
+use tikv_util::minitrace::future::FutureExt;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
@@ -374,9 +374,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             let time_slice_len = time_slice_start.elapsed();
             // Check whether we should yield from the execution
             if time_slice_len > MAX_TIME_SLICE {
-                reschedule()
-                    .trace_async(Event::TiKvCoprHandleRequestReschedule as u32)
-                    .await;
+                reschedule().in_new_span("reschedule").await;
                 time_slice_start = Instant::now();
             }
 
