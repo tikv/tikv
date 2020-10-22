@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::marker::PhantomData;
 
 use futures::future::{Future, TryFutureExt};
 use futures::sink::SinkExt;
@@ -19,7 +20,6 @@ use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb::TikvClient;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
-use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
@@ -292,7 +292,7 @@ where R: RaftStoreRouter<E> + 'static,
     }
 }
 
-pub struct Runner<R: RaftStoreRouter<RocksEngine> + 'static> {
+pub struct Runner<R, E> where R: RaftStoreRouter<E> + 'static, E: KvEngine {
     env: Arc<Environment>,
     snap_mgr: SnapManager,
     pool: Runtime,
@@ -301,16 +301,17 @@ pub struct Runner<R: RaftStoreRouter<RocksEngine> + 'static> {
     cfg: Arc<Config>,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
+    _engine: PhantomData<E>,
 }
 
-impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
+impl<R, E> Runner<R, E> where R: RaftStoreRouter<E> + 'static, E: KvEngine {
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: SnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<Config>,
-    ) -> Runner<R> {
+    ) -> Runner<R, E> {
         Runner {
             env,
             snap_mgr,
@@ -327,11 +328,12 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
             cfg,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
+            _engine: PhantomData,
         }
     }
 }
 
-impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable for Runner<R> {
+impl<R, E> Runnable for Runner<R, E> where R: RaftStoreRouter<E> + 'static, E: KvEngine {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
