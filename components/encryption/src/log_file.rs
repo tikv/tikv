@@ -1,11 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{BigEndian, ByteOrder};
-use kvproto::encryptionpb::{FileDictionary, FileInfo};
+use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
 
 use crate::encrypted_file::{Header, Version, TMP_FILE_SUFFIX};
+use crate::master_key::{Backend, PlaintextBackend};
 use crate::Result;
 
 use std::fs::{rename, File, OpenOptions};
@@ -113,37 +114,45 @@ impl LogFile {
         let mut f = OpenOptions::new()
             .read(true)
             .open(self.base.join(&self.name))?;
-        let mut file_dict = FileDictionary::default();
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
         let mut remained = buf.as_slice();
 
         // parse the file dictionary
-        let (_, content) = Header::parse(remained)?;
+        let (header, content) = Header::parse(remained)?;
         remained.consume(Header::SIZE + content.len());
-        file_dict.merge_from_bytes(content)?;
-
-        // parse the remained records
-        while !remained.is_empty() {
-            // If the parsing get errors, manual intervention is required to recover.
-            let (used_size, file_name, mode) = Self::parse_next_record(remained)?;
-            remained.consume(used_size);
-            match mode {
-                LogRecord::INSERT(info) => {
-                    file_dict.files.insert(file_name, info);
-                }
-                LogRecord::REMOVE => {
-                    let original = file_dict.files.remove(&file_name);
-                    if original.is_none() {
-                        return Err(box_err!(
-                            "Try to recovery from log file but remove a null entry, file name: {}",
-                            file_name
-                        ));
+        let mut file_dict = FileDictionary::default();
+        match header.version() {
+            Version::V1 => {
+                let mut encrypted_content = EncryptedContent::default();
+                encrypted_content.merge_from_bytes(content)?;
+                let content = PlaintextBackend::default().decrypt(&encrypted_content)?;
+                file_dict.merge_from_bytes(&content)?;
+            }
+            Version::V2 => {
+                file_dict.merge_from_bytes(content)?;
+                // parse the remained records
+                while !remained.is_empty() {
+                    // If the parsing get errors, manual intervention is required to recover.
+                    let (used_size, file_name, mode) = Self::parse_next_record(remained)?;
+                    remained.consume(used_size);
+                    match mode {
+                        LogRecord::INSERT(info) => {
+                            file_dict.files.insert(file_name, info);
+                        }
+                        LogRecord::REMOVE => {
+                            let original = file_dict.files.remove(&file_name);
+                            if original.is_none() {
+                                return Err(box_err!(
+                                    "Try to recovery from log file but remove a null entry, file name: {}",
+                                    file_name
+                                ));
+                            }
+                        }
                     }
                 }
             }
         }
-
         Ok(file_dict)
     }
 
@@ -299,11 +308,12 @@ impl LogFile {
 mod tests {
     use super::*;
     use crate::crypter::compat;
+    use crate::encrypted_file::EncryptedFile;
     use crate::Error;
     use kvproto::encryptionpb::EncryptionMethod;
 
     #[test]
-    fn test_log_file() {
+    fn test_log_file_normal() {
         let tempdir = tempfile::tempdir().unwrap();
         let mut log_file = LogFile::new(tempdir.path(), "test_log_file").unwrap();
         let info1 = create_file_info(1, EncryptionMethod::Aes256Ctr);
@@ -334,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn test_log_file_open_existed() {
+    fn test_log_file_existed() {
         let tempdir = tempfile::tempdir().unwrap();
         let mut log_file = LogFile::new(tempdir.path(), "test_log_file").unwrap();
 
@@ -348,10 +358,31 @@ mod tests {
     }
 
     #[test]
-    fn test_log_file_open_not_existed() {
+    fn test_log_file_not_existed() {
         let tempdir = tempfile::tempdir().unwrap();
         let ret = LogFile::open(tempdir.path(), "test_log_file");
         assert!(matches!(ret, Err(Error::Io(_))));
+    }
+
+    #[test]
+    fn test_log_file_update_from_v1() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let mut file_dict = FileDictionary::default();
+
+        let info1 = create_file_info(1, EncryptionMethod::Aes256Ctr);
+        let info2 = create_file_info(2, EncryptionMethod::Aes256Ctr);
+        file_dict.files.insert("f1".to_owned(), info1);
+        file_dict.files.insert("f2".to_owned(), info2);
+
+        let file = EncryptedFile::new(tempdir.path(), "test_log_file");
+        file.write(
+            &file_dict.write_to_bytes().unwrap(),
+            &PlaintextBackend::default(),
+        )
+        .unwrap();
+
+        let (_, file_dict_read) = LogFile::open(tempdir.path(), "test_log_file").unwrap();
+        assert_eq!(file_dict, file_dict_read);
     }
 
     fn create_file_info(id: u64, method: EncryptionMethod) -> FileInfo {

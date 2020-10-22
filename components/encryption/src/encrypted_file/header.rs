@@ -117,6 +117,10 @@ impl Header {
 
         buf.to_vec()
     }
+
+    pub fn version(&self) -> Version {
+        self.version
+    }
 }
 
 #[cfg(test)]
