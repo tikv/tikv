@@ -208,7 +208,7 @@ fn test_pipelined_pessimistic_lock() {
     let rockskv_async_write_fp = "rockskv_async_write";
     let rockskv_write_modifies_fp = "rockskv_write_modifies";
     let scheduler_async_write_finish_fp = "scheduler_async_write_finish";
-    let scheduler_pipelined_write_finish_fp = "scheduler_pipelined_write_finish";
+    let before_pipelined_write_finish_fp = "before_pipelined_write_finish";
 
     let storage = TestStorageBuilder::new(DummyLockManager {})
         .set_pipelined_pessimistic_lock(true)
@@ -310,9 +310,9 @@ fn test_pipelined_pessimistic_lock() {
     fail::remove(scheduler_async_write_finish_fp);
     delete_pessimistic_lock(&storage, key.clone(), 50, 50);
 
-    // Async write is finished before pipelined write due to thread scheduling.
-    // Storage should handle it properly.
-    fail::cfg(scheduler_pipelined_write_finish_fp, "pause").unwrap();
+    // The proposed callback, which is responsible for returning response, is not guaranteed to be
+    // invoked. In this case it should still be continued properly.
+    fail::cfg(before_pipelined_write_finish_fp, "return()").unwrap();
     storage
         .sched_txn_command(
             new_acquire_pessimistic_lock_command(
@@ -328,7 +328,7 @@ fn test_pipelined_pessimistic_lock() {
         )
         .unwrap();
     rx.recv().unwrap();
-    fail::remove(scheduler_pipelined_write_finish_fp);
+    fail::remove(before_pipelined_write_finish_fp);
     delete_pessimistic_lock(&storage, key, 60, 60);
 }
 
