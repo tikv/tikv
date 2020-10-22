@@ -1,23 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::f64::INFINITY;
-<<<<<<< HEAD
 use std::sync::{Arc, Mutex};
 
 use engine::rocks::util::compact_files_in_range;
 use engine::rocks::DB;
 use engine_rocks::util::ingest_maybe_slowdown_writes;
-use engine_traits::{name_to_cf, CF_DEFAULT, CF_WRITE};
+use engine_traits::{name_to_cf, CF_DEFAULT};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
-=======
-use std::sync::Arc;
-
-use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT};
-use futures::executor::{ThreadPool, ThreadPoolBuilder};
-use futures::{TryFutureExt, TryStreamExt};
->>>>>>> eefee83f4... importer: do not set in memory in importer sst writer (#8852)
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::errorpb;
 
@@ -395,7 +387,6 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         }
         let label = "write";
         let timer = Instant::now_coarse();
-<<<<<<< HEAD
         let import = Arc::clone(&self.importer);
         let engine = Arc::clone(&self.engine);
         let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
@@ -410,51 +401,9 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                                 Some(Chunk::Meta(m)) => m,
                                 _ => return Err(Error::InvalidChunk),
                             },
-=======
-        let import = self.importer.clone();
-        let engine = self.engine.clone();
-        let (rx, buf_driver) = create_stream_with_buffer(stream, self.cfg.stream_channel_window);
-        let mut rx = rx.map_err(Error::from);
-
-        let handle_task = async move {
-            let res = async move {
-                let first_req = rx.try_next().await?;
-                let meta = match first_req {
-                    Some(r) => match r.chunk {
-                        Some(Chunk::Meta(m)) => m,
-                        _ => return Err(Error::InvalidChunk),
-                    },
-                    _ => return Err(Error::InvalidChunk),
-                };
-
-                let writer = match import.new_writer::<E>(&engine, meta) {
-                    Ok(w) => w,
-                    Err(e) => {
-                        error!("build writer failed {:?}", e);
-                        return Err(Error::InvalidChunk);
-                    }
-                };
-                let writer = rx
-                    .try_fold(writer, |mut writer, req| async move {
-                        let start = Instant::now_coarse();
-                        let batch = match req.chunk {
-                            Some(Chunk::Batch(b)) => b,
->>>>>>> eefee83f4... importer: do not set in memory in importer sst writer (#8852)
                             _ => return Err(Error::InvalidChunk),
                         };
-                        let name = import.get_path(&meta);
-
-                        let default = <RocksEngine as SstExt>::SstWriterBuilder::new()
-                            .set_in_memory(true)
-                            .set_db(RocksEngine::from_ref(&engine))
-                            .set_cf(CF_DEFAULT)
-                            .build(&name.to_str().unwrap())?;
-                        let write = <RocksEngine as SstExt>::SstWriterBuilder::new()
-                            .set_in_memory(true)
-                            .set_db(RocksEngine::from_ref(&engine))
-                            .set_cf(CF_WRITE)
-                            .build(&name.to_str().unwrap())?;
-                        let writer = match import.new_writer::<RocksEngine>(default, write, meta) {
+                        let writer = match import.new_writer(RocksEngine::from_ref(&engine), meta) {
                             Ok(w) => w,
                             Err(e) => {
                                 error!("build writer failed {:?}", e);
