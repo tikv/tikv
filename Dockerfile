@@ -15,7 +15,21 @@
 # Attempt to clean and rebuild the cache to avoid 404s
 
 # To avoid rebuilds we first install all Cargo dependencies
-# This process requires running a wrapper script docker-build
+
+
+# The prepare image avoid ruining the cache of the builder
+FROM centos:7.6.1810 as prepare
+WORKDIR /tikv
+
+# This step will always ruin the cache
+# There isn't a way with docker to wildcard COPY and preserve the directory structure
+COPY . .
+RUN mkdir /output
+RUN for component in $(find . -type f -name 'Cargo.toml' -exec dirname {} \; | sort -u); do \
+     mkdir -p "/output/${component}/src" \
+  && touch "/output/${component}/src/lib.rs" \
+  && cp "${component}/Cargo.toml" "/output/${component}/Cargo.toml" \
+  ; done
 
 
 FROM centos:7.6.1810 as builder
@@ -43,17 +57,16 @@ ENV PATH /root/.cargo/bin/:$PATH
 # Install the Rust toolchain
 WORKDIR /tikv
 COPY rust-toolchain ./
-RUN rustup self update
-RUN rustup set profile minimal
-RUN rustup default $(cat "rust-toolchain")
+RUN rustup self update \
+  && rustup set profile minimal \
+  && rustup default $(cat "rust-toolchain")
 
 # For cargo
 COPY scripts ./scripts
 COPY etc ./etc
 COPY Cargo.lock ./Cargo.lock
 
-# This implies being run from ./scripts/docker-build
-COPY .docker/ ./
+COPY --from=prepare /output/ ./
 
 RUN mkdir -p ./cmd/src/bin && \
     echo 'fn main() {}' > ./cmd/src/bin/tikv-ctl.rs && \
