@@ -88,9 +88,9 @@ impl PrewritePessimistic {
             for_update_ts,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
             None,
             false,
-            TimeStamp::zero(),
             Context::default(),
         )
     }
@@ -101,7 +101,7 @@ impl PrewritePessimistic {
         primary: Vec<u8>,
         start_ts: TimeStamp,
         for_update_ts: TimeStamp,
-        one_pc_max_commit_ts: TimeStamp,
+        max_commit_ts: TimeStamp,
     ) -> TypedCommand<PrewriteResult> {
         use crate::storage::Context;
         PrewritePessimistic::new(
@@ -112,9 +112,9 @@ impl PrewritePessimistic {
             for_update_ts,
             0,
             TimeStamp::default(),
+            max_commit_ts,
             None,
             true,
-            one_pc_max_commit_ts,
             Context::default(),
         )
     }
@@ -196,7 +196,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
                 // All keys can be successfully locked and `try_one_pc` is set. Try to directly
                 // commit them.
                 let (ts, released_locks) =
-                    handle_1pc(&mut txn, final_min_commit_ts, self.one_pc_max_commit_ts);
+                    handle_1pc(&mut txn, final_min_commit_ts, self.max_commit_ts);
                 let released_locks = released_locks.unwrap();
                 if !released_locks.is_empty() {
                     released_locks.wake_up(context.lock_mgr);

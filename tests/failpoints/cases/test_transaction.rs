@@ -50,7 +50,6 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
                 TimeStamp::default(),
                 Some(vec![]),
                 false,
-                TimeStamp::zero(),
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -104,7 +103,6 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
                 TimeStamp::default(),
                 Some(vec![]),
                 false,
-                TimeStamp::zero(),
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -147,7 +145,6 @@ fn test_update_max_ts_before_scan_memory_locks() {
                 TimeStamp::default(),
                 Some(vec![]),
                 false,
-                TimeStamp::zero(),
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -196,6 +193,7 @@ macro_rules! lock_release_test {
                         TimeStamp::default(),
                         TimeStamp::default(),
                         Some(vec![]),
+                        false,
                         Context::default(),
                     ),
                     Box::new(move |res| {
@@ -272,6 +270,7 @@ fn test_no_memory_locks_after_max_commit_ts_error() {
                 TimeStamp::default(),
                 100.into(),
                 Some(vec![b"k2".to_vec()]),
+                false,
                 Context::default(),
             ),
             Box::new(move |res| {
