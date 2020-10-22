@@ -14,8 +14,8 @@ use crate::storage::kv::{
 };
 use crate::storage::lock_manager::{self, Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{
-    has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock,
-    MvccReader, MvccTxn, ReleasedLock, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
+    Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock, MvccReader, MvccTxn,
+    ReleasedLock, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
 use crate::storage::txn::{
     commands::{
@@ -32,7 +32,6 @@ use crate::storage::{
     types::{MvccInfo, PessimisticLockRes, TxnStatus},
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
-use engine_traits::CF_WRITE;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 
@@ -535,58 +534,23 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
 ) -> Result<WriteResult> {
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd.kind {
         CommandKind::Prewrite(Prewrite {
-            mut mutations,
+            mutations,
             primary,
             start_ts,
             lock_ttl,
-            mut skip_constraint_check,
             txn_size,
             min_commit_ts,
+            ..
         }) => {
-            let mut scan_mode = None;
             let rows = mutations.len();
-            if rows > FORWARD_MIN_MUTATIONS_NUM {
-                mutations.sort_by(|a, b| a.key().cmp(b.key()));
-                let left_key = mutations.first().unwrap().key();
-                let right_key = mutations
-                    .last()
-                    .unwrap()
-                    .key()
-                    .clone()
-                    .append_ts(TimeStamp::zero());
-                if !has_data_in_range(
-                    snapshot.clone(),
-                    CF_WRITE,
-                    left_key,
-                    &right_key,
-                    &mut statistics.write,
-                )? {
-                    // If there is no data in range, we could skip constraint check, and use Forward seek for CF_LOCK.
-                    // Because in most instances, there won't be more than one transaction write the same key. Seek
-                    // operation could skip nonexistent key in CF_LOCK.
-                    skip_constraint_check = true;
-                    scan_mode = Some(ScanMode::Forward)
-                }
-            }
-            let mut txn = if scan_mode.is_some() {
-                MvccTxn::for_scan(snapshot, scan_mode, start_ts, !cmd.ctx.get_not_fill_cache())
-            } else {
-                MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())
-            };
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
 
             // Set extra op here for getting the write record when check write conflict in prewrite.
             txn.extra_op = extra_op;
 
             let mut locks = vec![];
             for m in mutations {
-                match txn.prewrite(
-                    m,
-                    &primary,
-                    skip_constraint_check,
-                    lock_ttl,
-                    txn_size,
-                    min_commit_ts,
-                ) {
+                match txn.prewrite(m, &primary, true, lock_ttl, txn_size, min_commit_ts) {
                     Ok(_) => {}
                     e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                         locks.push(e.map_err(Error::from).map_err(StorageError::from));
@@ -972,6 +936,7 @@ mod tests {
     use super::*;
     use crate::storage::kv::{Snapshot, TestEngineBuilder};
     use crate::storage::{mvcc::Mutation, DummyLockManager};
+    use engine_traits::CF_WRITE;
 
     #[test]
     fn test_extract_lock_from_result() {

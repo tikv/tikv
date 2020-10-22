@@ -561,26 +561,28 @@ impl<S: Snapshot> MvccTxn<S> {
                 self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
                 prev_write = Some(write);
             }
+            // Check whether the current key is locked at any timestamp.
+            if let Some(lock) = self.reader.load_lock(&key)? {
+                if lock.ts != self.start_ts {
+                    return Err(
+                        ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into(),
+                    );
+                }
+                // TODO: remove it in future
+                if lock.lock_type == LockType::Pessimistic {
+                    return Err(ErrorInner::LockTypeNotMatch {
+                        start_ts: self.start_ts,
+                        key: key.into_raw()?,
+                        pessimistic: true,
+                    }
+                    .into());
+                }
+                // Duplicated command. No need to overwrite the lock and data.
+                MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+                return Ok(());
+            }
         }
         if should_not_write {
-            return Ok(());
-        }
-        // Check whether the current key is locked at any timestamp.
-        if let Some(lock) = self.reader.load_lock(&key)? {
-            if lock.ts != self.start_ts {
-                return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
-            }
-            // TODO: remove it in future
-            if lock.lock_type == LockType::Pessimistic {
-                return Err(ErrorInner::LockTypeNotMatch {
-                    start_ts: self.start_ts,
-                    key: key.into_raw()?,
-                    pessimistic: true,
-                }
-                .into());
-            }
-            // Duplicated command. No need to overwrite the lock and data.
-            MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
             return Ok(());
         }
 

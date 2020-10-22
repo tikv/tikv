@@ -138,7 +138,7 @@ impl<S: Snapshot> MvccReader<S> {
             }
         } else {
             // use prefix bloom filter
-            let iter_opt = IterOption::default()
+            let iter_opt = IterOption::new(None, None, self.fill_cache)
                 .use_prefix_seek()
                 .set_prefix_same_as_start(true);
             let iter = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
