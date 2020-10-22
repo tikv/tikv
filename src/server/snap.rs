@@ -20,6 +20,7 @@ use kvproto::tikvpb::TikvClient;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
 use security::SecurityManager;
@@ -222,7 +223,10 @@ impl RecvSnapContext {
         })
     }
 
-    fn finish<R: RaftStoreRouter<RocksEngine>>(self, raft_router: R) -> Result<()> {
+    fn finish<R, E>(self, raft_router: R) -> Result<()>
+    where R: RaftStoreRouter<E>,
+          E: KvEngine,
+    {
         let key = self.key;
         if let Some(mut file) = self.file {
             info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
@@ -239,12 +243,15 @@ impl RecvSnapContext {
     }
 }
 
-fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
+fn recv_snap<R, E>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
     snap_mgr: SnapManager,
     raft_router: R,
-) -> impl Future<Output = Result<()>> {
+) -> impl Future<Output = Result<()>>
+where R: RaftStoreRouter<E> + 'static,
+      E: KvEngine,
+{
     let recv_task = async move {
         let mut stream = stream.map_err(Error::from);
         let head = stream.next().await.transpose()?;
