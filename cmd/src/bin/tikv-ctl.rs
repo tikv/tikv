@@ -2027,7 +2027,7 @@ fn main() {
         let from = unescape(matches.value_of("from").unwrap());
         let to = matches
             .value_of("to")
-            .map_or_else(|| vec![], |to| unescape(to));
+            .map_or_else(Vec::new, |to| unescape(to));
         let limit = matches
             .value_of("limit")
             .map_or(0, |s| s.parse().expect("parse u64"));

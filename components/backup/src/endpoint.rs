@@ -699,10 +699,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             ct,
                             request.compression_level,
                         ),
-                        brange
-                            .start_key
-                            .map_or_else(|| vec![], |k| k.into_encoded()),
-                        brange.end_key.map_or_else(|| vec![], |k| k.into_encoded()),
+                        brange.start_key.map_or_else(Vec::new, |k| k.into_encoded()),
+                        brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
                     )
                 } else {
                     (
@@ -719,10 +717,10 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                         ),
                         brange
                             .start_key
-                            .map_or_else(|| vec![], |k| k.into_raw().unwrap()),
+                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                         brange
                             .end_key
-                            .map_or_else(|| vec![], |k| k.into_raw().unwrap()),
+                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                     )
                 };
 
