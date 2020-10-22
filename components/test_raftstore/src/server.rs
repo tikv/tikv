@@ -58,7 +58,7 @@ use tikv_util::HandyRwLock;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
 type SimulateServerTransport =
-    SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
+    SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver, RocksEngine>>;
 
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
