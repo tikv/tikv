@@ -41,7 +41,7 @@ bitflags = "1.0.1"
 byteorder = "1.2"
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
-crossbeam = "0.7.2"
+crossbeam = "0.8"
 engine = { path = "../engine" }
 engine_rocks = { path = "../engine_rocks" }
 encryption = { path = "../encryption" }
