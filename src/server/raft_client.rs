@@ -4,7 +4,7 @@ use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::{self, Config, StoreAddrResolver};
 use crossbeam::queue::{ArrayQueue, PushError};
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
@@ -33,6 +33,7 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
+use std::marker::PhantomData;
 
 // When merge raft messages into a batch message, leave a buffer.
 const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
@@ -288,14 +289,15 @@ impl Buffer for MessageBuffer {
 }
 
 /// Reporter reports whether a snapshot is sent successfully.
-struct SnapshotReporter<T> {
+struct SnapshotReporter<T, E> {
     raft_router: T,
     region_id: u64,
     to_peer_id: u64,
     to_store_id: u64,
+    _engine: PhantomData<E>,
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
+impl<T, E> SnapshotReporter<T, E> where T: RaftStoreRouter<E> + 'static, E: KvEngine {
     pub fn report(&self, status: SnapshotStatus) {
         debug!(
             "send snapshot";
@@ -325,9 +327,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
     }
 }
 
-fn report_unreachable<R>(router: &R, msg: &RaftMessage)
+fn report_unreachable<R, E>(router: &R, msg: &RaftMessage)
 where
-    R: RaftStoreRouter<RocksEngine>,
+    R: RaftStoreRouter<E>,
+    E: KvEngine,
 {
     let to_peer = msg.get_to_peer();
     if msg.get_message().has_snapshot() {
@@ -358,7 +361,7 @@ fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
 }
 
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
-struct RaftCall<R, M, B> {
+struct RaftCall<R, M, B, E> {
     sender: ClientCStreamSender<M>,
     receiver: ClientCStreamReceiver<Done>,
     queue: Arc<Queue>,
@@ -368,14 +371,16 @@ struct RaftCall<R, M, B> {
     lifetime: Option<oneshot::Sender<()>>,
     store_id: u64,
     addr: String,
+    _engine: PhantomData<E>,
 }
 
-impl<R, M, B> RaftCall<R, M, B>
+impl<R, M, B, E> RaftCall<R, M, B, E>
 where
-    R: RaftStoreRouter<RocksEngine> + 'static,
+    R: RaftStoreRouter<E> + 'static,
     B: Buffer<OutputMessage = M>,
+    E: KvEngine,
 {
-    fn new_snapshot_reporter(&self, msg: &RaftMessage) -> SnapshotReporter<R> {
+    fn new_snapshot_reporter(&self, msg: &RaftMessage) -> SnapshotReporter<R, E> {
         let region_id = msg.get_region_id();
         let to_peer_id = msg.get_to_peer().get_id();
         let to_store_id = msg.get_to_peer().get_store_id();
@@ -385,6 +390,7 @@ where
             region_id,
             to_peer_id,
             to_store_id,
+            _engine: PhantomData,
         }
     }
 
@@ -445,10 +451,11 @@ where
     }
 }
 
-impl<R, M, B> Future for RaftCall<R, M, B>
+impl<R, M, B, E> Future for RaftCall<R, M, B, E>
 where
-    R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
+    R: RaftStoreRouter<E> + Unpin + 'static,
     B: Buffer<OutputMessage = M> + Unpin,
+    E: KvEngine + Unpin,
 {
     type Output = ();
 
@@ -530,16 +537,18 @@ impl<S, R> ConnectionBuilder<S, R> {
 
 /// StreamBackEnd watches lifetime of a connection and handles reconnecting,
 /// spawn new RPC.
-struct StreamBackEnd<S, R> {
+struct StreamBackEnd<S, R, E> {
     store_id: u64,
     queue: Arc<Queue>,
     builder: ConnectionBuilder<S, R>,
+    _engine: PhantomData<E>,
 }
 
-impl<S, R> StreamBackEnd<S, R>
+impl<S, R, E> StreamBackEnd<S, R, E>
 where
     S: StoreAddrResolver,
-    R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
+    R: RaftStoreRouter<E> + Unpin + 'static,
+    E: KvEngine + Unpin,
 {
     fn resolve(&self) -> impl Future<Output = server::Result<String>> {
         let (tx, rx) = oneshot::channel();
@@ -615,6 +624,7 @@ where
             lifetime: Some(tx),
             store_id: self.store_id,
             addr,
+            _engine: PhantomData,
         };
         // TODO: verify it will be notified if client is dropped while env still alive.
         client.spawn(call);
@@ -634,6 +644,7 @@ where
             lifetime: Some(tx),
             store_id: self.store_id,
             addr,
+            _engine: PhantomData,
         };
         client.spawn(call);
         rx
@@ -668,13 +679,14 @@ async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: 
 /// 4. fallback to legacy API if incompatible
 ///
 /// Every failure during the process should trigger retry automatically.
-async fn start<S, R>(
-    back_end: StreamBackEnd<S, R>,
+async fn start<S, R, E>(
+    back_end: StreamBackEnd<S, R, E>,
     conn_id: usize,
     pool: Arc<Mutex<ConnectionPool>>,
 ) where
     S: StoreAddrResolver + Send,
-    R: RaftStoreRouter<RocksEngine> + Unpin + Send + 'static,
+    R: RaftStoreRouter<E> + Unpin + Send + 'static,
+    E: KvEngine + Unpin,
 {
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
@@ -764,20 +776,22 @@ struct CachedQueue {
 /// }
 /// raft_client.flush();
 /// ```
-pub struct RaftClient<S, R> {
+pub struct RaftClient<S, R, E> {
     pool: Arc<Mutex<ConnectionPool>>,
     cache: LruCache<(u64, usize), CachedQueue>,
     need_flush: Vec<(u64, usize)>,
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
+    _engine: PhantomData<E>,
 }
 
-impl<S, R> RaftClient<S, R>
+impl<S, R, E> RaftClient<S, R, E>
 where
     S: StoreAddrResolver + Send + 'static,
-    R: RaftStoreRouter<RocksEngine> + Unpin + Send + 'static,
+    R: RaftStoreRouter<E> + Unpin + Send + 'static,
+    E: KvEngine + Unpin,
 {
-    pub fn new(builder: ConnectionBuilder<S, R>) -> RaftClient<S, R> {
+    pub fn new(builder: ConnectionBuilder<S, R>) -> RaftClient<S, R, E> {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
                 .max_thread_count(1)
@@ -789,6 +803,7 @@ where
             need_flush: vec![],
             future_pool,
             builder,
+            _engine: PhantomData,
         }
     }
 
@@ -811,6 +826,7 @@ where
                             store_id,
                             queue: queue.clone(),
                             builder: self.builder.clone(),
+                            _engine: PhantomData,
                         };
                         self.future_pool
                             .spawn(start(back_end, conn_id, self.pool.clone()));
@@ -912,7 +928,7 @@ where
     }
 }
 
-impl<S, R> Clone for RaftClient<S, R>
+impl<S, R, E> Clone for RaftClient<S, R, E>
 where
     S: Clone,
     R: Clone,
@@ -924,6 +940,7 @@ where
             need_flush: vec![],
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
+            _engine: PhantomData,
         }
     }
 }

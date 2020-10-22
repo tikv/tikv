@@ -14,7 +14,7 @@ where
     T: RaftStoreRouter<RocksEngine> + 'static,
     S: StoreAddrResolver + 'static,
 {
-    raft_client: RaftClient<S, T>,
+    raft_client: RaftClient<S, T, RocksEngine>,
 }
 
 impl<T, S> Clone for ServerTransport<T, S>
@@ -32,7 +32,7 @@ where
 impl<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static>
     ServerTransport<T, S>
 {
-    pub fn new(raft_client: RaftClient<S, T>) -> ServerTransport<T, S> {
+    pub fn new(raft_client: RaftClient<S, T, RocksEngine>) -> ServerTransport<T, S> {
         ServerTransport { raft_client }
     }
 }
