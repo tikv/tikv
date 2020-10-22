@@ -1032,8 +1032,8 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
         sleep_ms(10);
     }
     // Ignore this msg to make left region exist.
-    let on_need_gc_merge_fp = "on_need_gc_merge";
-    fail::cfg(on_need_gc_merge_fp, "return").unwrap();
+    let on_has_merge_target_fp = "on_has_merge_target";
+    fail::cfg(on_has_merge_target_fp, "return").unwrap();
 
     cluster.clear_send_filters();
     // On store 3, now the right region is updated by snapshot not applying logs
