@@ -95,6 +95,7 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::{WriteCommand, WriteContext};
+    use crate::storage::txn::tests::*;
     use crate::storage::TestEngineBuilder;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
@@ -124,7 +125,6 @@ pub mod tests {
             extra_op: Default::default(),
             statistics: &mut Default::default(),
             pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
         };
         let result = command.process_write(snapshot, write_context).unwrap();
         write(engine, &ctx, result.to_be_write.modifies);

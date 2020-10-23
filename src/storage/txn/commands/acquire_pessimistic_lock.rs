@@ -8,7 +8,7 @@ use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, Mvc
 use crate::storage::txn::commands::{
     Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
-use crate::storage::txn::{Error, ErrorInner, Result};
+use crate::storage::txn::{acquire_pessimistic_lock, Error, ErrorInner, Result};
 use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
     Result as StorageResult, Snapshot,
@@ -84,7 +84,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             Ok(PessimisticLockRes::Empty)
         };
         for (k, should_not_exist) in keys {
-            match txn.acquire_pessimistic_lock(
+            match acquire_pessimistic_lock(
+                &mut txn,
                 k,
                 &self.primary,
                 should_not_exist,
@@ -103,6 +104,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                     break;
                 }
                 Err(e) => return Err(Error::from(e)),
+            }
+        }
+
+        // Some values are read, update max_ts
+        if let Ok(PessimisticLockRes::Values(values)) = &res {
+            if !values.is_empty() {
+                txn.concurrency_manager.update_max_ts(self.for_update_ts);
             }
         }
 

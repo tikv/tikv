@@ -25,8 +25,8 @@ use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    Callback, CbContext, Cursor, Engine, Error, ErrorInner, Iterator as EngineIterator, Modify,
-    Result, ScanMode, Snapshot, WriteData,
+    Callback, CbContext, Cursor, Engine, Error, ErrorInner, ExtCallback,
+    Iterator as EngineIterator, Modify, Result, ScanMode, Snapshot, WriteData,
 };
 
 pub use engine_rocks::RocksSnapshot;
@@ -51,7 +51,9 @@ impl Display for Task {
 
 struct Runner(Engines<BaseRocksEngine, BaseRocksEngine>);
 
-impl Runnable<Task> for Runner {
+impl Runnable for Runner {
+    type Task = Task;
+
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => {
@@ -111,11 +113,11 @@ impl RocksEngine {
         )?);
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let engines = Engines::new(
-            BaseRocksEngine::from_db(db.clone()),
-            BaseRocksEngine::from_db(db),
-            shared_block_cache,
-        );
+        let mut kv_engine = BaseRocksEngine::from_db(db.clone());
+        let mut raft_engine = BaseRocksEngine::from_db(db);
+        kv_engine.set_shared_block_cache(shared_block_cache);
+        raft_engine.set_shared_block_cache(shared_block_cache);
+        let engines = Engines::new(kv_engine, raft_engine);
         box_try!(worker.start(Runner(engines.clone())));
         Ok(RocksEngine {
             sched: worker.scheduler(),
@@ -214,10 +216,12 @@ impl TestEngineBuilder {
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
-                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
-                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
-                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                CF_DEFAULT => {
+                    CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None))
+                }
+                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache, None)),
+                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache, None)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
@@ -290,11 +294,24 @@ impl Engine for RocksEngine {
         write_modifies(&self.engines.kv, modifies)
     }
 
-    fn async_write(&self, _: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
+    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
+        self.async_write_ext(ctx, batch, cb, None)
+    }
+
+    fn async_write_ext(
+        &self,
+        _: &Context,
+        batch: WriteData,
+        cb: Callback<()>,
+        proposed_cb: Option<ExtCallback>,
+    ) -> Result<()> {
         fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
 
         if batch.modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
+        }
+        if let Some(cb) = proposed_cb {
+            cb();
         }
         box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
         Ok(())

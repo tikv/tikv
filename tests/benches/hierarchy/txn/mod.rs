@@ -9,6 +9,7 @@ use tikv::storage::mvcc::{self, MvccTxn};
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
+use tikv::storage::txn::{commit, prewrite};
 
 fn setup_prewrite<E, F>(
     engine: &E,
@@ -28,13 +29,15 @@ where
 
     let kvs = KvGenerator::new(config.key_length, config.value_length).generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
-        txn.prewrite(
+        prewrite(
+            &mut txn,
             Mutation::Put((Key::from_raw(&k), v.clone())),
             &k.clone(),
             &None,
             false,
             0,
             0,
+            TimeStamp::default(),
             TimeStamp::default(),
         )
         .unwrap();
@@ -63,8 +66,18 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
             for (mutation, primary) in mutations {
                 let snapshot = engine.snapshot(&ctx).unwrap();
                 let mut txn = mvcc::MvccTxn::new(snapshot, 1.into(), true, cm.clone());
-                txn.prewrite(mutation, &primary, &None, false, 0, 0, TimeStamp::default())
-                    .unwrap();
+                prewrite(
+                    &mut txn,
+                    mutation,
+                    &primary,
+                    &None,
+                    false,
+                    0,
+                    0,
+                    TimeStamp::default(),
+                    TimeStamp::default(),
+                )
+                .unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();
             }
@@ -83,7 +96,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
             for key in keys {
                 let snapshot = engine.snapshot(&ctx).unwrap();
                 let mut txn = mvcc::MvccTxn::new(snapshot, 1.into(), true, cm.clone());
-                txn.commit(key, 2.into()).unwrap();
+                commit(&mut txn, key, 2.into()).unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();
             }

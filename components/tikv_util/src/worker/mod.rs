@@ -69,16 +69,18 @@ impl<T> Debug for ScheduleError<T> {
     }
 }
 
-pub trait Runnable<T: Display> {
+pub trait Runnable {
+    type Task: Display;
+
     /// Runs a task.
-    fn run(&mut self, _: T) {
+    fn run(&mut self, _: Self::Task) {
         unimplemented!()
     }
 
     /// Runs a batch of tasks.
     ///
     /// Please note that ts will be clear after invoking this method.
-    fn run_batch(&mut self, ts: &mut Vec<T>) {
+    fn run_batch(&mut self, ts: &mut Vec<Self::Task>) {
         for t in ts.drain(..) {
             let task_str = format!("{}", t);
             let timer = Instant::now_coarse();
@@ -91,17 +93,21 @@ pub trait Runnable<T: Display> {
     fn shutdown(&mut self) {}
 }
 
-pub trait RunnableWithTimer<T: Display, U>: Runnable<T> {
-    fn on_timeout(&mut self, _: &mut Timer<U>, _: U);
+pub trait RunnableWithTimer: Runnable {
+    type TimeoutTask;
+
+    fn on_timeout(&mut self, _: &mut Timer<Self::TimeoutTask>, _: Self::TimeoutTask);
 }
 
 struct DefaultRunnerWithTimer<R>(R);
 
-impl<T: Display, R: Runnable<T>> Runnable<T> for DefaultRunnerWithTimer<R> {
-    fn run(&mut self, t: T) {
+impl<R: Runnable> Runnable for DefaultRunnerWithTimer<R> {
+    type Task = R::Task;
+
+    fn run(&mut self, t: Self::Task) {
         self.0.run(t)
     }
-    fn run_batch(&mut self, ts: &mut Vec<T>) {
+    fn run_batch(&mut self, ts: &mut Vec<Self::Task>) {
         self.0.run_batch(ts)
     }
     fn on_tick(&mut self) {
@@ -112,13 +118,15 @@ impl<T: Display, R: Runnable<T>> Runnable<T> for DefaultRunnerWithTimer<R> {
     }
 }
 
-impl<T: Display, R: Runnable<T>> RunnableWithTimer<T, ()> for DefaultRunnerWithTimer<R> {
+impl<R: Runnable> RunnableWithTimer for DefaultRunnerWithTimer<R> {
+    type TimeoutTask = ();
+
     fn on_timeout(&mut self, _: &mut Timer<()>, _: ()) {}
 }
 
 /// Scheduler provides interface to schedule task to underlying workers.
 pub struct Scheduler<T> {
-    name: Arc<String>,
+    name: Arc<str>,
     counter: Arc<AtomicUsize>,
     sender: Sender<Option<T>>,
     metrics_pending_task_count: IntGauge,
@@ -127,12 +135,12 @@ pub struct Scheduler<T> {
 impl<T: Display> Scheduler<T> {
     fn new<S>(name: S, counter: AtomicUsize, sender: Sender<Option<T>>) -> Scheduler<T>
     where
-        S: Into<String>,
+        S: Into<Arc<str>>,
     {
         let name = name.into();
         Scheduler {
             metrics_pending_task_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
-            name: Arc::new(name),
+            name,
             counter: Arc::new(counter),
             sender,
         }
@@ -184,13 +192,13 @@ pub fn dummy_scheduler<T: Display>() -> (Scheduler<T>, Receiver<Option<T>>) {
 }
 
 #[derive(Copy, Clone)]
-pub struct Builder<S: Into<String>> {
+pub struct Builder<S: Into<Arc<str>>> {
     name: S,
     batch_size: usize,
     pending_capacity: usize,
 }
 
-impl<S: Into<String>> Builder<S> {
+impl<S: Into<Arc<str>>> Builder<S> {
     pub fn new(name: S) -> Self {
         Builder {
             name,
@@ -212,9 +220,9 @@ impl<S: Into<String>> Builder<S> {
 
     pub fn create<T: Display>(self) -> Worker<T> {
         let (tx, rx) = if self.pending_capacity == usize::MAX {
-            mpsc::unbounded::<Option<T>>()
+            mpsc::unbounded()
         } else {
-            mpsc::bounded::<Option<T>>(self.pending_capacity)
+            mpsc::bounded(self.pending_capacity)
         };
 
         Worker {
@@ -227,24 +235,20 @@ impl<S: Into<String>> Builder<S> {
 }
 
 /// A worker that can schedule time consuming tasks.
-pub struct Worker<T: Display> {
+pub struct Worker<T> {
     scheduler: Scheduler<T>,
     receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
     batch_size: usize,
 }
 
-fn poll<R, T, U>(
+fn poll<R: RunnableWithTimer>(
     mut runner: R,
-    rx: Receiver<Option<T>>,
+    rx: Receiver<Option<R::Task>>,
     counter: Arc<AtomicUsize>,
     batch_size: usize,
-    mut timer: Timer<U>,
-) where
-    R: RunnableWithTimer<T, U> + Send + 'static,
-    T: Display + Send + 'static,
-    U: Send + 'static,
-{
+    mut timer: Timer<R::TimeoutTask>,
+) {
     tikv_alloc::add_thread_memory_accessor();
     let current_thread = thread::current();
     let name = current_thread.name().unwrap();
@@ -314,21 +318,28 @@ fn fill_task_batch<T>(
 
 impl<T: Display + Send + 'static> Worker<T> {
     /// Creates a worker.
-    pub fn new<S: Into<String>>(name: S) -> Worker<T> {
+    pub fn new<S: Into<Arc<str>>>(name: S) -> Worker<T> {
         Builder::new(name).create()
     }
 
     /// Starts the worker.
-    pub fn start<R: Runnable<T> + Send + 'static>(&mut self, runner: R) -> Result<(), io::Error> {
+    pub fn start<R>(&mut self, runner: R) -> Result<(), io::Error>
+    where
+        R: Runnable<Task = T> + Send + 'static,
+    {
         let runner = DefaultRunnerWithTimer(runner);
         let timer: Timer<()> = Timer::new(0);
         self.start_with_timer(runner, timer)
     }
 
-    pub fn start_with_timer<R, U>(&mut self, runner: R, timer: Timer<U>) -> Result<(), io::Error>
+    pub fn start_with_timer<RT>(
+        &mut self,
+        runner: RT,
+        timer: Timer<RT::TimeoutTask>,
+    ) -> Result<(), io::Error>
     where
-        R: RunnableWithTimer<T, U> + Send + 'static,
-        U: Send + 'static,
+        RT: RunnableWithTimer<Task = T> + Send + 'static,
+        <RT as RunnableWithTimer>::TimeoutTask: Send,
     {
         let mut receiver = self.receiver.lock().unwrap();
         info!("starting working thread"; "worker" => &self.scheduler.name);
@@ -365,7 +376,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     }
 
     pub fn name(&self) -> &str {
-        self.scheduler.name.as_str()
+        &self.scheduler.name
     }
 
     /// Stops the worker thread.
@@ -392,7 +403,9 @@ mod tests {
         ch: mpsc::Sender<u64>,
     }
 
-    impl Runnable<u64> for StepRunner {
+    impl Runnable for StepRunner {
+        type Task = u64;
+
         fn run(&mut self, step: u64) {
             self.ch.send(step).unwrap();
             thread::sleep(Duration::from_millis(step));
@@ -407,7 +420,9 @@ mod tests {
         ch: mpsc::Sender<Vec<u64>>,
     }
 
-    impl Runnable<u64> for BatchRunner {
+    impl Runnable for BatchRunner {
+        type Task = u64;
+
         fn run_batch(&mut self, ms: &mut Vec<u64>) {
             self.ch.send(ms.to_vec()).unwrap();
         }
@@ -421,7 +436,9 @@ mod tests {
         ch: mpsc::Sender<&'static str>,
     }
 
-    impl Runnable<&'static str> for TickRunner {
+    impl Runnable for TickRunner {
+        type Task = &'static str;
+
         fn run(&mut self, msg: &'static str) {
             self.ch.send(msg).unwrap();
         }

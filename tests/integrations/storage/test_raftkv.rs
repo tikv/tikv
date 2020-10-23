@@ -193,7 +193,7 @@ fn test_read_on_replica() {
 fn test_invalid_read_index_when_no_leader() {
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_lease_read(&mut cluster, Some(50), Some(3));
+    configure_for_lease_read(&mut cluster, Some(10), Some(6));
     cluster.cfg.raft_store.raft_heartbeat_ticks = 1;
     cluster.cfg.raft_store.hibernate_regions = false;
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -210,26 +210,17 @@ fn test_invalid_read_index_when_no_leader() {
     let follower = follower_peers.pop().unwrap();
 
     // Delay all raft messages on follower.
-    let heartbeat_filter = Box::new(
-        RegionPacketFilter::new(region.get_id(), follower.get_store_id())
-            .direction(Direction::Recv)
-            .msg_type(MessageType::MsgHeartbeat)
-            .when(Arc::new(AtomicBool::new(true))),
+    cluster.sim.wl().add_recv_filter(
+        follower.get_store_id(),
+        Box::new(
+            RegionPacketFilter::new(region.get_id(), follower.get_store_id())
+                .direction(Direction::Recv)
+                .msg_type(MessageType::MsgHeartbeat)
+                .msg_type(MessageType::MsgAppend)
+                .msg_type(MessageType::MsgRequestVoteResponse)
+                .when(Arc::new(AtomicBool::new(true))),
+        ),
     );
-    cluster
-        .sim
-        .wl()
-        .add_recv_filter(follower.get_store_id(), heartbeat_filter);
-    let vote_resp_filter = Box::new(
-        RegionPacketFilter::new(region.get_id(), follower.get_store_id())
-            .direction(Direction::Recv)
-            .msg_type(MessageType::MsgRequestVoteResponse)
-            .when(Arc::new(AtomicBool::new(true))),
-    );
-    cluster
-        .sim
-        .wl()
-        .add_recv_filter(follower.get_store_id(), vote_resp_filter);
 
     // wait for election timeout
     thread::sleep(time::Duration::from_millis(300));
@@ -250,10 +241,7 @@ fn test_invalid_read_index_when_no_leader() {
 
     let resp = rx.recv_timeout(time::Duration::from_millis(500)).unwrap();
     assert!(
-        resp.get_header()
-            .get_error()
-            .get_message()
-            .contains("can not read index due to no leader"),
+        resp.get_header().get_error().has_not_leader(),
         "{:?}",
         resp.get_header()
     );

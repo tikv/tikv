@@ -9,7 +9,7 @@ use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::commands::{
     Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
-use crate::storage::txn::{Error, Result};
+use crate::storage::txn::{pessimistic_prewrite, Error, ErrorInner, Result};
 use crate::storage::types::PrewriteResult;
 use crate::storage::{Error as StorageError, ProcessResult, Snapshot};
 
@@ -33,6 +33,7 @@ command! {
             /// How many keys this transaction involved.
             txn_size: u64,
             min_commit_ts: TimeStamp,
+            max_commit_ts: TimeStamp,
             /// All secondary keys in the whole transaction (i.e., as sent to all nodes, not only
             /// this node). Only present if using async commit.
             secondary_keys: Option<Vec<Vec<u8>>>,
@@ -65,8 +66,20 @@ impl CommandExt for PrewritePessimistic {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
+
+        // Async commit requires the max timestamp in the concurrency manager to be up-to-date.
+        // If it is possibly stale due to leader transfer or region merge, return an error.
+        // TODO: Fallback to non-async commit if not synced instead of returning an error.
+        if self.secondary_keys.is_some() && !snapshot.is_max_ts_synced() {
+            return Err(ErrorInner::MaxTimestampNotSynced {
+                region_id: self.get_ctx().get_region_id(),
+                start_ts: self.start_ts,
+            }
+            .into());
+        }
+
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
@@ -76,12 +89,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
         // Althrough pessimistic prewrite doesn't read the write record for checking conflict, we still set extra op here
         // for getting the written keys.
         txn.extra_op = context.extra_op;
-
-        // If async commit is disabled in TiKV, set the secondary_keys in the request to None
-        // so we won't do anything for async commit.
-        if !context.enable_async_commit {
-            self.secondary_keys = None;
-        }
 
         let async_commit_pk: Option<Key> = self
             .secondary_keys
@@ -97,7 +104,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
             if Some(m.key()) == async_commit_pk.as_ref() {
                 secondaries = &self.secondary_keys;
             }
-            match txn.pessimistic_prewrite(
+            match pessimistic_prewrite(
+                &mut txn,
                 m,
                 &self.primary,
                 secondaries,
@@ -106,10 +114,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
                 self.for_update_ts,
                 self.txn_size,
                 self.min_commit_ts,
+                self.max_commit_ts,
                 context.pipelined_pessimistic_lock,
             ) {
                 Ok(ts) => {
-                    if secondaries.is_some() {
+                    if secondaries.is_some() && async_commit_ts < ts {
                         async_commit_ts = ts;
                     }
                 }

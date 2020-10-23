@@ -40,6 +40,8 @@ pub const PREPARE_BOOTSTRAP_KEY: &[u8] = &[LOCAL_PREFIX, 0x02];
 // with different prefixes.
 pub const REGION_RAFT_PREFIX: u8 = 0x02;
 pub const REGION_RAFT_PREFIX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX];
+pub const REGION_RAFT_MIN_KEY: &[u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX];
+pub const REGION_RAFT_MAX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX + 1];
 pub const REGION_META_PREFIX: u8 = 0x03;
 pub const REGION_META_PREFIX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
 pub const REGION_META_MIN_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
@@ -129,6 +131,17 @@ pub fn decode_raft_log_key(key: &[u8]) -> Result<(u64, u64)> {
     let region_id = BigEndian::read_u64(&key[REGION_RAFT_PREFIX_KEY.len()..suffix_idx]);
     let index = BigEndian::read_u64(&key[suffix_idx + mem::size_of::<u8>()..]);
     Ok((region_id, index))
+}
+
+/// Get the region id and log type from raft key.
+pub fn decode_raft_key(key: &[u8]) -> Result<(u64, u8)> {
+    let suffix_idx = REGION_RAFT_PREFIX_KEY.len() + mem::size_of::<u64>();
+    let expect_key_len = suffix_idx + mem::size_of::<u8>();
+    if key.len() < expect_key_len || !key.starts_with(REGION_RAFT_PREFIX_KEY) {
+        return Err(Error::InvalidRaftLogKey(key.to_owned()));
+    }
+    let region_id = BigEndian::read_u64(&key[REGION_RAFT_PREFIX_KEY.len()..suffix_idx]);
+    Ok((region_id, key[suffix_idx]))
 }
 
 pub fn raft_log_prefix(region_id: u64) -> [u8; 11] {

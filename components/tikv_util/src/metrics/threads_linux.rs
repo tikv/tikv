@@ -226,7 +226,7 @@ pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
             }
         })
         .collect();
-    tids.sort();
+    tids.sort_unstable();
     Ok(tids)
 }
 

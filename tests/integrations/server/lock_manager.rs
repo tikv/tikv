@@ -51,7 +51,7 @@ fn build_leader_client(cluster: &mut Cluster<ServerCluster>, key: &[u8]) -> (Tik
 
     let env = Arc::new(Environment::new(1));
     let channel =
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
     let client = TikvClient::new(channel);
 
     let mut ctx = Context::default();
@@ -148,6 +148,7 @@ fn new_cluster_for_deadlock_test(count: usize) -> Cluster<ServerCluster> {
     let region_id = cluster.run_conf_change();
     pd_client.must_add_peer(region_id, new_peer(2, 2));
     pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
     deadlock_detector_leader_must_be(&mut cluster, 1);
     must_detect_deadlock(&mut cluster, b"k", 10);
     cluster

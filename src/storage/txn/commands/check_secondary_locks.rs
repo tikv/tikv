@@ -42,6 +42,10 @@ impl CommandExt for CheckSecondaryLocks {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
+        // to prevent this case from happening.
+        context.concurrency_manager.update_max_ts(self.start_ts);
+
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
@@ -157,6 +161,7 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::WriteCommand;
+    use crate::storage::txn::tests::*;
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
@@ -185,7 +190,6 @@ pub mod tests {
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     pipelined_pessimistic_lock: false,
-                    enable_async_commit: true,
                 },
             )
             .unwrap();
@@ -221,7 +225,6 @@ pub mod tests {
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
                         pipelined_pessimistic_lock: false,
-                        enable_async_commit: true,
                     },
                 )
                 .unwrap();
