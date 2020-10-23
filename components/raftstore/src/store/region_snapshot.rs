@@ -228,14 +228,14 @@ where
             set_panic_mark();
             panic!(
                 "failed to get value of key {} in region {}: {:?}",
-                hex::encode_upper(&key),
+                log_wrappers::Value::key(&key),
                 self.region.get_id(),
                 e,
             );
         } else {
             error!(
                 "failed to get value of key in cf";
-                "key" => hex::encode_upper(&key),
+                "key" => log_wrappers::Value::key(&key),
                 "region" => self.region.get_id(),
                 "cf" => cf,
                 "error" => ?e,
@@ -552,19 +552,23 @@ mod tests {
                         assert!(
                             res.is_err(),
                             "exp failed at {}",
-                            hex::encode_upper(seek_key)
+                            log_wrappers::Value::key(seek_key)
                         );
                         return;
                     }
                     if exp.is_none() {
-                        assert!(!res.unwrap(), "exp none at {}", hex::encode_upper(seek_key));
+                        assert!(
+                            !res.unwrap(),
+                            "exp none at {}",
+                            log_wrappers::Value::key(seek_key)
+                        );
                         return;
                     }
 
                     assert!(
                         res.unwrap(),
                         "should succeed at {}",
-                        hex::encode_upper(seek_key)
+                        log_wrappers::Value::key(seek_key)
                     );
                     let (exp_key, exp_val) = exp.unwrap();
                     assert_eq!(iter.key(), exp_key);
