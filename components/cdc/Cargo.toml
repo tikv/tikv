@@ -32,6 +32,8 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
+test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
+test-engines-panic = ["tikv/test-engines-panic"]
 
 [dependencies]
 bitflags = "1.0"
@@ -58,7 +60,7 @@ txn_types = { path = "../txn_types" }
 concurrency_manager = { path = "../concurrency_manager" }
 fail = "0.4"
 lazy_static = "1.3"
-prometheus = { version = "0.8", default-features = false, features = ["nightly", "push"] }
+prometheus = { version = "0.8", default-features = false, features = ["nightly"] }
 protobuf = "2.8"
 prost = "0.6"
 

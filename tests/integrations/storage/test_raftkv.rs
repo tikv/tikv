@@ -241,10 +241,7 @@ fn test_invalid_read_index_when_no_leader() {
 
     let resp = rx.recv_timeout(time::Duration::from_millis(500)).unwrap();
     assert!(
-        resp.get_header()
-            .get_error()
-            .get_message()
-            .contains("can not read index due to no leader"),
+        resp.get_header().get_error().has_not_leader(),
         "{:?}",
         resp.get_header()
     );

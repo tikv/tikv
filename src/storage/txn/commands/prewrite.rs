@@ -39,6 +39,7 @@ command! {
             /// How many keys this transaction involved.
             txn_size: u64,
             min_commit_ts: TimeStamp,
+            max_commit_ts: TimeStamp,
             /// All secondary keys in the whole transaction (i.e., as sent to all nodes, not only
             /// this node). Only present if using async commit.
             secondary_keys: Option<Vec<Vec<u8>>>,
@@ -85,6 +86,7 @@ impl Prewrite {
             false,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
             None,
             Context::default(),
         )
@@ -105,6 +107,7 @@ impl Prewrite {
             false,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
             None,
             Context::default(),
         )
@@ -123,6 +126,7 @@ impl Prewrite {
             0,
             false,
             0,
+            TimeStamp::default(),
             TimeStamp::default(),
             None,
             ctx,
@@ -153,12 +157,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 // If there is no data in range, we could skip constraint check.
                 self.skip_constraint_check = true;
             }
-        }
-
-        // If async commit is disabled in TiKV, set the secondary_keys in the request to None
-        // so we won't do anything for async commit.
-        if !context.enable_async_commit {
-            self.secondary_keys = None;
         }
 
         // Async commit requires the max timestamp in the concurrency manager to be up-to-date.
@@ -205,6 +203,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 self.lock_ttl,
                 self.txn_size,
                 self.min_commit_ts,
+                self.max_commit_ts,
             ) {
                 Ok(ts) => {
                     if secondaries.is_some() && async_commit_ts < ts {
@@ -450,7 +449,6 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         if let ProcessResult::PrewriteResult {
@@ -492,7 +490,6 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -517,7 +514,6 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
-            enable_async_commit: true,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;

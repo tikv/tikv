@@ -64,7 +64,7 @@ impl Default for Config {
             region_max_size: split_size / 2 * 3,
             region_split_keys: SPLIT_KEYS,
             region_max_keys: SPLIT_KEYS / 2 * 3,
-            consistency_check_method: ConsistencyCheckMethod::Raw,
+            consistency_check_method: ConsistencyCheckMethod::Mvcc,
         }
     }
 }

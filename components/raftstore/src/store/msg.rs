@@ -53,6 +53,7 @@ where
 
 pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
+pub type ExtCallback = Box<dyn FnOnce() + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callback for read only requests including `StatusRequest`,
@@ -65,13 +66,27 @@ pub enum Callback<S: Snapshot> {
     /// Read callback.
     Read(ReadCallback<S>),
     /// Write callback.
-    Write(WriteCallback),
+    Write {
+        cb: WriteCallback,
+        /// `proposed_cb` is called after a request is proposed to the raft group successfully.
+        /// It's used to notify the caller to move on early because it's very likely the request
+        /// will be applied to the raftstore.
+        proposed_cb: Option<ExtCallback>,
+    },
 }
 
 impl<S> Callback<S>
 where
     S: Snapshot,
 {
+    pub fn write(cb: WriteCallback) -> Self {
+        Self::write_ext(cb, None)
+    }
+
+    pub fn write_ext(cb: WriteCallback, proposed_cb: Option<ExtCallback>) -> Self {
+        Callback::Write { cb, proposed_cb }
+    }
+
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
             Callback::None => (),
@@ -83,9 +98,17 @@ where
                 };
                 read(resp);
             }
-            Callback::Write(write) => {
+            Callback::Write { cb, .. } => {
                 let resp = WriteResponse { response: resp };
-                write(resp);
+                cb(resp);
+            }
+        }
+    }
+
+    pub fn invoke_proposed(&mut self) {
+        if let Callback::Write { proposed_cb, .. } = self {
+            if let Some(cb) = proposed_cb.take() {
+                cb()
             }
         }
     }
@@ -98,10 +121,7 @@ where
     }
 
     pub fn is_none(&self) -> bool {
-        match self {
-            Callback::None => true,
-            _ => false,
-        }
+        matches!(self, Callback::None)
     }
 }
 
@@ -113,7 +133,7 @@ where
         match *self {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
-            Callback::Write(_) => write!(fmt, "Callback::Write(..)"),
+            Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
         }
     }
 }
@@ -292,6 +312,12 @@ pub enum CasualMessage<EK: KvEngine> {
 
     /// A message to access peer's internal state.
     AccessPeer(Box<dyn FnOnce(&mut dyn AbstractPeer) + Send + 'static>),
+
+    /// Region info from PD
+    QueryRegionLeaderResp {
+        region: metapb::Region,
+        leader: metapb::Peer,
+    },
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -305,7 +331,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
                 fmt,
                 "ComputeHashResult [index: {}, context: {}, hash: {}]",
                 index,
-                hex::encode_upper(&context),
+                log_wrappers::Value::key(&context),
                 escape(hash)
             ),
             CasualMessage::SplitRegion { ref split_keys, .. } => write!(
@@ -336,6 +362,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
             CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
+            CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
         }
     }
 }
