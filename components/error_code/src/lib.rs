@@ -6,13 +6,8 @@ extern crate tikv_alloc;
 #[macro_use]
 extern crate lazy_static;
 
-<<<<<<< HEAD
 use std::fmt::{self, Display, Formatter};
 
-use serde::ser::{Serialize, SerializeStruct, Serializer};
-
-=======
->>>>>>> 8c7d117ea... error_code: re-format metafile (#8870)
 macro_rules! define_error_codes {
     ($prefix:literal,
         $($name:ident => ($suffix:literal, $description:literal, $workaround:literal)),+
