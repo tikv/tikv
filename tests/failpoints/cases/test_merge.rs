@@ -992,6 +992,11 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
 
     let right_peer_2 = find_peer(&right, 2).cloned().unwrap();
     assert_eq!(right_peer_2.get_id(), 2);
+
+    // Make sure peer 2 finish split before pause
+    cluster.must_put(b"k2pause", b"vpause");
+    must_get_equal(&cluster.get_engine(2), b"k2pause", b"vpause");
+
     let on_handle_apply_2_fp = "on_handle_apply_2";
     fail::cfg(on_handle_apply_2_fp, "pause").unwrap();
 
@@ -1027,8 +1032,8 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
         sleep_ms(10);
     }
     // Ignore this msg to make left region exist.
-    let on_need_gc_merge_fp = "on_need_gc_merge";
-    fail::cfg(on_need_gc_merge_fp, "return").unwrap();
+    let on_has_merge_target_fp = "on_has_merge_target";
+    fail::cfg(on_has_merge_target_fp, "return").unwrap();
 
     cluster.clear_send_filters();
     // On store 3, now the right region is updated by snapshot not applying logs
