@@ -32,8 +32,9 @@ pub struct LogFile {
     name: String,
     // Avoid reopening the file every time when append.
     append_file: Option<File>,
-    // Number of append records.
-    append_num: u64,
+    // Internal file dictionary to avoid recovery before rewrite and to check if compaction
+    // is needed.
+    file_dict: FileDictionary,
 }
 
 impl LogFile {
@@ -60,11 +61,9 @@ impl LogFile {
             base: base.as_ref().to_path_buf(),
             name: name.to_owned(),
             append_file: None,
-            append_num: 0,
+            file_dict: FileDictionary::default(),
         };
-
-        let file_dict = FileDictionary::default();
-        log_file.write(&file_dict)?;
+        log_file.write(&log_file.file_dict.clone())?;
         Ok(log_file)
     }
 
@@ -73,7 +72,7 @@ impl LogFile {
             base: base.as_ref().to_path_buf(),
             name: name.to_owned(),
             append_file: None,
-            append_num: 0,
+            file_dict: FileDictionary::default(),
         };
 
         let file_dict = log_file.recovery()?;
@@ -104,13 +103,12 @@ impl LogFile {
         base_dir.sync_all()?;
         let file = std::fs::OpenOptions::new().append(true).open(origin_path)?;
         self.append_file.replace(file);
-        self.append_num = 0;
 
         Ok(())
     }
 
     /// Recovery from the log file and return `FileDictionary`.
-    pub fn recovery(&self) -> Result<FileDictionary> {
+    pub fn recovery(&mut self) -> Result<FileDictionary> {
         let mut f = OpenOptions::new()
             .read(true)
             .open(self.base.join(&self.name))?;
@@ -153,6 +151,7 @@ impl LogFile {
                 }
             }
         }
+        self.file_dict = file_dict.clone();
         Ok(file_dict)
     }
 
@@ -160,62 +159,56 @@ impl LogFile {
     ///
     /// Warning: `self.write(file_dict)` must be called before.
     pub fn insert(&mut self, name: &str, info: FileInfo) -> Result<()> {
-        if let Some(file) = self.append_file.as_mut() {
-            let bytes = Self::convert_record_to_bytes(name, LogRecord::INSERT(info))?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            self.check_compact()?;
-            Ok(())
-        } else {
-            Err(box_err!(
-                "file corrupted! write operation must be called before append."
-            ))
-        }
+        let file = self.append_file.as_mut().unwrap();
+        let bytes = Self::convert_record_to_bytes(name, LogRecord::INSERT(info.clone()))?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+
+        self.file_dict.files.insert(name.to_owned(), info);
+        self.check_compact()?;
+
+        Ok(())
     }
 
     /// Append a remove operation to the log file.
     ///
     /// Warning: `self.write(file_dict)` must be called before.
     pub fn remove(&mut self, name: &str) -> Result<()> {
-        if let Some(file) = self.append_file.as_mut() {
-            let bytes = Self::convert_record_to_bytes(name, LogRecord::REMOVE)?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            self.check_compact()?;
-            Ok(())
-        } else {
-            Err(box_err!(
-                "file corrupted! write operation must be called before append."
-            ))
-        }
+        let file = self.append_file.as_mut().unwrap();
+        let bytes = Self::convert_record_to_bytes(name, LogRecord::REMOVE)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+
+        self.file_dict.files.remove(name);
+        self.check_compact()?;
+
+        Ok(())
     }
 
     /// Replace existed file entry with new file information.
     ///
     /// Warning: `self.write(file_dict)` must be called before.
     pub fn replace(&mut self, src_name: &str, dst_name: &str, info: FileInfo) -> Result<()> {
-        if let Some(file) = self.append_file.as_mut() {
-            let bytes1 = Self::convert_record_to_bytes(src_name, LogRecord::REMOVE)?;
-            let bytes2 = Self::convert_record_to_bytes(dst_name, LogRecord::INSERT(info))?;
-            file.write_all(&bytes1)?;
-            file.write_all(&bytes2)?;
-            file.sync_all()?;
-            self.check_compact()?;
-            Ok(())
-        } else {
-            Err(box_err!(
-                "file corrupted! write operation must be called before append."
-            ))
-        }
+        assert_ne!(src_name, dst_name);
+        let file = self.append_file.as_mut().unwrap();
+        let bytes1 = Self::convert_record_to_bytes(dst_name, LogRecord::INSERT(info.clone()))?;
+        let bytes2 = Self::convert_record_to_bytes(src_name, LogRecord::REMOVE)?;
+        file.write_all(&bytes1)?;
+        file.write_all(&bytes2)?;
+        file.sync_all()?;
+
+        self.file_dict.files.remove(src_name);
+        self.file_dict.files.insert(dst_name.to_owned(), info);
+        self.check_compact()?;
+
+        Ok(())
     }
 
     /// This function needs to be called after each append operation to check
     /// if compact is needed.
     fn check_compact(&mut self) -> Result<()> {
-        self.append_num += 1;
-        if self.append_num > Self::REWRITE_THRESHOLD {
-            let file_dict = self.recovery()?;
-            self.write(&file_dict)?;
+        if self.file_dict.files.len() as u64 > Self::REWRITE_THRESHOLD {
+            self.write(&self.file_dict.clone())?;
         }
         Ok(())
     }
