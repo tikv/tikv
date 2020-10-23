@@ -478,7 +478,12 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
             "injected error for iter"
         )));
-        Ok(Cursor::new(RegionSnapshot::iter(self, iter_opt), mode))
+        let prefix_seek = iter_opt.prefix_seek_used();
+        Ok(Cursor::new(
+            RegionSnapshot::iter(self, iter_opt),
+            mode,
+            prefix_seek,
+        ))
     }
 
     fn iter_cf(
@@ -490,9 +495,11 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
             "injected error for iter_cf"
         )));
+        let prefix_seek = iter_opt.prefix_seek_used();
         Ok(Cursor::new(
             RegionSnapshot::iter_cf(self, cf, iter_opt)?,
             mode,
+            prefix_seek,
         ))
     }
 
