@@ -73,7 +73,7 @@ tikv = { path = "../../", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 txn_types = { path = "../txn_types" }
-yatp = { git = "https://github.com/koushiro/yatp.git", branch = "koushiro/update-deps" }
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
 futures-executor = "0.3"

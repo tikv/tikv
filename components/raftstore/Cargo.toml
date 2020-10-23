@@ -81,7 +81,7 @@ time = "0.1"
 tokio = { version = "0.2", features = ["sync", "rt-threaded"] }
 txn_types = { path = "../txn_types" }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
-yatp = { git = "https://github.com/koushiro/yatp.git", branch = "koushiro/update-deps" }
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
 engine_test = { path = "../engine_test" }

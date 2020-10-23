@@ -93,7 +93,7 @@ tikv_util = { path = "../components/tikv_util" }
 toml = "0.4"
 txn_types = { path = "../components/txn_types" }
 vlog = "0.1.4"
-yatp = { git = "https://github.com/koushiro/yatp.git", branch = "koushiro/update-deps" }
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [build-dependencies]
 time = "0.1"
