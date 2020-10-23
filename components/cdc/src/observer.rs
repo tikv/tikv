@@ -5,13 +5,9 @@ use std::ops::{Bound, Deref};
 use std::sync::{Arc, RwLock};
 
 use engine_rocks::RocksEngine;
-<<<<<<< HEAD
-use engine_traits::{IterOptions, KvEngine, ReadOptions, Snapshot, CF_DEFAULT, CF_LOCK, CF_WRITE};
-=======
 use engine_traits::{
-    IterOptions, KvEngine, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_KEY_PREFIX_LEN,
+    IterOptions, KvEngine, ReadOptions, Snapshot CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_KEY_PREFIX_LEN,
 };
->>>>>>> a69dd4728... cdc: fix resolved ts blocked by channel receiving & improve old value (#8878)
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
@@ -22,16 +18,10 @@ use tikv::storage::{Cursor, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
-<<<<<<< HEAD
-use txn_types::{Key, Lock, MutationType, TxnExtra, Value, WriteRef, WriteType};
+use txn_types::{Key, Lock, MutationType, TimeStamp, TxnExtra, Value, WriteRef, WriteType};
 
 use crate::endpoint::{Deregister, Task};
-=======
-use txn_types::{Key, Lock, MutationType, TimeStamp, Value, WriteRef, WriteType};
-
-use crate::endpoint::{Deregister, OldValueCache, Task};
 use crate::metrics::*;
->>>>>>> a69dd4728... cdc: fix resolved ts blocked by channel receiving & improve old value (#8878)
 use crate::{Error as CdcError, Result};
 
 /// An Observer for CDC.
@@ -139,16 +129,8 @@ impl CmdObserver<RocksEngine> for CdcObserver {
             // Create a snapshot here for preventing the old value was GC-ed.
             let snapshot = RegionSnapshot::from_snapshot(engine.snapshot().into_sync(), region);
             let mut reader = OldValueReader::new(snapshot);
-<<<<<<< HEAD
-            let get_old_value = move |key| {
+            let get_old_value = move |key, statistics: &mut Statistics| {
                 if let Some((old_value, mutation_type)) = txn_extra.mut_old_values().remove(&key) {
-=======
-            let get_old_value = move |key,
-                                      old_value_cache: &mut OldValueCache,
-                                      statistics: &mut Statistics| {
-                old_value_cache.access_count += 1;
-                if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
->>>>>>> a69dd4728... cdc: fix resolved ts blocked by channel receiving & improve old value (#8878)
                     match mutation_type {
                         MutationType::Insert => {
                             assert!(old_value.is_none());
@@ -173,9 +155,6 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                         _ => unreachable!(),
                     }
                 }
-<<<<<<< HEAD
-                reader.near_seek_old_value(&key).unwrap_or_default()
-=======
                 // Cannot get old value from cache, seek for it in engine.
                 old_value_cache.miss_count += 1;
                 let start = Instant::now();
@@ -186,7 +165,6 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                     .with_label_values(&["seek"])
                     .observe(start.elapsed().as_secs_f64());
                 value
->>>>>>> a69dd4728... cdc: fix resolved ts blocked by channel receiving & improve old value (#8878)
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
                 multi: batches,
@@ -423,53 +401,4 @@ mod tests {
         observer.on_role_change(&mut ctx, StateRole::Follower);
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
     }
-<<<<<<< HEAD
-=======
-
-    #[test]
-    fn test_old_value_reader() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let kv_engine = engine.get_rocksdb();
-        let k = b"k";
-        let key = Key::from_raw(k);
-
-        let must_get_eq = |ts: u64, value| {
-            let mut old_value_reader = OldValueReader::new(Arc::new(kv_engine.snapshot()));
-            let mut statistics = Statistics::default();
-            assert_eq!(
-                old_value_reader
-                    .near_seek_old_value(&key.clone().append_ts(ts.into()), &mut statistics)
-                    .unwrap(),
-                value
-            );
-            let mut opts = ReadOptions::new();
-            opts.set_fill_cache(false);
-        };
-
-        must_prewrite_put(&engine, k, b"v1", k, 1);
-        must_get_eq(2, None);
-        must_get_eq(1, Some(vec![]));
-        must_commit(&engine, k, 1, 1);
-        must_get_eq(1, Some(vec![]));
-
-        must_prewrite_put(&engine, k, b"v2", k, 2);
-        must_get_eq(2, Some(b"v1".to_vec()));
-        must_rollback(&engine, k, 2);
-
-        must_prewrite_put(&engine, k, b"v3", k, 3);
-        must_get_eq(3, Some(b"v1".to_vec()));
-        must_commit(&engine, k, 3, 3);
-
-        must_prewrite_delete(&engine, k, k, 4);
-        must_get_eq(4, Some(b"v3".to_vec()));
-        must_commit(&engine, k, 4, 4);
-
-        must_prewrite_put(&engine, k, vec![b'v'; 5120].as_slice(), k, 5);
-        must_get_eq(5, Some(vec![]));
-        must_commit(&engine, k, 5, 5);
-
-        must_prewrite_delete(&engine, k, k, 6);
-        must_get_eq(6, Some(vec![b'v'; 5120]));
-    }
->>>>>>> a69dd4728... cdc: fix resolved ts blocked by channel receiving & improve old value (#8878)
 }

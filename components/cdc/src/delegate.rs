@@ -584,15 +584,10 @@ impl Delegate {
 
                     if self.txn_extra_op == TxnExtraOp::ReadOldValue {
                         let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-<<<<<<< HEAD
-                        row.old_value = old_value_cb.borrow_mut().as_mut()(key).unwrap_or_default();
-=======
                         let start = Instant::now();
 
                         let mut statistics = Statistics::default();
-                        row.old_value =
-                            old_value_cb.borrow_mut()(key, old_value_cache, &mut statistics)
-                                .unwrap_or_default();
+                        row.old_value = old_value_cb.borrow_mut().as_mut()(key, &mut statistics).unwrap_or_default();
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
                             .with_label_values(&["all"])
                             .observe(start.elapsed().as_secs_f64());
@@ -603,7 +598,6 @@ impl Delegate {
                                     .inc_by(*count as i64);
                             }
                         }
->>>>>>> a69dd4728... cdc: fix resolved ts blocked by channel receiving & improve old value (#8878)
                     }
 
                     let occupied = rows.entry(row.key.clone()).or_default();
