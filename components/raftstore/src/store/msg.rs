@@ -250,6 +250,12 @@ pub enum CasualMessage<E: KvEngine> {
 
     /// A message to access peer's internal state.
     AccessPeer(Box<dyn FnOnce(&mut PeerFsm<E>) + Send + 'static>),
+
+    /// Region info from PD
+    QueryRegionLeaderResp {
+        region: metapb::Region,
+        leader: metapb::Peer,
+    },
 }
 
 impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
@@ -288,6 +294,7 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
+            CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
         }
     }
 }
