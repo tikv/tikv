@@ -84,6 +84,7 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { git = "https://github.com/koushiro/yatp.git", branch = "koushiro/update-deps" }
 
 [dev-dependencies]
+engine_test = { path = "../engine_test" }
 panic_hook = { path = "../panic_hook" }
 test_sst_importer = { path = "../test_sst_importer" }
 engine_panic = { path = "../engine_panic" }

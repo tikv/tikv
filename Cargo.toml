@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec"]
+default = ["protobuf-codec", "test-engines-rocksdb"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -51,6 +51,14 @@ protobuf-codec = [
   "tikv_util/protobuf-codec",
 ]
 testexport = ["raftstore/testexport"]
+test-engines-rocksdb = [
+  "engine_test/test-engine-kv-rocksdb",
+  "engine_test/test-engine-raft-rocksdb",
+]
+test-engines-panic = [
+  "engine_test/test-engine-kv-panic",
+  "engine_test/test-engine-raft-panic",
+]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -78,6 +86,7 @@ derive_more = "0.99.3"
 encryption = { path = "components/encryption" }
 engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
+engine_test = { path = "components/engine_test" }
 engine_traits = { path = "components/engine_traits" }
 error_code = { path = "components/error_code" }
 fail = "0.4"

@@ -146,12 +146,8 @@ fn get_region_approximate_middle_cf(
 mod tests {
     use std::iter;
     use std::sync::mpsc;
-    use std::sync::Arc;
 
-    use engine_rocks::raw::Writable;
-    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
-    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
-    use engine_rocks::Compat;
+    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
     use engine_traits::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
@@ -159,7 +155,7 @@ mod tests {
     use tempfile::Builder;
 
     use crate::store::{SplitCheckRunner, SplitCheckTask};
-    use engine_rocks::properties::RangePropertiesCollectorFactory;
+    use engine_traits::{MiscExt, SyncMutable};
     use tikv_util::config::ReadableSize;
     use tikv_util::escape;
     use tikv_util::worker::Runnable;
@@ -177,13 +173,11 @@ mod tests {
         let cfs_opts = ALL_CFS
             .iter()
             .map(|cf| {
-                let mut cf_opts = ColumnFamilyOptions::new();
-                let f = Box::new(RangePropertiesCollectorFactory::default());
-                cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+                let cf_opts = ColumnFamilyOptions::new();
                 CFOptions::new(cf, cf_opts)
             })
             .collect();
-        let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -194,21 +188,16 @@ mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let mut cfg = Config::default();
         cfg.region_max_size = ReadableSize(BUCKET_NUMBER_LIMIT as u64);
-        let mut runnable = SplitCheckRunner::new(
-            engine.c().clone(),
-            tx.clone(),
-            CoprocessorHost::new(tx),
-            cfg,
-        );
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx), cfg);
 
         // so split key will be z0005
-        let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
         for i in 0..11 {
             let k = format!("{:04}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
-            engine.put_cf(cf_handle, &k, &k).unwrap();
+            engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
             // Flush for every key so that we can know the exact middle key.
-            engine.flush_cf(cf_handle, true).unwrap();
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
         }
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
@@ -236,29 +225,25 @@ mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
         let cfs_opts = LARGE_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine =
-            Arc::new(engine_rocks::raw_util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
+        let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
-        let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
         let mut big_value = Vec::with_capacity(256);
         big_value.extend(iter::repeat(b'v').take(256));
         for i in 0..100 {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
-            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            engine.put_cf(CF_DEFAULT, &k, &big_value).unwrap();
             // Flush for every key so that we can know the exact middle key.
-            engine.flush_cf(cf_handle, true).unwrap();
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
         }
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let middle_key = get_region_approximate_middle_cf(engine.c(), CF_DEFAULT, &region)
+        let middle_key = get_region_approximate_middle_cf(&engine, CF_DEFAULT, &region)
             .unwrap()
             .unwrap();
 

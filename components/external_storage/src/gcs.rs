@@ -215,10 +215,8 @@ impl GCSStorage {
         if !endpoint.is_empty() {
             let url = req.uri().to_string();
             for hardcoded in HARDCODED_ENDPOINTS {
-                if url.starts_with(hardcoded) {
-                    *req.uri_mut() = [endpoint.trim_end_matches('/'), &url[hardcoded.len()..]]
-                        .concat()
-                        .parse()?;
+                if let Some(res) = url.strip_prefix(hardcoded) {
+                    *req.uri_mut() = [endpoint.trim_end_matches('/'), res].concat().parse()?;
                     break;
                 }
             }

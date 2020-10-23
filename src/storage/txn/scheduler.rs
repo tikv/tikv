@@ -20,8 +20,9 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use parking_lot::Mutex;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use crossbeam::utils::CachePadded;
+use parking_lot::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
@@ -137,10 +138,10 @@ impl TaskContext {
 
 struct SchedulerInner<L: LockManager> {
     // slot_id -> { cid -> `TaskContext` } in the slot.
-    task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
+    task_slots: Vec<CachePadded<Mutex<HashMap<u64, TaskContext>>>>,
 
     // cmd id generator
-    id_alloc: AtomicU64,
+    id_alloc: CachePadded<AtomicU64>,
 
     // write concurrency control
     latches: Latches,
@@ -154,13 +155,13 @@ struct SchedulerInner<L: LockManager> {
     high_priority_pool: SchedPool,
 
     // used to control write flow
-    running_write_bytes: AtomicUsize,
+    running_write_bytes: CachePadded<AtomicUsize>,
 
     lock_mgr: L,
 
     concurrency_manager: ConcurrencyManager,
 
-    pipelined_pessimistic_lock: bool,
+    pipelined_pessimistic_lock: Arc<AtomicBool>,
 }
 
 #[inline]
@@ -176,34 +177,23 @@ impl<L: LockManager> SchedulerInner<L> {
         id + 1
     }
 
-    fn dequeue_task(&self, cid: u64) -> Task {
-        let mut tasks = self.task_contexts[id_index(cid)].lock();
-        let task = tasks.get_mut(&cid).unwrap().task.take().unwrap();
-        assert_eq!(task.cid, cid);
-        task
+    #[inline]
+    fn get_task_slot(&self, cid: u64) -> MutexGuard<HashMap<u64, TaskContext>> {
+        self.task_slots[id_index(cid)].lock()
     }
 
-    fn enqueue_task(&self, task: Task, callback: StorageCallback) {
-        let cid = task.cid;
+    fn new_task_context(&self, task: Task, callback: StorageCallback) -> TaskContext {
         let tctx = TaskContext::new(task, &self.latches, callback);
-
         let running_write_bytes = self
             .running_write_bytes
             .fetch_add(tctx.write_bytes, Ordering::AcqRel) as i64;
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes + tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.inc();
-
-        let mut tasks = self.task_contexts[id_index(cid)].lock();
-        if tasks.insert(cid, tctx).is_some() {
-            panic!("TaskContext cid={} shouldn't exist", cid);
-        }
+        tctx
     }
 
     fn dequeue_task_context(&self, cid: u64) -> TaskContext {
-        let tctx = self.task_contexts[id_index(cid)]
-            .lock()
-            .remove(&cid)
-            .unwrap();
+        let tctx = self.get_task_slot(cid).remove(&cid).unwrap();
 
         let running_write_bytes = self
             .running_write_bytes
@@ -215,8 +205,7 @@ impl<L: LockManager> SchedulerInner<L> {
     }
 
     fn take_task_cb(&self, cid: u64) -> Option<StorageCallback> {
-        self.task_contexts[id_index(cid)]
-            .lock()
+        self.get_task_slot(cid)
             .get_mut(&cid)
             .and_then(|tctx| tctx.cb.take())
     }
@@ -228,15 +217,15 @@ impl<L: LockManager> SchedulerInner<L> {
 
     /// Tries to acquire all the required latches for a command.
     ///
-    /// Returns `true` if successful; returns `false` otherwise.
-    fn acquire_lock(&self, cid: u64) -> bool {
-        let mut task_contexts = self.task_contexts[id_index(cid)].lock();
-        let tctx = task_contexts.get_mut(&cid).unwrap();
+    /// Returns the `Task` if successful; returns `None` otherwise.
+    fn acquire_lock(&self, cid: u64) -> Option<Task> {
+        let mut task_slot = self.get_task_slot(cid);
+        let tctx = task_slot.get_mut(&cid).unwrap();
         if self.latches.acquire(&mut tctx.lock, cid) {
             tctx.on_schedule();
-            return true;
+            return tctx.task.take();
         }
-        false
+        None
     }
 }
 
@@ -259,21 +248,19 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
-        pipelined_pessimistic_lock: bool,
+        pipelined_pessimistic_lock: Arc<AtomicBool>,
     ) -> Self {
-        // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
-        // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
         let t = Instant::now_coarse();
-        let mut task_contexts = Vec::with_capacity(TASKS_SLOTS_NUM);
+        let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
         for _ in 0..TASKS_SLOTS_NUM {
-            task_contexts.push(Mutex::new(Default::default()));
+            task_slots.push(Mutex::new(Default::default()).into());
         }
 
         let inner = Arc::new(SchedulerInner {
-            task_contexts,
-            id_alloc: AtomicU64::new(0),
+            task_slots,
+            id_alloc: AtomicU64::new(0).into(),
             latches: Latches::new(concurrency),
-            running_write_bytes: AtomicUsize::new(0),
+            running_write_bytes: AtomicUsize::new(0).into(),
             sched_pending_write_threshold,
             worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
             high_priority_pool: SchedPool::new(
@@ -319,23 +306,28 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
-        let task = Task::new(cid, cmd);
-        // TODO: enqueue_task should return an reference of the tctx.
-        self.inner.enqueue_task(task, callback);
-        if self.inner.acquire_lock(cid) {
-            self.get_snapshot(cid);
-        }
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
             .get(priority_tag)
             .inc();
+
+        let mut task_slot = self.inner.get_task_slot(cid);
+        let tctx = task_slot
+            .entry(cid)
+            .or_insert_with(|| self.inner.new_task_context(Task::new(cid, cmd), callback));
+        if self.inner.latches.acquire(&mut tctx.lock, cid) {
+            tctx.on_schedule();
+            let task = tctx.task.take().unwrap();
+            drop(task_slot);
+            self.execute(task);
+        }
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
-        if self.inner.acquire_lock(cid) {
-            self.get_snapshot(cid);
+        if let Some(task) = self.inner.acquire_lock(cid) {
+            self.execute(task);
         }
     }
 
@@ -347,10 +339,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    /// Initiates an async operation to get a snapshot from the storage engine, then posts a
-    /// `SnapshotFinished` message back to the event loop when it finishes.
-    fn get_snapshot(&self, cid: u64) {
-        let mut task = self.inner.dequeue_task(cid);
+    /// Initiates an async operation to get a snapshot from the storage engine, then execute the
+    /// task in the sched pool.
+    fn execute(&self, mut task: Task) {
+        let cid = task.cid;
         let tag = task.cmd.tag();
         let ctx = task.cmd.ctx().clone();
         let sched = self.clone();
@@ -594,14 +586,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
-        let pipelined = self.inner.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
+        let pipelined_pessimistic_lock = self
+            .inner
+            .pipelined_pessimistic_lock
+            .load(Ordering::Relaxed);
+        let pipelined = pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
 
         let context = WriteContext {
             lock_mgr: &self.inner.lock_mgr,
             concurrency_manager: self.inner.concurrency_manager.clone(),
             extra_op: task.extra_op,
             statistics,
-            pipelined_pessimistic_lock: self.inner.pipelined_pessimistic_lock,
+            pipelined_pessimistic_lock,
         };
 
         match task.cmd.process_write(snapshot, context) {
