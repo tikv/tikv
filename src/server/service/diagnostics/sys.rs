@@ -457,6 +457,7 @@ pub fn system_info(collector: &mut Vec<ServerInfoItem>) {
     item.set_name("sysctl".to_string());
     item.set_pairs(pairs.into());
     collector.push(item);
+    collector.push(get_transparent_hugepage());
 }
 
 /// Returns system wide configuration
@@ -477,6 +478,21 @@ fn get_sysctl_list() -> HashMap<String, String> {
             Some((name, content.trim().to_string()))
         })
         .collect()
+}
+
+fn get_transparent_hugepage() -> ServerInfoItem {
+    let mut pairs = vec![];
+    if let Ok(content) = std::fs::read_to_string("/sys/kernel/mm/transparent_hugepage/enabled") {
+        let mut pair = ServerInfoPair::default();
+        pair.set_key("transparent_hugepage_enabled".to_string());
+        pair.set_value(content.trim().to_string());
+        pairs.push(pair);
+    }
+    let mut item = ServerInfoItem::default();
+    item.set_tp("system".to_string());
+    item.set_name("kernel".to_string());
+    item.set_pairs(pairs.into());
+    item
 }
 
 /// process_info collects all process list
@@ -634,6 +650,10 @@ mod tests {
             let item = collector
                 .iter()
                 .filter(|x| x.get_tp() == "system" && x.get_name() == "sysctl");
+            assert_ne!(item.count(), 0);
+            let item = collector
+                .iter()
+                .filter(|x| x.get_tp() == "system" && x.get_name() == "kernel");
             assert_ne!(item.count(), 0);
         }
     }
