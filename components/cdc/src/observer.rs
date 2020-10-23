@@ -6,7 +6,8 @@ use std::sync::{Arc, RwLock};
 
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    IterOptions, KvEngine, ReadOptions, Snapshot CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_KEY_PREFIX_LEN,
+    IterOptions, KvEngine, ReadOptions, Snapshot, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    DATA_KEY_PREFIX_LEN,
 };
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
@@ -156,7 +157,6 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                     }
                 }
                 // Cannot get old value from cache, seek for it in engine.
-                old_value_cache.miss_count += 1;
                 let start = Instant::now();
                 let value = reader
                     .near_seek_old_value(&key, statistics)

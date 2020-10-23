@@ -638,7 +638,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                                             Some(region_id)
                                         };
                                         if tx.send(resp).is_err() {
-                                            error!("cdc send tso response failed");
+                                            error!("cdc send tso response failed"; "region_id" => region_id);
                                         }
                                     },
                                 ))),
