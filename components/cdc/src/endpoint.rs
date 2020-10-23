@@ -738,7 +738,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     async move {
                         let (tx, rx) = tokio::sync::oneshot::channel();
                         if let Err(e) = raft_router_clone.significant_send(
-                        region_id,
+                            region_id,
                         SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
                             let resp = if resp.response.get_header().has_error() {
                                 None
