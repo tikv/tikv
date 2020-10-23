@@ -41,7 +41,7 @@ use raftstore::{
     store::{
         config::RaftstoreConfigManager,
         fsm,
-        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
+        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
         AutoSplitController, GlobalReplicationState, LocalReader, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
@@ -85,7 +85,8 @@ pub fn run_tikv(config: TiKvConfig) {
     initial_logger(&config);
 
     // Print version information.
-    tikv::log_tikv_info();
+    let build_timestamp = option_env!("TIKV_BUILD_TIME");
+    tikv::log_tikv_info(build_timestamp);
 
     // Print resource quota.
     SysQuota::new().log_quota();
@@ -388,7 +389,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
                 self.router.clone(),

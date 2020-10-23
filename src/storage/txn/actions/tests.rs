@@ -24,6 +24,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
     for_update_ts: TimeStamp,
     txn_size: u64,
     min_commit_ts: TimeStamp,
+    max_commit_ts: TimeStamp,
 ) {
     let ctx = Context::default();
     let snapshot = engine.snapshot(&ctx).unwrap();
@@ -41,6 +42,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
             lock_ttl,
             txn_size,
             min_commit_ts,
+            max_commit_ts,
         )
         .unwrap();
     } else {
@@ -54,6 +56,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
             for_update_ts,
             txn_size,
             min_commit_ts,
+            max_commit_ts,
         )
         .unwrap();
     }
@@ -79,6 +82,7 @@ pub fn must_prewrite_put<E: Engine>(
         TimeStamp::default(),
         0,
         TimeStamp::default(),
+        TimeStamp::default(),
     );
 }
 
@@ -102,6 +106,7 @@ pub fn must_pessimistic_prewrite_put<E: Engine>(
         0,
         for_update_ts.into(),
         0,
+        TimeStamp::default(),
         TimeStamp::default(),
     );
 }
@@ -127,6 +132,7 @@ pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
         lock_ttl,
         for_update_ts.into(),
         0,
+        TimeStamp::default(),
         TimeStamp::default(),
     );
 }
@@ -156,6 +162,7 @@ pub fn must_prewrite_put_for_large_txn<E: Engine>(
         for_update_ts,
         0,
         min_commit_ts,
+        TimeStamp::default(),
     );
 }
 
@@ -181,6 +188,7 @@ pub fn must_prewrite_put_async_commit<E: Engine>(
         TimeStamp::default(),
         0,
         min_commit_ts.into(),
+        TimeStamp::default(),
     );
 }
 
@@ -208,6 +216,7 @@ pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
         for_update_ts.into(),
         0,
         min_commit_ts.into(),
+        TimeStamp::default(),
     );
 }
 
@@ -237,6 +246,7 @@ fn must_prewrite_put_err_impl<E: Engine>(
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
         )
         .unwrap_err()
     } else {
@@ -249,6 +259,7 @@ fn must_prewrite_put_err_impl<E: Engine>(
             0,
             for_update_ts,
             0,
+            TimeStamp::default(),
             TimeStamp::default(),
         )
         .unwrap_err()
@@ -310,6 +321,7 @@ fn must_prewrite_delete_impl<E: Engine>(
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
         )
         .unwrap();
     } else {
@@ -322,6 +334,7 @@ fn must_prewrite_delete_impl<E: Engine>(
             0,
             for_update_ts,
             0,
+            TimeStamp::default(),
             TimeStamp::default(),
         )
         .unwrap();
@@ -376,6 +389,7 @@ fn must_prewrite_lock_impl<E: Engine>(
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
         )
         .unwrap();
     } else {
@@ -388,6 +402,7 @@ fn must_prewrite_lock_impl<E: Engine>(
             0,
             for_update_ts,
             0,
+            TimeStamp::default(),
             TimeStamp::default(),
         )
         .unwrap();
@@ -421,6 +436,7 @@ pub fn must_prewrite_lock_err<E: Engine>(
         false,
         0,
         0,
+        TimeStamp::default(),
         TimeStamp::default(),
     )
     .is_err());

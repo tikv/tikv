@@ -738,6 +738,7 @@ pub mod tests {
             TimeStamp::zero(),
             1,
             /* min_commit_ts */ TimeStamp::zero(),
+            /* max_commit_ts */ TimeStamp::zero(),
         );
         must_success(
             &engine,
