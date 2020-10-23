@@ -137,9 +137,11 @@ impl<S: Snapshot> MvccTxn<S> {
         // scan only.
         // IsolationLevel is `Si`, actually the method we use in MvccTxn does not rely on
         // isolation level, so it can be any value.
-        let mut reader = MvccReader::new(snapshot, None, fill_cache, IsolationLevel::Si);
-        reader.set_single_key(true);
-        Self::from_reader(reader, start_ts, concurrency_manager)
+        Self::from_reader(
+            MvccReader::new(snapshot, None, fill_cache, IsolationLevel::Si),
+            start_ts,
+            concurrency_manager,
+        )
     }
 
     // Use `ScanMode::Forward` when gc.

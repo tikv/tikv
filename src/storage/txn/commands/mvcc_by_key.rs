@@ -39,7 +39,6 @@ impl<S: Snapshot> ReadCommand<S> for MvccByKey {
             !self.ctx.get_not_fill_cache(),
             self.ctx.get_isolation_level(),
         );
-        reader.set_single_key(true);
         let result = find_mvcc_infos_by_key(&mut reader, &self.key, TimeStamp::max());
         statistics.add(reader.get_statistics());
         let (lock, writes, values) = result?;

@@ -74,15 +74,14 @@ pub struct MvccReader<S: Snapshot> {
     lock_cursor: Option<Cursor<S::Iter>>,
     pub write_cursor: Option<Cursor<S::Iter>>,
 
+    /// None means following operations are performed on a single user key, i.e.,
+    /// different versions of the same key. It can use prefix seek to speed up reads
+    /// from the write-cf.
     scan_mode: Option<ScanMode>,
-    key_only: bool,
-
-    /// True means following operations are performed on keys with the same prefix, i.e.,
-    /// different versions of the same key. It can use prefix seek to speed up reads from write-cf.
-    /// The `scan_mode` is ignored if it's true.
-    single_key: bool,
-    // Records the current key for single key mode. Will Reset the write cursor when switching to another key.
+    // Records the current key for prefix seek. Will Reset the write cursor when switching to another key.
     current_key: Option<Key>,
+
+    key_only: bool,
 
     fill_cache: bool,
     isolation_level: IsolationLevel,
@@ -102,10 +101,9 @@ impl<S: Snapshot> MvccReader<S> {
             lock_cursor: None,
             write_cursor: None,
             scan_mode,
+            current_key: None,
             isolation_level,
             key_only: false,
-            single_key: false,
-            current_key: None,
             fill_cache,
         }
     }
@@ -117,14 +115,6 @@ impl<S: Snapshot> MvccReader<S> {
     pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
         stats.add(&self.statistics);
         self.statistics = Statistics::default();
-    }
-
-    pub fn set_key_only(&mut self, key_only: bool) {
-        self.key_only = key_only;
-    }
-
-    pub fn set_single_key(&mut self, single_key: bool) {
-        self.single_key = single_key;
     }
 
     pub fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
@@ -180,11 +170,6 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     fn get_scan_mode(&self, allow_backward: bool) -> ScanMode {
-        // Ignore the scan mode in single key mode.
-        if self.single_key {
-            assert!(self.scan_mode.is_none());
-            return ScanMode::Mixed;
-        }
         match self.scan_mode {
             Some(ScanMode::Forward) => ScanMode::Forward,
             Some(ScanMode::Backward) if allow_backward => ScanMode::Backward,
@@ -193,17 +178,12 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
-        // When it switches to another key in single key mode or in point get mode,
-        // creates a new cursor to guarantee a total order of all keys due to prefix seek.
-        if self.single_key {
-            if self.current_key.as_ref().map_or(true, |k| k != key) {
-                self.current_key = Some(key.clone());
-                self.write_cursor.take();
-            }
-        } else if self.scan_mode.is_none() {
+        // When it switches to another key in prefix seek mode, creates a new cursor to guarantee
+        // a total order of all keys.
+        if self.scan_mode.is_none() && self.current_key.as_ref().map_or(true, |k| k != key) {
+            self.current_key = Some(key.clone());
             self.write_cursor.take();
         }
-
         self.create_write_cursor()?;
         let cursor = self.write_cursor.as_mut().unwrap();
         let ok = cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?;
@@ -317,8 +297,8 @@ impl<S: Snapshot> MvccReader<S> {
         if self.write_cursor.is_none() {
             let cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
                 .fill_cache(self.fill_cache)
-                // Only use prefix seek in single key mode or point get mode.
-                .prefix_seek(self.single_key || self.scan_mode.is_none())
+                // Only use prefix seek in non-scan mode.
+                .prefix_seek(self.scan_mode.is_none())
                 .scan_mode(self.get_scan_mode(true))
                 .build()?;
             self.write_cursor = Some(cursor);
@@ -1006,97 +986,89 @@ mod tests {
         engine.prewrite_pessimistic_lock(m, k, 45);
         engine.commit(k, 45, 50);
 
-        for &single_key in &[true, false] {
-            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
-            let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
-            reader.set_single_key(single_key);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
-            // Let's assume `50_45 PUT` means a commit version with start ts is 45 and commit ts
-            // is 50.
-            // Commit versions: [50_45 PUT, 45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
-            let key = Key::from_raw(k);
-            let overlapped_write = reader
-                .get_txn_commit_record(&key, 55.into())
-                .unwrap()
-                .unwrap_none();
-            assert!(overlapped_write.is_none());
+        // Let's assume `50_45 PUT` means a commit version with start ts is 45 and commit ts
+        // is 50.
+        // Commit versions: [50_45 PUT, 45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
+        let key = Key::from_raw(k);
+        let overlapped_write = reader
+            .get_txn_commit_record(&key, 55.into())
+            .unwrap()
+            .unwrap_none();
+        assert!(overlapped_write.is_none());
 
-            // When no such record is found but a record of another txn has a write record with
-            // its commit_ts equals to current start_ts, it
-            let overlapped_write = reader
-                .get_txn_commit_record(&key, 50.into())
-                .unwrap()
-                .unwrap_none()
-                .unwrap();
-            assert_eq!(overlapped_write.start_ts, 45.into());
-            assert_eq!(overlapped_write.write_type, WriteType::Put);
+        // When no such record is found but a record of another txn has a write record with
+        // its commit_ts equals to current start_ts, it
+        let overlapped_write = reader
+            .get_txn_commit_record(&key, 50.into())
+            .unwrap()
+            .unwrap_none()
+            .unwrap();
+        assert_eq!(overlapped_write.start_ts, 45.into());
+        assert_eq!(overlapped_write.write_type, WriteType::Put);
 
-            let (commit_ts, write_type) = reader
-                .get_txn_commit_record(&key, 45.into())
-                .unwrap()
-                .unwrap_single_record();
-            assert_eq!(commit_ts, 50.into());
-            assert_eq!(write_type, WriteType::Put);
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 45.into())
+            .unwrap()
+            .unwrap_single_record();
+        assert_eq!(commit_ts, 50.into());
+        assert_eq!(write_type, WriteType::Put);
 
-            let commit_ts = reader
-                .get_txn_commit_record(&key, 40.into())
-                .unwrap()
-                .unwrap_overlapped_rollback();
-            assert_eq!(commit_ts, 40.into());
+        let commit_ts = reader
+            .get_txn_commit_record(&key, 40.into())
+            .unwrap()
+            .unwrap_overlapped_rollback();
+        assert_eq!(commit_ts, 40.into());
 
-            let (commit_ts, write_type) = reader
-                .get_txn_commit_record(&key, 35.into())
-                .unwrap()
-                .unwrap_single_record();
-            assert_eq!(commit_ts, 40.into());
-            assert_eq!(write_type, WriteType::Put);
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 35.into())
+            .unwrap()
+            .unwrap_single_record();
+        assert_eq!(commit_ts, 40.into());
+        assert_eq!(write_type, WriteType::Put);
 
-            let (commit_ts, write_type) = reader
-                .get_txn_commit_record(&key, 25.into())
-                .unwrap()
-                .unwrap_single_record();
-            assert_eq!(commit_ts, 30.into());
-            assert_eq!(write_type, WriteType::Put);
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 25.into())
+            .unwrap()
+            .unwrap_single_record();
+        assert_eq!(commit_ts, 30.into());
+        assert_eq!(write_type, WriteType::Put);
 
-            let (commit_ts, write_type) = reader
-                .get_txn_commit_record(&key, 20.into())
-                .unwrap()
-                .unwrap_single_record();
-            assert_eq!(commit_ts, 20.into());
-            assert_eq!(write_type, WriteType::Rollback);
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 20.into())
+            .unwrap()
+            .unwrap_single_record();
+        assert_eq!(commit_ts, 20.into());
+        assert_eq!(write_type, WriteType::Rollback);
 
-            let (commit_ts, write_type) = reader
-                .get_txn_commit_record(&key, 1.into())
-                .unwrap()
-                .unwrap_single_record();
-            assert_eq!(commit_ts, 10.into());
-            assert_eq!(write_type, WriteType::Put);
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 1.into())
+            .unwrap()
+            .unwrap_single_record();
+        assert_eq!(commit_ts, 10.into());
+        assert_eq!(write_type, WriteType::Put);
 
-            let (commit_ts, write_type) = reader
-                .get_txn_commit_record(&key, 5.into())
-                .unwrap()
-                .unwrap_single_record();
-            assert_eq!(commit_ts, 5.into());
-            assert_eq!(write_type, WriteType::Rollback);
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 5.into())
+            .unwrap()
+            .unwrap_single_record();
+        assert_eq!(commit_ts, 5.into());
+        assert_eq!(write_type, WriteType::Rollback);
 
-            let seek_old = reader.get_statistics().write.seek;
-            let next_old = reader.get_statistics().write.next;
-            assert!(!reader
-                .get_txn_commit_record(&key, 30.into())
-                .unwrap()
-                .exist());
-            let seek_new = reader.get_statistics().write.seek;
-            let next_new = reader.get_statistics().write.next;
+        let seek_old = reader.get_statistics().write.seek;
+        let next_old = reader.get_statistics().write.next;
+        assert!(!reader
+            .get_txn_commit_record(&key, 30.into())
+            .unwrap()
+            .exist());
+        let seek_new = reader.get_statistics().write.seek;
+        let next_new = reader.get_statistics().write.next;
 
-            // `get_txn_commit_record(&key, 30)` stopped at `30_25 PUT`.
-            if single_key {
-                assert_eq!(seek_new - seek_old, 1);
-                assert_eq!(next_new - next_old, 2);
-            } else {
-                assert_eq!(seek_new - seek_old, 3);
-                assert_eq!(next_new, next_old);
-            }
-        }
+        // `get_txn_commit_record(&key, 30)` stopped at `30_25 PUT`.
+        assert_eq!(seek_new - seek_old, 1);
+        assert_eq!(next_new - next_old, 2);
     }
 
     #[test]
@@ -1123,25 +1095,22 @@ mod tests {
         engine.prewrite_pessimistic_lock(m, k, 1);
         engine.commit(k, 1, 4);
 
-        for &single_key in &[true, false] {
-            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
-            let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
-            reader.set_single_key(single_key);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
-            let (commit_ts, write_type) = reader
-                .get_txn_commit_record(&key, 2.into())
-                .unwrap()
-                .unwrap_single_record();
-            assert_eq!(commit_ts, 3.into());
-            assert_eq!(write_type, WriteType::Put);
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 2.into())
+            .unwrap()
+            .unwrap_single_record();
+        assert_eq!(commit_ts, 3.into());
+        assert_eq!(write_type, WriteType::Put);
 
-            let (commit_ts, write_type) = reader
-                .get_txn_commit_record(&key, 1.into())
-                .unwrap()
-                .unwrap_single_record();
-            assert_eq!(commit_ts, 4.into());
-            assert_eq!(write_type, WriteType::Put);
-        }
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 1.into())
+            .unwrap()
+            .unwrap_single_record();
+        assert_eq!(commit_ts, 4.into());
+        assert_eq!(write_type, WriteType::Put);
     }
 
     #[test]
@@ -1174,57 +1143,73 @@ mod tests {
         engine.prewrite(m, k, 23);
         engine.commit(k, 23, 25);
 
-        let k = Key::from_raw(k);
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
         // is 2.
         // Commit versions: [25_23 PUT, 20_10 PUT, 17_15 PUT, 7_7 Rollback, 5_1 PUT, 3_3 Rollback].
-        for &single_key in &[true, false] {
-            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
-            let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
-            reader.set_single_key(single_key);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
-            let (commit_ts, write) = reader.seek_write(&k, 30.into()).unwrap().unwrap();
-            assert_eq!(commit_ts, 25.into());
-            assert_eq!(
-                write,
-                Write::new(WriteType::Put, 23.into(), Some(v.to_vec()))
-            );
+        let k = Key::from_raw(k);
+        let (commit_ts, write) = reader.seek_write(&k, 30.into()).unwrap().unwrap();
+        assert_eq!(commit_ts, 25.into());
+        assert_eq!(
+            write,
+            Write::new(WriteType::Put, 23.into(), Some(v.to_vec()))
+        );
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 0);
 
-            let (commit_ts, write) = reader.seek_write(&k, 25.into()).unwrap().unwrap();
-            assert_eq!(commit_ts, 25.into());
-            assert_eq!(
-                write,
-                Write::new(WriteType::Put, 23.into(), Some(v.to_vec()))
-            );
+        let (commit_ts, write) = reader.seek_write(&k, 25.into()).unwrap().unwrap();
+        assert_eq!(commit_ts, 25.into());
+        assert_eq!(
+            write,
+            Write::new(WriteType::Put, 23.into(), Some(v.to_vec()))
+        );
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 0);
 
-            let (commit_ts, write) = reader.seek_write(&k, 20.into()).unwrap().unwrap();
-            assert_eq!(commit_ts, 20.into());
-            assert_eq!(write, Write::new(WriteType::Lock, 10.into(), None));
+        let (commit_ts, write) = reader.seek_write(&k, 20.into()).unwrap().unwrap();
+        assert_eq!(commit_ts, 20.into());
+        assert_eq!(write, Write::new(WriteType::Lock, 10.into(), None));
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 1);
 
-            let (commit_ts, write) = reader.seek_write(&k, 19.into()).unwrap().unwrap();
-            assert_eq!(commit_ts, 17.into());
-            assert_eq!(
-                write,
-                Write::new(WriteType::Put, 15.into(), Some(v.to_vec()))
-            );
+        let (commit_ts, write) = reader.seek_write(&k, 19.into()).unwrap().unwrap();
+        assert_eq!(commit_ts, 17.into());
+        assert_eq!(
+            write,
+            Write::new(WriteType::Put, 15.into(), Some(v.to_vec()))
+        );
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 2);
 
-            let (commit_ts, write) = reader.seek_write(&k, 3.into()).unwrap().unwrap();
-            assert_eq!(commit_ts, 3.into());
-            assert_eq!(write, Write::new_rollback(3.into(), false));
+        let (commit_ts, write) = reader.seek_write(&k, 3.into()).unwrap().unwrap();
+        assert_eq!(commit_ts, 3.into());
+        assert_eq!(write, Write::new_rollback(3.into(), false));
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 5);
 
-            let (commit_ts, write) = reader.seek_write(&k, 16.into()).unwrap().unwrap();
-            assert_eq!(commit_ts, 7.into());
-            assert_eq!(write, Write::new_rollback(7.into(), false));
+        let (commit_ts, write) = reader.seek_write(&k, 16.into()).unwrap().unwrap();
+        assert_eq!(commit_ts, 7.into());
+        assert_eq!(write, Write::new_rollback(7.into(), false));
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 6);
+        assert_eq!(reader.get_statistics().write.prev, 3);
 
-            let (commit_ts, write) = reader.seek_write(&k, 6.into()).unwrap().unwrap();
-            assert_eq!(commit_ts, 5.into());
-            assert_eq!(
-                write,
-                Write::new(WriteType::Put, 1.into(), Some(v.to_vec()))
-            );
+        let (commit_ts, write) = reader.seek_write(&k, 6.into()).unwrap().unwrap();
+        assert_eq!(commit_ts, 5.into());
+        assert_eq!(
+            write,
+            Write::new(WriteType::Put, 1.into(), Some(v.to_vec()))
+        );
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 7);
+        assert_eq!(reader.get_statistics().write.prev, 3);
 
-            assert!(reader.seek_write(&k, 2.into()).unwrap().is_none());
-        }
+        assert!(reader.seek_write(&k, 2.into()).unwrap().is_none());
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 9);
+        assert_eq!(reader.get_statistics().write.prev, 3);
 
         // Test seek_write should not see the next key.
         let (k2, v2) = (b"k2", b"v2");
@@ -1232,33 +1217,32 @@ mod tests {
         engine.prewrite(m2, k2, 1);
         engine.commit(k2, 1, 2);
 
-        for &single_key in &[true, false] {
-            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
-            let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
-            reader.set_single_key(single_key);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
-            let (commit_ts, write) = reader
-                .seek_write(&Key::from_raw(k2), 3.into())
-                .unwrap()
-                .unwrap();
-            assert_eq!(commit_ts, 2.into());
-            assert_eq!(
-                write,
-                Write::new(WriteType::Put, 1.into(), Some(v2.to_vec()))
-            );
+        let (commit_ts, write) = reader
+            .seek_write(&Key::from_raw(k2), 3.into())
+            .unwrap()
+            .unwrap();
+        assert_eq!(commit_ts, 2.into());
+        assert_eq!(
+            write,
+            Write::new(WriteType::Put, 1.into(), Some(v2.to_vec()))
+        );
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 0);
 
-            assert!(reader.seek_write(&k, 2.into()).unwrap().is_none());
-        }
+        // Should seek for another key.
+        assert!(reader.seek_write(&k, 2.into()).unwrap().is_none());
+        assert_eq!(reader.get_statistics().write.seek, 2);
+        assert_eq!(reader.get_statistics().write.next, 0);
 
         // Test seek_write touches region's end.
         let region1 = make_region(1, vec![], Key::from_raw(b"k1").into_encoded());
-        for &single_key in &[true, false] {
-            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region1.clone());
-            let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
-            reader.set_single_key(single_key);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region1);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
-            assert!(reader.seek_write(&k, 2.into()).unwrap().is_none());
-        }
+        assert!(reader.seek_write(&k, 2.into()).unwrap().is_none());
     }
 
     #[test]
@@ -1305,54 +1289,51 @@ mod tests {
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.prewrite(m, k, 24);
 
-        for &single_key in &[true, false] {
-            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
-            let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
-            reader.set_single_key(single_key);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
-            // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
-            // is 2.
-            // Commit versions: [21_17 LOCK, 20_18 PUT, 15_13 LOCK, 14_12 PUT, 9_8 DELETE, 7_6 LOCK,
-            //                   5_5 Rollback, 2_1 PUT].
-            let key = Key::from_raw(k);
+        // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
+        // is 2.
+        // Commit versions: [21_17 LOCK, 20_18 PUT, 15_13 LOCK, 14_12 PUT, 9_8 DELETE, 7_6 LOCK,
+        //                   5_5 Rollback, 2_1 PUT].
+        let key = Key::from_raw(k);
 
-            assert!(reader.get_write(&key, 1.into()).unwrap().is_none());
+        assert!(reader.get_write(&key, 1.into()).unwrap().is_none());
 
-            let write = reader.get_write(&key, 2.into()).unwrap().unwrap();
-            assert_eq!(write.write_type, WriteType::Put);
-            assert_eq!(write.start_ts, 1.into());
+        let write = reader.get_write(&key, 2.into()).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 1.into());
 
-            let write = reader.get_write(&key, 5.into()).unwrap().unwrap();
-            assert_eq!(write.write_type, WriteType::Put);
-            assert_eq!(write.start_ts, 1.into());
+        let write = reader.get_write(&key, 5.into()).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 1.into());
 
-            let write = reader.get_write(&key, 7.into()).unwrap().unwrap();
-            assert_eq!(write.write_type, WriteType::Put);
-            assert_eq!(write.start_ts, 1.into());
+        let write = reader.get_write(&key, 7.into()).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 1.into());
 
-            assert!(reader.get_write(&key, 9.into()).unwrap().is_none());
+        assert!(reader.get_write(&key, 9.into()).unwrap().is_none());
 
-            let write = reader.get_write(&key, 14.into()).unwrap().unwrap();
-            assert_eq!(write.write_type, WriteType::Put);
-            assert_eq!(write.start_ts, 12.into());
+        let write = reader.get_write(&key, 14.into()).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 12.into());
 
-            let write = reader.get_write(&key, 16.into()).unwrap().unwrap();
-            assert_eq!(write.write_type, WriteType::Put);
-            assert_eq!(write.start_ts, 12.into());
+        let write = reader.get_write(&key, 16.into()).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 12.into());
 
-            let write = reader.get_write(&key, 20.into()).unwrap().unwrap();
-            assert_eq!(write.write_type, WriteType::Put);
-            assert_eq!(write.start_ts, 18.into());
+        let write = reader.get_write(&key, 20.into()).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 18.into());
 
-            let write = reader.get_write(&key, 24.into()).unwrap().unwrap();
-            assert_eq!(write.write_type, WriteType::Put);
-            assert_eq!(write.start_ts, 18.into());
+        let write = reader.get_write(&key, 24.into()).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 18.into());
 
-            assert!(reader
-                .get_write(&Key::from_raw(b"j"), 100.into())
-                .unwrap()
-                .is_none());
-        }
+        assert!(reader
+            .get_write(&Key::from_raw(b"j"), 100.into())
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1557,30 +1538,27 @@ mod tests {
         let m = Mutation::Put((Key::from_raw(k), long_value.to_vec()));
         engine.prewrite(m, k, 10);
 
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         let key = Key::from_raw(k);
-        for &skip_lock_check in &[false, true] {
-            for &single_key in &[false, true] {
-                let snap =
-                    RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
-                let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
-                reader.set_single_key(single_key);
-                assert_eq!(
-                    reader.get(&key, 2.into(), skip_lock_check).unwrap(),
-                    Some(short_value.to_vec())
-                );
-                assert_eq!(
-                    reader.get(&key, 5.into(), skip_lock_check).unwrap(),
-                    Some(short_value.to_vec())
-                );
-                assert_eq!(
-                    reader.get(&key, 7.into(), skip_lock_check).unwrap(),
-                    Some(short_value.to_vec())
-                );
-                assert_eq!(reader.get(&key, 9.into(), skip_lock_check).unwrap(), None);
 
-                assert!(reader.get(&key, 11.into(), false).is_err());
-                assert_eq!(reader.get(&key, 9.into(), true).unwrap(), None);
-            }
+        for &skip_lock_check in &[false, true] {
+            assert_eq!(
+                reader.get(&key, 2.into(), skip_lock_check).unwrap(),
+                Some(short_value.to_vec())
+            );
+            assert_eq!(
+                reader.get(&key, 5.into(), skip_lock_check).unwrap(),
+                Some(short_value.to_vec())
+            );
+            assert_eq!(
+                reader.get(&key, 7.into(), skip_lock_check).unwrap(),
+                Some(short_value.to_vec())
+            );
+            assert_eq!(reader.get(&key, 9.into(), skip_lock_check).unwrap(), None);
+
+            assert!(reader.get(&key, 11.into(), false).is_err());
+            assert_eq!(reader.get(&key, 9.into(), true).unwrap(), None);
         }
 
         // Commit the long value
@@ -1593,67 +1571,5 @@ mod tests {
                 Some(long_value.to_vec())
             );
         }
-    }
-
-    #[test]
-    fn test_single_key_mode() {
-        let path = tempfile::Builder::new()
-            .prefix("_test_storage_mvcc_reader_single_key")
-            .tempdir()
-            .unwrap();
-        let path = path.path().to_str().unwrap();
-        let region = make_region(1, vec![], vec![]);
-        let db = open_db(path, true);
-        let mut engine = RegionEngine::new(&db, &region);
-
-        engine.rollback(b"k0", 10);
-        engine.rollback(b"k0", 20);
-
-        for &single_key in &[true] {
-            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
-            let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
-            reader.set_single_key(single_key);
-
-            let k = Key::from_raw(b"k0");
-            let (commit_ts, write) = reader.seek_write(&k, 20.into()).unwrap().unwrap();
-            assert_eq!(commit_ts, TimeStamp::new(20));
-            assert_eq!(write.write_type, WriteType::Rollback);
-            assert_eq!(reader.get_statistics().write.seek, 1);
-
-            let (commit_ts, write) = reader.seek_write(&k, 10.into()).unwrap().unwrap();
-            assert_eq!(commit_ts, TimeStamp::new(10));
-            assert_eq!(write.write_type, WriteType::Rollback);
-            if single_key {
-                // Should only seek once in single key mode.
-                assert_eq!(reader.get_statistics().write.seek, 1);
-                assert_eq!(reader.get_statistics().write.next, 1);
-            } else {
-                assert_eq!(reader.get_statistics().write.seek, 2);
-            }
-
-            assert!(reader.seek_write(&k, 5.into()).unwrap().is_none());
-            if single_key {
-                assert_eq!(reader.get_statistics().write.seek, 1);
-                assert_eq!(reader.get_statistics().write.next, 2);
-            } else {
-                assert_eq!(reader.get_statistics().write.seek, 3);
-            }
-        }
-
-        engine.rollback(b"k1", 10);
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
-        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
-        reader.set_single_key(true);
-        for &k in &[b"k0", b"k1"] {
-            let (commit_ts, write) = reader
-                .seek_write(&Key::from_raw(k), 10.into())
-                .unwrap()
-                .unwrap();
-            assert_eq!(commit_ts, TimeStamp::new(10));
-            assert_eq!(write.write_type, WriteType::Rollback);
-        }
-        // Should create a cursor for each key.
-        assert_eq!(reader.get_statistics().write.seek, 2);
-        assert_eq!(reader.get_statistics().write.next, 0);
     }
 }

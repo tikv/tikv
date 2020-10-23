@@ -30,7 +30,7 @@ fn prepare_mvcc_data(key: &Key, n: u64) -> SyncTestStorage<RocksEngine> {
     store
 }
 
-fn bench_get_txn_commit_record(b: &mut test::Bencher, single_key: bool, n: u64) {
+fn bench_get_txn_commit_record(b: &mut test::Bencher, n: u64) {
     let key = Key::from_raw(&table::encode_row_key(1, 0));
     let store = prepare_mvcc_data(&key, n);
     b.iter(|| {
@@ -40,7 +40,6 @@ fn bench_get_txn_commit_record(b: &mut test::Bencher, single_key: bool, n: u64) 
             true,
             IsolationLevel::Si,
         );
-        mvcc_reader.set_single_key(single_key);
         mvcc_reader
             .get_txn_commit_record(&key, 1.into())
             .unwrap()
@@ -49,21 +48,11 @@ fn bench_get_txn_commit_record(b: &mut test::Bencher, single_key: bool, n: u64) 
 }
 
 #[bench]
-fn bench_get_txn_commit_record_single_key_5(c: &mut test::Bencher) {
-    bench_get_txn_commit_record(c, true, 5);
+fn bench_get_txn_commit_record_100(c: &mut test::Bencher) {
+    bench_get_txn_commit_record(c, 100);
 }
 
 #[bench]
-fn bench_get_txn_commit_record_non_single_key_5(c: &mut test::Bencher) {
-    bench_get_txn_commit_record(c, false, 5);
-}
-
-#[bench]
-fn bench_get_txn_commit_record_single_key_100(c: &mut test::Bencher) {
-    bench_get_txn_commit_record(c, true, 100);
-}
-
-#[bench]
-fn bench_get_txn_commit_record_non_single_key_100(c: &mut test::Bencher) {
-    bench_get_txn_commit_record(c, false, 100);
+fn bench_get_txn_commit_record_5(c: &mut test::Bencher) {
+    bench_get_txn_commit_record(c, 5);
 }
