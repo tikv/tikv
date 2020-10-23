@@ -222,11 +222,7 @@ fn test_read_hibernated_region() {
     let resp1_ch = async_read_on_peer(&mut cluster, p2.clone(), region.clone(), b"k1", true, true);
     let resp1 = resp1_ch.recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(
-        resp1
-            .get_header()
-            .get_error()
-            .get_message()
-            .contains("can not read index due to no leader"),
+        resp1.get_header().get_error().has_not_leader(),
         "{:?}",
         resp1.get_header()
     );

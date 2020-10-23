@@ -82,7 +82,7 @@ type Key = Vec<u8>;
 
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
-pub const PENDING_VOTES_CAP: usize = 20;
+pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
 pub struct StoreInfo {
@@ -99,9 +99,10 @@ pub struct StoreMeta {
     pub regions: HashMap<u64, Region>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
-    /// `MsgRequestPreVote` or `MsgRequestVote` messages from newly split Regions shouldn't be dropped if there is no
-    /// such Region in this store now. So the messages are recorded temporarily and will be handled later.
-    pub pending_votes: RingQueue<RaftMessage>,
+    /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly split Regions shouldn't be
+    /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
+    /// will be handled later.
+    pub pending_msgs: RingQueue<RaftMessage>,
     /// The regions with pending snapshots.
     pub pending_snapshot_regions: Vec<Region>,
     /// A marker used to indicate the peer of a Region has received a merge target message and waits to be destroyed.
@@ -119,7 +120,7 @@ impl StoreMeta {
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
             readers: HashMap::default(),
-            pending_votes: RingQueue::with_capacity(vote_capacity),
+            pending_msgs: RingQueue::with_capacity(vote_capacity),
             pending_snapshot_regions: Vec::default(),
             pending_merge_targets: HashMap::default(),
             targets_map: HashMap::default(),
@@ -1340,14 +1341,20 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         if local_state.get_state() != PeerState::Tombstone {
             // Maybe split, but not registered yet.
             self.ctx.raft_metrics.message_dropped.region_nonexistent += 1;
-            if util::is_first_vote_msg(msg.get_message()) {
+            if util::is_first_message(msg.get_message()) {
                 let mut meta = self.ctx.store_meta.lock().unwrap();
                 // Last check on whether target peer is created, otherwise, the
                 // vote message will never be consumed.
                 if meta.regions.contains_key(&region_id) {
                     return Ok(false);
                 }
-                meta.pending_votes.push(msg.to_owned());
+
+                // Save one pending message for a peer is enough, remove
+                // the previous pending message of this peer
+                meta.pending_msgs
+                    .swap_remove_front(|m| m.get_to_peer() == msg.get_to_peer());
+                meta.pending_msgs.push(msg.to_owned());
+
                 info!(
                     "region doesn't exist yet, wait for it to be split";
                     "region_id" => region_id
@@ -1504,6 +1511,27 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return Ok(());
         }
         if !self.maybe_create_peer(region_id, &msg)? {
+            if util::is_first_message(msg.get_message()) {
+                // Failed to create peer, to void losing messages, either
+                // put it to pending_msgs or force send.
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                if !meta.regions.contains_key(&region_id) {
+                    // Save one pending message for a peer is enough, remove
+                    // the previous pending message of this peer
+                    meta.pending_msgs
+                        .swap_remove_front(|m| m.get_to_peer() == msg.get_to_peer());
+                    meta.pending_msgs.push(msg);
+                } else {
+                    drop(meta);
+                    if let Err(e) = self
+                        .ctx
+                        .router
+                        .force_send(region_id, PeerMsg::RaftMessage(msg))
+                    {
+                        warn!("handle first request failed"; "region_id" => region_id, "error" => ?e);
+                    }
+                }
+            }
             return Ok(());
         }
         let _ = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
@@ -1553,9 +1581,6 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 "msg" => ?msg,
                 "exist_region" => ?exist_region,
             );
-            if util::is_first_vote_msg(msg.get_message()) {
-                meta.pending_votes.push(msg.to_owned());
-            }
 
             if maybe_destroy_source(
                 meta,

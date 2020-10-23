@@ -28,7 +28,7 @@ use raftstore::{
     store::{
         config::RaftstoreConfigManager,
         fsm,
-        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
+        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
         new_compaction_listener, AutoSplitController, LocalReader, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager,
     },
@@ -361,7 +361,7 @@ impl TiKVServer {
             Arc::new(raft_engine),
             block_cache.is_some(),
         );
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let local_reader = LocalReader::new(
             engines.kv.c().clone(),
             store_meta.clone(),
