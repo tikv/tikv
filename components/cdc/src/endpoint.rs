@@ -23,6 +23,7 @@ use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
+use tikv::storage::Statistics;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 use tikv_util::timer::{SteadyTimer, Timer};
@@ -91,7 +92,28 @@ impl fmt::Debug for Deregister {
 }
 
 type InitCallback = Box<dyn FnOnce() + Send>;
+<<<<<<< HEAD
 pub(crate) type OldValueCallback = Box<dyn FnMut(Key) -> Option<Vec<u8>> + Send>;
+=======
+pub(crate) type OldValueCallback =
+    Box<dyn FnMut(Key, &mut OldValueCache, &mut Statistics) -> Option<Vec<u8>> + Send>;
+
+pub struct OldValueCache {
+    pub cache: LruCache<Key, (Option<OldValue>, MutationType)>,
+    pub miss_count: usize,
+    pub access_count: usize,
+}
+
+impl OldValueCache {
+    pub fn new(size: usize) -> OldValueCache {
+        OldValueCache {
+            cache: LruCache::with_capacity(size),
+            miss_count: 0,
+            access_count: 0,
+        }
+    }
+}
+>>>>>>> a69dd4728... cdc: fix resolved ts blocked by channel receiving & improve old value (#8878)
 
 pub enum Task {
     Register {
@@ -270,7 +292,12 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
     }
 
     fn on_deregister(&mut self, deregister: Deregister) {
+<<<<<<< HEAD
         info!("cdc deregister region"; "deregister" => ?deregister);
+=======
+        info!("cdc deregister"; "deregister" => ?deregister);
+        fail_point!("cdc_before_handle_deregister", |_| {});
+>>>>>>> a69dd4728... cdc: fix resolved ts blocked by channel receiving & improve old value (#8878)
         match deregister {
             Deregister::Downstream {
                 region_id,
@@ -506,6 +533,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
     }
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
+        fail_point!("cdc_before_handle_multi_batch", |_| {});
         let old_value_cb = Rc::new(RefCell::new(old_value_cb));
         for batch in multi {
             let region_id = batch.region_id;
@@ -609,6 +637,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             .iter()
             .map(|(region_id, delegate)| (*region_id, delegate.id))
             .collect();
+<<<<<<< HEAD
         let fut = timeout
             .map_err(|_| unreachable!())
             .then(move |_| pd_client.get_tso())
@@ -674,6 +703,82 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                     }).map_err(|_| ())
             },
         );
+=======
+        let cm: ConcurrencyManager = self.concurrency_manager.clone();
+        let fut = async move {
+            let _ = timeout.compat().await;
+            // Ignore get tso errors since we will retry every `min_ts_interval`.
+            let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
+
+            // Sync with concurrency manager so that it can work correctly when optimizations
+            // like async commit is enabled.
+            // Note: This step must be done before scheduling `Task::MinTS` task, and the
+            // resolver must be checked in or after `Task::MinTS`' execution.
+            cm.update_max_ts(min_ts);
+            if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
+                if min_mem_lock_ts < min_ts {
+                    min_ts = min_mem_lock_ts;
+                }
+            }
+            // TODO: send a message to raftstore would consume too much cpu time,
+            // try to handle it outside raftstore.
+            let regions: Vec<_> = regions
+                .iter()
+                .copied()
+                .map(|(region_id, observe_id)| {
+                    let scheduler_clone = scheduler.clone();
+                    let raft_router_clone = raft_router.clone();
+                    async move {
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        if let Err(e) = raft_router_clone.significant_send(
+                            region_id,
+                        SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
+                            let resp = if resp.response.get_header().has_error() {
+                                None
+                            } else {
+                                Some(region_id)
+                            };
+                            if tx.send(resp).is_err() {
+                                error!("cdc send tso response failed"; "region_id" => region_id);
+                            }
+                        }))),
+                    ) {
+                        warn!("cdc send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
+                        let deregister = Deregister::Region {
+                            observe_id,
+                            region_id,
+                            err: Error::Request(e.into()),
+                        };
+                        if let Err(e) = scheduler_clone.schedule(Task::Deregister(deregister)) {
+                            error!("schedule cdc task failed"; "error" => ?e);
+                        }
+                        return None;
+                    }
+                        rx.await.unwrap_or(None)
+                    }
+                })
+                .collect();
+            match scheduler.schedule(Task::RegisterMinTsEvent) {
+                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                // advance normally.
+                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
+            }
+            let resps = futures::future::join_all(regions).await;
+            let regions = resps
+                .into_iter()
+                .filter_map(|resp| resp)
+                .collect::<Vec<u64>>();
+            if !regions.is_empty() {
+                match scheduler.schedule(Task::MinTS { regions, min_ts }) {
+                    Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                    // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                    // advance normally.
+                    Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
+                }
+            }
+        };
+>>>>>>> a69dd4728... cdc: fix resolved ts blocked by channel receiving & improve old value (#8878)
         self.tso_worker.spawn(fut);
     }
 
