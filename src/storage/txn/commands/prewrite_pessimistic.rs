@@ -196,7 +196,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
                 // All keys can be successfully locked and `try_one_pc` is set. Try to directly
                 // commit them.
                 let (ts, released_locks) =
-                    handle_1pc(&mut txn, final_min_commit_ts, self.max_commit_ts);
+                    handle_1pc(&mut txn, final_min_commit_ts);
                 let released_locks = released_locks.unwrap();
                 if !released_locks.is_empty() {
                     released_locks.wake_up(context.lock_mgr);
@@ -249,7 +249,7 @@ mod tests {
     use crate::storage::{Statistics, TestEngineBuilder};
 
     #[test]
-    fn test_prewrite_pessimsitic_one_pc() {
+    fn test_prewrite_pessimsitic_1pc() {
         use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
         use crate::storage::txn::tests::must_acquire_pessimistic_lock;
         let engine = TestEngineBuilder::new().build().unwrap();

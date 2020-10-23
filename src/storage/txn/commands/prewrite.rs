@@ -261,7 +261,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 // All keys can be successfully locked and `try_one_pc` is set. Try to directly
                 // commit them.
                 let (ts, released_locks) =
-                    handle_1pc(&mut txn, final_min_commit_ts, self.max_commit_ts);
+                    handle_1pc(&mut txn, final_min_commit_ts);
                 if let Some(released_locks) = released_locks {
                     assert!(released_locks.is_empty());
                 }

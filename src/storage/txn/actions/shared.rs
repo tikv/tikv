@@ -94,19 +94,7 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
 pub(in crate::storage::txn) fn handle_1pc<S: Snapshot>(
     txn: &mut MvccTxn<S>,
     commit_ts: TimeStamp,
-    max_commit_ts: TimeStamp,
 ) -> (TimeStamp, Option<ReleasedLocks>) {
-    if commit_ts > max_commit_ts {
-        warn!("failed to commit transaction with 1PC because commit_ts exceeds max_commit_ts from client. fallback to 2PC.";
-            "start_ts" => txn.start_ts,
-            "commit_ts" => commit_ts, 
-            "max_commit_ts" => max_commit_ts);
-        std::mem::take(&mut txn.locks_for_1pc)
-            .into_iter()
-            .for_each(|(key, lock, _)| txn.put_lock(key, &lock));
-        return (TimeStamp::zero(), None);
-    }
-
     let mut released_locks = ReleasedLocks::new(txn.start_ts, commit_ts);
 
     // TODO: It's much simpler than normal 2PC committing. Is there anything missing?
