@@ -151,7 +151,7 @@ fn test_region_error() {
     req.set_region_epoch(target.get_region_epoch().clone());
     let (mut target_tx, target_wrap, _target_event) =
         new_event_feed(suite.get_region_cdc_client(target.get_id()));
-    block_on(target_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    block_on(target_tx.send((req, WriteFlags::default()))).unwrap();
     sleep_ms(200);
 
     suite
