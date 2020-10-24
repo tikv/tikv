@@ -33,7 +33,7 @@ use engine_rocks::{
     RocksSstPartitionerFactory, RocksdbLogger, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
     DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
-use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
+use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
@@ -1395,8 +1395,7 @@ impl DBConfigManger {
 
     fn set_cf_config(&self, cf: &str, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
         self.validate_cf(cf)?;
-        let handle = self.db.cf_handle(cf)?;
-        self.db.set_options_cf(handle, opts)?;
+        self.db.set_options_cf(cf, opts)?;
         // Write config to metric
         for (cfg_name, cfg_value) in opts {
             let cfg_value = match cfg_value {
@@ -1420,8 +1419,7 @@ impl DBConfigManger {
                  block-cache.capacity in storage module instead"
                 .into());
         }
-        let handle = self.db.cf_handle(cf)?;
-        let opt = self.db.get_options_cf(handle);
+        let opt = self.db.get_options_cf(cf)?;
         opt.set_block_cache_capacity(size.0)?;
         // Write config to metric
         CONFIG_ROCKSDB_GAUGE
@@ -3299,8 +3297,7 @@ mod tests {
         );
 
         // update some configs on default cf
-        let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
-        let cf_opts = db.get_options_cf(defaultcf);
+        let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
         assert_eq!(cf_opts.get_disable_auto_compactions(), false);
         assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(64).0);
         assert_eq!(cf_opts.get_block_cache_capacity(), ReadableSize::mb(8).0);
@@ -3320,7 +3317,7 @@ mod tests {
         );
         cfg_controller.update(change).unwrap();
 
-        let cf_opts = db.get_options_cf(defaultcf);
+        let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);
         assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(32).0);
         assert_eq!(cf_opts.get_block_cache_capacity(), ReadableSize::mb(256).0);
@@ -3348,8 +3345,7 @@ mod tests {
             .update_config("storage.block-cache.capacity", "256MB")
             .unwrap();
 
-        let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
-        let defaultcf_opts = db.get_options_cf(defaultcf);
+        let defaultcf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
         assert_eq!(
             defaultcf_opts.get_block_cache_capacity(),
             ReadableSize::mb(256).0
