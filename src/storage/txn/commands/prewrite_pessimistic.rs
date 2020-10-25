@@ -12,6 +12,7 @@ use crate::storage::txn::commands::{
 use crate::storage::txn::{Error, Result};
 use crate::storage::types::PrewriteResult;
 use crate::storage::{Error as StorageError, ProcessResult, Snapshot};
+use tikv_util::minitrace::*;
 
 command! {
     /// The prewrite phase of a transaction using pessimistic locking. The first phase of 2PC.
@@ -65,6 +66,7 @@ impl CommandExt for PrewritePessimistic {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
+    #[trace("PrewritePessimistic.process_write")]
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
         let mut txn = MvccTxn::new(

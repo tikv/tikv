@@ -2,6 +2,7 @@
 
 use crate::server::metrics::GRPC_MSG_HISTOGRAM_STATIC;
 use crate::server::service::kv::{batch_commands_response, poll_future_notify};
+use crate::server::tracing::Reporter;
 use crate::storage::{
     errors::{extract_key_error, extract_region_error},
     kv::Engine,
@@ -10,23 +11,33 @@ use crate::storage::{
 };
 use futures::Future;
 use kvproto::kvrpcpb::*;
+use tikv_util::minitrace::*;
 use tikv_util::mpsc::batch::Sender;
 use tikv_util::time::{duration_to_sec, Instant};
 
-pub struct ReqBatcher {
-    gets: Vec<GetRequest>,
-    raw_gets: Vec<RawGetRequest>,
-    get_ids: Vec<u64>,
-    raw_get_ids: Vec<u64>,
+struct ReqContext {
+    pub id: u64,
+    pub trace_context: TraceContext,
+    pub scope: Scope,
+    pub collector: Option<Collector>,
 }
 
-impl ReqBatcher {
-    pub fn new() -> ReqBatcher {
+pub struct ReqBatcher<R> {
+    gets: Vec<GetRequest>,
+    raw_gets: Vec<RawGetRequest>,
+    get_ctxs: Vec<ReqContext>,
+    raw_get_ctxs: Vec<ReqContext>,
+    reporter: R,
+}
+
+impl<R: Reporter + Clone + 'static> ReqBatcher<R> {
+    pub fn new(reporter: R) -> Self {
         ReqBatcher {
             gets: vec![],
             raw_gets: vec![],
-            get_ids: vec![],
-            raw_get_ids: vec![],
+            get_ctxs: vec![],
+            raw_get_ctxs: vec![],
+            reporter,
         }
     }
 
@@ -38,14 +49,38 @@ impl ReqBatcher {
         req.get_context().get_priority() == CommandPri::Normal
     }
 
-    pub fn add_get_request(&mut self, req: GetRequest, id: u64) {
+    pub fn add_get_request(
+        &mut self,
+        mut req: GetRequest,
+        scope: Scope,
+        collector: Option<Collector>,
+        id: u64,
+    ) {
+        let trace_context = req.mut_context().take_trace_context();
         self.gets.push(req);
-        self.get_ids.push(id);
+        self.get_ctxs.push(ReqContext {
+            id,
+            trace_context,
+            scope,
+            collector,
+        });
     }
 
-    pub fn add_raw_get_request(&mut self, req: RawGetRequest, id: u64) {
+    pub fn add_raw_get_request(
+        &mut self,
+        mut req: RawGetRequest,
+        scope: Scope,
+        collector: Option<Collector>,
+        id: u64,
+    ) {
+        let trace_context = req.mut_context().take_trace_context();
         self.raw_gets.push(req);
-        self.raw_get_ids.push(id);
+        self.raw_get_ctxs.push(ReqContext {
+            id,
+            trace_context,
+            scope,
+            collector,
+        });
     }
 
     pub fn maybe_commit<E: Engine, L: LockManager>(
@@ -55,13 +90,19 @@ impl ReqBatcher {
     ) {
         if self.gets.len() > 10 {
             let gets = std::mem::replace(&mut self.gets, vec![]);
-            let ids = std::mem::replace(&mut self.get_ids, vec![]);
-            future_batch_get_command(storage, ids, gets, tx.clone());
+            let get_ctxs = std::mem::replace(&mut self.get_ctxs, vec![]);
+            future_batch_get_command(storage, get_ctxs, gets, tx.clone(), self.reporter.clone());
         }
         if self.raw_gets.len() > 16 {
             let gets = std::mem::replace(&mut self.raw_gets, vec![]);
-            let ids = std::mem::replace(&mut self.raw_get_ids, vec![]);
-            future_batch_raw_get_command(storage, ids, gets, tx.clone());
+            let get_ctxs = std::mem::replace(&mut self.raw_get_ctxs, vec![]);
+            future_batch_raw_get_command(
+                storage,
+                get_ctxs,
+                gets,
+                tx.clone(),
+                self.reporter.clone(),
+            );
         }
     }
 
@@ -72,28 +113,48 @@ impl ReqBatcher {
     ) {
         if !self.gets.is_empty() {
             let gets = std::mem::replace(&mut self.gets, vec![]);
-            let ids = std::mem::replace(&mut self.get_ids, vec![]);
-            future_batch_get_command(storage, ids, gets, tx.clone());
+            let get_ctxs = std::mem::replace(&mut self.get_ctxs, vec![]);
+            future_batch_get_command(storage, get_ctxs, gets, tx.clone(), self.reporter.clone());
         }
         if !self.raw_gets.is_empty() {
             let gets = std::mem::replace(&mut self.raw_gets, vec![]);
-            let ids = std::mem::replace(&mut self.raw_get_ids, vec![]);
-            future_batch_raw_get_command(storage, ids, gets, tx.clone());
+            let get_ctxs = std::mem::replace(&mut self.raw_get_ctxs, vec![]);
+            future_batch_raw_get_command(
+                storage,
+                get_ctxs,
+                gets,
+                tx.clone(),
+                self.reporter.clone(),
+            );
         }
     }
 }
 
-fn future_batch_get_command<E: Engine, L: LockManager>(
+fn future_batch_get_command<E: Engine, L: LockManager, R: Reporter + 'static>(
     storage: &Storage<E, L>,
-    requests: Vec<u64>,
+    req_ctxs: Vec<ReqContext>,
     gets: Vec<GetRequest>,
     tx: Sender<(u64, batch_commands_response::Response)>,
+    reporter: R,
 ) {
     let begin_instant = Instant::now_coarse();
+    let _gs = req_ctxs.iter().map(|ctx| ctx.scope.start_scope());
     let f = storage.batch_get_command(gets).then(move |ret| {
         match ret {
             Ok(ret) => {
-                for (v, req) in ret.into_iter().zip(requests) {
+                for (
+                    v,
+                    ReqContext {
+                        id,
+                        trace_context,
+                        scope,
+                        collector,
+                    },
+                ) in ret.into_iter().zip(req_ctxs)
+                {
+                    drop(scope);
+                    reporter.report(trace_context, collector);
+
                     let mut resp = GetResponse::default();
                     if let Some(err) = extract_region_error(&v) {
                         resp.set_region_error(err);
@@ -106,7 +167,7 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
                     }
                     let mut res = batch_commands_response::Response::default();
                     res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
-                    if tx.send_and_notify((req, res)).is_err() {
+                    if tx.send_and_notify((id, res)).is_err() {
                         error!("KvService response batch commands fail");
                     }
                 }
@@ -120,8 +181,17 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
                 }
                 let mut res = batch_commands_response::Response::default();
                 res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
-                for req in requests {
-                    if tx.send_and_notify((req, res.clone())).is_err() {
+                for ReqContext {
+                    id,
+                    trace_context,
+                    scope,
+                    collector,
+                } in req_ctxs
+                {
+                    drop(scope);
+                    reporter.report(trace_context, collector);
+
+                    if tx.send_and_notify((id, res.clone())).is_err() {
                         error!("KvService response batch commands fail");
                     }
                 }
@@ -135,20 +205,33 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
     poll_future_notify(f);
 }
 
-fn future_batch_raw_get_command<E: Engine, L: LockManager>(
+fn future_batch_raw_get_command<E: Engine, L: LockManager, R: Reporter + 'static>(
     storage: &Storage<E, L>,
-    requests: Vec<u64>,
+    req_ctxs: Vec<ReqContext>,
     gets: Vec<RawGetRequest>,
     tx: Sender<(u64, batch_commands_response::Response)>,
+    reporter: R,
 ) {
     let begin_instant = Instant::now_coarse();
     let f = storage.raw_batch_get_command(gets).then(move |v| {
         match v {
             Ok(v) => {
-                if requests.len() != v.len() {
+                if req_ctxs.len() != v.len() {
                     error!("KvService batch response size mismatch");
                 }
-                for (req, v) in requests.into_iter().zip(v.into_iter()) {
+                for (
+                    v,
+                    ReqContext {
+                        id,
+                        trace_context,
+                        scope,
+                        collector,
+                    },
+                ) in v.into_iter().zip(req_ctxs)
+                {
+                    drop(scope);
+                    reporter.report(trace_context, collector);
+
                     let mut resp = RawGetResponse::default();
                     if let Some(err) = extract_region_error(&v) {
                         resp.set_region_error(err);
@@ -161,7 +244,7 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
                     }
                     let mut res = batch_commands_response::Response::default();
                     res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                    if tx.send_and_notify((req, res)).is_err() {
+                    if tx.send_and_notify((id, res)).is_err() {
                         error!("KvService response batch commands fail");
                     }
                 }
@@ -175,8 +258,17 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
                 }
                 let mut res = batch_commands_response::Response::default();
                 res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                for req in requests {
-                    if tx.send_and_notify((req, res.clone())).is_err() {
+                for ReqContext {
+                    id,
+                    trace_context,
+                    scope,
+                    collector,
+                } in req_ctxs
+                {
+                    drop(scope);
+                    reporter.report(trace_context, collector);
+
+                    if tx.send_and_notify((id, res.clone())).is_err() {
                         error!("KvService response batch commands fail");
                     }
                 }

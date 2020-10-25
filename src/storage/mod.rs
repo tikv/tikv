@@ -305,7 +305,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     result
                 }
-            },
+            }
+            .in_new_scope("Storage::get"),
             priority,
             thread_rng().next_u64(),
         );
@@ -421,7 +422,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
                     Ok(results)
-                },
+                }
+                .in_new_scope("Storage::batch_get_command"),
                 priority,
                 thread_rng().next_u64(),
             );
@@ -520,7 +522,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .observe(command_duration.elapsed_secs());
                     result
                 }
-            },
+            }
+            .in_new_scope("Storage::batch_get"),
             priority,
             thread_rng().next_u64(),
         );

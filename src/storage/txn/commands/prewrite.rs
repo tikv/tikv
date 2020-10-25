@@ -15,6 +15,7 @@ use crate::storage::{
     types::PrewriteResult,
     Context, Error as StorageError, ProcessResult, Snapshot,
 };
+use tikv_util::minitrace::*;
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -130,6 +131,7 @@ impl Prewrite {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
+    #[trace("Prewrite.process_write")]
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
         if rows > FORWARD_MIN_MUTATIONS_NUM {

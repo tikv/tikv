@@ -10,6 +10,7 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
+use tikv_util::minitrace::*;
 
 command! {
     /// Commit the transaction that started at `lock_ts`.
@@ -37,6 +38,7 @@ impl CommandExt for Commit {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
+    #[trace("Commit.process_write")]
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         if self.commit_ts <= self.lock_ts {
             return Err(Error::from(ErrorInner::InvalidTxnTso {

@@ -426,6 +426,7 @@ impl<S: Snapshot> MvccTxn<S> {
         Err(ErrorInner::KeyIsLocked(info).into())
     }
 
+    #[trace("MvccTxn::acquire_pessimistic_lock")]
     pub fn acquire_pessimistic_lock(
         &mut self,
         key: Key,
@@ -571,6 +572,7 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(val)
     }
 
+    #[trace("MvccTxn::pessimistic_prewrite")]
     pub fn pessimistic_prewrite(
         &mut self,
         mutation: Mutation,

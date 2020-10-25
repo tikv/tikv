@@ -147,13 +147,13 @@ macro_rules! requests_to_trace {
             $(($name, $enable: expr) => { {
                 if $enable {
                     let (root, collector) = root_scope(stringify!($name));
-                    (Some(root), Some(collector))
+                    (root, Some(collector))
                 } else {
-                    (None, None)
+                    (Scope::default(), None)
                 }
             } };)*
             ($_: ident, $__: expr) => {{
-                (None, None)
+                (Scope::default(), None)
             }}
         }
     }
@@ -191,9 +191,9 @@ macro_rules! handle_request {
             }
 
             let begin_instant = Instant::now_coarse();
-            let (scope, collector): (Option<Scope>, Option<Collector>) =
+            let (scope, collector): (Scope, Option<Collector>) =
                 trace_may_enable!($fn_name, !self.tracing_reporter.is_null());
-            let _g = scope.as_ref().map(|s| s.start_scope());
+            let _g = scope.start_scope();
 
             let reporter = self.tracing_reporter.clone();
             let req_trace_context = req.mut_context().take_trace_context();
@@ -201,7 +201,11 @@ macro_rules! handle_request {
             let resp = $future_name(&self.storage, req);
             let task = async move {
                 let resp = resp.await?;
-                sink.success(resp).compat().in_new_span("grpcio::sink::success").await?;
+                sink.success(resp)
+                    .compat()
+                    .in_new_span("grpcio::sink::success")
+                    .with_scope(scope)
+                    .await?;
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
                     .observe(duration_to_sec(begin_instant.elapsed()));
@@ -214,11 +218,7 @@ macro_rules! handle_request {
                 );
                 GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
             })
-            .in_new_scope("grpcio")
-            .inspect(move |_| {
-                drop(scope);
-                reporter.report(req_trace_context, collector);
-            });
+            .inspect(move |_| reporter.report(req_trace_context, collector));
 
             ctx.spawn(Compat::new(task.boxed()));
         }
@@ -371,9 +371,9 @@ impl<
             return;
         }
         let begin_instant = Instant::now_coarse();
-        let (scope, collector): (Option<Scope>, Option<Collector>) =
+        let (scope, collector): (Scope, Option<Collector>) =
             trace_may_enable!(coprocessor, !self.tracing_reporter.is_null());
-        let _g = scope.as_ref().map(|s| s.start_scope());
+        let _g = scope.start_scope();
         let reporter = self.tracing_reporter.clone();
         let req_trace_context = req.mut_context().take_trace_context();
 
@@ -383,6 +383,7 @@ impl<
             sink.success(resp)
                 .compat()
                 .in_new_span("grpcio::sink::success")
+                .with_scope(scope)
                 .await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
@@ -396,11 +397,7 @@ impl<
             );
             GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
         })
-        .in_new_scope("grpcio")
-        .inspect(move |_| {
-            drop(scope);
-            reporter.report(req_trace_context, collector);
-        });
+        .inspect(move |_| reporter.report(req_trace_context, collector));
 
         ctx.spawn(Compat::new(task.boxed()));
     }
@@ -935,7 +932,7 @@ impl<
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
             let mut batcher = if enable_req_batch && requests.len() > 2 {
-                Some(ReqBatcher::new())
+                Some(ReqBatcher::new(tracing_reporter.clone()))
             } else {
                 None
             };
@@ -1057,28 +1054,26 @@ fn response_batch_commands_request<F, G>(
     tx: Sender<(u64, batch_commands_response::Response)>,
     begin_instant: Instant,
     label_enum: GrpcTypeKind,
-    trace_scope: Option<Scope>,
+    trace_scope: Scope,
     post_fn: G,
 ) where
     F: Future03<Output = Result<batch_commands_response::Response, ()>> + Send + 'static,
     G: FnOnce() + Send + 'static,
 {
-    let f = Compat::new(resp.boxed()).and_then(move |resp| {
-        {
-            let _g = trace_scope.as_ref().map(|s| s.start_scope());
-            let _g = new_span("response");
+    let f = Compat::new(resp.boxed())
+        .and_then(move |resp| {
+            let _g = trace_scope.start_scope();
+            let _g = new_span("batch_commands_response.tx.send_and_notify");
             if tx.send_and_notify((id, resp)).is_err() {
                 error!("KvService response batch commands fail");
                 return Err(());
             }
-            drop(trace_scope);
-        }
-        GRPC_MSG_HISTOGRAM_STATIC
-            .get(label_enum)
-            .observe(begin_instant.elapsed_secs());
-        post_fn();
-        Ok(())
-    });
+            GRPC_MSG_HISTOGRAM_STATIC
+                .get(label_enum)
+                .observe(begin_instant.elapsed_secs());
+            Ok(())
+        })
+        .inspect(|_| post_fn());
     poll_future_notify(f);
 }
 
@@ -1114,7 +1109,7 @@ fn handle_batch_commands_request<
     L: LockManager,
     R: tracing::Reporter + Clone + 'static,
 >(
-    batcher: &mut Option<ReqBatcher>,
+    batcher: &mut Option<ReqBatcher<R>>,
     storage: &Storage<E, L>,
     cop: &Endpoint<E>,
     tracing_reporter: &R,
@@ -1141,35 +1136,7 @@ fn handle_batch_commands_request<
                     // For some invalid requests.
                     let begin_instant = Instant::now();
                     let resp = future03::ok(batch_commands_response::Response::default());
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, None, || {});
-                },
-                Some(batch_commands_request::request::Cmd::Get(req)) => {
-                    if batcher.as_mut().map_or(false, |req_batch| {
-                        req_batch.maybe_commit(storage, tx);
-                        req_batch.can_batch_get(&req)
-                    }) {
-                        batcher.as_mut().unwrap().add_get_request(req, id);
-                    } else {
-                       let begin_instant = Instant::now();
-                       let resp = future_get(storage, req)
-                            .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
-                            .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
-                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, None, || {});
-                    }
-                },
-                Some(batch_commands_request::request::Cmd::RawGet(req)) => {
-                    if batcher.as_mut().map_or(false, |req_batch| {
-                        req_batch.maybe_commit(storage, tx);
-                        req_batch.can_batch_raw_get(&req)
-                    }) {
-                        batcher.as_mut().unwrap().add_raw_get_request(req, id);
-                    } else {
-                       let begin_instant = Instant::now();
-                       let resp = future_raw_get(storage, req)
-                            .map_ok(oneof!(batch_commands_response::response::Cmd::RawGet))
-                            .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
-                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, None, || {});
-                    }
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, Scope::default(), || {});
                 },
                 Some(batch_commands_request::request::Cmd::Empty(req)) => {
                     let begin_instant = Instant::now();
@@ -1177,17 +1144,64 @@ fn handle_batch_commands_request<
                     let resp = future_handle_empty(req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::Empty))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, None, || {});
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, Scope::default(), || {});
+                },
+                Some(batch_commands_request::request::Cmd::Get(mut req)) => {
+                    if batcher.as_mut().map_or(false, |req_batch| {
+                        req_batch.maybe_commit(storage, tx);
+                        req_batch.can_batch_get(&req)
+                    }) {
+                        let (scope, collector): (Scope, Option<Collector>) =
+                            trace_may_enable!(kv_get, !tracing_reporter.is_null());
+                        batcher.as_mut().unwrap().add_get_request(req, scope, collector, id);
+                    } else {
+                        let reporter = tracing_reporter.clone();
+                        let (scope, collector): (Scope, Option<Collector>) =
+                            trace_may_enable!(kv_get, !tracing_reporter.is_null());
+                        let req_trace_context = req.mut_context().take_trace_context();
+                        let _g = scope.start_scope();
+
+                       let begin_instant = Instant::now();
+                       let resp = future_get(storage, req)
+                            .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
+                            .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
+                       response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, scope, move || {
+                           reporter.report(req_trace_context, collector);
+                       });
+                    }
+                },
+                Some(batch_commands_request::request::Cmd::RawGet(mut req)) => {
+                    if batcher.as_mut().map_or(false, |req_batch| {
+                        req_batch.maybe_commit(storage, tx);
+                        req_batch.can_batch_raw_get(&req)
+                    }) {
+                        let (scope, collector): (Scope, Option<Collector>) =
+                                trace_may_enable!(kv_get, !tracing_reporter.is_null());
+                        batcher.as_mut().unwrap().add_raw_get_request(req, scope, collector, id);
+                    } else {
+                        let reporter = tracing_reporter.clone();
+                        let (scope, collector): (Scope, Option<Collector>) =
+                            trace_may_enable!(raw_get, !tracing_reporter.is_null());
+                        let req_trace_context = req.mut_context().take_trace_context();
+
+                        let begin_instant = Instant::now();
+                        let _g = scope.start_scope();
+                        let resp = future_raw_get(storage, req)
+                             .map_ok(oneof!(batch_commands_response::response::Cmd::RawGet))
+                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
+                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, scope, move || {
+                            reporter.report(req_trace_context, collector);
+                        });
+                    }
                 },
                 $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
-                    let begin_instant = Instant::now();
-
                     let reporter = tracing_reporter.clone();
-                    let (scope, collector): (Option<Scope>, Option<Collector>) =
+                    let (scope, collector): (Scope, Option<Collector>) =
                         trace_may_enable!($metric_name, !tracing_reporter.is_null());
                     let req_trace_context = req.mut_context().take_trace_context();
-                    let _g = scope.as_ref().map(|s| s.start_scope());
+                    let _g = scope.start_scope();
 
+                    let begin_instant = Instant::now();
                     let resp = $future_fn($($arg,)* req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());

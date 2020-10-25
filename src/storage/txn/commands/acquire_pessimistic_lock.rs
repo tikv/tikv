@@ -13,6 +13,7 @@ use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
     Result as StorageResult, Snapshot,
 };
+use tikv_util::minitrace::*;
 
 command! {
     /// Acquire a Pessimistic lock on the keys.
@@ -69,6 +70,7 @@ fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
+    #[trace("AcquirePessimisticLock.process_write")]
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
         let mut txn = MvccTxn::new(
