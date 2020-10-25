@@ -9,6 +9,8 @@ use std::time::Duration;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::RocksEngine;
 use futures::future::Future;
+use futures::sink::Sink;
+use futures::stream::Stream;
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
@@ -627,7 +629,8 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                         let scheduler_clone = scheduler.clone();
                         let raft_router_clone = raft_router.clone();
                         futures::future::lazy(move || {
-                            let (tx, rx) = futures::sync::oneshot::channel();
+                            let (tx, rx) = futures::sync::mpsc::channel(5);
+                            let tx_clone = tx.clone();
                             if let Err(e) = raft_router_clone.significant_send(
                                 region_id,
                                 SignificantMsg::LeaderCallback(Callback::Read(Box::new(
@@ -637,8 +640,8 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                                         } else {
                                             Some(region_id)
                                         };
-                                        if tx.send(resp).is_err() {
-                                            error!("cdc send tso response failed"; "region_id" => region_id);
+                                        if let Err(err) =  tx_clone.send(resp).wait() {
+                                            error!("cdc send tso response failed"; "region_id" => region_id, "err" => ?err);
                                         }
                                     },
                                 ))),
@@ -652,8 +655,11 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                                 if let Err(e) = scheduler_clone.schedule(Task::Deregister(deregister)) {
                                     error!("schedule cdc task failed"; "error" => ?e);
                                 }
+                                if let Err(err) =  tx.send(None).wait() {
+                                    error!("cdc send tso response failed"; "region_id" => region_id, "err" => ?err);
+                                }
                             }
-                            rx
+                            rx.into_future()
                         })
                     })
                     .collect();
@@ -664,7 +670,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                         Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
                     }
                     futures::future::join_all(regions).and_then(move |resps| {
-                        let regions = resps.into_iter().filter_map(|resp| resp).collect::<Vec<u64>>();
+                        let regions = resps.into_iter().filter_map(|(resp, _)| resp.unwrap_or(None)).collect::<Vec<u64>>();
                         if !regions.is_empty() {
                             match scheduler.schedule(Task::MinTS { regions, min_ts }) {
                                 Ok(_) | Err(ScheduleError::Stopped(_)) => (),

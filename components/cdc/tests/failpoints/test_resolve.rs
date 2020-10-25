@@ -150,25 +150,29 @@ fn test_region_error() {
     suite.cluster.must_split(&region, b"k1");
     // Subscribe source region
     let source = suite.cluster.get_region(b"k0");
-    let mut req = suite.new_changedata_request(region.get_id());
+    let mut req = ChangeDataRequest::default();
     req.region_id = source.get_id();
     req.set_region_epoch(source.get_region_epoch().clone());
-    let (mut source_tx, source_wrap, source_event) =
+    let (source_tx, source_wrap, source_event) =
         new_event_feed(suite.get_region_cdc_client(source.get_id()));
-    block_on(source_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    let _source_tx = source_tx
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
     // Subscribe target region
     let target = suite.cluster.get_region(b"k2");
     req.region_id = target.get_id();
     req.set_region_epoch(target.get_region_epoch().clone());
-    let (mut target_tx, target_wrap, _target_event) =
+    let (target_tx, target_wrap, _target_event) =
         new_event_feed(suite.get_region_cdc_client(target.get_id()));
-    block_on(target_tx.send((req, WriteFlags::default()))).unwrap();
-    sleep_ms(200);
+    let _target_tx = target_tx.send((req, WriteFlags::default())).wait().unwrap();
+    sleep_ms(1000);
 
     suite
         .cluster
-        .must_try_merge(source.get_id(), target.get_id());
-    sleep_ms(200);
+        .pd_client
+        .must_merge(source.get_id(), target.get_id());
+    sleep_ms(1000);
 
     let mut last_resolved_ts = 0;
     for _ in 0..5 {
