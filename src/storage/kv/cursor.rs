@@ -614,7 +614,7 @@ mod tests {
 
         let (region, _) = load_default_dataset(engine.clone());
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engine.clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engine, region);
         let mut statistics = CfStatistics::default();
         let it = snap.iter(
             IterOptions::default()
