@@ -214,4 +214,45 @@ pub mod tests {
         )
         .unwrap_err();
     }
+
+    #[test]
+    fn test_1pc_check_max_commit_ts() {
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(42.into());
+
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+
+        let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
+        // calculated commit_ts = 43 ≤ 50, ok
+        prewrite(
+            &mut txn,
+            Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
+            b"k1",
+            &None,
+            false,
+            2000,
+            2,
+            10.into(),
+            50.into(),
+            true,
+        )
+        .unwrap();
+
+        cm.update_max_ts(60.into());
+        // calculated commit_ts = 61 > 50, ok
+        prewrite(
+            &mut txn,
+            Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
+            b"k1",
+            &None,
+            false,
+            2000,
+            1,
+            10.into(),
+            50.into(),
+            true,
+        )
+        .unwrap_err();
+    }
 }
