@@ -8,7 +8,7 @@ use crate::storage::mvcc::MvccTxn;
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::actions::shared::handle_1pc;
 use crate::storage::txn::commands::{
-    Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::{pessimistic_prewrite, Error, ErrorInner, Result};
 use crate::storage::types::PrewriteResult;
@@ -236,6 +236,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
             };
             (pr, WriteData::default(), 0, self.ctx, None, vec![])
         };
+        let response_policy = if !async_commit_ts.is_zero() && context.async_apply_prewrite {
+            ResponsePolicy::OnCommitted
+        } else {
+            ResponsePolicy::OnApplied
+        };
         Ok(WriteResult {
             ctx,
             to_be_write,
@@ -243,6 +248,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
             pr,
             lock_info,
             lock_guards,
+            response_policy,
         })
     }
 }
