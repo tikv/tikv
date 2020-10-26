@@ -727,7 +727,7 @@ mod tests {
     use crate::store::{CasualMessage, SnapKey, SnapManager};
     use engine_test::ctor::CFOptions;
     use engine_test::ctor::ColumnFamilyOptions;
-    use engine_test::kv::KvTestEngine;
+    use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_traits::{
         CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
     };
@@ -829,7 +829,7 @@ mod tests {
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let bg_worker = Worker::new("region-worker");
-        let mut worker: LazyWorker<Task<RocksSnapshot>> = bg_worker.lazy_build("region-worker");
+        let mut worker: LazyWorker<Task<KvTestSnapshot>> = bg_worker.lazy_build("region-worker");
         let sched = worker.scheduler();
         let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let (router, _) = mpsc::sync_channel(11);
