@@ -9,7 +9,7 @@ pub mod scheduler;
 mod actions;
 
 pub use actions::{
-    acquire_pessimistic_lock::acquire_pessimistic_lock, commit::commit,
+    acquire_pessimistic_lock::acquire_pessimistic_lock, cleanup::cleanup, commit::commit,
     pessimistic_prewrite::pessimistic_prewrite, prewrite::prewrite,
 };
 

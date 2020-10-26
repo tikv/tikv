@@ -11,4 +11,5 @@ pub mod pessimistic_prewrite;
 pub mod prewrite;
 pub(crate) mod shared;
 
+pub mod cleanup;
 pub mod tests;

@@ -320,6 +320,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot, WriteData};
+    use crate::storage::txn::cleanup;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -421,7 +422,7 @@ pub mod tests {
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
-        txn.cleanup(Key::from_raw(key), current_ts, true).unwrap();
+        cleanup(&mut txn, Key::from_raw(key), current_ts, true).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -436,8 +437,7 @@ pub mod tests {
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
-        txn.cleanup(Key::from_raw(key), current_ts, true)
-            .unwrap_err()
+        cleanup(&mut txn, Key::from_raw(key), current_ts, true).unwrap_err()
     }
 
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
