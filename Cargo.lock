@@ -1097,6 +1097,7 @@ dependencies = [
  "configuration",
  "encryption",
  "engine_traits",
+ "fail 0.4.0",
  "keys",
  "kvproto",
  "lazy_static",
