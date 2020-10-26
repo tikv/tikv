@@ -188,6 +188,9 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let engine = Arc::clone(&self.engine);
 
         ctx.spawn(self.threads.spawn_fn(move || {
+            // SST writer must not be opened in gRPC threads, because it may be
+            // blocked for a long time due to IO, especially, when encryption at rest
+            // is enabled, and it leads to gRPC keepalive timeout.
             let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
                 .set_db(RocksEngine::from_ref(&engine))
                 .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
