@@ -94,7 +94,7 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
 pub(in crate::storage::txn) fn handle_1pc<S: Snapshot>(
     txn: &mut MvccTxn<S>,
     commit_ts: TimeStamp,
-) -> (TimeStamp, ReleasedLocks) {
+) -> ReleasedLocks {
     let mut released_locks = ReleasedLocks::new(txn.start_ts, commit_ts);
 
     // TODO: It's much simpler than normal 2PC committing. Is there anything missing?
@@ -111,5 +111,5 @@ pub(in crate::storage::txn) fn handle_1pc<S: Snapshot>(
         }
     }
 
-    (commit_ts, released_locks)
+    released_locks
 }
