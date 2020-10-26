@@ -7,7 +7,9 @@ use byteorder::{BigEndian, ByteOrder};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Version {
+    // The content only contains the encrypted part.
     V1 = 1,
+    // The end contains a variable number of unencrypted log records.
     V2 = 2,
 }
 
@@ -59,7 +61,9 @@ impl Header {
             size,
         }
     }
-    pub fn parse(buf: &[u8]) -> Result<(Header, &[u8])> {
+
+    /// Parse bytes into header, content and remained bytes.
+    pub fn parse(buf: &[u8]) -> Result<(Header, &[u8], &[u8])> {
         if buf.len() < Header::SIZE {
             return Err(box_err!(
                 "file corrupted! header size mismatch {} != {}",
@@ -75,14 +79,30 @@ impl Header {
         // Content size (8 bytes)
         let size = BigEndian::read_u64(&buf[8..Header::SIZE]);
 
-        if buf.len() - Header::SIZE < size as usize {
-            return Err(box_err!(
-                "file corrupted! content size is too small: {}, expected: {}",
-                buf.len() - Header::SIZE,
-                size
-            ));
+        let remained_size = buf.len() - Header::SIZE;
+        match version {
+            Version::V1 => {
+                if remained_size != size as usize {
+                    return Err(box_err!(
+                        "file corrupted! content size isn't expected: {}, expected: {}",
+                        remained_size,
+                        size
+                    ));
+                }
+            }
+            Version::V2 => {
+                if remained_size < size as usize {
+                    return Err(box_err!(
+                        "file corrupted! content size is too small: {}, expected: {}",
+                        remained_size,
+                        size
+                    ));
+                }
+            }
         }
+
         let content = &buf[Header::SIZE..Header::SIZE + size as usize];
+        let remained = &buf[Header::SIZE + size as usize..];
 
         let mut digest = crc32fast::Hasher::new();
         digest.update(content);
@@ -100,7 +120,7 @@ impl Header {
             crc32,
             size,
         };
-        Ok((header, content))
+        Ok((header, content, remained))
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -136,7 +156,7 @@ mod tests {
         };
 
         let bytes = empty_header.to_bytes();
-        let (header1, content1) = Header::parse(&bytes).unwrap();
+        let (header1, content1, _) = Header::parse(&bytes).unwrap();
         assert_eq!(empty_header, header1);
         let empty: Vec<u8> = vec![];
         assert_eq!(content1, empty.as_slice())
@@ -152,7 +172,7 @@ mod tests {
             let mut bytes = header.to_bytes();
             bytes.extend_from_slice(&content);
 
-            let (header1, content1) = Header::parse(&bytes).unwrap();
+            let (header1, content1, _) = Header::parse(&bytes).unwrap();
             assert_eq!(header, header1);
             assert_eq!(content, content1)
         }

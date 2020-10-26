@@ -35,6 +35,7 @@ pub struct LogFile {
     // Internal file dictionary to avoid recovery before rewrite and to check if compaction
     // is needed.
     file_dict: FileDictionary,
+    file_rewrite_threshold: u64,
 }
 
 impl LogFile {
@@ -54,25 +55,33 @@ impl LogFile {
     /// ```
     const RECORD_HEADER_SIZE: usize = 4 + 2 + 2 + 1;
 
-    const REWRITE_THRESHOLD: u64 = 80000;
-
-    pub fn new<P: AsRef<Path>>(base: P, name: &str) -> Result<LogFile> {
+    pub fn new<P: AsRef<Path>>(
+        base: P,
+        name: &str,
+        file_rewrite_threshold: u64,
+    ) -> Result<LogFile> {
         let mut log_file = LogFile {
             base: base.as_ref().to_path_buf(),
             name: name.to_owned(),
             append_file: None,
             file_dict: FileDictionary::default(),
+            file_rewrite_threshold,
         };
         log_file.write(&log_file.file_dict.clone())?;
         Ok(log_file)
     }
 
-    pub fn open<P: AsRef<Path>>(base: P, name: &str) -> Result<(LogFile, FileDictionary)> {
+    pub fn open<P: AsRef<Path>>(
+        base: P,
+        name: &str,
+        file_rewrite_threshold: u64,
+    ) -> Result<(LogFile, FileDictionary)> {
         let mut log_file = LogFile {
             base: base.as_ref().to_path_buf(),
             name: name.to_owned(),
             append_file: None,
             file_dict: FileDictionary::default(),
+            file_rewrite_threshold,
         };
 
         let file_dict = log_file.recovery()?;
@@ -114,11 +123,10 @@ impl LogFile {
             .open(self.base.join(&self.name))?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
-        let mut remained = buf.as_slice();
+        let remained = buf.as_slice();
 
         // parse the file dictionary
-        let (header, content) = Header::parse(remained)?;
-        remained.consume(Header::SIZE + content.len());
+        let (header, content, mut remained) = Header::parse(remained)?;
         let mut file_dict = FileDictionary::default();
         match header.version() {
             Version::V1 => {
@@ -158,13 +166,13 @@ impl LogFile {
     /// Append an insert operation to the log file.
     ///
     /// Warning: `self.write(file_dict)` must be called before.
-    pub fn insert(&mut self, name: &str, info: FileInfo) -> Result<()> {
+    pub fn insert(&mut self, name: &str, info: &FileInfo) -> Result<()> {
         let file = self.append_file.as_mut().unwrap();
         let bytes = Self::convert_record_to_bytes(name, LogRecord::INSERT(info.clone()))?;
         file.write_all(&bytes)?;
         file.sync_all()?;
 
-        self.file_dict.files.insert(name.to_owned(), info);
+        self.file_dict.files.insert(name.to_owned(), info.clone());
         self.check_compact()?;
 
         Ok(())
@@ -191,10 +199,10 @@ impl LogFile {
     pub fn replace(&mut self, src_name: &str, dst_name: &str, info: FileInfo) -> Result<()> {
         assert_ne!(src_name, dst_name);
         let file = self.append_file.as_mut().unwrap();
-        let bytes1 = Self::convert_record_to_bytes(dst_name, LogRecord::INSERT(info.clone()))?;
+        let mut bytes1 = Self::convert_record_to_bytes(dst_name, LogRecord::INSERT(info.clone()))?;
         let bytes2 = Self::convert_record_to_bytes(src_name, LogRecord::REMOVE)?;
+        bytes1.extend_from_slice(&bytes2);
         file.write_all(&bytes1)?;
-        file.write_all(&bytes2)?;
         file.sync_all()?;
 
         self.file_dict.files.remove(src_name);
@@ -207,7 +215,7 @@ impl LogFile {
     /// This function needs to be called after each append operation to check
     /// if compact is needed.
     fn check_compact(&mut self) -> Result<()> {
-        if self.file_dict.files.len() as u64 > Self::REWRITE_THRESHOLD {
+        if self.file_dict.files.len() as u64 > self.file_rewrite_threshold {
             self.write(&self.file_dict.clone())?;
         }
         Ok(())
@@ -221,13 +229,13 @@ impl LogFile {
         let mut header_buf = [0; Self::RECORD_HEADER_SIZE];
         let info_len = match record_type {
             LogRecord::INSERT(info) => {
-                header_buf[8] = 1;
+                header_buf[Self::RECORD_HEADER_SIZE - 1] = 1;
                 let info_bytes = info.write_to_bytes()?;
                 content.extend_from_slice(&info_bytes);
                 info_bytes.len() as u16
             }
             LogRecord::REMOVE => {
-                header_buf[8] = 2;
+                header_buf[Self::RECORD_HEADER_SIZE - 1] = 2;
                 0
             }
         };
@@ -256,7 +264,7 @@ impl LogFile {
         let crc32 = BigEndian::read_u32(&remained[0..4]);
         let name_len = BigEndian::read_u16(&remained[4..6]) as usize;
         let info_len = BigEndian::read_u16(&remained[6..8]) as usize;
-        let mode = remained[8];
+        let mode = remained[Self::RECORD_HEADER_SIZE - 1];
         remained.consume(Self::RECORD_HEADER_SIZE);
         if remained.len() < name_len + info_len {
             return Err(box_err!(
@@ -279,12 +287,14 @@ impl LogFile {
         }
 
         // read file name
-        let file_name = String::from_utf8(remained[0..name_len].to_owned()).unwrap();
+        let ret: Result<String> = String::from_utf8(remained[0..name_len].to_owned())
+            .map_err(|e| box_err!("parse file name failed: {:?}", e));
+        let file_name = ret?;
         remained.consume(name_len);
 
         // return result
         let used_size = Self::RECORD_HEADER_SIZE + name_len + info_len;
-        let record_mode = match mode {
+        let record = match mode {
             2 => LogRecord::REMOVE,
             1 => {
                 let mut file_info = FileInfo::default();
@@ -293,7 +303,7 @@ impl LogFile {
             }
             _ => return Err(box_err!("file corrupted! record type is unknown: {}", mode)),
         };
-        Ok((used_size, file_name, record_mode))
+        Ok((used_size, file_name, record))
     }
 }
 
@@ -308,14 +318,14 @@ mod tests {
     #[test]
     fn test_log_file_normal() {
         let tempdir = tempfile::tempdir().unwrap();
-        let mut log_file = LogFile::new(tempdir.path(), "test_log_file").unwrap();
+        let mut log_file = LogFile::new(tempdir.path(), "test_log_file", 2).unwrap();
         let info1 = create_file_info(1, EncryptionMethod::Aes256Ctr);
         let info2 = create_file_info(2, EncryptionMethod::Unknown);
         let info3 = create_file_info(3, EncryptionMethod::Aes128Ctr);
 
-        log_file.insert("info1", info1.clone()).unwrap();
-        log_file.insert("info2", info2.clone()).unwrap();
-        log_file.insert("info3", info3.clone()).unwrap();
+        log_file.insert("info1", &info1).unwrap();
+        log_file.insert("info2", &info2).unwrap();
+        log_file.insert("info3", &info3).unwrap();
 
         let file_dict = log_file.recovery().unwrap();
 
@@ -339,21 +349,21 @@ mod tests {
     #[test]
     fn test_log_file_existed() {
         let tempdir = tempfile::tempdir().unwrap();
-        let mut log_file = LogFile::new(tempdir.path(), "test_log_file").unwrap();
+        let mut log_file = LogFile::new(tempdir.path(), "test_log_file", 2).unwrap();
 
         let info = create_file_info(1, EncryptionMethod::Aes256Ctr);
         let mut dict = FileDictionary::default();
         dict.files.insert("info".to_owned(), info);
         log_file.write(&dict).unwrap();
 
-        let (_, file_dict) = LogFile::open(tempdir.path(), "test_log_file").unwrap();
+        let (_, file_dict) = LogFile::open(tempdir.path(), "test_log_file", 2).unwrap();
         assert_eq!(file_dict, dict);
     }
 
     #[test]
     fn test_log_file_not_existed() {
         let tempdir = tempfile::tempdir().unwrap();
-        let ret = LogFile::open(tempdir.path(), "test_log_file");
+        let ret = LogFile::open(tempdir.path(), "test_log_file", 2);
         assert!(matches!(ret, Err(Error::Io(_))));
     }
 
@@ -374,7 +384,7 @@ mod tests {
         )
         .unwrap();
 
-        let (_, file_dict_read) = LogFile::open(tempdir.path(), "test_log_file").unwrap();
+        let (_, file_dict_read) = LogFile::open(tempdir.path(), "test_log_file", 2).unwrap();
         assert_eq!(file_dict, file_dict_read);
     }
 

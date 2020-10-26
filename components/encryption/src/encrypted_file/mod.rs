@@ -44,7 +44,7 @@ impl<'a> EncryptedFile<'a> {
             Ok(mut f) => {
                 let mut buf = Vec::new();
                 f.read_to_end(&mut buf)?;
-                let (_, content) = Header::parse(&buf)?;
+                let (_, content, _) = Header::parse(&buf)?;
                 let mut encrypted_content = EncryptedContent::default();
                 encrypted_content.merge_from_bytes(content)?;
                 let plaintext = master_key.decrypt(&encrypted_content)?;

@@ -41,10 +41,14 @@ struct Dicts {
 }
 
 impl Dicts {
-    fn new(path: &str, rotation_period: Duration) -> Result<Dicts> {
+    fn new(path: &str, rotation_period: Duration, file_rewrite_threshold: u64) -> Result<Dicts> {
         Ok(Dicts {
             file_dict: Mutex::new(FileDictionary::default()),
-            log_file: Mutex::new(LogFile::new(Path::new(path).to_owned(), FILE_DICT_NAME)?),
+            log_file: Mutex::new(LogFile::new(
+                Path::new(path).to_owned(),
+                FILE_DICT_NAME,
+                file_rewrite_threshold,
+            )?),
             key_dict: Mutex::new(KeyDictionary {
                 current_key_id: 0,
                 ..Default::default()
@@ -59,11 +63,12 @@ impl Dicts {
         path: &str,
         rotation_period: Duration,
         master_key: &dyn Backend,
+        file_rewrite_threshold: u64,
     ) -> Result<Option<Dicts>> {
         let base = Path::new(path);
 
         // File dict is saved in plaintext.
-        let log_content = LogFile::open(base, FILE_DICT_NAME);
+        let log_content = LogFile::open(base, FILE_DICT_NAME, file_rewrite_threshold);
 
         let key_file = EncryptedFile::new(base, KEY_DICT_NAME);
         let key_bytes = key_file.read(master_key);
@@ -177,7 +182,7 @@ impl Dicts {
             file_dict.files.len() as _
         };
 
-        log_file.insert(fname, file.clone())?;
+        log_file.insert(fname, &file)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
@@ -242,7 +247,7 @@ impl Dicts {
             let file_num = file_dict.files.len() as _;
             (method, file, file_num)
         };
-        log_file.insert(dst_fname, file)?;
+        log_file.insert(dst_fname, &file)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != compat(EncryptionMethod::Plaintext) {
@@ -394,6 +399,7 @@ impl DataKeyManager {
             &config.previous_master_key,
             config.data_encryption_method,
             config.data_key_rotation_period.into(),
+            config.file_rewrite_threshold.0,
             dict_path,
         )
     }
@@ -403,6 +409,7 @@ impl DataKeyManager {
         previous_master_key_config: &MasterKeyConfig,
         method: EncryptionMethod,
         rotation_period: Duration,
+        file_rewrite_threshold: u64,
         dict_path: &str,
     ) -> Result<Option<DataKeyManager>> {
         let master_key = create_backend(master_key_config).map_err(|e| {
@@ -415,7 +422,12 @@ impl DataKeyManager {
             ));
         }
         let dicts = match (
-            Dicts::open(dict_path, rotation_period, master_key.as_ref()),
+            Dicts::open(
+                dict_path,
+                rotation_period,
+                master_key.as_ref(),
+                file_rewrite_threshold,
+            ),
             method,
         ) {
             // Encryption is disabled.
@@ -426,7 +438,7 @@ impl DataKeyManager {
             // Encryption is being enabled.
             (Ok(None), _) => {
                 info!("encryption is being enabled. method = {:?}", method);
-                Dicts::new(dict_path, rotation_period)?
+                Dicts::new(dict_path, rotation_period, file_rewrite_threshold)?
             }
             // Encryption was enabled and master key didn't change.
             (Ok(Some(dicts)), _) => {
@@ -443,19 +455,24 @@ impl DataKeyManager {
                     master_key_config, previous_master_key_config
                 );
                 let previous_master_key = create_backend(previous_master_key_config)?;
-                let dicts = Dicts::open(dict_path, rotation_period, previous_master_key.as_ref())
-                    .map_err(|e| {
-                        if let Error::WrongMasterKey(e_previous) = e {
-                            Error::BothMasterKeyFail(e_current, e_previous)
-                        } else {
-                            e
-                        }
-                    })?
-                    .ok_or_else(|| {
-                        Error::Other(box_err!(
-                            "Fallback to previous master key but find dictionaries to be empty."
-                        ))
-                    })?;
+                let dicts = Dicts::open(
+                    dict_path,
+                    rotation_period,
+                    previous_master_key.as_ref(),
+                    file_rewrite_threshold,
+                )
+                .map_err(|e| {
+                    if let Error::WrongMasterKey(e_previous) = e {
+                        Error::BothMasterKeyFail(e_current, e_previous)
+                    } else {
+                        e
+                    }
+                })?
+                .ok_or_else(|| {
+                    Error::Other(box_err!(
+                        "Fallback to previous master key but find dictionaries to be empty."
+                    ))
+                })?;
                 // Rewrite key_dict after replace master key.
                 dicts.save_key_dict(master_key.as_ref())?;
 
@@ -645,6 +662,7 @@ mod tests {
             &previous_master_key,
             method.unwrap_or(EncryptionMethod::Aes256Ctr),
             Duration::from_secs(60),
+            2,
             tmp.path().as_os_str().to_str().unwrap(),
         );
         (tmp, manager)
