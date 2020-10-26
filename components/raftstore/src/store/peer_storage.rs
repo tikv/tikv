@@ -1995,7 +1995,7 @@ mod tests {
             CoprocessorHost::<KvTestEngine>::default(),
             router,
         );
-        worker.start(runner);
+        worker.start_with_timer(runner);
         let snap = s.snapshot(0);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);

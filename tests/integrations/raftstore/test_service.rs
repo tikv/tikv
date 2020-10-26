@@ -26,7 +26,7 @@ use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::server::gc_worker::sync_gc;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
-use tikv_util::worker::{dummy_scheduler, FutureWorker, Worker};
+use tikv_util::worker::{dummy_scheduler, FutureWorker};
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
@@ -775,7 +775,6 @@ fn test_double_run_node() {
             coprocessor_host,
             importer,
             split_check_scheduler,
-            Worker::new("split"),
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),
         )

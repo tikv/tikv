@@ -79,7 +79,6 @@ impl<R: Runnable + 'static> Drop for RunnableWrapper<R> {
 
 enum Msg<T: Display + Send> {
     Task(T),
-    Stop,
     Timeout,
 }
 
@@ -130,7 +129,7 @@ impl<T: Display + Send> Scheduler<T> {
     }
 
     pub fn stop(&self) {
-        let _ = self.sender.unbounded_send(Msg::Stop);
+        self.sender.close_channel();
     }
 }
 
@@ -190,7 +189,6 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
 
     pub fn stop(&mut self) {
         self.scheduler.stop();
-        self.worker.stop();
     }
 }
 
@@ -392,7 +390,6 @@ impl Worker {
                         metrics_pending_task_count.dec();
                     }
                     Msg::Timeout => (),
-                    Msg::Stop => return,
                 }
             }
         });
@@ -423,7 +420,6 @@ impl Worker {
                         handle.inner.on_timeout();
                         Self::delay_notify(tx.clone(), timeout);
                     }
-                    Msg::Stop => break,
                 }
             }
         });

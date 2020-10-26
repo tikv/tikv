@@ -1158,7 +1158,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         mut coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
-        bg_worker: Worker,
+        background_worker: Worker,
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
@@ -1173,7 +1173,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let workers = Workers {
             pd_worker,
-            background_worker: bg_worker,
+            background_worker,
             coprocessor_host: coprocessor_host.clone(),
         };
         mgr.init()?;
@@ -1352,6 +1352,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             }
         }
         workers.coprocessor_host.shutdown();
+        workers.background_worker.stop();
     }
 }
 

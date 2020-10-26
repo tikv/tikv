@@ -614,6 +614,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             raft_store,
             self.pd_client.clone(),
             self.state.clone(),
+            Some(self.background_worker.clone()),
         );
 
         node.start(
@@ -625,7 +626,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.coprocessor_host.clone().unwrap(),
             importer.clone(),
             split_check_scheduler,
-            self.background_worker.clone(),
             auto_split_controller,
             self.concurrency_manager.clone(),
         )

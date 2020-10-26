@@ -64,7 +64,7 @@ mod tests {
         }
 
         fn shutdown(&mut self) {
-            self.ch.send(vec![]).unwrap();
+            let _ = self.ch.send(vec![]);
         }
     }
 
