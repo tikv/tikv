@@ -38,6 +38,7 @@ where
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
         )
         .unwrap();
     }
@@ -73,6 +74,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
                     false,
                     0,
                     0,
+                    TimeStamp::default(),
                     TimeStamp::default(),
                 )
                 .unwrap();

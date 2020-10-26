@@ -587,6 +587,28 @@ where
                 self.on_raft_gc_log_tick(true);
             }
             CasualMessage::AccessPeer(cb) => cb(&mut self.fsm.peer as &mut dyn AbstractPeer),
+            CasualMessage::QueryRegionLeaderResp { region, leader } => {
+                // the leader already updated
+                if self.fsm.peer.raft_group.raft.leader_id != raft::INVALID_ID
+                    // the returned region is stale
+                    || util::is_epoch_stale(
+                        region.get_region_epoch(),
+                        self.fsm.peer.region().get_region_epoch(),
+                    )
+                {
+                    // Stale message
+                    return;
+                }
+
+                // Wake up the leader if the peer is on the leader's peer list
+                if region
+                    .get_peers()
+                    .iter()
+                    .any(|p| p.get_id() == self.fsm.peer_id())
+                {
+                    self.fsm.peer.send_wake_up_message(&mut self.ctx, &leader);
+                }
+            }
         }
     }
 
@@ -1233,6 +1255,11 @@ where
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if self.fsm.group_state == GroupState::Idle {
                     self.reset_raft_tick(GroupState::Ordered);
+                }
+                if msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+                    && self.fsm.peer.is_leader()
+                {
+                    self.fsm.peer.raft_group.raft.ping();
                 }
             }
             ExtraMessageType::MsgWantRollbackMerge => {
@@ -2199,7 +2226,7 @@ where
 
             if !campaigned {
                 if let Some(msg) = meta
-                    .pending_votes
+                    .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
                     if let Err(e) = self
@@ -2207,7 +2234,7 @@ where
                         .router
                         .force_send(new_region_id, PeerMsg::RaftMessage(msg))
                     {
-                        warn!("handle first requset vote failed"; "region_id" => region_id, "error" => ?e);
+                        warn!("handle first requset failed"; "region_id" => region_id, "error" => ?e);
                     }
                 }
             }
@@ -3932,7 +3959,7 @@ mod tests {
     use crate::store::local_metrics::RaftProposeMetrics;
     use crate::store::msg::{Callback, ExtCallback, RaftCommand};
 
-    use engine_rocks::RocksEngine;
+    use engine_test::kv::KvTestEngine;
     use kvproto::raft_cmdpb::{
         AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
         StatusRequest,
@@ -3944,7 +3971,7 @@ mod tests {
     #[test]
     fn test_batch_raft_cmd_request_builder() {
         let max_batch_size = 1000.0;
-        let mut builder = BatchRaftCmdRequestBuilder::<RocksEngine>::new(max_batch_size);
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new(max_batch_size);
         let mut q = Request::default();
         let mut metric = RaftProposeMetrics::default();
 

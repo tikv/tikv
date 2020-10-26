@@ -86,6 +86,13 @@ else
 ENABLE_FEATURES += protobuf-codec
 endif
 
+# Set the storage engines used for testing
+ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
+ENABLE_FEATURES += test-engines-rocksdb
+else
+# Caller is responsible for setting up test engine features
+endif
+
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 BIN_PATH = $(CURDIR)/bin
@@ -312,12 +319,12 @@ error-code: etc/error_code.toml
 
 # A special target for building TiKV docker image.
 docker:
-	bash ./scripts/gen-dockerfile.sh | docker build \
+	docker build \
 		-t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
-		-f - . \
 		--build-arg GIT_HASH=${TIKV_BUILD_GIT_HASH} \
 		--build-arg GIT_TAG=${TIKV_BUILD_GIT_TAG} \
-		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH}
+		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH} \
+		.
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------
