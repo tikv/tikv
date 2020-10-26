@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 define_error_codes!(
-    "KV-Storage-",
+    "KV:Storage:",
 
     TIMEOUT => ("Timeout", "", ""),
     EMPTY_REQUEST => ("EmptyRequest", "", ""),

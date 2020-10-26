@@ -5,9 +5,8 @@ use crate::import::RocksIngestExternalFileOptions;
 use crate::sst::RocksSstWriterBuilder;
 use crate::{util, RocksSstWriter};
 use engine_traits::{
-    CFHandleExt, CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions,
-    Iterable, Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder,
-    WriteBatchExt, ALL_CFS,
+    CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions, Iterable,
+    Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder, WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
 use tikv_util::keybuilder::KeyBuilder;
@@ -81,10 +80,9 @@ impl RocksEngine {
 
         if let Some(writer) = writer_wrapper {
             writer.finish()?;
-            let handle = self.cf_handle(cf)?;
             let mut opt = RocksIngestExternalFileOptions::new();
             opt.move_files(true);
-            self.ingest_external_file_cf(handle, &opt, &[sst_path.as_str()])?;
+            self.ingest_external_file_cf(cf, &opt, &[sst_path.as_str()])?;
         } else {
             let mut wb = self.write_batch();
             for key in data.iter() {
@@ -315,9 +313,8 @@ impl MiscExt for RocksEngine {
         start: &[u8],
         end: &[u8],
     ) -> Result<Option<(u64, u64)>> {
-        let handle = self.cf_handle(cf)?;
         Ok(crate::properties::get_range_entries_and_versions(
-            self, handle, start, end,
+            self, cf, start, end,
         ))
     }
 
