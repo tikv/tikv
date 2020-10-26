@@ -120,8 +120,6 @@ pub struct Storage<E: Engine, L: LockManager> {
 
     concurrency_manager: ConcurrencyManager,
 
-    enable_async_apply_prewrite: bool,
-
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
     // TODO: This should be implemented in thread pool and worker.
@@ -147,7 +145,6 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
             concurrency_manager: self.concurrency_manager.clone(),
-            enable_async_apply_prewrite: self.enable_async_apply_prewrite,
         }
     }
 }
@@ -214,7 +211,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             concurrency_manager,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
-            enable_async_apply_prewrite: config.enable_async_apply_prewrite,
         })
     }
 

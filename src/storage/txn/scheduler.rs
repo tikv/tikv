@@ -464,13 +464,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         tag: metrics::CommandKind,
     ) {
         // TODO: Does async apply prewrite worth a special metric here?
-        if !pipelined {
-            SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
-        } else {
+        if pipelined {
             SCHED_STAGE_COUNTER_VEC
                 .get(tag)
                 .pipelined_write_finish
                 .inc();
+        } else if async_apply_prewrite {
+            SCHED_STAGE_COUNTER_VEC
+                .get(tag)
+                .async_apply_prewrite_finish
+                .inc();
+        } else {
+            SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
         debug!("write command finished"; 
@@ -666,7 +671,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                         cb.unwrap(),
                                         pr.unwrap(),
                                         tag,
-                                        metrics::CommandStageKind::resp_on_commit,
+                                        metrics::CommandStageKind::async_apply_prewrite,
                                     );
                                 });
                                 is_async_apply_prewrite = true;
