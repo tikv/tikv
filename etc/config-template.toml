@@ -191,6 +191,11 @@
 ## When the pending write bytes exceeds this threshold, the "scheduler too busy" error is displayed.
 # scheduler-pending-write-threshold = "100MB"
 
+## For async commit transactions, it's possible to response to the client before applying prewrite
+## requests. Enabling this can ease reduce latency when apply duration is significant, or reduce
+## latency jittering when apply duration is not stable.
+# enable-async-apply-prewrite = false
+
 [storage.block-cache]
 ## Whether to create a shared block cache for all RocksDB column families.
 ##
