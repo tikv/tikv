@@ -260,14 +260,6 @@ pub struct ReadStats {
 }
 
 impl ReadStats {
-    pub fn default() -> ReadStats {
-        ReadStats {
-            sample_num: DEFAULT_SAMPLE_NUM,
-            region_infos: HashMap::default(),
-            flows: HashMap::default(),
-        }
-    }
-
     pub fn add_qps(&mut self, region_id: u64, peer: &Peer, key_range: KeyRange) {
         self.add_qps_batch(region_id, peer, vec![key_range]);
     }
@@ -293,6 +285,16 @@ impl ReadStats {
 
     pub fn is_empty(&self) -> bool {
         self.region_infos.is_empty() && self.flows.is_empty()
+    }
+}
+
+impl Default for ReadStats {
+    fn default() -> ReadStats {
+        ReadStats {
+            sample_num: DEFAULT_SAMPLE_NUM,
+            region_infos: HashMap::default(),
+            flows: HashMap::default(),
+        }
     }
 }
 
