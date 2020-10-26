@@ -600,66 +600,29 @@ mod tests {
                 b"ba".to_vec(),
             )
             .unwrap();
-        engine
-            .put_cf(
-                &Context::default(),
-                "write",
-                Key::from_raw(b"foo").append_ts(TimeStamp::zero()),
-                b"bar".to_vec(),
-            )
-            .unwrap();
-        engine
-            .delete_cf(
-                &Context::default(),
-                "write",
-                Key::from_raw(b"foo").append_ts(TimeStamp::zero()),
-            )
-            .unwrap();
-        engine
-            .put_cf(
-                &Context::default(),
-                "write",
-                Key::from_raw(b"foo1").append_ts(TimeStamp::zero()),
-                b"bar1".to_vec(),
-            )
-            .unwrap();
-        engine
-            .delete_cf(
-                &Context::default(),
-                "write",
-                Key::from_raw(b"foo1").append_ts(TimeStamp::zero()),
-            )
-            .unwrap();
-        engine
-            .put_cf(
-                &Context::default(),
-                "write",
-                Key::from_raw(b"foo2").append_ts(TimeStamp::zero()),
-                b"bar2".to_vec(),
-            )
-            .unwrap();
-        engine
-            .delete_cf(
-                &Context::default(),
-                "write",
-                Key::from_raw(b"foo2").append_ts(TimeStamp::zero()),
-            )
-            .unwrap();
-        engine
-            .put_cf(
-                &Context::default(),
-                "write",
-                Key::from_raw(b"foo3").append_ts(TimeStamp::zero()),
-                b"bar3".to_vec(),
-            )
-            .unwrap();
-        engine
-            .delete_cf(
-                &Context::default(),
-                "write",
-                Key::from_raw(b"foo3").append_ts(TimeStamp::zero()),
-            )
-            .unwrap();
+        for key in &[
+            b"foo".to_vec(),
+            b"foo1".to_vec(),
+            b"foo2".to_vec(),
+            b"foo3".to_vec(),
+        ] {
+            engine
+                .put_cf(
+                    &Context::default(),
+                    "write",
+                    Key::from_raw(key).append_ts(TimeStamp::zero()),
+                    b"bar".to_vec(),
+                )
+                .unwrap();
+            engine
+                .delete_cf(
+                    &Context::default(),
+                    "write",
+                    Key::from_raw(key).append_ts(TimeStamp::zero()),
+                )
+                .unwrap();
+        }
+
         engine
             .put_cf(
                 &Context::default(),
