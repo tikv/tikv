@@ -160,9 +160,10 @@ impl TitanCfConfig {
 
 fn get_background_job_limit(
     default_background_jobs: i32,
+    default_background_flushes: i32,
     default_sub_compactions: u32,
     default_background_gc: i32,
-) -> (i32, u32, i32) {
+) -> (i32, i32, u32, i32) {
     let cpu_num = SysQuota::new().cpu_cores_quota();
     // At the minimum, we should have two background jobs: one for flush and one for compaction.
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
@@ -170,8 +171,14 @@ fn get_background_job_limit(
     // the rest shared by flush and compaction.
     let max_background_jobs: i32 =
         cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1.0) as i32));
+    // Scale flush threads proportionally to background jobs. Also make sure the number of flush
+    // threads doesn't exceed total jobs.
+    let max_background_flushes: i32 = cmp::min(
+        cmp::max(default_background_flushes, max_background_jobs / 4),
+        max_background_jobs - 1,
+    );
     // Cap max_sub_compactions to allow at least two compactions.
-    let max_compactions = max_background_jobs - max_background_jobs / 4;
+    let max_compactions = max_background_jobs - max_background_flushes;
     let max_sub_compactions: u32 = cmp::max(
         1,
         cmp::min(default_sub_compactions, (max_compactions - 1) as u32),
@@ -179,7 +186,12 @@ fn get_background_job_limit(
     // Maximum background GC threads for Titan
     let max_background_gc: i32 = cmp::min(default_background_gc, cpu_num as i32);
 
-    (max_background_jobs, max_sub_compactions, max_background_gc)
+    (
+        max_background_jobs,
+        max_background_flushes,
+        max_sub_compactions,
+        max_background_gc,
+    )
 }
 
 macro_rules! cf_config {
@@ -935,8 +947,8 @@ pub struct DbConfig {
 
 impl Default for DbConfig {
     fn default() -> DbConfig {
-        let (max_background_jobs, max_sub_compactions, max_background_gc) =
-            get_background_job_limit(8, 3, 4);
+        let (max_background_jobs, max_background_flushes, max_sub_compactions, max_background_gc) =
+            get_background_job_limit(8, 2, 3, 4);
         let mut titan_config = TitanDBConfig::default();
         titan_config.max_background_gc = max_background_gc;
         DbConfig {
@@ -946,7 +958,7 @@ impl Default for DbConfig {
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
             max_background_jobs,
-            max_background_flushes: -1,
+            max_background_flushes,
             max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
@@ -991,17 +1003,9 @@ impl DbConfig {
         opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
         opts.set_max_total_wal_size(self.max_total_wal_size.0);
         opts.set_max_background_jobs(self.max_background_jobs);
-        let sanitized_background_flushes = if self.max_background_flushes == 0 {
-            1
-        } else {
-            self.max_background_flushes
-        };
-        if sanitized_background_flushes > 0 {
-            opts.set_max_background_flushes(sanitized_background_flushes);
-            opts.set_max_background_compactions(
-                self.max_background_jobs - sanitized_background_flushes,
-            );
-        }
+        // RocksDB will cap flush and compaction threads to at least one
+        opts.set_max_background_flushes(self.max_background_flushes);
+        opts.set_max_background_compactions(self.max_background_jobs - self.max_background_flushes);
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
@@ -1225,8 +1229,8 @@ pub struct RaftDbConfig {
 
 impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
-        let (max_background_jobs, max_sub_compactions, max_background_gc) =
-            get_background_job_limit(4, 2, 4);
+        let (max_background_jobs, max_background_flushes, max_sub_compactions, max_background_gc) =
+            get_background_job_limit(4, 1, 2, 4);
         let mut titan_config = TitanDBConfig::default();
         titan_config.max_background_gc = max_background_gc;
         RaftDbConfig {
@@ -1236,7 +1240,7 @@ impl Default for RaftDbConfig {
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
             max_background_jobs,
-            max_background_flushes: -1,
+            max_background_flushes,
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
@@ -1272,17 +1276,8 @@ impl RaftDbConfig {
         opts.set_wal_ttl_seconds(self.wal_ttl_seconds);
         opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
         opts.set_max_background_jobs(self.max_background_jobs);
-        let sanitized_background_flushes = if self.max_background_flushes == 0 {
-            1
-        } else {
-            self.max_background_flushes
-        };
-        if sanitized_background_flushes > 0 {
-            opts.set_max_background_flushes(sanitized_background_flushes);
-            opts.set_max_background_compactions(
-                self.max_background_jobs - sanitized_background_flushes,
-            );
-        }
+        opts.set_max_background_flushes(self.max_background_flushes);
+        opts.set_max_background_compactions(self.max_background_jobs - self.max_background_flushes);
         opts.set_max_total_wal_size(self.max_total_wal_size.0);
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
@@ -1433,26 +1428,24 @@ impl DBConfigManger {
         Ok(())
     }
 
+    fn set_max_background_jobs(&self, max_background_jobs: i32) -> Result<(), Box<dyn Error>> {
+        let opt = self.db.as_inner().get_db_options();
+        if max_background_jobs < opt.get_max_background_jobs() {
+            return Err("unable to shrink background jobs while the instance is running".into());
+        }
+        self.set_db_config(&[("max_background_jobs", &max_background_jobs.to_string())])?;
+        Ok(())
+    }
+
     fn set_max_background_flushes(
         &self,
         max_background_flushes: i32,
     ) -> Result<(), Box<dyn Error>> {
-        let sanitized = if max_background_flushes < 0 {
-            1
-        } else {
-            max_background_flushes
-        };
+        let opt = self.db.as_inner().get_db_options();
+        if max_background_flushes < opt.get_max_background_flushes() {
+            return Err("unable to shrink background jobs while the instance is running".into());
+        }
         self.set_db_config(&[("max_background_flushes", &sanitized.to_string())])?;
-        let max_background_compactions = self
-            .db
-            .as_inner()
-            .get_db_options()
-            .get_max_background_jobs()
-            - max_background_flushes;
-        self.set_db_config(&[(
-            "max_background_compactions",
-            &max_background_compactions.to_string(),
-        )])?;
         Ok(())
     }
 
@@ -1501,6 +1494,14 @@ impl ConfigManager for DBConfigManger {
         {
             let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
             self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
+        }
+
+        if let Some(background_compactions_config) = change
+            .drain_filter(|(name, _)| name == "max_background_compactions")
+            .next()
+        {
+            let max_background_compactions = background_compactions_config.1.into();
+            self.set_max_background_compactions(max_background_compactions)?;
         }
 
         if let Some(background_flushes_config) = change
