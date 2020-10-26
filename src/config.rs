@@ -1186,7 +1186,6 @@ pub struct RaftDbConfig {
     pub wal_size_limit: ReadableSize,
     pub max_total_wal_size: ReadableSize,
     pub max_background_jobs: i32,
-    #[config(skip)]
     pub max_background_flushes: i32,
     #[config(skip)]
     pub max_manifest_file_size: ReadableSize,
@@ -1445,7 +1444,10 @@ impl DBConfigManger {
         if max_background_flushes < opt.get_max_background_flushes() {
             return Err("unable to shrink background jobs while the instance is running".into());
         }
-        self.set_db_config(&[("max_background_flushes", &sanitized.to_string())])?;
+        self.set_db_config(&[(
+            "max_background_flushes",
+            &max_background_flushes.to_string(),
+        )])?;
         Ok(())
     }
 
@@ -1496,12 +1498,12 @@ impl ConfigManager for DBConfigManger {
             self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
         }
 
-        if let Some(background_compactions_config) = change
-            .drain_filter(|(name, _)| name == "max_background_compactions")
+        if let Some(background_jobs_config) = change
+            .drain_filter(|(name, _)| name == "max_background_jobs")
             .next()
         {
-            let max_background_compactions = background_compactions_config.1.into();
-            self.set_max_background_compactions(max_background_compactions)?;
+            let max_background_jobs = background_jobs_config.1.into();
+            self.set_max_background_jobs(max_background_jobs)?;
         }
 
         if let Some(background_flushes_config) = change
@@ -3273,16 +3275,14 @@ mod tests {
         assert_eq!(db.get_db_options().get_max_background_jobs(), 8);
 
         // update max_background_flushes
-        let db_opts = db.get_db_options();
-        assert_eq!(db_opts.get_max_background_flushes(), -1);
+        assert_eq!(db_opts.get_max_background_flushes(), 2);
 
         cfg_controller
             .update_config("rocksdb.max-background-flushes", "4")
             .unwrap();
-        assert_eq!(db.get_db_options().get_max_background_flushes(), 4);
+        assert_eq!(db_opts.get_max_background_flushes(), 4);
 
         // update rate_bytes_per_sec
-        let db_opts = db.get_db_options();
         assert_eq!(
             db_opts.get_rate_bytes_per_sec().unwrap(),
             ReadableSize::mb(64).0 as i64
@@ -3292,7 +3292,7 @@ mod tests {
             .update_config("rocksdb.rate-bytes-per-sec", "128MB")
             .unwrap();
         assert_eq!(
-            db.get_db_options().get_rate_bytes_per_sec().unwrap(),
+            db_opts.get_rate_bytes_per_sec().unwrap(),
             ReadableSize::mb(128).0 as i64
         );
 
