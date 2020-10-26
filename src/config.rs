@@ -879,7 +879,6 @@ pub struct DbConfig {
     pub wal_size_limit: ReadableSize,
     pub max_total_wal_size: ReadableSize,
     pub max_background_jobs: i32,
-    #[config(skip)]
     pub max_background_flushes: i32,
     #[config(skip)]
     pub max_manifest_file_size: ReadableSize,
