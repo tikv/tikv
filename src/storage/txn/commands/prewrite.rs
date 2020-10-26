@@ -252,8 +252,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 Err(e) => return Err(Error::from(e)),
             }
         }
-
         context.statistics.add(&txn.take_statistics());
+
+        let async_commit_ts = if self.secondary_keys.is_some() {
+            final_min_commit_ts
+        } else {
+            TimeStamp::zero()
+        };
+
         let (pr, to_be_write, rows, ctx, lock_info, lock_guards) = if locks.is_empty() {
             let one_pc_commit_ts = if self.try_one_pc {
                 assert_eq!(txn.locks_for_1pc.len(), rows);
@@ -271,7 +277,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks: vec![],
-                    min_commit_ts: final_min_commit_ts,
+                    min_commit_ts: async_commit_ts,
                     one_pc_commit_ts,
                 },
             };
@@ -287,7 +293,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks,
-                    min_commit_ts: final_min_commit_ts,
+                    min_commit_ts: async_commit_ts,
                     one_pc_commit_ts: TimeStamp::zero(),
                 },
             };
