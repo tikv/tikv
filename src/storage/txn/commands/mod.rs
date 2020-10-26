@@ -637,12 +637,12 @@ pub mod test_util {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
         let concurrency_manager = ConcurrencyManager::new(start_ts.into());
-        let cmd = if one_pc_max_commit_ts.is_some() {
+        let cmd = if let Some(max_commit_ts) = one_pc_max_commit_ts {
             Prewrite::with_1pc(
                 mutations,
                 primary,
                 TimeStamp::from(start_ts),
-                one_pc_max_commit_ts.unwrap().into(),
+                max_commit_ts.into(),
             )
         } else {
             Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts))
@@ -684,13 +684,13 @@ pub mod test_util {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
         let concurrency_manager = ConcurrencyManager::new(start_ts.into());
-        let cmd = if one_pc_max_commit_ts.is_some() {
+        let cmd = if let Some(max_commit_ts) = one_pc_max_commit_ts {
             PrewritePessimistic::with_1pc(
                 mutations,
                 primary,
                 start_ts.into(),
                 for_update_ts.into(),
-                one_pc_max_commit_ts.unwrap().into(),
+                max_commit_ts.into(),
             )
         } else {
             PrewritePessimistic::with_defaults(
