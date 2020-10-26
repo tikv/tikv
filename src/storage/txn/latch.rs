@@ -147,7 +147,7 @@ impl Latches {
     {
         // prevent from deadlock, so we sort and deduplicate the index
         let mut hashes: Vec<u64> = keys.into_iter().map(|x| self.calc_slot(x)).collect();
-        hashes.sort();
+        hashes.sort_unstable();
         hashes.dedup();
         Lock::new(hashes)
     }

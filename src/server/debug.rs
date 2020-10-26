@@ -1220,7 +1220,7 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
 mod tests {
     use std::sync::Arc;
 
-    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use kvproto::metapb::{Peer, Region};
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
@@ -1229,7 +1229,7 @@ mod tests {
     use crate::storage::mvcc::{Lock, LockType};
     use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine_rocks::RocksEngine;
-    use engine_traits::{CFHandleExt, Mutable, SyncMutable};
+    use engine_traits::{Mutable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     fn init_region_state(engine: &Arc<DB>, region_id: u64, stores: &[u64]) -> Region {
@@ -1733,11 +1733,7 @@ mod tests {
 
         let remove_region_state = |region_id: u64| {
             let key = keys::region_state_key(region_id);
-            let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
-            engine
-                .as_inner()
-                .delete_cf(cf_raft.as_inner(), &key)
-                .unwrap();
+            engine.delete_cf(CF_RAFT, &key).unwrap();
         };
 
         let mut region = Region::default();

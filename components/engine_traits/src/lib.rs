@@ -267,8 +267,6 @@ extern crate slog_global;
 //
 // Many of these define "extension" traits, that end in `Ext`.
 
-mod cf_handle;
-pub use crate::cf_handle::*;
 mod cf_names;
 pub use crate::cf_names::*;
 mod cf_options;
