@@ -639,7 +639,7 @@ mod tests {
             .build()
             .unwrap();
         let mut getter = PointGetter {
-            snapshot: snapshot,
+            snapshot,
             multi: true,
             omit_value: false,
             isolation_level: IsolationLevel::Si,
