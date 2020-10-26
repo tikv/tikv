@@ -260,8 +260,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 assert_ne!(final_min_commit_ts, TimeStamp::zero());
                 // All keys can be successfully locked and `try_one_pc` is set. Try to directly
                 // commit them.
-                let (ts, released_locks) =
-                    handle_1pc(&mut txn, final_min_commit_ts);
+                let (ts, released_locks) = handle_1pc(&mut txn, final_min_commit_ts);
                 if let Some(released_locks) = released_locks {
                     assert!(released_locks.is_empty());
                 }
@@ -340,7 +339,7 @@ mod tests {
             ))],
             pri_key.to_vec(),
             99,
-            false,
+            None,
         )
         .unwrap();
         assert_eq!(1, statistic.write.seek);
@@ -350,7 +349,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             100,
-            false,
+            None,
         )
         .err()
         .unwrap();
@@ -374,7 +373,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             101,
-            false,
+            None,
         )
         .err()
         .unwrap();
@@ -390,7 +389,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             104,
-            false,
+            None,
         )
         .err()
         .unwrap();
@@ -414,7 +413,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             104,
-            false,
+            None,
         )
         .unwrap();
         // All keys are prewrited successful with only one seek operations.
@@ -461,7 +460,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             100,
-            false,
+            None,
         )
         .unwrap();
         // Rollback to make tombstones in lock-cf.
@@ -481,7 +480,7 @@ mod tests {
             mutations,
             pri_key.to_vec(),
             110,
-            false,
+            None,
         )
         .unwrap();
         let d = perf.delta();
@@ -499,7 +498,15 @@ mod tests {
         let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
 
         let mut statistics = Statistics::default();
-        prewrite(&engine, &mut statistics, mutations, key.to_vec(), 10, true).unwrap();
+        prewrite(
+            &engine,
+            &mut statistics,
+            mutations,
+            key.to_vec(),
+            10,
+            Some(15),
+        )
+        .unwrap();
         must_unlocked(&engine, key);
         must_get(&engine, key, 12, value);
         must_get_commit_ts(&engine, key, 10, 11);

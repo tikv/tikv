@@ -613,17 +613,17 @@ pub mod test_util {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: u64,
-        try_one_pc: bool,
+        one_pc_max_commit_ts: Option<u64>,
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
         let concurrency_manager = ConcurrencyManager::new(start_ts.into());
-        let cmd = if try_one_pc {
+        let cmd = if one_pc_max_commit_ts.is_some() {
             Prewrite::with_1pc(
                 mutations,
                 primary,
                 TimeStamp::from(start_ts),
-                TimeStamp::max(),
+                one_pc_max_commit_ts.unwrap().into(),
             )
         } else {
             Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts))
@@ -659,18 +659,18 @@ pub mod test_util {
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,
-        try_one_pc: bool,
+        one_pc_max_commit_ts: Option<u64>,
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
         let concurrency_manager = ConcurrencyManager::new(start_ts.into());
-        let cmd = if try_one_pc {
+        let cmd = if one_pc_max_commit_ts.is_some() {
             PrewritePessimistic::with_1pc(
                 mutations,
                 primary,
                 start_ts.into(),
                 for_update_ts.into(),
-                TimeStamp::max(),
+                one_pc_max_commit_ts.unwrap().into(),
             )
         } else {
             PrewritePessimistic::with_defaults(

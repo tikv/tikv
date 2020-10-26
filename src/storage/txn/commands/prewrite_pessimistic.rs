@@ -195,8 +195,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
                 assert_ne!(final_min_commit_ts, TimeStamp::zero());
                 // All keys can be successfully locked and `try_one_pc` is set. Try to directly
                 // commit them.
-                let (ts, released_locks) =
-                    handle_1pc(&mut txn, final_min_commit_ts);
+                let (ts, released_locks) = handle_1pc(&mut txn, final_min_commit_ts);
                 let released_locks = released_locks.unwrap();
                 if !released_locks.is_empty() {
                     released_locks.wake_up(context.lock_mgr);
@@ -267,7 +266,7 @@ mod tests {
             key.to_vec(),
             10,
             10,
-            true,
+            Some(15),
         )
         .unwrap();
 
@@ -292,7 +291,7 @@ mod tests {
             k1.to_vec(),
             8,
             12,
-            true,
+            Some(15),
         )
         .unwrap();
 
