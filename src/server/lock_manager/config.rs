@@ -18,6 +18,7 @@ pub struct Config {
     pub wait_for_lock_timeout: ReadableDuration,
     #[serde(deserialize_with = "readable_duration_or_u64")]
     pub wake_up_delay_duration: ReadableDuration,
+    #[config(skip)]
     pub pipelined: bool,
 }
 

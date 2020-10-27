@@ -4,8 +4,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use futures::executor::block_on;
-use futures::{stream, SinkExt};
+use futures::{stream, Future, Stream};
 use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
@@ -44,7 +43,7 @@ pub fn new_cluster_and_tikv_import_client(
         let env = Arc::new(Environment::new(1));
         let node = ctx.get_peer().get_store_id();
         ChannelBuilder::new(env)
-            .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
+            .http2_max_ping_strikes(std::i32::MAX) // For pings without data from clients.
             .keepalive_time(cluster.cfg.server.grpc_keepalive_time.into())
             .keepalive_timeout(cluster.cfg.server.grpc_keepalive_timeout.into())
             .connect(&cluster.sim.rl().get_addr(node))
@@ -74,15 +73,11 @@ pub fn send_upload_sst(
     r2.set_data(data.to_vec());
     let reqs: Vec<_> = vec![r1, r2]
         .into_iter()
-        .map(|r| Result::Ok((r, WriteFlags::default())))
+        .map(|r| (r, WriteFlags::default()))
         .collect();
-    let (mut tx, rx) = client.upload().unwrap();
-    let mut stream = stream::iter(reqs);
-    block_on(async move {
-        tx.send_all(&mut stream).await?;
-        tx.close().await?;
-        rx.await
-    })
+    let (tx, rx) = client.upload().unwrap();
+    let stream = stream::iter_ok(reqs);
+    stream.forward(tx).and_then(|_| rx).wait()
 }
 
 pub fn send_write_sst(
@@ -126,16 +121,12 @@ pub fn send_write_sst(
 
     let reqs: Vec<_> = vec![r1, r2]
         .into_iter()
-        .map(|r| Result::Ok((r, WriteFlags::default())))
+        .map(|r| (r, WriteFlags::default()))
         .collect();
 
-    let (mut tx, rx) = client.write().unwrap();
-    let mut stream = stream::iter(reqs);
-    block_on(async move {
-        tx.send_all(&mut stream).await?;
-        tx.close().await?;
-        rx.await
-    })
+    let (tx, rx) = client.write().unwrap();
+    let stream = stream::iter_ok(reqs);
+    stream.forward(tx).and_then(|_| rx).wait()
 }
 
 pub fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {

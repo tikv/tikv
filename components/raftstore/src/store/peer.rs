@@ -2113,21 +2113,29 @@ impl Peer {
         // cause a long time waiting for a read response. Then we should return an error directly
         // in this situation.
         if !self.is_leader() && self.leader_id() == INVALID_ID {
-            cmd_resp::bind_error(
-                &mut err_resp,
-                box_err!("{} can not read index due to no leader", self.tag),
-            );
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             // The leader may be hibernated, send a message for trying to awaken the leader.
-            if poll_ctx.cfg.hibernate_regions
-                && (self.bcast_wake_up_time.is_none()
-                    || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
-                        >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL))
+            if self.bcast_wake_up_time.is_none()
+                || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
+                    >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL)
             {
                 self.bcast_wake_up_message(poll_ctx);
                 self.bcast_wake_up_time = Some(UtilInstant::now_coarse());
+
+                let task = PdTask::QueryRegionLeader {
+                    region_id: self.region_id,
+                };
+                if let Err(e) = poll_ctx.pd_scheduler.schedule(task) {
+                    error!(
+                        "failed to notify pd";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer_id(),
+                        "err" => %e,
+                    )
+                }
             }
             self.should_wake_up = true;
+            cmd_resp::bind_error(&mut err_resp, Error::NotLeader(self.region_id, None));
             cb.invoke_with_response(err_resp);
             return false;
         }
@@ -2689,24 +2697,32 @@ impl Peer {
             if peer.get_id() == self.peer_id() {
                 continue;
             }
-            let mut send_msg = RaftMessage::default();
-            send_msg.set_region_id(self.region_id);
-            send_msg.set_from_peer(self.peer.clone());
-            send_msg.set_region_epoch(self.region().get_region_epoch().clone());
-            send_msg.set_to_peer(peer.clone());
-            let extra_msg = send_msg.mut_extra_msg();
-            extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-            if let Err(e) = ctx.trans.send(send_msg) {
-                error!(?e;
-                    "failed to send wake up message";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                    "target_peer_id" => peer.get_id(),
-                    "target_store_id" => peer.get_store_id(),
-                );
-            } else {
-                ctx.need_flush_trans = true;
-            }
+            self.send_wake_up_message(ctx, peer);
+        }
+    }
+
+    pub fn send_wake_up_message<T: Transport, C>(
+        &self,
+        ctx: &mut PollContext<T, C>,
+        peer: &metapb::Peer,
+    ) {
+        let mut send_msg = RaftMessage::default();
+        send_msg.set_region_id(self.region_id);
+        send_msg.set_from_peer(self.peer.clone());
+        send_msg.set_region_epoch(self.region().get_region_epoch().clone());
+        send_msg.set_to_peer(peer.clone());
+        let extra_msg = send_msg.mut_extra_msg();
+        extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
+        if let Err(e) = ctx.trans.send(send_msg) {
+            error!(?e;
+                "failed to send wake up message";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "target_peer_id" => peer.get_id(),
+                "target_store_id" => peer.get_store_id(),
+            );
+        } else {
+            ctx.need_flush_trans = true;
         }
     }
 

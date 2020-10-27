@@ -12,7 +12,8 @@ use kvproto::cdcpb::{
 };
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
-use test_raftstore::sleep_ms;
+use test_raftstore::*;
+use tikv_util::config::*;
 
 #[test]
 fn test_stale_resolver() {
@@ -80,9 +81,9 @@ fn test_stale_resolver() {
     // Unblock all scans
     fail::remove(fp1);
     // Receive events
-    let mut events = receive_event(false);
+    let mut events = receive_event(false).events.to_vec();
     while events.len() < 2 {
-        events.extend(receive_event(false).into_iter());
+        events.extend(receive_event(false).events.into_iter());
     }
     assert_eq!(events.len(), 2);
     for event in events {
@@ -107,7 +108,7 @@ fn test_stale_resolver() {
     event_feed_wrap.as_ref().replace(Some(resp_rx1));
     // Receive events
     for _ in 0..2 {
-        let mut events = receive_event(false);
+        let mut events = receive_event(false).events.to_vec();
         match events.pop().unwrap().event.unwrap() {
             Event_oneof_event::Entries(es) => match es.entries.len() {
                 1 => {
@@ -130,5 +131,62 @@ fn test_stale_resolver() {
     }
 
     event_feed_wrap.as_ref().replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_region_error() {
+    let mut cluster = new_server_cluster(1, 1);
+    cluster.cfg.cdc.min_ts_interval = ReadableDuration::millis(100);
+    let mut suite = TestSuite::with_cluster(1, cluster);
+
+    let multi_batch_fp = "cdc_before_handle_multi_batch";
+    fail::cfg(multi_batch_fp, "return").unwrap();
+    let deregister_fp = "cdc_before_handle_deregister";
+    fail::cfg(deregister_fp, "return").unwrap();
+
+    // Split region
+    let region = suite.cluster.get_region(&[]);
+    suite.cluster.must_split(&region, b"k1");
+    // Subscribe source region
+    let source = suite.cluster.get_region(b"k0");
+    let mut req = ChangeDataRequest::default();
+    req.region_id = source.get_id();
+    req.set_region_epoch(source.get_region_epoch().clone());
+    let (source_tx, source_wrap, source_event) =
+        new_event_feed(suite.get_region_cdc_client(source.get_id()));
+    let _source_tx = source_tx
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
+    // Subscribe target region
+    let target = suite.cluster.get_region(b"k2");
+    req.region_id = target.get_id();
+    req.set_region_epoch(target.get_region_epoch().clone());
+    let (target_tx, target_wrap, _target_event) =
+        new_event_feed(suite.get_region_cdc_client(target.get_id()));
+    let _target_tx = target_tx.send((req, WriteFlags::default())).wait().unwrap();
+    sleep_ms(1000);
+
+    suite
+        .cluster
+        .pd_client
+        .must_merge(source.get_id(), target.get_id());
+    sleep_ms(1000);
+
+    let mut last_resolved_ts = 0;
+    for _ in 0..5 {
+        let event = source_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            let ts = resolved_ts.ts;
+            assert!(ts > last_resolved_ts);
+            last_resolved_ts = ts;
+        }
+    }
+    fail::remove(multi_batch_fp);
+    fail::remove(deregister_fp);
+
+    source_wrap.as_ref().replace(None);
+    target_wrap.as_ref().replace(None);
     suite.stop();
 }
