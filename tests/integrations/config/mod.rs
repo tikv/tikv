@@ -124,8 +124,8 @@ fn test_serde_custom_tikv_config() {
         },
     };
     value.metric = MetricConfig {
-        interval: ReadableDuration::secs(12),
-        address: "example.com:443".to_owned(),
+        interval: ReadableDuration::secs(15),
+        address: "".to_string(),
         job: "tikv_1".to_owned(),
     };
     let mut apply_batch_system = BatchSystemConfig::default();
@@ -243,7 +243,7 @@ fn test_serde_custom_tikv_config() {
         rate_bytes_per_sec: ReadableSize::kb(1),
         rate_limiter_refill_period: ReadableDuration::millis(10),
         rate_limiter_mode: DBRateLimiterMode::AllIo,
-        auto_tuned: true,
+        auto_tuned: false,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
         max_sub_compactions: 12,
@@ -290,7 +290,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: titan_cf_config.clone(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -337,7 +337,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -398,7 +398,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -459,7 +459,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -520,7 +520,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: titan_cf_config.clone(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -595,7 +595,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: titan_cf_config,
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -616,6 +616,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(2),
+        enable_async_apply_prewrite: true,
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
@@ -671,7 +672,7 @@ fn test_serde_custom_tikv_config() {
     value.pessimistic_txn = PessimisticTxnConfig {
         wait_for_lock_timeout: ReadableDuration::millis(10),
         wake_up_delay_duration: ReadableDuration::millis(100),
-        pipelined: true,
+        pipelined: false,
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),

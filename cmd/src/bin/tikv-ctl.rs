@@ -1033,7 +1033,8 @@ fn main() {
     vlog::set_verbosity_level(1);
 
     let raw_key_hint: &'static str = "Raw key (generally starts with \"z\") in escaped form";
-    let version_info = tikv::tikv_version_info();
+    let build_timestamp = option_env!("TIKV_BUILD_TIME");
+    let version_info = tikv::tikv_version_info(build_timestamp);
 
     let mut app = App::new("TiKV Control (tikv-ctl)")
         .about("A tool for interacting with TiKV deployments.")
@@ -2262,17 +2263,16 @@ fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
     let key_path = matches.value_of("key_path");
 
     let mut cfg = SecurityConfig::default();
-    if ca_path.is_none() && cert_path.is_none() && key_path.is_none() {
-        return Arc::new(SecurityManager::new(&cfg).unwrap());
-    }
-
     if ca_path.is_some() || cert_path.is_some() || key_path.is_some() {
-        if ca_path.is_none() || cert_path.is_none() || key_path.is_none() {
-            panic!("CA certificate and private key should all be set.");
-        }
-        cfg.ca_path = ca_path.unwrap().to_owned();
-        cfg.cert_path = cert_path.unwrap().to_owned();
-        cfg.key_path = key_path.unwrap().to_owned();
+        cfg.ca_path = ca_path
+            .expect("CA path should be set when cert path or key path is set.")
+            .to_owned();
+        cfg.cert_path = cert_path
+            .expect("cert path should be set when CA path or key path is set.")
+            .to_owned();
+        cfg.key_path = key_path
+            .expect("key path should be set when cert path or CA path is set.")
+            .to_owned();
     }
 
     Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))

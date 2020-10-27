@@ -994,6 +994,11 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
 
     let right_peer_2 = find_peer(&right, 2).cloned().unwrap();
     assert_eq!(right_peer_2.get_id(), 2);
+
+    // Make sure peer 2 finish split before pause
+    cluster.must_put(b"k2pause", b"vpause");
+    must_get_equal(&cluster.get_engine(2), b"k2pause", b"vpause");
+
     let on_handle_apply_2_fp = "on_handle_apply_2";
     fail::cfg(on_handle_apply_2_fp, "pause").unwrap();
 
@@ -1221,19 +1226,19 @@ fn test_node_merge_crash_when_snapshot() {
 
     let r1 = pd_client.get_region(b"k1").unwrap();
     let r1_on_store1 = find_peer(&r1, 1).unwrap().to_owned();
-    cluster.transfer_leader(r1.get_id(), r1_on_store1);
+    cluster.must_transfer_leader(r1.get_id(), r1_on_store1);
     let r2 = pd_client.get_region(b"k2").unwrap();
     let r2_on_store1 = find_peer(&r2, 1).unwrap().to_owned();
-    cluster.transfer_leader(r2.get_id(), r2_on_store1);
+    cluster.must_transfer_leader(r2.get_id(), r2_on_store1);
     let r3 = pd_client.get_region(b"k3").unwrap();
     let r3_on_store1 = find_peer(&r3, 1).unwrap().to_owned();
-    cluster.transfer_leader(r3.get_id(), r3_on_store1);
+    cluster.must_transfer_leader(r3.get_id(), r3_on_store1);
     let r4 = pd_client.get_region(b"k4").unwrap();
     let r4_on_store1 = find_peer(&r4, 1).unwrap().to_owned();
-    cluster.transfer_leader(r4.get_id(), r4_on_store1);
+    cluster.must_transfer_leader(r4.get_id(), r4_on_store1);
     let r5 = pd_client.get_region(b"k5").unwrap();
     let r5_on_store1 = find_peer(&r5, 1).unwrap().to_owned();
-    cluster.transfer_leader(r5.get_id(), r5_on_store1);
+    cluster.must_transfer_leader(r5.get_id(), r5_on_store1);
 
     for i in 1..5 {
         cluster.must_put(format!("k{}", i).as_bytes(), b"v");

@@ -8,6 +8,7 @@ version = "0.0.1"
 parking_lot = "0.10"
 tokio = { version = "0.2", features = ["sync"] }
 txn_types = { path = "../txn_types" }
+fail = "0.4"
 
 [dependencies.crossbeam-skiplist]
 git = "https://github.com/crossbeam-rs/crossbeam.git"

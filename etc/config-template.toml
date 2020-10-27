@@ -191,6 +191,11 @@
 ## When the pending write bytes exceeds this threshold, the "scheduler too busy" error is displayed.
 # scheduler-pending-write-threshold = "100MB"
 
+## For async commit transactions, it's possible to response to the client before applying prewrite
+## requests. Enabling this can ease reduce latency when apply duration is significant, or reduce
+## latency jittering when apply duration is not stable.
+# enable-async-apply-prewrite = false
+
 [storage.block-cache]
 ## Whether to create a shared block cache for all RocksDB column families.
 ##
@@ -454,11 +459,11 @@
 ##    2 : WriteOnly
 ##    3 : AllIo
 ## 4. auto_tuned enables dynamic adjustment of rate limit within the range
-##    [rate_bytes_per_sec / 20, rate_bytes_per_sec], according to the recent demand for background I/O.
-# rate-bytes-per-sec = 0
+##    [10MB/s, rate_bytes_per_sec], according to the recent demand for background I/O.
+# rate-bytes-per-sec = "10GB"
 # rate-limiter-refill-period = "100ms"
 # rate-limiter-mode = 2
-# auto-tuned = false
+# auto-tuned = true
 
 
 ## Enable or disable the pipelined write.
@@ -889,7 +894,7 @@
 
 ## Enable pipelined pessimistic lock, only effect when processing perssimistic transactions
 ## Enabled this will improve performance, but slightly increase the transcation failure rate
-# pipelined = false
+# pipelined = true
 
 [gc]
 ## The number of keys to GC in one batch.

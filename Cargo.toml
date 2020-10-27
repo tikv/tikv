@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec"]
+default = ["protobuf-codec", "test-engines-rocksdb"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -34,7 +34,6 @@ prost-codec = [
   "txn_types/prost-codec",
   "encryption/prost-codec",
   "tikv_util/prost-codec",
-  "log_wrappers/prost-codec"
 ]
 protobuf-codec = [
   "engine_rocks/protobuf-codec",
@@ -50,9 +49,16 @@ protobuf-codec = [
   "txn_types/protobuf-codec",
   "encryption/protobuf-codec",
   "tikv_util/protobuf-codec",
-  "log_wrappers/protobuf-codec"
 ]
 testexport = ["raftstore/testexport"]
+test-engines-rocksdb = [
+  "engine_test/test-engine-kv-rocksdb",
+  "engine_test/test-engine-raft-rocksdb",
+]
+test-engines-panic = [
+  "engine_test/test-engine-kv-panic",
+  "engine_test/test-engine-raft-panic",
+]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -80,6 +86,7 @@ derive_more = "0.99.3"
 encryption = { path = "components/encryption" }
 engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
+engine_test = { path = "components/engine_test" }
 engine_traits = { path = "components/engine_traits" }
 error_code = { path = "components/error_code" }
 fail = "0.4"
@@ -130,7 +137,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 slog_derive = "0.2"
 parking_lot = "0.10"
-prometheus = { version = "0.8", features = ["nightly", "push"] }
+prometheus = { version = "0.8", features = ["nightly"] }
 sst_importer = { path = "components/sst_importer" }
 sysinfo = "0.15"
 semver = "0.10"

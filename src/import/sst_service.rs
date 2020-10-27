@@ -3,7 +3,7 @@
 use std::f64::INFINITY;
 use std::sync::Arc;
 
-use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT, CF_WRITE};
+use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::{TryFutureExt, TryStreamExt};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
@@ -269,7 +269,7 @@ where
         cmd.mut_requests().push(ingest);
 
         let (cb, future) = paired_future_callback();
-        if let Err(e) = self.router.send_command(cmd, Callback::Write(cb)) {
+        if let Err(e) = self.router.send_command(cmd, Callback::write(cb)) {
             let mut resp = IngestResponse::default();
             resp.set_error(e.into());
             ctx.spawn(
@@ -418,19 +418,7 @@ where
                     _ => return Err(Error::InvalidChunk),
                 };
 
-                let name = import.get_path(&meta);
-
-                let default = <E as SstExt>::SstWriterBuilder::new()
-                    .set_in_memory(true)
-                    .set_db(&engine)
-                    .set_cf(CF_DEFAULT)
-                    .build(&name.to_str().unwrap())?;
-                let write = <E as SstExt>::SstWriterBuilder::new()
-                    .set_in_memory(true)
-                    .set_db(&engine)
-                    .set_cf(CF_WRITE)
-                    .build(&name.to_str().unwrap())?;
-                let writer = match import.new_writer::<E>(default, write, meta) {
+                let writer = match import.new_writer::<E>(&engine, meta) {
                     Ok(w) => w,
                     Err(e) => {
                         error!("build writer failed {:?}", e);
