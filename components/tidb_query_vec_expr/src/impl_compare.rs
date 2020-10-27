@@ -411,10 +411,12 @@ pub fn least_time(mut ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Resul
 }
 
 #[inline]
-fn do_get_extremum<'a, T, E>(args: &[Option<&'a T>], chooser: E) -> Result<Option<T::Owned>>
+fn do_get_extremum<'a, T>(
+    args: &[Option<&'a T>],
+    chooser: fn(&'a T, &'a T) -> &'a T,
+) -> Result<Option<T::Owned>>
 where
     T: Ord + ToOwned + ?Sized,
-    E: Fn(&'a T, &'a T) -> &'a T,
 {
     let first = args[0];
     match first {
@@ -892,12 +894,14 @@ mod tests {
                     Ordering::Less,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
             (
                 "a",
                 "b",
                 [
+                    Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
@@ -912,6 +916,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
             (
@@ -922,6 +927,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
             (
@@ -930,6 +936,7 @@ mod tests {
                 [
                     Ordering::Less,
                     Ordering::Less,
+                    Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
                 ],
@@ -942,12 +949,14 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
             (
                 "À\t",
                 "A",
                 [
+                    Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
@@ -962,12 +971,14 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
+                    Ordering::Greater,
                 ],
             ),
             (
                 "a bc",
                 "ab ",
                 [
+                    Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
@@ -982,6 +993,7 @@ mod tests {
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
             (
@@ -991,6 +1003,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
+                    Ordering::Less,
                     Ordering::Less,
                 ],
             ),
@@ -1002,6 +1015,18 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Equal,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "aa",
+                "AA۝۝۝۝۝۝۝۝۝",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Less,
+                    Ordering::Equal,
                 ],
             ),
         ];
@@ -1010,6 +1035,7 @@ mod tests {
             (Collation::Utf8Mb4BinNoPadding, 1),
             (Collation::Utf8Mb4Bin, 2),
             (Collation::Utf8Mb4GeneralCi, 3),
+            (Collation::Utf8Mb4UnicodeCi, 4),
         ];
 
         for (str_a, str_b, ordering_in_collations) in cases {

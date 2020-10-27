@@ -11,10 +11,10 @@ use std::sync::Arc;
 use crate::store::{util, PeerStorage};
 use crate::{Error, Result};
 use engine_traits::util::check_key_in_range;
+use engine_traits::RaftEngine;
 use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
 use keys::DATA_PREFIX_KEY;
-use raft_engine::RaftEngine;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -229,14 +229,14 @@ where
             set_panic_mark();
             panic!(
                 "failed to get value of key {} in region {}: {:?}",
-                hex::encode_upper(&key),
+                log_wrappers::Value::key(&key),
                 self.region.get_id(),
                 e,
             );
         } else {
             error!(
                 "failed to get value of key in cf";
-                "key" => hex::encode_upper(&key),
+                "key" => log_wrappers::Value::key(&key),
                 "region" => self.region.get_id(),
                 "cf" => cf,
                 "error" => ?e,
@@ -382,9 +382,9 @@ mod tests {
     use crate::store::PeerStorage;
     use crate::Result;
 
-    use engine_rocks::util::new_temp_engine;
-    use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_traits::{CompactExt, Engines, MiscExt, Peekable, SyncMutable};
+    use engine_test::kv::KvTestSnapshot;
+    use engine_test::new_temp_engine;
+    use engine_traits::{Engines, KvEngine, Peekable, RaftEngine, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -394,17 +394,20 @@ mod tests {
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn new_peer_storage(
-        engines: Engines<RocksEngine, RocksEngine>,
-        r: &Region,
-    ) -> PeerStorage<RocksEngine, RocksEngine> {
+    fn new_peer_storage<EK, ER>(engines: Engines<EK, ER>, r: &Region) -> PeerStorage<EK, ER>
+    where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
         let (sched, _) = worker::dummy_scheduler();
         PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
     }
 
-    fn load_default_dataset(
-        engines: Engines<RocksEngine, RocksEngine>,
-    ) -> (PeerStorage<RocksEngine, RocksEngine>, DataSet) {
+    fn load_default_dataset<EK, ER>(engines: Engines<EK, ER>) -> (PeerStorage<EK, ER>, DataSet)
+    where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -426,9 +429,13 @@ mod tests {
         (store, base_data)
     }
 
-    fn load_multiple_levels_dataset(
-        engines: Engines<RocksEngine, RocksEngine>,
-    ) -> (PeerStorage<RocksEngine, RocksEngine>, DataSet) {
+    fn load_multiple_levels_dataset<EK, ER>(
+        engines: Engines<EK, ER>,
+    ) -> (PeerStorage<EK, ER>, DataSet)
+    where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -485,7 +492,7 @@ mod tests {
         let key3 = b"key3";
         engines.kv.put_msg(&data_key(key3), &r).expect("");
 
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
         let v3 = snap.get_msg(key3).expect("");
         assert_eq!(v3, Some(r));
 
@@ -502,9 +509,9 @@ mod tests {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
         let (store, _) = load_default_dataset(engines);
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
 
-        let check_seek_result = |snap: &RegionSnapshot<RocksSnapshot>,
+        let check_seek_result = |snap: &RegionSnapshot<KvTestSnapshot>,
                                  lower_bound: Option<&[u8]>,
                                  upper_bound: Option<&[u8]>,
                                  seek_table: &Vec<(
@@ -520,26 +527,30 @@ mod tests {
             );
             let mut iter = snap.iter(iter_opt);
             for (seek_key, in_range, seek_exp, prev_exp) in seek_table.clone() {
-                let check_res = |iter: &RegionIterator<RocksSnapshot>,
+                let check_res = |iter: &RegionIterator<KvTestSnapshot>,
                                  res: Result<bool>,
                                  exp: Option<(&[u8], &[u8])>| {
                     if !in_range {
                         assert!(
                             res.is_err(),
                             "exp failed at {}",
-                            hex::encode_upper(seek_key)
+                            log_wrappers::Value::key(seek_key)
                         );
                         return;
                     }
                     if exp.is_none() {
-                        assert!(!res.unwrap(), "exp none at {}", hex::encode_upper(seek_key));
+                        assert!(
+                            !res.unwrap(),
+                            "exp none at {}",
+                            log_wrappers::Value::key(seek_key)
+                        );
                         return;
                     }
 
                     assert!(
                         res.unwrap(),
                         "should succeed at {}",
-                        hex::encode_upper(seek_key)
+                        log_wrappers::Value::key(seek_key)
                     );
                     let (exp_key, exp_val) = exp.unwrap();
                     assert_eq!(iter.key(), exp_key);
@@ -586,7 +597,7 @@ mod tests {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
         let (store, _) = load_multiple_levels_dataset(engines);
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
 
         seek_table = vec![
             (b"a01", false, None, None),
@@ -614,7 +625,7 @@ mod tests {
         let engines = new_temp_engine(&path);
         let (store, base_data) = load_default_dataset(engines.clone());
 
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
         let mut data = vec![];
         snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
@@ -649,7 +660,7 @@ mod tests {
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
         let store = new_peer_storage(engines.clone(), &region);
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
         data.clear();
         snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
@@ -675,7 +686,7 @@ mod tests {
 
         // test iterator with upper bound
         let store = new_peer_storage(engines, &region);
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
         let mut iter = snap.iter(IterOptions::new(
             None,
             Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
@@ -698,7 +709,7 @@ mod tests {
         let engines = new_temp_engine(&path);
         let (store, test_data) = load_default_dataset(engines);
 
-        let snap = RegionSnapshot::<RocksSnapshot>::new(&store);
+        let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
         let mut iter_opt = IterOptions::default();
         iter_opt.set_lower_bound(b"a3", 1);
         let mut iter = snap.iter(iter_opt);

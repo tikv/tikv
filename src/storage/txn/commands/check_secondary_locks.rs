@@ -6,7 +6,8 @@ use crate::storage::mvcc::{
     txn::make_rollback, LockType, MvccTxn, SecondaryLockStatus, TimeStamp, TxnCommitRecord,
 };
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+    WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::types::SecondaryLocksStatus;
@@ -42,6 +43,10 @@ impl CommandExt for CheckSecondaryLocks {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
+        // to prevent this case from happening.
+        context.concurrency_manager.update_max_ts(self.start_ts);
+
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
@@ -146,6 +151,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             pr,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }
@@ -157,6 +163,7 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::WriteCommand;
+    use crate::storage::txn::tests::*;
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
@@ -185,7 +192,7 @@ pub mod tests {
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     pipelined_pessimistic_lock: false,
-                    enable_async_commit: true,
+                    async_apply_prewrite: false,
                 },
             )
             .unwrap();
@@ -221,7 +228,7 @@ pub mod tests {
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
                         pipelined_pessimistic_lock: false,
-                        enable_async_commit: true,
+                        async_apply_prewrite: false,
                     },
                 )
                 .unwrap();

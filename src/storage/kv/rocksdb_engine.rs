@@ -25,8 +25,8 @@ use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    Callback, CbContext, Cursor, Engine, Error, ErrorInner, Iterator as EngineIterator, Modify,
-    Result, ScanMode, Snapshot, WriteData,
+    Callback, CbContext, Cursor, Engine, Error, ErrorInner, ExtCallback,
+    Iterator as EngineIterator, Modify, Result, ScanMode, Snapshot, WriteData,
 };
 
 pub use engine_rocks::RocksSnapshot;
@@ -51,7 +51,9 @@ impl Display for Task {
 
 struct Runner(Engines<BaseRocksEngine, BaseRocksEngine>);
 
-impl Runnable<Task> for Runner {
+impl Runnable for Runner {
+    type Task = Task;
+
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => {
@@ -111,11 +113,11 @@ impl RocksEngine {
         )?);
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let engines = Engines::new(
-            BaseRocksEngine::from_db(db.clone()),
-            BaseRocksEngine::from_db(db),
-            shared_block_cache,
-        );
+        let mut kv_engine = BaseRocksEngine::from_db(db.clone());
+        let mut raft_engine = BaseRocksEngine::from_db(db);
+        kv_engine.set_shared_block_cache(shared_block_cache);
+        raft_engine.set_shared_block_cache(shared_block_cache);
+        let engines = Engines::new(kv_engine, raft_engine);
         box_try!(worker.start(Runner(engines.clone())));
         Ok(RocksEngine {
             sched: worker.scheduler(),
@@ -214,10 +216,12 @@ impl TestEngineBuilder {
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
-                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
-                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
-                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                CF_DEFAULT => {
+                    CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None))
+                }
+                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache, None)),
+                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache, None)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
@@ -290,11 +294,28 @@ impl Engine for RocksEngine {
         write_modifies(&self.engines.kv, modifies)
     }
 
-    fn async_write(&self, _: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
+    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
+        self.async_write_ext(ctx, batch, cb, None, None)
+    }
+
+    fn async_write_ext(
+        &self,
+        _: &Context,
+        batch: WriteData,
+        cb: Callback<()>,
+        proposed_cb: Option<ExtCallback>,
+        committed_cb: Option<ExtCallback>,
+    ) -> Result<()> {
         fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
 
         if batch.modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
+        }
+        if let Some(cb) = proposed_cb {
+            cb();
+        }
+        if let Some(cb) = committed_cb {
+            cb();
         }
         box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
         Ok(())
@@ -348,8 +369,9 @@ impl Snapshot for Arc<RocksSnapshot> {
 
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create iterator");
+        let prefix_seek = iter_opt.prefix_seek_used();
         let iter = self.iterator_opt(iter_opt)?;
-        Ok(Cursor::new(iter, mode))
+        Ok(Cursor::new(iter, mode, prefix_seek))
     }
 
     fn iter_cf(
@@ -359,8 +381,9 @@ impl Snapshot for Arc<RocksSnapshot> {
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create cf iterator");
+        let prefix_seek = iter_opt.prefix_seek_used();
         let iter = self.iterator_cf_opt(cf, iter_opt)?;
-        Ok(Cursor::new(iter, mode))
+        Ok(Cursor::new(iter, mode, prefix_seek))
     }
 }
 
@@ -446,6 +469,7 @@ mod tests {
     use super::super::tests::*;
     use super::super::CfStatistics;
     use super::*;
+    use txn_types::TimeStamp;
 
     #[test]
     fn test_rocksdb() {
@@ -507,6 +531,28 @@ mod tests {
         test_perf_statistics(&engine);
     }
 
+    #[test]
+    fn test_max_skippable_internal_keys_error() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        must_put(&engine, b"foo", b"bar");
+        must_delete(&engine, b"foo");
+        must_put(&engine, b"foo1", b"bar1");
+        must_delete(&engine, b"foo1");
+        must_put(&engine, b"foo2", b"bar2");
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let iter_opt = IterOptions::default().set_max_skippable_internal_keys(1);
+        let mut iter = snapshot.iter(iter_opt, ScanMode::Forward).unwrap();
+
+        let mut statistics = CfStatistics::default();
+        let res = iter.seek(&Key::from_raw(b"foo"), &mut statistics);
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("Result incomplete: Too many internal keys skipped"));
+    }
+
     fn test_perf_statistics<E: Engine>(engine: &E) {
         must_put(engine, b"foo", b"bar1");
         must_put(engine, b"foo2", b"bar2");
@@ -545,5 +591,110 @@ mod tests {
 
         iter.prev(&mut statistics);
         assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 3);
+    }
+
+    #[test]
+    fn test_prefix_seek_skip_tombstone() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        engine
+            .put_cf(
+                &Context::default(),
+                "write",
+                Key::from_raw(b"aoo").append_ts(TimeStamp::zero()),
+                b"ba".to_vec(),
+            )
+            .unwrap();
+        for key in &[
+            b"foo".to_vec(),
+            b"foo1".to_vec(),
+            b"foo2".to_vec(),
+            b"foo3".to_vec(),
+        ] {
+            engine
+                .put_cf(
+                    &Context::default(),
+                    "write",
+                    Key::from_raw(key).append_ts(TimeStamp::zero()),
+                    b"bar".to_vec(),
+                )
+                .unwrap();
+            engine
+                .delete_cf(
+                    &Context::default(),
+                    "write",
+                    Key::from_raw(key).append_ts(TimeStamp::zero()),
+                )
+                .unwrap();
+        }
+
+        engine
+            .put_cf(
+                &Context::default(),
+                "write",
+                Key::from_raw(b"foo4").append_ts(TimeStamp::zero()),
+                b"bar4".to_vec(),
+            )
+            .unwrap();
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let iter_opt = IterOptions::default()
+            .use_prefix_seek()
+            .set_prefix_same_as_start(true);
+        let mut iter = snapshot
+            .iter_cf("write", iter_opt, ScanMode::Forward)
+            .unwrap();
+
+        let mut statistics = CfStatistics::default();
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.seek(
+            &Key::from_raw(b"aoo").append_ts(TimeStamp::zero()),
+            &mut statistics,
+        )
+        .unwrap();
+        assert_eq!(iter.valid().unwrap(), true);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.seek(
+            &Key::from_raw(b"foo").append_ts(TimeStamp::zero()),
+            &mut statistics,
+        )
+        .unwrap();
+        assert_eq!(iter.valid().unwrap(), false);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 1);
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.seek(
+            &Key::from_raw(b"foo1").append_ts(TimeStamp::zero()),
+            &mut statistics,
+        )
+        .unwrap();
+        assert_eq!(iter.valid().unwrap(), false);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 1);
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.seek(
+            &Key::from_raw(b"foo2").append_ts(TimeStamp::zero()),
+            &mut statistics,
+        )
+        .unwrap();
+        assert_eq!(iter.valid().unwrap(), false);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 1);
+        let perf_statistics = PerfStatisticsInstant::new();
+        assert_eq!(
+            iter.seek(
+                &Key::from_raw(b"foo4").append_ts(TimeStamp::zero()),
+                &mut statistics
+            )
+            .unwrap(),
+            true
+        );
+        assert_eq!(iter.valid().unwrap(), true);
+        assert_eq!(
+            iter.key(&mut statistics),
+            Key::from_raw(b"foo4")
+                .append_ts(TimeStamp::zero())
+                .as_encoded()
+                .as_slice()
+        );
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
     }
 }

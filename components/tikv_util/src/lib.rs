@@ -2,6 +2,7 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
+#![feature(min_specialization)]
 #![feature(box_patterns)]
 
 #[macro_use(fail_point)]
@@ -12,8 +13,6 @@ extern crate lazy_static;
 extern crate quick_error;
 #[macro_use(slog_o)]
 extern crate slog;
-#[macro_use]
-extern crate slog_global;
 #[macro_use]
 extern crate derive_more;
 #[cfg(test)]
@@ -26,20 +25,21 @@ use std::io;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, thread, u64};
 
 use fs2::FileExt;
 use rand::rngs::ThreadRng;
 
+#[macro_use]
+pub mod log;
 pub mod buffer_vec;
 pub mod codec;
 pub mod collections;
 pub mod config;
 pub mod file;
 pub mod future;
-pub mod future_pool;
 #[macro_use]
 pub mod macros;
 pub mod callback;
@@ -50,11 +50,11 @@ pub mod lru;
 pub mod metrics;
 pub mod mpsc;
 pub mod sys;
-pub mod threadpool;
 pub mod time;
 pub mod timer;
 pub mod trace;
 pub mod worker;
+pub mod yatp_pool;
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
@@ -490,7 +490,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
-        if let Some(level) = log::max_level().to_level() {
+        if let Some(level) = ::log::max_level().to_level() {
             let drainer = logger::text_format(logger::term_writer());
             let _ = logger::init_log(
                 drainer,
@@ -547,6 +547,10 @@ pub fn check_environment_variables() {
 #[inline]
 pub fn is_zero_duration(d: &Duration) -> bool {
     d.as_secs() == 0 && d.subsec_nanos() == 0
+}
+
+pub fn empty_shared_slice<T>() -> Arc<[T]> {
+    Vec::new().into()
 }
 
 #[cfg(test)]

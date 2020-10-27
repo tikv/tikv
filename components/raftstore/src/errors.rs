@@ -50,10 +50,10 @@ quick_error! {
         }
         KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
             display("key {} is not in region key range [{}, {}) for region {}",
-                    hex::encode_upper(key),
-                    hex::encode_upper(region.get_start_key()),
-                    hex::encode_upper(region.get_end_key()),
-                    region.get_id())
+                log_wrappers::Value::key(key),
+                log_wrappers::Value::key(region.get_start_key()),
+                log_wrappers::Value::key(region.get_end_key()),
+                region.get_id())
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
@@ -70,10 +70,6 @@ quick_error! {
         Engine(err: engine_traits::Error) {
             from()
             display("Engine {:?}", err)
-        }
-        RaftEngine(err: raft_engine::Error) {
-            from()
-            display("RaftEngine {:?}", err)
         }
         Protobuf(err: ProtobufError) {
             from()
@@ -253,7 +249,6 @@ impl ErrorCodeExt for Error {
             Error::KeyNotInRegion(_, _) => error_code::raftstore::KEY_NOT_IN_REGION,
             Error::Io(_) => error_code::raftstore::IO,
             Error::Engine(e) => e.error_code(),
-            Error::RaftEngine(_) => error_code::engine::ENGINE,
             Error::Protobuf(_) => error_code::raftstore::PROTOBUF,
             Error::Codec(e) => e.error_code(),
             Error::AddrParse(_) => error_code::raftstore::ADDR_PARSE,

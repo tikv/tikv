@@ -8,7 +8,7 @@ use std::result;
 
 use encryption::Error as EncryptionError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use futures03::channel::oneshot::Canceled;
+use futures::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
 use kvproto::import_sstpb;
 use tikv_util::codec::Error as CodecError;
@@ -75,8 +75,8 @@ quick_error! {
             cause(err)
             display("{}", err)
         }
-        FileExists(path: PathBuf) {
-            display("File {:?} exists", path)
+        FileExists(path: PathBuf, action: &'static str) {
+            display("File {:?} exists, cannot {}", path, action)
         }
         FileCorrupted(path: PathBuf, reason: String) {
             display("File {:?} corrupted: {}", path, reason)
@@ -98,8 +98,8 @@ quick_error! {
             display("\
                 {} has wrong prefix: key {} does not start with {}",
                 what,
-                hex::encode_upper(&key),
-                hex::encode_upper(&prefix),
+                log_wrappers::Value::key(&key),
+                log_wrappers::Value::key(&prefix),
             )
         }
         BadFormat(msg: String) {
@@ -137,7 +137,7 @@ impl ErrorCodeExt for Error {
             Error::RocksDB(_) => error_code::sst_importer::ROCKSDB,
             Error::EngineTraits(e) => e.error_code(),
             Error::ParseIntError(_) => error_code::sst_importer::PARSE_INT_ERROR,
-            Error::FileExists(_) => error_code::sst_importer::FILE_EXISTS,
+            Error::FileExists(..) => error_code::sst_importer::FILE_EXISTS,
             Error::FileCorrupted(_, _) => error_code::sst_importer::FILE_CORRUPTED,
             Error::InvalidSSTPath(_) => error_code::sst_importer::INVALID_SST_PATH,
             Error::InvalidChunk => error_code::sst_importer::INVALID_CHUNK,

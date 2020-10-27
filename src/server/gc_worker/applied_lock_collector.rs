@@ -188,10 +188,9 @@ impl QueryObserver for LockObserver {
             let lock = match Lock::parse(put_request.get_value()) {
                 Ok(l) => l,
                 Err(e) => {
-                    error!(
+                    error!(?e;
                         "cannot parse lock";
                         "value" => hex::encode_upper(put_request.get_value()),
-                        "err" => ?e
                     );
                     self.state.mark_dirty();
                     return;
@@ -247,10 +246,7 @@ impl ApplySnapshotObserver for LockObserver {
 
         match locks {
             Err(e) => {
-                error!(
-                    "cannot parse lock";
-                    "err" => ?e
-                );
+                error!(?e; "cannot parse lock");
                 self.state.mark_dirty()
             }
             Ok(l) => self.send(l),
@@ -364,7 +360,9 @@ impl LockCollectorRunner {
     }
 }
 
-impl Runnable<LockCollectorTask> for LockCollectorRunner {
+impl Runnable for LockCollectorRunner {
+    type Task = LockCollectorTask;
+
     fn run(&mut self, task: LockCollectorTask) {
         match task {
             LockCollectorTask::ObservedLocks(locks) => self.handle_observed_locks(locks),
@@ -452,7 +450,7 @@ impl Drop for AppliedLockCollector {
     fn drop(&mut self) {
         let r = self.stop();
         if let Err(e) = r {
-            error!("Failed to stop applied_lock_collector"; "err" => ?e);
+            error!(?e; "Failed to stop applied_lock_collector");
         }
     }
 }

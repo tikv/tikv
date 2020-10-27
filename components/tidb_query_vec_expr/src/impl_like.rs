@@ -155,6 +155,20 @@ mod tests {
                 Collation::Utf8Mb4Bin,
                 Some(1),
             ),
+            (
+                r#"ßssß"#,
+                r#"_sSß"#,
+                '\\',
+                Collation::Utf8Mb4GeneralCi,
+                Some(1),
+            ),
+            (
+                r#"ßssß"#,
+                r#"_ßß"#,
+                '\\',
+                Collation::Utf8Mb4GeneralCi,
+                Some(0),
+            ),
         ];
         for (target, pattern, escape, collation, expected) in cases {
             let output = RpnFnScalarEvaluator::new()

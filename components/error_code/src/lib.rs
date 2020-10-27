@@ -1,7 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+#![feature(min_specialization)]
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[macro_use]
+extern crate lazy_static;
 
 macro_rules! define_error_codes {
     ($prefix:literal,
@@ -13,8 +16,17 @@ macro_rules! define_error_codes {
             description: $description,
             workaround: $workaround,
         };)+
+        lazy_static! {
+           pub static ref ALL_ERROR_CODES: Vec<ErrorCode> = vec![$($name,)+];
+        }
     };
 }
+
+pub const UNKNOWN: ErrorCode = ErrorCode {
+    code: "KV:Unknown",
+    description: "",
+    workaround: "",
+};
 
 pub mod codec;
 pub mod coprocessor;
@@ -37,12 +49,18 @@ pub struct ErrorCode {
 
 impl Display for ErrorCode {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {}", self.code, self.description)
+        write!(f, "{}", self.code)
     }
 }
 
 pub trait ErrorCodeExt {
     fn error_code(&self) -> ErrorCode;
+}
+
+impl<T> ErrorCodeExt for T {
+    default fn error_code(&self) -> ErrorCode {
+        UNKNOWN
+    }
 }
 
 #[cfg(test)]

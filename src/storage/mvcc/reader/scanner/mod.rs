@@ -4,7 +4,9 @@ mod backward;
 mod forward;
 
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use keys::DATA_PREFIX_KEY;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
+use tikv_util::keybuilder::KeyBuilder;
 use txn_types::{Key, TimeStamp, TsSet, Value, Write, WriteRef, WriteType};
 
 use self::backward::BackwardKvScanner;
@@ -353,11 +355,33 @@ pub fn has_data_in_range<S: Snapshot>(
     right: &Key,
     statistic: &mut CfStatistics,
 ) -> Result<bool> {
-    let iter_opt = IterOptions::new(None, None, true);
+    let iter_opt = IterOptions::new(
+        None,
+        Some(KeyBuilder::from_slice(
+            right.as_encoded(),
+            DATA_PREFIX_KEY.len(),
+            0,
+        )),
+        true,
+    )
+    .set_max_skippable_internal_keys(100);
     let mut iter = snapshot.iter_cf(cf, iter_opt, ScanMode::Forward)?;
-    if iter.seek(left, statistic)? {
-        if iter.key(statistic) < right.as_encoded().as_slice() {
+    match iter.seek(left, statistic) {
+        Ok(valid) => {
+            if valid {
+                if iter.key(statistic) < right.as_encoded().as_slice() {
+                    return Ok(true);
+                }
+            }
+        }
+        Err(e)
+            if e.to_string()
+                .contains("Result incomplete: Too many internal keys skipped") =>
+        {
             return Ok(true);
+        }
+        err @ Err(_) => {
+            err?;
         }
     }
     Ok(false)
@@ -434,6 +458,7 @@ mod tests {
     use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+    use crate::storage::txn::tests::*;
     use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
     use kvproto::kvrpcpb::Context;
 

@@ -181,10 +181,7 @@ impl LazyBatchColumn {
                             }
                         }
                         LogicalRows::Ref { logical_rows } => {
-                            let mut decode_bitmap = Vec::with_capacity(raw_vec_len);
-                            for _ in 0..raw_vec_len {
-                                decode_bitmap.push(false);
-                            }
+                            let mut decode_bitmap = vec![false; raw_vec_len];
                             for row_index in logical_rows {
                                 decode_bitmap[*row_index] = true;
                             }

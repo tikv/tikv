@@ -12,11 +12,10 @@
 #![feature(specialization)]
 #![feature(const_fn)]
 #![feature(decl_macro)]
+#![feature(const_fn_fn_ptr_basics)]
+#![feature(const_mut_refs)]
 
-#[macro_use(warn)]
-extern crate slog_global;
-
-#[macro_use(box_try)]
+#[macro_use(box_try, warn)]
 extern crate tikv_util;
 
 #[macro_use(other_err)]
