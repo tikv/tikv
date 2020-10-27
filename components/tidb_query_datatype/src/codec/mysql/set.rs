@@ -2,6 +2,8 @@
 pub struct Set {
     data: Vec<u8>,
     offset: Vec<usize>,
+    // TIDB makes sure there will be no more than 64 bits
+    // https://github.com/pingcap/tidb/blob/master/types/set.go
     value: usize,
 }
 
