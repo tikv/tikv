@@ -17,13 +17,14 @@ use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
 use crate::codec::Result;
+use crate::codec::prelude::*;
 
 const TRIM_PADDING_SPACE: char = 0x20 as char;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::Collation;
+    use crate::codec::collation::match_template_collator;
 
     #[test]
     #[allow(clippy::string_lit_as_bytes)]
