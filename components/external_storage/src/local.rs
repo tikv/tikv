@@ -4,7 +4,8 @@ use std::fs::{self, File};
 use std::io;
 use std::marker::Unpin;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
 
 use futures_executor::block_on;
 use futures_io::AsyncRead;
@@ -40,14 +41,21 @@ impl LocalStorage {
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());
-        let tmp_dir = base.join(LOCAL_STORAGE_TMP_DIR);
-        maybe_create_dir(&tmp_dir)?;
-        let base_dir = Arc::new(File::open(base)?);
-        Ok(LocalStorage {
-            base: base.to_owned(),
-            base_dir,
-            tmp: tmp_dir,
-        })
+        static cache: RwLock<HashMap<Path, LocalStorage>> = RwLock::new(HashMap::new());
+        if let Some(l) = cache.get(&base) {
+            Ok(l.clone())
+        } else {
+            let tmp_dir = base.join(LOCAL_STORAGE_TMP_DIR);
+            maybe_create_dir(&tmp_dir)?;
+            let base_dir = Arc::new(File::open(base)?);
+            let local = LocalStorage {
+                base: base.to_owned(),
+                base_dir,
+                tmp: tmp_dir,
+            };
+            cache.insert(base.to_owned(), local.clone());
+            local
+        }
     }
 
     fn tmp_path(&self, path: &Path) -> PathBuf {
