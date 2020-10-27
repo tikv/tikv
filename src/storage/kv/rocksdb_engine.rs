@@ -295,7 +295,7 @@ impl Engine for RocksEngine {
     }
 
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
-        self.async_write_ext(ctx, batch, cb, None)
+        self.async_write_ext(ctx, batch, cb, None, None)
     }
 
     fn async_write_ext(
@@ -304,6 +304,7 @@ impl Engine for RocksEngine {
         batch: WriteData,
         cb: Callback<()>,
         proposed_cb: Option<ExtCallback>,
+        committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
         fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
 
@@ -311,6 +312,9 @@ impl Engine for RocksEngine {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
         if let Some(cb) = proposed_cb {
+            cb();
+        }
+        if let Some(cb) = committed_cb {
             cb();
         }
         box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
