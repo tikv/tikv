@@ -15,6 +15,7 @@ use super::Collator;
 
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
+use std::str;
 
 use codec::prelude::*;
 
