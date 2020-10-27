@@ -8,6 +8,7 @@ use std::sync::Arc;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::FutureExt;
 use grpcio::{
     DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
     RpcStatusCode, UnarySink, WriteFlags,
@@ -19,11 +20,13 @@ use kvproto::cdcpb::{
 use protobuf::Message;
 use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
+use tikv_util::future::paired_future_callback;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
 use tikv_util::worker::*;
 
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
+use crate::errors::Result;
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -395,10 +398,29 @@ impl ChangeData for Service {
 
     fn check_leader(
         &mut self,
-        _: RpcContext<'_>,
-        _: CheckLeaderRequest,
-        _: UnarySink<CheckLeaderResponse>,
+        ctx: RpcContext<'_>,
+        mut request: CheckLeaderRequest,
+        sink: UnarySink<CheckLeaderResponse>,
     ) {
+        let ts = request.get_ts();
+        let regions = request.take_regions().into();
+        let scheduler = self.scheduler.clone();
+        let (cb, rx) = paired_future_callback();
+        let task = async move {
+            box_try!(scheduler.schedule(Task::CheckLeader { regions, ts, cb }));
+            let regions = box_try!(rx.await);
+            let mut resp = CheckLeaderResponse::default();
+            resp.set_ts(ts);
+            resp.set_regions(regions);
+            box_try!(sink.success(resp).await);
+            Result::Ok(())
+        }
+        .map_err(|e| {
+            warn!("cdc call CheckLeader failed"; "err" => ?e);
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
     }
 }
 

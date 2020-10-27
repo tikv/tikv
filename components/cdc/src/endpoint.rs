@@ -154,6 +154,11 @@ pub enum Task {
         cb: InitCallback,
     },
     TxnExtra(TxnExtra),
+    CheckLeader {
+        regions: Vec<LeaderInfo>,
+        ts: u64,
+        cb: Box<dyn FnOnce(Vec<u64>) + Send>,
+    },
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
 }
 
@@ -223,6 +228,9 @@ impl fmt::Debug for Task {
                 .field("downstream", &downstream_id)
                 .finish(),
             Task::TxnExtra(_) => de.field("type", &"txn_extra").finish(),
+            Task::CheckLeader { ref ts, .. } => {
+                de.field("type", &"check_leader").field("ts", &ts).finish()
+            }
             Task::Validate(region_id, _) => de.field("region_id", &region_id).finish(),
         }
     }
@@ -789,6 +797,22 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     fn flush_all(&self) {
         self.connections.iter().for_each(|(_, conn)| conn.flush());
     }
+
+    fn check_region_leader(&self, regions: Vec<LeaderInfo>) -> Vec<u64> {
+        let meta = self.store_meta.lock().unwrap();
+        regions
+            .into_iter()
+            .map(|region| {
+                if let Some((term, leader)) = meta.leaders.get(&region.region_id) {
+                    if *term == region.term && leader.id == region.leader_id {
+                        return Some(region.region_id);
+                    }
+                }
+                None
+            })
+            .filter_map(|r| r)
+            .collect()
+    }
 }
 
 struct Initializer {
@@ -1011,6 +1035,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                 for (k, v) in txn_extra.old_values {
                     self.old_value_cache.cache.insert(k, v);
                 }
+            }
+            Task::CheckLeader { regions, ts, cb } => {
+                debug!("cdc try to check leader"; "ts" => ts);
+                cb(self.check_region_leader(regions));
             }
             Task::Validate(region_id, validate) => {
                 validate(self.capture_regions.get(&region_id));
