@@ -956,10 +956,10 @@ impl Default for DbConfig {
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
             info_log_level: LogLevel::Info,
-            rate_bytes_per_sec: ReadableSize::kb(0),
+            rate_bytes_per_sec: ReadableSize::gb(10),
             rate_limiter_refill_period: ReadableDuration::millis(100),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
-            auto_tuned: false,
+            auto_tuned: true,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             max_sub_compactions,
@@ -999,12 +999,21 @@ impl DbConfig {
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
         if self.rate_bytes_per_sec.0 > 0 {
-            opts.set_ratelimiter_with_auto_tuned(
-                self.rate_bytes_per_sec.0 as i64,
-                (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
-                self.rate_limiter_mode,
-                self.auto_tuned,
-            );
+            if self.auto_tuned {
+                opts.set_writeampbasedratelimiter_with_auto_tuned(
+                    self.rate_bytes_per_sec.0 as i64,
+                    (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
+                    self.rate_limiter_mode,
+                    self.auto_tuned,
+                );
+            } else {
+                opts.set_ratelimiter_with_auto_tuned(
+                    self.rate_bytes_per_sec.0 as i64,
+                    (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
+                    self.rate_limiter_mode,
+                    self.auto_tuned,
+                );
+            }
         }
 
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
@@ -3187,13 +3196,13 @@ mod tests {
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
+        cfg.rocksdb.auto_tuned = false;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
 
         // update max_background_jobs
-        let db_opts = db.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 2);
+        assert_eq!(db.get_db_options().get_max_background_jobs(), 2);
 
         cfg_controller
             .update_config("rocksdb.max-background-jobs", "8")
@@ -3201,9 +3210,8 @@ mod tests {
         assert_eq!(db.get_db_options().get_max_background_jobs(), 8);
 
         // update rate_bytes_per_sec
-        let db_opts = db.get_db_options();
         assert_eq!(
-            db_opts.get_rate_bytes_per_sec().unwrap(),
+            db.get_db_options().get_rate_bytes_per_sec().unwrap(),
             ReadableSize::mb(64).0 as i64
         );
 
