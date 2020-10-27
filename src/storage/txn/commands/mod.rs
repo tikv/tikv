@@ -634,9 +634,29 @@ pub mod test_util {
         start_ts: u64,
         one_pc_max_commit_ts: Option<u64>,
     ) -> Result<()> {
+        let cm = ConcurrencyManager::new(start_ts.into());
+        prewrite_with_cm(
+            engine,
+            cm,
+            statistics,
+            mutations,
+            primary,
+            start_ts,
+            one_pc_max_commit_ts,
+        )
+    }
+
+    pub fn prewrite_with_cm<E: Engine>(
+        engine: &E,
+        cm: ConcurrencyManager,
+        statistics: &mut Statistics,
+        mutations: Vec<Mutation>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        one_pc_max_commit_ts: Option<u64>,
+    ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
-        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
         let cmd = if let Some(max_commit_ts) = one_pc_max_commit_ts {
             Prewrite::with_1pc(
                 mutations,
@@ -649,7 +669,7 @@ pub mod test_util {
         };
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
-            concurrency_manager,
+            concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
@@ -681,9 +701,31 @@ pub mod test_util {
         for_update_ts: u64,
         one_pc_max_commit_ts: Option<u64>,
     ) -> Result<()> {
+        let cm = ConcurrencyManager::new(start_ts.into());
+        pessimsitic_prewrite_with_cm(
+            engine,
+            cm,
+            statistics,
+            mutations,
+            primary,
+            start_ts,
+            for_update_ts,
+            one_pc_max_commit_ts,
+        )
+    }
+
+    pub fn pessimsitic_prewrite_with_cm<E: Engine>(
+        engine: &E,
+        cm: ConcurrencyManager,
+        statistics: &mut Statistics,
+        mutations: Vec<(Mutation, bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
+        one_pc_max_commit_ts: Option<u64>,
+    ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
-        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
         let cmd = if let Some(max_commit_ts) = one_pc_max_commit_ts {
             PrewritePessimistic::with_1pc(
                 mutations,
@@ -702,7 +744,7 @@ pub mod test_util {
         };
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
-            concurrency_manager,
+            concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,

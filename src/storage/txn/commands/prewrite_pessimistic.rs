@@ -256,14 +256,15 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
     use crate::storage::txn::commands::test_util::*;
+    use crate::storage::txn::tests::must_acquire_pessimistic_lock;
     use crate::storage::{Statistics, TestEngineBuilder};
 
     #[test]
     fn test_prewrite_pessimsitic_1pc() {
-        use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
-        use crate::storage::txn::tests::must_acquire_pessimistic_lock;
         let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let key = b"k";
         let value = b"v";
 
@@ -271,8 +272,9 @@ mod tests {
 
         let mutations = vec![(Mutation::Put((Key::from_raw(key), value.to_vec())), true)];
         let mut statistics = Statistics::default();
-        pessimsitic_prewrite(
+        pessimsitic_prewrite_with_cm(
             &engine,
+            cm.clone(),
             &mut statistics,
             mutations,
             key.to_vec(),
@@ -289,15 +291,16 @@ mod tests {
         let (k1, v1) = (b"k", b"v");
         let (k2, v2) = (b"k2", b"v2");
 
-        must_acquire_pessimistic_lock(&engine, k1, k1, 8, 15);
+        must_acquire_pessimistic_lock(&engine, k1, k1, 8, 12);
 
         let mutations = vec![
             (Mutation::Put((Key::from_raw(k1), v1.to_vec())), true),
             (Mutation::Put((Key::from_raw(k2), v2.to_vec())), false),
         ];
         statistics = Statistics::default();
-        pessimsitic_prewrite(
+        pessimsitic_prewrite_with_cm(
             &engine,
+            cm.clone(),
             &mut statistics,
             mutations,
             k1.to_vec(),
@@ -311,11 +314,24 @@ mod tests {
         must_unlocked(&engine, k2);
         must_get(&engine, k1, 16, v1);
         must_get(&engine, k2, 16, v2);
-        // Note that we didn't keep only one `ConcurrencyManager` instance in the unit test, so the
-        // final commit ts is just `for_update_ts + 1`.
         must_get_commit_ts(&engine, k1, 8, 13);
         must_get_commit_ts(&engine, k2, 8, 13);
 
-        // TODO: Test checking max_commit_ts.
+        cm.update_max_ts(50.into());
+        must_acquire_pessimistic_lock(&engine, k1, k1, 20, 20);
+
+        let mutations = vec![(Mutation::Put((Key::from_raw(k1), v1.to_vec())), true)];
+        statistics = Statistics::default();
+        pessimsitic_prewrite_with_cm(
+            &engine,
+            cm,
+            &mut statistics,
+            mutations,
+            k1.to_vec(),
+            20,
+            20,
+            Some(30),
+        )
+        .unwrap_err();
     }
 }

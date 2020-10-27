@@ -324,7 +324,7 @@ mod tests {
     use txn_types::{Key, Mutation};
 
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-    use crate::storage::txn::commands::test_util::{commit, prewrite, rollback};
+    use crate::storage::txn::commands::test_util::{commit, prewrite, prewrite_with_cm, rollback};
     use crate::storage::txn::commands::FORWARD_MIN_MUTATIONS_NUM;
     use crate::storage::txn::{Error, ErrorInner};
     use crate::storage::{Engine, Snapshot, Statistics, TestEngineBuilder};
@@ -503,13 +503,16 @@ mod tests {
         use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
 
         let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+
         let key = b"k";
         let value = b"v";
         let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
 
         let mut statistics = Statistics::default();
-        prewrite(
+        prewrite_with_cm(
             &engine,
+            cm.clone(),
             &mut statistics,
             mutations,
             key.to_vec(),
@@ -521,6 +524,20 @@ mod tests {
         must_get(&engine, key, 12, value);
         must_get_commit_ts(&engine, key, 10, 11);
 
-        // TODO: Test checking max_commit_ts.
+        cm.update_max_ts(50.into());
+
+        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
+
+        let mut statistics = Statistics::default();
+        prewrite_with_cm(
+            &engine,
+            cm,
+            &mut statistics,
+            mutations,
+            key.to_vec(),
+            20,
+            Some(30),
+        )
+        .unwrap_err();
     }
 }

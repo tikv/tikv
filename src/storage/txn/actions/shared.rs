@@ -97,7 +97,6 @@ pub(in crate::storage::txn) fn handle_1pc<S: Snapshot>(
 ) -> ReleasedLocks {
     let mut released_locks = ReleasedLocks::new(txn.start_ts, commit_ts);
 
-    // TODO: It's much simpler than normal 2PC committing. Is there anything missing?
     for (key, lock, delete_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
         let write = Write::new(
             WriteType::from_lock_type(lock.lock_type).unwrap(),
