@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Enum {
     data: Vec<u8>,
@@ -33,14 +35,24 @@ impl ToString for Enum {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Ord, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EnumRef<'a> {
     data: &'a [u8],
     offset: &'a [usize],
     value: usize,
 }
 
-impl<'a> EnumRef<'a> {}
+impl<'a> Ord for EnumRef<'a> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.value.cmp(&other.value)
+    }
+}
+
+impl<'a> PartialOrd for EnumRef<'a> {
+    fn partial_cmp(&self, right: &Self) -> Option<Ordering> {
+        Some(self.cmp(right))
+    }
+}
 
 impl crate::codec::data_type::AsMySQLBool for Enum {
     #[inline]

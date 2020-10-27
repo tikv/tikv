@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Set {
     data: Vec<u8>,
@@ -52,14 +54,24 @@ impl crate::codec::data_type::AsMySQLBool for Set {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Ord, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SetRef<'a> {
     data: &'a [u8],
     offset: &'a [usize],
     value: usize,
 }
 
-impl<'a> SetRef<'a> {}
+impl<'a> Ord for SetRef<'a> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.value.cmp(&other.value)
+    }
+}
+
+impl<'a> PartialOrd for SetRef<'a> {
+    fn partial_cmp(&self, right: &Self) -> Option<Ordering> {
+        Some(self.cmp(right))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -75,7 +87,7 @@ mod tests {
         ];
 
         for (data, offset, value, expect) in cases {
-            let mut s = Set {
+            let s = Set {
                 data: data.as_bytes().to_vec(),
                 offset,
                 value,
