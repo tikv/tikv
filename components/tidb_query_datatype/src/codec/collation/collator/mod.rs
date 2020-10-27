@@ -25,16 +25,16 @@ const TRIM_PADDING_SPACE: char = 0x20 as char;
 
 #[cfg(test)]
 mod tests {
-    use crate::Collation;
-    use crate::codec::collation::Collator;
     use crate::codec::collation::match_template_collator;
+    use crate::codec::collation::Collator;
+    use crate::Collation;
 
     #[test]
     #[allow(clippy::string_lit_as_bytes)]
     fn test_compare() {
-        use std::hash::Hasher;
         use std::cmp::Ordering;
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::Hasher;
 
         let collations = [
             (Collation::Utf8Mb4Bin, 0),

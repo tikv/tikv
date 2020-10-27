@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod collator;
 mod charset;
+mod collator;
 
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -10,8 +10,8 @@ use std::ops::Deref;
 
 use codec::prelude::*;
 
-use collator::*;
 use crate::codec::Result;
+use collator::*;
 
 pub macro match_template_collator($t:tt, $($tail:tt)*) {
     match_template::match_template! {

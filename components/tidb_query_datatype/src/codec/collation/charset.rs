@@ -37,4 +37,3 @@ impl Charset for CharsetUtf8mb4 {
         }
     }
 }
-
