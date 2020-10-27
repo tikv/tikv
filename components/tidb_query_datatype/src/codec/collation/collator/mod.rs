@@ -32,6 +32,7 @@ mod tests {
     #[test]
     #[allow(clippy::string_lit_as_bytes)]
     fn test_compare() {
+        use std::hash::Hasher;
         use std::cmp::Ordering;
         use std::collections::hash_map::DefaultHasher;
 
