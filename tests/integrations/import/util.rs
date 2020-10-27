@@ -91,7 +91,7 @@ pub fn send_write_sst(
     // TODO rewrite following code blocks with cfg-if.
     #[cfg(feature = "prost-codec")]
     {
-        r2.chunk = Some(write_request::Chunk::Meta(meta.clone()));
+        r1.chunk = Some(write_request::Chunk::Meta(meta.clone()));
     }
     #[cfg(not(feature = "prost-codec"))]
     {
