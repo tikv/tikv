@@ -3196,13 +3196,13 @@ mod tests {
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
+        cfg.rocksdb.auto_tuned = false;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
 
         // update max_background_jobs
-        let db_opts = db.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 2);
+        assert_eq!(db.get_db_options().get_max_background_jobs(), 2);
 
         cfg_controller
             .update_config("rocksdb.max-background-jobs", "8")
@@ -3210,9 +3210,8 @@ mod tests {
         assert_eq!(db.get_db_options().get_max_background_jobs(), 8);
 
         // update rate_bytes_per_sec
-        let db_opts = db.get_db_options();
         assert_eq!(
-            db_opts.get_rate_bytes_per_sec().unwrap(),
+            db.get_db_options().get_rate_bytes_per_sec().unwrap(),
             ReadableSize::mb(64).0 as i64
         );
 
