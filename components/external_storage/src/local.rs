@@ -1,13 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io;
 use std::marker::Unpin;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 
 use lazy_static::*;
+use metrics::*;
 
 use futures_executor::block_on;
 use futures_io::AsyncRead;
@@ -22,7 +23,7 @@ use super::{util::error_stream, ExternalStorage};
 const LOCAL_STORAGE_TMP_DIR: &str = "localtmp";
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
 lazy_static! {
-	static ref cache: Mutex<HashMap<PathBuf, LocalStorage>> = Mutex::new(HashMap::new());
+    static ref cache: Mutex<HashMap<PathBuf, LocalStorage>> = Mutex::new(HashMap::new());
 }
 
 fn maybe_create_dir(path: &Path) -> io::Result<()> {
@@ -45,10 +46,12 @@ pub struct LocalStorage {
 impl LocalStorage {
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
-        info!("create local storage"; "base" => base.display());
         if let Some(l) = cache.lock().unwrap().get(&base.to_path_buf()) {
+            info!("get local storage by cache"; "base" => base.display());
+            LOCAL_STORAGE_NUM_GAUGE.inc();
             Ok(l.clone())
         } else {
+            info!("create local storage"; "base" => base.display());
             let tmp_dir = base.join(LOCAL_STORAGE_TMP_DIR);
             maybe_create_dir(&tmp_dir)?;
             let base_dir = Arc::new(File::open(base)?);

@@ -186,13 +186,17 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
         let engine = Arc::clone(&self.engine);
-        let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
-            .set_db(RocksEngine::from_ref(&engine))
-            .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
-            .build(self.importer.get_path(req.get_sst()).to_str().unwrap())
-            .unwrap();
 
         ctx.spawn(self.threads.spawn_fn(move || {
+            // SST writer must not be opened in gRPC threads, because it may be
+            // blocked for a long time due to IO, especially, when encryption at rest
+            // is enabled, and it leads to gRPC keepalive timeout.
+            let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
+                .set_db(RocksEngine::from_ref(&engine))
+                .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
+                .build(importer.get_path(req.get_sst()).to_str().unwrap())
+                .unwrap();
+
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
             // Unfortunately, this currently can't happen because the S3Storage
