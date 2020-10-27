@@ -238,19 +238,6 @@ impl GCSStorage {
     }
 }
 
-// FIXME: `impl Copy for PredefinedAcl` and get rid of this silly function (EmbarkStudios/tame-gcs#30).
-fn copy_predefined_acl(acl: &Option<PredefinedAcl>) -> Option<PredefinedAcl> {
-    match acl {
-        None => None,
-        Some(PredefinedAcl::AuthenticatedRead) => Some(PredefinedAcl::AuthenticatedRead),
-        Some(PredefinedAcl::BucketOwnerFullControl) => Some(PredefinedAcl::BucketOwnerFullControl),
-        Some(PredefinedAcl::BucketOwnerRead) => Some(PredefinedAcl::BucketOwnerRead),
-        Some(PredefinedAcl::Private) => Some(PredefinedAcl::Private),
-        Some(PredefinedAcl::ProjectPrivate) => Some(PredefinedAcl::ProjectPrivate),
-        Some(PredefinedAcl::PublicRead) => Some(PredefinedAcl::PublicRead),
-    }
-}
-
 // Convert manually since they don't implement FromStr.
 fn parse_storage_class(sc: &str) -> Result<Option<StorageClass>, &str> {
     Ok(Some(match sc {
@@ -316,7 +303,7 @@ impl ExternalStorage for GCSStorage {
                     content_length,
                     &metadata,
                     Some(InsertObjectOptional {
-                        predefined_acl: copy_predefined_acl(&predefined_acl),
+                        predefined_acl,
                         ..Default::default()
                     }),
                 )?
