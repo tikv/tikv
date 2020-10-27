@@ -405,7 +405,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Calls the callback with an error.
     fn finish_with_err(&self, cid: u64, err: Error) {
-        debug!("write command finished with error"; "cid" => cid);
+        debug!("write command finished with error"; "cid" => cid, "err" => ?err);
         let tctx = self.inner.dequeue_task_context(cid);
 
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).error.inc();
