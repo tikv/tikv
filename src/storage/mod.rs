@@ -199,6 +199,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
             pipelined_pessimistic_lock,
+            config.enable_async_apply_prewrite,
         );
 
         info!("Storage started.");
@@ -1525,6 +1526,11 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     pub fn set_pipelined_pessimistic_lock(self, enabled: bool) -> Self {
         self.pipelined_pessimistic_lock
             .store(enabled, atomic::Ordering::Relaxed);
+        self
+    }
+
+    pub fn set_async_apply_prewrite(mut self, enabled: bool) -> Self {
+        self.config.enable_async_apply_prewrite = enabled;
         self
     }
 
