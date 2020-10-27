@@ -1200,6 +1200,8 @@ dependencies = [
  "hyper-tls",
  "kvproto",
  "matches",
+ "lazy_static",
+ "prometheus",
  "rand 0.7.3",
  "rusoto_core",
  "rusoto_mock",
