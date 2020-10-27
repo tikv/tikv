@@ -26,6 +26,7 @@ const TRIM_PADDING_SPACE: char = 0x20 as char;
 #[cfg(test)]
 mod tests {
     use crate::Collation;
+    use crate::codec::collation::Collator;
     use crate::codec::collation::match_template_collator;
 
     #[test]
