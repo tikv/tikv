@@ -27,14 +27,14 @@ impl ToString for Set {
         let mut buf: Vec<u8> = Vec::new();
         if !self.value.is_empty() {
             for idx in self.offset.iter() {
-                if !self.value.get(idx.clone()) {
+                if !self.value.get(*idx) {
                     continue;
                 }
 
-                if buf.len() > 0 {
+                if !buf.is_empty() {
                     buf.push(b',');
                 }
-                buf.extend_from_slice(self.get(idx.clone()));
+                buf.extend_from_slice(self.get(*idx));
             }
         }
 
