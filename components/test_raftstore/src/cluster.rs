@@ -1165,6 +1165,7 @@ impl<T: Simulator> Cluster<T> {
                 region_epoch: region.get_region_epoch().clone(),
                 split_keys: vec![split_key],
                 callback: cb,
+                source: "test".into(),
             },
         )
         .unwrap();

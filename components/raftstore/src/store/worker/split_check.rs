@@ -347,5 +347,6 @@ where
         region_epoch,
         split_keys,
         callback: Callback::None,
+        source: "split checker".into(),
     }
 }
