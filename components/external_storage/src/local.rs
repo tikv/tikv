@@ -4,8 +4,10 @@ use std::fs::{self, File};
 use std::io;
 use std::marker::Unpin;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+
+use lazy_static::*;
 
 use futures_executor::block_on;
 use futures_io::AsyncRead;
@@ -19,6 +21,9 @@ use super::{util::error_stream, ExternalStorage};
 
 const LOCAL_STORAGE_TMP_DIR: &str = "localtmp";
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
+lazy_static! {
+	static ref cache: Mutex<HashMap<PathBuf, LocalStorage>> = Mutex::new(HashMap::new());
+}
 
 fn maybe_create_dir(path: &Path) -> io::Result<()> {
     if let Err(e) = fs::create_dir_all(path) {
@@ -41,20 +46,19 @@ impl LocalStorage {
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());
-        static cache: RwLock<HashMap<Path, LocalStorage>> = RwLock::new(HashMap::new());
-        if let Some(l) = cache.get(&base) {
+        if let Some(l) = cache.lock().unwrap().get(&base.to_path_buf()) {
             Ok(l.clone())
         } else {
             let tmp_dir = base.join(LOCAL_STORAGE_TMP_DIR);
             maybe_create_dir(&tmp_dir)?;
             let base_dir = Arc::new(File::open(base)?);
             let local = LocalStorage {
-                base: base.to_owned(),
+                base: base.to_path_buf(),
                 base_dir,
                 tmp: tmp_dir,
             };
-            cache.insert(base.to_owned(), local.clone());
-            local
+            cache.lock().unwrap().insert(base.to_owned(), local.clone());
+            Ok(local)
         }
     }
 

@@ -1166,6 +1166,7 @@ dependencies = [
  "hyper",
  "hyper-tls",
  "kvproto",
+ "lazy_static",
  "rand 0.7.3",
  "rusoto_core",
  "rusoto_mock",
