@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::encryptionpb::EncryptionMethod;
-use tikv_util::config::{ReadableDuration, ReadableSize};
+use tikv_util::config::ReadableDuration;
 
 #[cfg(test)]
 use crate::master_key::Backend;
@@ -19,11 +19,11 @@ pub struct EncryptionConfig {
     #[config(skip)]
     pub data_key_rotation_period: ReadableDuration,
     #[config(skip)]
+    pub file_rewrite_threshold: u64,
+    #[config(skip)]
     pub master_key: MasterKeyConfig,
     #[config(skip)]
     pub previous_master_key: MasterKeyConfig,
-    #[config(hidden)]
-    pub file_rewrite_threshold: ReadableSize,
 }
 
 impl Default for EncryptionConfig {
@@ -33,7 +33,7 @@ impl Default for EncryptionConfig {
             data_key_rotation_period: ReadableDuration::days(7),
             master_key: MasterKeyConfig::default(),
             previous_master_key: MasterKeyConfig::default(),
-            file_rewrite_threshold: ReadableSize::gb(1),
+            file_rewrite_threshold: 1000000,
         }
     }
 }
@@ -190,7 +190,7 @@ mod tests {
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
-            file_rewrite_threshold: ReadableSize::gb(1),
+            file_rewrite_threshold: 1000000,
         };
         let kms_str = r#"
         data-encryption-method = "aes128-ctr"

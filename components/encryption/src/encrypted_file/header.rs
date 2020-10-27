@@ -48,7 +48,7 @@ impl Header {
     // Version (1 bytes) | Reserved  (3 bytes)
     // Crc32  (4 bytes)
     // Content size (8 bytes)
-    pub const SIZE: usize = 1 + 3 + 4 + 8;
+    const SIZE: usize = 1 + 3 + 4 + 8;
 
     pub fn new(content: &[u8], version: Version) -> Header {
         let size = content.len() as u64;

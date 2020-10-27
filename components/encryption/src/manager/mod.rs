@@ -399,7 +399,7 @@ impl DataKeyManager {
             &config.previous_master_key,
             config.data_encryption_method,
             config.data_key_rotation_period.into(),
-            config.file_rewrite_threshold.0,
+            config.file_rewrite_threshold,
             dict_path,
         )
     }
@@ -489,7 +489,7 @@ impl DataKeyManager {
         let dict_clone = dicts.clone();
         let (rotate_terminal, rx) = channel::bounded(1);
         std::thread::Builder::new()
-            .name(thd_name!("encryption-rotate-key"))
+            .name(thd_name!("enc:key"))
             .spawn(move || {
                 run_background_rotate_work(dict_clone, method, master_key, rx);
             })?;
