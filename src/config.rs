@@ -956,10 +956,10 @@ impl Default for DbConfig {
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
             info_log_level: LogLevel::Info,
-            rate_bytes_per_sec: ReadableSize::kb(0),
+            rate_bytes_per_sec: ReadableSize::gb(10),
             rate_limiter_refill_period: ReadableDuration::millis(100),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
-            auto_tuned: false,
+            auto_tuned: true,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             max_sub_compactions,
@@ -999,12 +999,21 @@ impl DbConfig {
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
         if self.rate_bytes_per_sec.0 > 0 {
-            opts.set_ratelimiter_with_auto_tuned(
-                self.rate_bytes_per_sec.0 as i64,
-                (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
-                self.rate_limiter_mode,
-                self.auto_tuned,
-            );
+            if self.auto_tuned {
+                opts.set_writeampbasedratelimiter_with_auto_tuned(
+                    self.rate_bytes_per_sec.0 as i64,
+                    (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
+                    self.rate_limiter_mode,
+                    self.auto_tuned,
+                );
+            } else {
+                opts.set_ratelimiter_with_auto_tuned(
+                    self.rate_bytes_per_sec.0 as i64,
+                    (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
+                    self.rate_limiter_mode,
+                    self.auto_tuned,
+                );
+            }
         }
 
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
@@ -1700,6 +1709,26 @@ macro_rules! readpool_config {
                 }
             }
 
+            pub fn use_unified_pool(&self) -> bool {
+                // The unified pool is used by default unless the corresponding module has
+                // customized configurations.
+                self.use_unified_pool
+                    .unwrap_or_else(|| *self == Default::default())
+            }
+
+            pub fn adjust_use_unified_pool(&mut self) {
+                if self.use_unified_pool.is_none() {
+                    // The unified pool is used by default unless the corresponding module has customized configurations.
+                    if *self == Default::default() {
+                        info!("readpool.{}.use-unified-pool is not set, set to true by default", $display_name);
+                        self.use_unified_pool = Some(true);
+                    } else {
+                        info!("readpool.{}.use-unified-pool is not set, set to false because there are other customized configurations", $display_name);
+                        self.use_unified_pool = Some(false);
+                    }
+                }
+            }
+
             pub fn validate(&self) -> Result<(), Box<dyn Error>> {
                 if self.use_unified_pool() {
                     return Ok(());
@@ -1849,21 +1878,6 @@ impl Default for StorageReadPoolConfig {
     }
 }
 
-impl StorageReadPoolConfig {
-    pub fn use_unified_pool(&self) -> bool {
-        // The storage module does not use the unified pool by default.
-        self.use_unified_pool.unwrap_or(false)
-    }
-
-    pub fn adjust_use_unified_pool(&mut self) {
-        if self.use_unified_pool.is_none() {
-            // The storage module does not use the unified pool by default.
-            info!("readpool.storage.use-unified-pool is not set, set to false by default");
-            self.use_unified_pool = Some(false);
-        }
-    }
-}
-
 const DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY: usize = 2;
 
 readpool_config!(
@@ -1886,27 +1900,6 @@ impl Default for CoprReadPoolConfig {
             max_tasks_per_worker_normal: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             max_tasks_per_worker_low: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
-        }
-    }
-}
-
-impl CoprReadPoolConfig {
-    pub fn use_unified_pool(&self) -> bool {
-        // The coprocessor module uses the unified pool unless it has customized configurations.
-        self.use_unified_pool
-            .unwrap_or_else(|| *self == Default::default())
-    }
-
-    pub fn adjust_use_unified_pool(&mut self) {
-        if self.use_unified_pool.is_none() {
-            // The coprocessor module uses the unified pool unless it has customized configurations.
-            if *self == Default::default() {
-                info!("readpool.coprocessor.use-unified-pool is not set, set to true by default");
-                self.use_unified_pool = Some(true);
-            } else {
-                info!("readpool.coprocessor.use-unified-pool is not set, set to false because there are other customized configurations");
-                self.use_unified_pool = Some(false);
-            }
         }
     }
 }
@@ -2022,7 +2015,10 @@ mod readpool_tests {
 
     #[test]
     fn test_is_unified() {
-        let storage = StorageReadPoolConfig::default();
+        let storage = StorageReadPoolConfig {
+            use_unified_pool: Some(false),
+            ..Default::default()
+        };
         assert!(!storage.use_unified_pool());
         let coprocessor = CoprReadPoolConfig::default();
         assert!(coprocessor.use_unified_pool());
@@ -2034,6 +2030,7 @@ mod readpool_tests {
         };
         assert!(cfg.is_unified_pool_enabled());
 
+        cfg.storage.use_unified_pool = Some(false);
         cfg.coprocessor.use_unified_pool = Some(false);
         assert!(!cfg.is_unified_pool_enabled());
     }
@@ -3199,13 +3196,13 @@ mod tests {
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
+        cfg.rocksdb.auto_tuned = false;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
 
         // update max_background_jobs
-        let db_opts = db.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 2);
+        assert_eq!(db.get_db_options().get_max_background_jobs(), 2);
 
         cfg_controller
             .update_config("rocksdb.max-background-jobs", "8")
@@ -3213,9 +3210,8 @@ mod tests {
         assert_eq!(db.get_db_options().get_max_background_jobs(), 8);
 
         // update rate_bytes_per_sec
-        let db_opts = db.get_db_options();
         assert_eq!(
-            db_opts.get_rate_bytes_per_sec().unwrap(),
+            db.get_db_options().get_rate_bytes_per_sec().unwrap(),
             ReadableSize::mb(64).0 as i64
         );
 
@@ -3327,12 +3323,12 @@ mod tests {
         "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.compatible_adjust();
-        assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
+        assert_eq!(cfg.readpool.storage.use_unified_pool, Some(true));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(true));
 
         let content = r#"
         [readpool.storage]
-        stack-size = "10MB"
+        stack-size = "1MB"
         [readpool.coprocessor]
         normal-concurrency = 1
         "#;

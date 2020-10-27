@@ -1995,7 +1995,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#488fb4181c063d7328308049cced6d4ef9616ba7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0ca70eadb9e0aaa654c23b1930cbfeaa3d0bad0e"
 dependencies = [
  "cc",
  "cmake",
@@ -2004,7 +2004,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#488fb4181c063d7328308049cced6d4ef9616ba7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0ca70eadb9e0aaa654c23b1930cbfeaa3d0bad0e"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2024,7 +2024,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#488fb4181c063d7328308049cced6d4ef9616ba7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0ca70eadb9e0aaa654c23b1930cbfeaa3d0bad0e"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3530,7 +3530,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#488fb4181c063d7328308049cced6d4ef9616ba7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0ca70eadb9e0aaa654c23b1930cbfeaa3d0bad0e"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4275,11 +4275,11 @@ checksum = "f764005d11ee5f36500a149ace24e00e3da98b0158b3e2d53a7495660d3f4d60"
 
 [[package]]
 name = "tame-gcs"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a563f50394146c3dbaf0bcc362ae6b89ffe23a1a0df5e51d411973c872f1af2"
+checksum = "d1c46b9e9c457a023b1dd47bb136f74472140eb33cb6550eaad24ec272221011"
 dependencies = [
- "base64 0.11.0",
+ "base64 0.12.0",
  "bytes 0.5.3",
  "chrono",
  "futures-util",
@@ -5547,7 +5547,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git#3894a861643b6ba384aaad352bbaed9717f66838"
+source = "git+https://github.com/tikv/yatp.git#1abdc83b428105631ae8e20a4eaf3a23a900560d"
 dependencies = [
  "crossbeam-deque",
  "dashmap",
