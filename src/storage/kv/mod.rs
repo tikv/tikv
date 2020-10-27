@@ -128,6 +128,7 @@ pub trait Engine: Send + Clone + 'static {
         batch: WriteData,
         write_cb: Callback<()>,
         _proposed_cb: Option<ExtCallback>,
+        _committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
         self.async_write(ctx, batch, write_cb)
     }
@@ -264,6 +265,7 @@ quick_error! {
     pub enum ErrorInner {
         Request(err: ErrorHeader) {
             from()
+            description(err.get_message())
             display("{:?}", err)
         }
         Timeout(d: Duration) {

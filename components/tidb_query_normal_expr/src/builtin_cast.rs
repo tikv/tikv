@@ -67,10 +67,7 @@ impl ScalarFunc {
             return self.children[0].eval_int(ctx, row);
         }
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let is_negative = match val.iter().find(|x| !x.is_ascii_whitespace()) {
-            Some(&b'-') => true,
-            _ => false,
-        };
+        let is_negative = matches!(val.iter().find(|x| !x.is_ascii_whitespace()), Some(&b'-'));
         let res = if is_negative {
             val.to_int(ctx, FieldTypeTp::LongLong).map(|v| {
                 // TODO: handle inUion flag

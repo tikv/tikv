@@ -17,6 +17,7 @@ pub fn prewrite<S: Snapshot>(
     lock_ttl: u64,
     txn_size: u64,
     min_commit_ts: TimeStamp,
+    max_commit_ts: TimeStamp,
 ) -> MvccResult<TimeStamp> {
     let lock_type = LockType::from_mutation(&mutation);
     // For the insert/checkNotExists operation, the old key should not be in the system.
@@ -102,14 +103,13 @@ pub fn prewrite<S: Snapshot>(
         TimeStamp::zero(),
         txn_size,
         min_commit_ts,
+        max_commit_ts,
     )
 }
 
 pub mod tests {
     use super::*;
-    use crate::storage::mvcc::tests::*;
-    use crate::storage::mvcc::MvccTxn;
-    use crate::storage::Engine;
+    use crate::storage::{mvcc::tests::*, mvcc::MvccTxn, Engine};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use txn_types::TimeStamp;
@@ -137,6 +137,7 @@ pub mod tests {
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
         )?;
         write(engine, &ctx, txn.into_modifies());
         Ok(())
@@ -163,7 +164,47 @@ pub mod tests {
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
         )?;
         Ok(())
+    }
+
+    #[test]
+    fn test_async_commit_prewrite_check_max_commit_ts() {
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(42.into());
+
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+
+        let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
+        // calculated commit_ts = 43 ≤ 50, ok
+        prewrite(
+            &mut txn,
+            Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
+            b"k1",
+            &Some(vec![b"k2".to_vec()]),
+            false,
+            2000,
+            2,
+            10.into(),
+            50.into(),
+        )
+        .unwrap();
+
+        cm.update_max_ts(60.into());
+        // calculated commit_ts = 61 > 50, ok
+        prewrite(
+            &mut txn,
+            Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
+            b"k1",
+            &Some(vec![]),
+            false,
+            2000,
+            1,
+            10.into(),
+            50.into(),
+        )
+        .unwrap_err();
     }
 }
