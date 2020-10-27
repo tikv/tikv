@@ -4,7 +4,7 @@ use super::ErrorCodeExt;
 use kvproto::errorpb;
 
 define_error_codes!(
-    "KV-Raftstore-",
+    "KV:Raftstore:",
 
     ENGINE => ("Engine", "", ""),
     ENTRY_TOO_LARGE => ("EntryTooLarge", "", ""),

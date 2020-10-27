@@ -306,7 +306,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
     } else {
         error!(
             "default value not found";
-            "key" => log_wrappers::Key(&key),
+            "key" => log_wrappers::Value::key(&key),
             "hint" => hint,
         );
         Error::from(ErrorInner::DefaultNotFound { key })

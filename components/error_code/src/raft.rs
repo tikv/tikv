@@ -4,7 +4,7 @@ use super::ErrorCodeExt;
 use raft::Error;
 
 define_error_codes!(
-    "KV-Raft-",
+    "KV:Raft:",
 
     IO => ("Io", "", ""),
     STORE => ("Store", "", ""),

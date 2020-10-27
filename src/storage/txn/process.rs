@@ -162,7 +162,6 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
 
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(mut self, cb_ctx: CbContext, snapshot: E::Snap, mut task: Task) {
-        SCHED_STAGE_COUNTER_VEC.get(task.tag).process.inc();
         debug!(
             "process cmd with snapshot";
             "cid" => task.cid, "cb_ctx" => ?cb_ctx
@@ -178,6 +177,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
             .pool
             .spawn(async move {
                 fail_point!("scheduler_async_snapshot_finish");
+                SCHED_STAGE_COUNTER_VEC.get(task.tag).process.inc();
 
                 let read_duration = Instant::now_coarse();
 
