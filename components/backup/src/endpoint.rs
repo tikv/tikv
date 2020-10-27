@@ -107,9 +107,6 @@ impl Task {
             cf: req.get_cf().to_owned(),
         })?;
 
-        // Check storage backend eagerly.
-        create_storage(req.get_storage_backend())?;
-
         let task = Task {
             request: Request {
                 start_key: req.get_start_key().to_owned(),
