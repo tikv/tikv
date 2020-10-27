@@ -59,7 +59,7 @@ mod tests {
         ];
 
         for (data, offset, value, expect) in cases {
-            let mut e = Enum {
+            let e = Enum {
                 data: data.as_bytes().to_vec(),
                 offset,
                 value,
