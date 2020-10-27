@@ -1,26 +1,12 @@
 use std::cmp::Ordering;
+use tikv_util::buffer_vec::BufferVec;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Enum {
-    data: Vec<u8>,
-    offset: Vec<usize>,
+    data: BufferVec,
+
     // MySQL Enum is 1-based index, value == 0 means this enum is ''
     value: usize,
-}
-
-impl Enum {
-    fn get(&self, idx: usize) -> &[u8] {
-        assert!(idx < self.offset.len());
-
-        let start = self.offset[idx];
-        let end = if idx < self.offset.len() - 1 {
-            self.offset[idx + 1]
-        } else {
-            self.offset.len()
-        };
-
-        &self.data[start..end]
-    }
 }
 
 impl ToString for Enum {
@@ -29,27 +15,28 @@ impl ToString for Enum {
             return String::new();
         }
 
-        let buf = self.get(self.value - 1);
+        let buf = &self.data[self.value - 1];
 
         // TODO: Check the requirements and intentions of to_string usage.
         String::from_utf8_lossy(buf).to_string()
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EnumRef<'a> {
-    data: &'a [u8],
-    offset: &'a [usize],
-    value: usize,
+impl Eq for Enum {}
+
+impl PartialEq for Enum {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
 }
 
-impl<'a> Ord for EnumRef<'a> {
+impl Ord for Enum {
     fn cmp(&self, other: &Self) -> Ordering {
         self.value.cmp(&other.value)
     }
 }
 
-impl<'a> PartialOrd for EnumRef<'a> {
+impl PartialOrd for Enum {
     fn partial_cmp(&self, right: &Self) -> Option<Ordering> {
         Some(self.cmp(right))
     }
@@ -65,23 +52,48 @@ impl crate::codec::data_type::AsMySQLBool for Enum {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct EnumRef<'a> {
+    data: &'a BufferVec,
+    value: usize,
+}
+
+impl<'a> Eq for EnumRef<'a> {}
+
+impl<'a> PartialEq for EnumRef<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl<'a> Ord for EnumRef<'a> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.value.cmp(&other.value)
+    }
+}
+
+impl<'a> PartialOrd for EnumRef<'a> {
+    fn partial_cmp(&self, right: &Self) -> Option<Ordering> {
+        Some(self.cmp(right))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_to_string() {
-        let cases = vec![
-            ("abc", vec![0, 1, 2], 1, "a"),
-            ("abc", vec![0, 1, 2], 3, "c"),
-        ];
+        let cases = vec![(vec!["a", "b", "c"], 1, "a"), (vec!["a", "b", "c"], 3, "c")];
 
-        for (data, offset, value, expect) in cases {
-            let e = Enum {
-                data: data.as_bytes().to_vec(),
-                offset,
+        for (data, value, expect) in cases {
+            let mut e = Enum {
+                data: BufferVec::new(),
                 value,
             };
+            for v in data {
+                e.data.push(v);
+            }
 
             assert_eq!(e.to_string(), expect.to_string())
         }
