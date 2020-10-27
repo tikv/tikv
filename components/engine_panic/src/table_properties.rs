@@ -16,7 +16,7 @@ impl TablePropertiesExt for PanicEngine {
 
     fn get_properties_of_tables_in_range(
         &self,
-        cf: &Self::CFHandle,
+        cf: &str,
         ranges: &[Range],
     ) -> Result<Self::TablePropertiesCollection> {
         panic!()

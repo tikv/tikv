@@ -73,6 +73,7 @@ max-key-size = 8192
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
+enable-async-apply-prewrite = true
 
 [storage.block-cache]
 shared = true
