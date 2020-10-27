@@ -260,6 +260,7 @@ pub struct Endpoint<T> {
     min_resolved_ts: TimeStamp,
     min_ts_region_id: u64,
     old_value_cache: OldValueCache,
+    compatible_hibernate_region: bool,
 }
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
@@ -301,6 +302,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
             old_value_cache: OldValueCache::new(cfg.old_value_cache_size),
+            compatible_hibernate_region: cfg.compatible_hibernate_region,
         };
         ep.register_min_ts_event();
         ep
@@ -733,9 +735,39 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 }
             }
 
-            // TODO: send a message to raftstore would consume too much cpu time,
-            // try to handle it outside raftstore.
-            let regions: Vec<_> = regions.iter().copied().map(|(region_id, observe_id)| {
+            let regions =
+                Self::region_resolved_ts_raft(regions, &scheduler, raft_router, min_ts).await;
+
+            if !regions.is_empty() {
+                match scheduler.schedule(Task::MinTS { regions, min_ts }) {
+                    Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                    // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                    // advance normally.
+                    Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
+                }
+            }
+            match scheduler.schedule(Task::RegisterMinTsEvent) {
+                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                // advance normally.
+                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
+            }
+        };
+        self.tso_worker.spawn(fut);
+    }
+
+    async fn region_resolved_ts_raft(
+        regions: Vec<(u64, ObserveID)>,
+        scheduler: &Scheduler<Task>,
+        raft_router: T,
+        min_ts: TimeStamp,
+    ) -> Vec<u64> {
+        // TODO: send a message to raftstore would consume too much cpu time,
+        // try to handle it outside raftstore.
+        let regions: Vec<_> = regions
+            .iter()
+            .copied()
+            .map(|(region_id, observe_id)| {
                 let scheduler_clone = scheduler.clone();
                 let raft_router_clone = raft_router.clone();
                 async move {
@@ -766,28 +798,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     }
                     rx.await.unwrap_or(None)
                 }
-            }).collect();
-            let resps = futures::future::join_all(regions).await;
-            let regions = resps
-                .into_iter()
-                .filter_map(|resp| resp)
-                .collect::<Vec<u64>>();
-            if !regions.is_empty() {
-                match scheduler.schedule(Task::MinTS { regions, min_ts }) {
-                    Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                    // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
-                    // advance normally.
-                    Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
-                }
-            }
-            match scheduler.schedule(Task::RegisterMinTsEvent) {
-                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
-                // advance normally.
-                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
-            }
-        };
-        self.tso_worker.spawn(fut);
+            })
+            .collect();
+        let resps = futures::future::join_all(regions).await;
+        resps
+            .into_iter()
+            .filter_map(|resp| resp)
+            .collect::<Vec<u64>>()
     }
 
     fn on_open_conn(&mut self, conn: Conn) {
