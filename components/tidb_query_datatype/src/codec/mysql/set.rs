@@ -1,10 +1,8 @@
-use crate::codec::data_type::BitVec;
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Set {
     data: Vec<u8>,
     offset: Vec<usize>,
-    value: BitVec,
+    value: usize,
 }
 
 impl Set {
@@ -25,9 +23,9 @@ impl Set {
 impl ToString for Set {
     fn to_string(&self) -> String {
         let mut buf: Vec<u8> = Vec::new();
-        if !self.value.is_empty() {
+        if self.value > 0 {
             for idx in self.offset.iter() {
-                if !self.value.get(*idx) {
+                if self.value & (1 << *idx) == 0 {
                     continue;
                 }
 
@@ -48,7 +46,7 @@ impl crate::codec::data_type::AsMySQLBool for Set {
         &self,
         _context: &mut crate::expr::EvalContext,
     ) -> tidb_query_common::error::Result<bool> {
-        Ok(!self.value.is_empty())
+        Ok(self.value > 0)
     }
 }
 
@@ -56,7 +54,7 @@ impl crate::codec::data_type::AsMySQLBool for Set {
 pub struct SetRef<'a> {
     data: &'a [u8],
     offset: &'a [usize],
-    value: &'a BitVec,
+    value: usize,
 }
 
 impl<'a> SetRef<'a> {}
@@ -68,21 +66,18 @@ mod tests {
     #[test]
     fn test_to_string() {
         let cases = vec![
-            ("abc", vec![0, 1, 2], vec![true, false, false], "a"),
-            ("abc", vec![0, 1, 2], vec![true, true, false], "a,b"),
-            ("abc", vec![0, 1, 2], vec![true, true, true], "a,b,c"),
-            ("abc", vec![0, 1, 2], vec![true, false, true], "a,c"),
+            ("abc", vec![0, 1, 2], 0b001, "a"),
+            ("abc", vec![0, 1, 2], 0b011, "a,b"),
+            ("abc", vec![0, 1, 2], 0b111, "a,b,c"),
+            ("abc", vec![0, 1, 2], 0b101, "a,c"),
         ];
 
         for (data, offset, value, expect) in cases {
             let mut s = Set {
                 data: data.as_bytes().to_vec(),
-                offset: offset.clone(),
-                value: BitVec::with_capacity(offset.len()),
+                offset,
+                value,
             };
-            for exist in value {
-                s.value.push(exist);
-            }
 
             assert_eq!(s.to_string(), expect.to_string())
         }
