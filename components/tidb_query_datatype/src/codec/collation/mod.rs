@@ -9,8 +9,8 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 
 use codec::prelude::*;
-use collator::*;
 
+use collator::*;
 use crate::codec::Result;
 
 pub macro match_template_collator($t:tt, $($tail:tt)*) {
