@@ -129,6 +129,7 @@ pub trait Engine: Send + Clone + 'static {
         batch: WriteData,
         write_cb: Callback<()>,
         _proposed_cb: Option<ExtCallback>,
+        _committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
         self.async_write(ctx, batch, write_cb)
     }

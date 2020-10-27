@@ -106,19 +106,13 @@ impl<'a> RpnStackNode<'a> {
     /// Whether this is a `Scalar` variant.
     #[inline]
     pub fn is_scalar(&self) -> bool {
-        match self {
-            RpnStackNode::Scalar { .. } => true,
-            _ => false,
-        }
+        matches!(self, RpnStackNode::Scalar { .. })
     }
 
     /// Whether this is a `Vector` variant.
     #[inline]
     pub fn is_vector(&self) -> bool {
-        match self {
-            RpnStackNode::Vector { .. } => true,
-            _ => false,
-        }
+        matches!(self, RpnStackNode::Vector { .. })
     }
 
     /// Gets a reference of the element by logical index.
