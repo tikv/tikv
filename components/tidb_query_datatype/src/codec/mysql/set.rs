@@ -1,5 +1,4 @@
 use crate::codec::data_type::BitVec;
-use std::cmp::Ordering;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Set {

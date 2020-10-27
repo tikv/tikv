@@ -1,5 +1,3 @@
-use bitflags::_core::marker::PhantomData;
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Enum {
     data: Vec<u8>,
