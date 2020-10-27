@@ -7,9 +7,9 @@ use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::MvccTxn;
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::commands::{
-    Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
-use crate::storage::txn::{Error, ErrorInner, Result};
+use crate::storage::txn::{pessimistic_prewrite, Error, ErrorInner, Result};
 use crate::storage::types::PrewriteResult;
 use crate::storage::{Error as StorageError, ProcessResult, Snapshot};
 
@@ -33,6 +33,7 @@ command! {
             /// How many keys this transaction involved.
             txn_size: u64,
             min_commit_ts: TimeStamp,
+            max_commit_ts: TimeStamp,
             /// All secondary keys in the whole transaction (i.e., as sent to all nodes, not only
             /// this node). Only present if using async commit.
             secondary_keys: Option<Vec<Vec<u8>>>,
@@ -65,14 +66,8 @@ impl CommandExt for PrewritePessimistic {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
-
-        // If async commit is disabled in TiKV, set the secondary_keys in the request to None
-        // so we won't do anything for async commit.
-        if !context.enable_async_commit {
-            self.secondary_keys = None;
-        }
 
         // Async commit requires the max timestamp in the concurrency manager to be up-to-date.
         // If it is possibly stale due to leader transfer or region merge, return an error.
@@ -109,7 +104,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
             if Some(m.key()) == async_commit_pk.as_ref() {
                 secondaries = &self.secondary_keys;
             }
-            match txn.pessimistic_prewrite(
+            match pessimistic_prewrite(
+                &mut txn,
                 m,
                 &self.primary,
                 secondaries,
@@ -118,6 +114,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
                 self.for_update_ts,
                 self.txn_size,
                 self.min_commit_ts,
+                self.max_commit_ts,
                 context.pipelined_pessimistic_lock,
             ) {
                 Ok(ts) => {
@@ -159,6 +156,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
             };
             (pr, WriteData::default(), 0, self.ctx, None, vec![])
         };
+        let response_policy = if !async_commit_ts.is_zero() && context.async_apply_prewrite {
+            ResponsePolicy::OnCommitted
+        } else {
+            ResponsePolicy::OnApplied
+        };
         Ok(WriteResult {
             ctx,
             to_be_write,
@@ -166,6 +168,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
             pr,
             lock_info,
             lock_guards,
+            response_policy,
         })
     }
 }

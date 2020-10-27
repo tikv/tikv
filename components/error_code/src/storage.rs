@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 define_error_codes!(
-    "KV-Storage-",
+    "KV:Storage:",
 
     TIMEOUT => ("Timeout", "", ""),
     EMPTY_REQUEST => ("EmptyRequest", "", ""),
@@ -31,6 +31,7 @@ define_error_codes!(
     COMMIT_TS_EXPIRED => ("CommitTsExpired", "", ""),
     KEY_VERSION => ("KeyVersion", "",""),
     PESSIMISTIC_LOCK_NOT_FOUND => ("PessimisticLockNotFound", "", ""),
+    COMMIT_TS_TOO_LARGE => ("CommitTsTooLarge", "", ""),
 
     UNKNOWN => ("Unknown", "", "")
 );

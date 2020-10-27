@@ -23,10 +23,11 @@ use uuid::{Builder as UuidBuilder, Uuid};
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksSstReader};
 use engine_traits::{
-    EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstExt,
-    SstReader, SstWriter, CF_DEFAULT, CF_WRITE,
+    EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
+    SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
+use tikv_util::file::sync_dir;
 use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
@@ -88,7 +89,7 @@ impl SSTImporter {
                 Ok(())
             }
             Err(e) => {
-                error!(%e; "ingest failed"; "meta" => ?meta,);
+                error!(%e; "ingest failed"; "meta" => ?meta, );
                 Err(e)
             }
         }
@@ -367,7 +368,7 @@ impl SSTImporter {
                     .map_err(|e| {
                         Error::BadFormat(format!(
                             "key {}: {}",
-                            hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
+                            log_wrappers::Value::key(keys::origin_key(iter.key())),
                             e
                         ))
                     })?
@@ -377,7 +378,7 @@ impl SSTImporter {
                     let mut write = WriteRef::parse(iter.value()).map_err(|e| {
                         Error::BadFormat(format!(
                             "write {}: {}",
-                            hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
+                            log_wrappers::Value::key(keys::origin_key(iter.key())),
                             e
                         ))
                     })?;
@@ -416,19 +417,25 @@ impl SSTImporter {
         self.dir.list_ssts()
     }
 
-    pub fn new_writer<E: KvEngine>(
-        &self,
-        default: E::SstWriter,
-        write: E::SstWriter,
-        meta: SstMeta,
-    ) -> Result<SSTWriter<E>> {
+    pub fn new_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<SSTWriter<E>> {
         let mut default_meta = meta.clone();
         default_meta.set_cf_name(CF_DEFAULT.to_owned());
         let default_path = self.dir.join(&default_meta)?;
+        let default = E::SstWriterBuilder::new()
+            .set_db(&db)
+            .set_cf(CF_DEFAULT)
+            .build(default_path.temp.to_str().unwrap())
+            .unwrap();
 
         let mut write_meta = meta;
         write_meta.set_cf_name(CF_WRITE.to_owned());
         let write_path = self.dir.join(&write_meta)?;
+        let write = E::SstWriterBuilder::new()
+            .set_db(&db)
+            .set_cf(CF_WRITE)
+            .build(write_path.temp.to_str().unwrap())
+            .unwrap();
+
         Ok(SSTWriter::new(
             default,
             write,
@@ -506,13 +513,13 @@ impl<E: KvEngine> SSTWriter<E> {
         let (p1, p2) = (self.default_path.clone(), self.write_path.clone());
         let (w1, w2) = (self.default, self.write);
         if default_entries > 0 {
-            let (_, sst_reader) = w1.finish_read()?;
-            Self::save(sst_reader, p1)?;
+            w1.finish()?;
+            Self::save(p1)?;
             metas.push(default_meta);
         }
         if write_entries > 0 {
-            let (_, sst_reader) = w2.finish_read()?;
-            Self::save(sst_reader, p2)?;
+            w2.finish()?;
+            Self::save(p2)?;
             metas.push(write_meta);
         }
         info!("finish write to sst";
@@ -522,16 +529,12 @@ impl<E: KvEngine> SSTWriter<E> {
         Ok(metas)
     }
 
-    fn save(
-        mut sst_reader: <<E as SstExt>::SstWriter as SstWriter>::ExternalSstFileReader,
-        import_path: ImportPath,
-    ) -> Result<()> {
-        let tmp_path = import_path.temp;
-        let mut tmp_f = File::create(&tmp_path)?;
-        std::io::copy(&mut sst_reader, &mut tmp_f)?;
-        tmp_f.metadata()?.permissions().set_readonly(true);
-        tmp_f.sync_all()?;
-        fs::rename(tmp_path, import_path.save)?;
+    // move file from temp to save.
+    fn save(mut import_path: ImportPath) -> Result<()> {
+        fs::rename(&import_path.temp, &import_path.save)?;
+        // sync the directory after rename
+        import_path.save.pop();
+        sync_dir(&import_path.save)?;
         Ok(())
     }
 }
@@ -588,7 +591,7 @@ impl ImportDir {
     fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
         let path = self.join(meta)?;
         if path.save.exists() {
-            return Err(Error::FileExists(path.save));
+            return Err(Error::FileExists(path.save, "create SST upload cache"));
         }
         ImportFile::create(meta.clone(), path)
     }
@@ -616,7 +619,6 @@ impl ImportDir {
         let start = Instant::now();
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
-        let cf = engine.cf_handle(cf).expect("bad cf name");
         super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager)?;
         let length = meta.get_length();
         let crc32 = meta.get_crc32();
@@ -709,7 +711,10 @@ impl ImportFile {
         self.validate()?;
         self.file.take().unwrap().sync_all()?;
         if self.path.save.exists() {
-            return Err(Error::FileExists(self.path.save.clone()));
+            return Err(Error::FileExists(
+                self.path.save.clone(),
+                "finalize SST write cache",
+            ));
         }
         fs::rename(&self.path.temp, &self.path.save)?;
         Ok(())
@@ -1621,25 +1626,10 @@ mod tests {
 
         let importer_dir = tempfile::tempdir().unwrap();
         let importer = SSTImporter::new(&importer_dir, None).unwrap();
-        let name = importer.get_path(&meta);
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
-        let default = <TestEngine as SstExt>::SstWriterBuilder::new()
-            .set_in_memory(true)
-            .set_db(&db)
-            .set_cf(CF_DEFAULT)
-            .build(&name.to_str().unwrap())
-            .unwrap();
-        let write = <TestEngine as SstExt>::SstWriterBuilder::new()
-            .set_in_memory(true)
-            .set_db(&db)
-            .set_cf(CF_WRITE)
-            .build(&name.to_str().unwrap())
-            .unwrap();
 
-        let mut w = importer
-            .new_writer::<TestEngine>(default, write, meta)
-            .unwrap();
+        let mut w = importer.new_writer::<TestEngine>(&db, meta).unwrap();
         let mut batch = WriteBatch::default();
         let mut pairs = vec![];
 

@@ -154,11 +154,6 @@
 ## Max time to handle Coprocessor requests before timeout.
 # end-point-request-max-handle-duration = "60s"
 
-## Whether to check memory locks before handling coprocessor requests.
-## This option must be enabled if async commit is enable.
-## DO NOT use it in production. This option may be removed in the future.
-# end-point-check-memory-locks = true
-
 ## Max bytes that snapshot can be written to disk in one second.
 ## It should be set based on your disk performance.
 # snap-max-write-bytes-per-sec = "100MB"
@@ -196,9 +191,10 @@
 ## When the pending write bytes exceeds this threshold, the "scheduler too busy" error is displayed.
 # scheduler-pending-write-threshold = "100MB"
 
-## Whether to enable the async commit feature.
-## DO NOT use it in production. This option may be removed in the future.
-# enable-async-commit = true
+## For async commit transactions, it's possible to response to the client before applying prewrite
+## requests. Enabling this can ease reduce latency when apply duration is significant, or reduce
+## latency jittering when apply duration is not stable.
+# enable-async-apply-prewrite = false
 
 [storage.block-cache]
 ## Whether to create a shared block cache for all RocksDB column families.
@@ -359,8 +355,8 @@
 # region-max-keys = 1440000
 # region-split-keys = 960000
 
-## Currently only "raw" is supported, which means the check is based raw data.
-# consistency-check-method = "raw"
+## Set to "mvcc" to do consistency check for MVCC data, or "raw" for raw data.
+# consistency-check-method = "mvcc"
 
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
@@ -463,11 +459,11 @@
 ##    2 : WriteOnly
 ##    3 : AllIo
 ## 4. auto_tuned enables dynamic adjustment of rate limit within the range
-##    [rate_bytes_per_sec / 20, rate_bytes_per_sec], according to the recent demand for background I/O.
-# rate-bytes-per-sec = 0
+##    [10MB/s, rate_bytes_per_sec], according to the recent demand for background I/O.
+# rate-bytes-per-sec = "10GB"
 # rate-limiter-refill-period = "100ms"
 # rate-limiter-mode = 2
-# auto-tuned = false
+# auto-tuned = true
 
 
 ## Enable or disable the pipelined write.
@@ -807,6 +803,11 @@
 # cert-path = ""
 # key-path = ""
 # cert-allowed-cn = []
+#
+## Avoid outputing data (e.g. user keys) to info log. It currently does not avoid printing
+## user data altogether, but greatly reduce those logs.
+## Default is false.
+# redact-info-log = false
 
 # Configurations for encryption at rest. Experimental.
 [security.encryption]
@@ -893,7 +894,7 @@
 
 ## Enable pipelined pessimistic lock, only effect when processing perssimistic transactions
 ## Enabled this will improve performance, but slightly increase the transcation failure rate
-# pipelined = false
+# pipelined = true
 
 [gc]
 ## The number of keys to GC in one batch.

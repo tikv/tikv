@@ -17,11 +17,11 @@ use std::{error, ptr, result};
 
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{CfName, CF_DEFAULT};
-use engine_traits::{IterOptions, KvEngine as LocalEngine, ReadOptions};
+use engine_traits::{IterOptions, KvEngine as LocalEngine, MvccProperties, ReadOptions};
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
-use txn_types::{Key, TxnExtra, Value};
+use txn_types::{Key, TimeStamp, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -38,6 +38,7 @@ pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 pub type Callback<T> = Box<dyn FnOnce((CbContext, Result<T>)) + Send>;
+pub type ExtCallback = Box<dyn FnOnce() + Send>;
 pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug)]
@@ -115,7 +116,22 @@ pub trait Engine: Send + Clone + 'static {
         cb: Callback<Self::Snap>,
     ) -> Result<()>;
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
+    fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()>;
+
+    /// Writes data to the engine asynchronously with some extensions.
+    ///
+    /// When the write request is proposed successfully, the `proposed_cb` is invoked.
+    /// When the write request is finished, the `write_cb` is invoked.
+    fn async_write_ext(
+        &self,
+        ctx: &Context,
+        batch: WriteData,
+        write_cb: Callback<()>,
+        _proposed_cb: Option<ExtCallback>,
+        _committed_cb: Option<ExtCallback>,
+    ) -> Result<()> {
+        self.async_write(ctx, batch, write_cb)
+    }
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
@@ -165,6 +181,16 @@ pub trait Engine: Send + Clone + 'static {
         _end: &[u8],
     ) -> Result<RocksTablePropertiesCollection> {
         Err(box_err!("no user properties"))
+    }
+
+    fn get_mvcc_properties_cf(
+        &self,
+        _: CfName,
+        _safe_point: TimeStamp,
+        _start: &[u8],
+        _end: &[u8],
+    ) -> Option<MvccProperties> {
+        None
     }
 }
 

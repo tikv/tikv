@@ -31,7 +31,7 @@ libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 num_cpus = "1"
 openssl = "0.10"
-prometheus = { version = "0.8", features = ["nightly", "push"] }
+prometheus = { version = "0.8", features = ["nightly"] }
 quick-error = "1.2.3"
 rand = "0.7"
 serde = { version = "1.0", features = ["derive"] }
@@ -41,10 +41,9 @@ slog-async = "2.3"
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 slog-json = "2.3"
 slog-term = "2.4"
-sysinfo = "0.14"
+sysinfo = "0.15"
 tikv_alloc = { path = "../tikv_alloc" }
 time = "0.1"
-tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio = { version = "0.2", features = ["rt-util"] }
 tokio-executor = "0.1"
 tokio-timer = "0.2"

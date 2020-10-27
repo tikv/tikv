@@ -9,7 +9,10 @@ use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
 use futures::{Future, Sink};
-use grpcio::{ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, WriteFlags};
+use grpcio::{
+    ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatus,
+    RpcStatusCode, WriteFlags,
+};
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
 use raft::SnapshotStatus;
@@ -22,7 +25,7 @@ use std::marker::Unpin;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use std::{cmp, mem, result};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::lru::LruCache;
@@ -346,6 +349,14 @@ where
     let _ = router.report_unreachable(msg.region_id, to_peer.id);
 }
 
+fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
+    if let grpcio::Error::RpcFailure(RpcStatus { ref status, .. }) = e {
+        let x = *status == RpcStatusCode::UNIMPLEMENTED;
+        return x;
+    }
+    false
+}
+
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
 struct RaftCall<R, M, B> {
     sender: ClientCStreamSender<M>,
@@ -422,14 +433,13 @@ where
         if let Some(tx) = self.lifetime.take() {
             let should_fallback = [sink_err, recv_err]
                 .iter()
-                .any(|e| e.as_ref().map_or(false, super::grpc_error_is_unimplemented));
+                .any(|e| e.as_ref().map_or(false, grpc_error_is_unimplemented));
             if should_fallback {
                 // Asks backend to fallback.
                 let _ = tx.send(());
                 return;
             }
         }
-
         let router = &self.router;
         router.broadcast_unreachable(self.store_id);
     }
@@ -499,7 +509,6 @@ pub struct ConnectionBuilder<S, R> {
 }
 
 impl<S, R> ConnectionBuilder<S, R> {
-    #[allow(unused)]
     pub fn new(
         env: Arc<Environment>,
         cfg: Arc<Config>,
@@ -537,6 +546,7 @@ where
         let store_id = self.store_id;
         let res = self.builder.resolver.resolve(
             store_id,
+            #[allow(unused_mut)]
             Box::new(move |mut addr| {
                 {
                     // Wrapping the fail point in a closure, so we can modify
@@ -630,11 +640,11 @@ where
     }
 }
 
-async fn maybe_backoff(last_wake_time: &mut Instant, retry_times: &mut u64) {
+async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: &mut u32) {
     if *retry_times == 0 {
         return;
     }
-    let timeout = Duration::from_secs(cmp::min(*retry_times, 5));
+    let timeout = cfg.raft_client_backoff_step.0 * cmp::min(*retry_times, 5);
     let now = Instant::now();
     if *last_wake_time + timeout < now {
         // We have spent long enough time in last retry, no need to backoff again.
@@ -652,10 +662,10 @@ async fn maybe_backoff(last_wake_time: &mut Instant, retry_times: &mut u64) {
 ///
 /// The general progress of connection is:
 ///
-///     1. resolve address
-///     2. connect
-///     3. make batch call
-///     4. fallback to legacy API if incompatible
+/// 1. resolve address
+/// 2. connect
+/// 3. make batch call
+/// 4. fallback to legacy API if incompatible
 ///
 /// Every failure during the process should trigger retry automatically.
 async fn start<S, R>(
@@ -669,7 +679,7 @@ async fn start<S, R>(
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
     loop {
-        maybe_backoff(&mut last_wake_time, &mut retry_times).await;
+        maybe_backoff(&back_end.builder.cfg, &mut last_wake_time, &mut retry_times).await;
         retry_times += 1;
         let f = back_end.resolve();
         let addr = match f.await {
@@ -767,7 +777,6 @@ where
     S: StoreAddrResolver + Send + 'static,
     R: RaftStoreRouter<RocksEngine> + Unpin + Send + 'static,
 {
-    #[allow(unused)]
     pub fn new(builder: ConnectionBuilder<S, R>) -> RaftClient<S, R> {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
@@ -827,10 +836,10 @@ where
     /// If the message fails to be sent, false is returned. Returning true means the message is
     /// enqueued to buffer. Caller is expected to call `flush` to ensure all buffered messages
     /// are sent out.
-    #[allow(unused)]
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
         let conn_id = (msg.region_id % self.builder.cfg.grpc_raft_conn_num as u64) as usize;
+        #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
                 "transport_on_send_snapshot",
@@ -879,7 +888,6 @@ where
     }
 
     /// Flushes all buffered messages.
-    #[allow(unused)]
     pub fn flush(&mut self) {
         if self.need_flush.is_empty() {
             return;
