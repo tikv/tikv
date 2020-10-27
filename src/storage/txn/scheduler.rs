@@ -753,8 +753,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-
-                debug!("write command failed at prewrite"; "cid" => cid);
+                debug!("write command failed at prewrite"; "cid" => cid, "err" => ?err);
                 scheduler.finish_with_err(cid, err);
             }
         }

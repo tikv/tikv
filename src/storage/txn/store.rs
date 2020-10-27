@@ -751,6 +751,7 @@ mod tests {
             Ok(Cursor::new(
                 MockRangeSnapshotIter::default(),
                 ScanMode::Forward,
+                false,
             ))
         }
         fn iter_cf(
@@ -762,6 +763,7 @@ mod tests {
             Ok(Cursor::new(
                 MockRangeSnapshotIter::default(),
                 ScanMode::Forward,
+                false,
             ))
         }
         fn lower_bound(&self) -> Option<&[u8]> {
