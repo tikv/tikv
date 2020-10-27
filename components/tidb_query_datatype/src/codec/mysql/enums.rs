@@ -26,9 +26,7 @@ impl ToString for Enum {
     fn to_string(&self) -> String {
         let buf = Vec::from(self.get(self.value));
 
-        unsafe {
-            String::from_utf8_unchecked(buf)
-        }
+        unsafe { String::from_utf8_unchecked(buf) }
     }
 }
 
@@ -58,18 +56,8 @@ mod tests {
     #[test]
     fn test_to_string() {
         let cases = vec![
-            (
-                "abc",
-                vec![0, 1, 2],
-                0,
-                "a"
-            ),
-            (
-                "abc",
-                vec![0, 1, 2],
-                2,
-                "c"
-            ),
+            ("abc", vec![0, 1, 2], 0, "a"),
+            ("abc", vec![0, 1, 2], 2, "c"),
         ];
 
         for (data, offset, value, expect) in cases {

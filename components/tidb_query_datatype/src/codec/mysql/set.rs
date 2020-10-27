@@ -1,5 +1,5 @@
-use std::cmp::Ordering;
 use crate::codec::data_type::BitVec;
+use std::cmp::Ordering;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Set {
@@ -39,9 +39,7 @@ impl ToString for Set {
             }
         }
 
-        unsafe {
-            String::from_utf8_unchecked(buf)
-        }
+        unsafe { String::from_utf8_unchecked(buf) }
     }
 }
 
@@ -71,30 +69,10 @@ mod tests {
     #[test]
     fn test_to_string() {
         let cases = vec![
-            (
-                "abc",
-                vec![0, 1, 2],
-                vec![true, false, false],
-                "a"
-            ),
-            (
-                "abc",
-                vec![0, 1, 2],
-                vec![true, true, false],
-                "a,b"
-            ),
-            (
-                "abc",
-                vec![0, 1, 2],
-                vec![true, true, true],
-                "a,b,c"
-            ),
-            (
-                "abc",
-                vec![0, 1, 2],
-                vec![true, false, true],
-                "a,c"
-            ),
+            ("abc", vec![0, 1, 2], vec![true, false, false], "a"),
+            ("abc", vec![0, 1, 2], vec![true, true, false], "a,b"),
+            ("abc", vec![0, 1, 2], vec![true, true, true], "a,b,c"),
+            ("abc", vec![0, 1, 2], vec![true, false, true], "a,c"),
         ];
 
         for (data, offset, value, expect) in cases {
