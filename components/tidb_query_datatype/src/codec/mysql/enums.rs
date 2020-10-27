@@ -2,6 +2,7 @@
 pub struct Enum {
     data: Vec<u8>,
     offset: Vec<usize>,
+    // MySQL Enum is 1-based index, value == 0 means this enum is ''
     value: usize,
 }
 
@@ -22,7 +23,11 @@ impl Enum {
 
 impl ToString for Enum {
     fn to_string(&self) -> String {
-        let buf = Vec::from(self.get(self.value));
+        if self.value == 0 {
+            return String::new();
+        }
+
+        let buf = Vec::from(self.get(self.value - 1));
 
         unsafe { String::from_utf8_unchecked(buf) }
     }
@@ -43,7 +48,7 @@ impl crate::codec::data_type::AsMySQLBool for Enum {
         &self,
         _context: &mut crate::expr::EvalContext,
     ) -> tidb_query_common::error::Result<bool> {
-        unimplemented!()
+        Ok(self.value != 0)
     }
 }
 
@@ -54,8 +59,8 @@ mod tests {
     #[test]
     fn test_to_string() {
         let cases = vec![
-            ("abc", vec![0, 1, 2], 0, "a"),
-            ("abc", vec![0, 1, 2], 2, "c"),
+            ("abc", vec![0, 1, 2], 1, "a"),
+            ("abc", vec![0, 1, 2], 3, "c"),
         ];
 
         for (data, offset, value, expect) in cases {
