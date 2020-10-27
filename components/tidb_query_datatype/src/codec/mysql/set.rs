@@ -40,7 +40,8 @@ impl ToString for Set {
             }
         }
 
-        unsafe { String::from_utf8_unchecked(buf) }
+        // TODO: Check the requirements and intentions of to_string usage.
+        String::from_utf8_lossy(buf.as_slice()).to_string()
     }
 }
 
