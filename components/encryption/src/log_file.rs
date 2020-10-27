@@ -35,7 +35,10 @@ pub struct LogFile {
     // Internal file dictionary to avoid recovery before rewrite and to check if compaction
     // is needed.
     file_dict: FileDictionary,
+    // Determine whether compact the log.
     file_rewrite_threshold: u64,
+    // Record the number of `REMOVE` to determine whether compact the log.
+    removed: u64,
 }
 
 impl LogFile {
@@ -66,6 +69,7 @@ impl LogFile {
             append_file: None,
             file_dict: FileDictionary::default(),
             file_rewrite_threshold,
+            removed: 0,
         };
         log_file.write(&log_file.file_dict.clone())?;
         Ok(log_file)
@@ -82,6 +86,7 @@ impl LogFile {
             append_file: None,
             file_dict: FileDictionary::default(),
             file_rewrite_threshold,
+            removed: 0,
         };
 
         let file_dict = log_file.recovery()?;
@@ -188,6 +193,7 @@ impl LogFile {
         file.sync_all()?;
 
         self.file_dict.files.remove(name);
+        self.removed += 1;
         self.check_compact()?;
 
         Ok(())
@@ -207,6 +213,7 @@ impl LogFile {
 
         self.file_dict.files.remove(src_name);
         self.file_dict.files.insert(dst_name.to_owned(), info);
+        self.removed += 1;
         self.check_compact()?;
 
         Ok(())
@@ -215,7 +222,8 @@ impl LogFile {
     /// This function needs to be called after each append operation to check
     /// if compact is needed.
     fn check_compact(&mut self) -> Result<()> {
-        if self.file_dict.files.len() as u64 > self.file_rewrite_threshold {
+        if self.removed > self.file_rewrite_threshold {
+            self.removed = 0;
             self.write(&self.file_dict.clone())?;
         }
         Ok(())
