@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::Ordering, mpsc::channel, Arc};
+use std::sync::{atomic::Ordering, mpsc::channel, mpsc::RecvTimeoutError, Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -8,7 +8,8 @@ use grpcio::*;
 use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
 use kvproto::tikvpb::TikvClient;
 
-use errors::extract_region_error;
+use errors::{extract_key_error, extract_region_error};
+use futures::executor::block_on;
 use test_raftstore::{must_get_equal, must_get_none, new_peer, new_server_cluster};
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use tikv::storage::lock_manager::DummyLockManager;
@@ -207,7 +208,7 @@ fn test_pipelined_pessimistic_lock() {
     let rockskv_async_write_fp = "rockskv_async_write";
     let rockskv_write_modifies_fp = "rockskv_write_modifies";
     let scheduler_async_write_finish_fp = "scheduler_async_write_finish";
-    let scheduler_pipelined_write_finish_fp = "scheduler_pipelined_write_finish";
+    let before_pipelined_write_finish_fp = "before_pipelined_write_finish";
 
     let storage = TestStorageBuilder::new(DummyLockManager {})
         .set_pipelined_pessimistic_lock(true)
@@ -309,9 +310,9 @@ fn test_pipelined_pessimistic_lock() {
     fail::remove(scheduler_async_write_finish_fp);
     delete_pessimistic_lock(&storage, key.clone(), 50, 50);
 
-    // Async write is finished before pipelined write due to thread scheduling.
-    // Storage should handle it properly.
-    fail::cfg(scheduler_pipelined_write_finish_fp, "pause").unwrap();
+    // The proposed callback, which is responsible for returning response, is not guaranteed to be
+    // invoked. In this case it should still be continued properly.
+    fail::cfg(before_pipelined_write_finish_fp, "return()").unwrap();
     storage
         .sched_txn_command(
             new_acquire_pessimistic_lock_command(
@@ -326,8 +327,8 @@ fn test_pipelined_pessimistic_lock() {
             ),
         )
         .unwrap();
-    rx.recv().unwrap();
-    fail::remove(scheduler_pipelined_write_finish_fp);
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    fail::remove(before_pipelined_write_finish_fp);
     delete_pessimistic_lock(&storage, key, 60, 60);
 }
 
@@ -442,4 +443,270 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
 
     // should NOT get max timestamp not synced error
     check_max_timestamp_not_synced(false);
+}
+
+fn test_async_apply_prewrite_impl<E: Engine>(
+    storage: &Storage<E, DummyLockManager>,
+    ctx: Context,
+    key: &[u8],
+    value: &[u8],
+    start_ts: u64,
+    commit_ts: Option<u64>,
+    is_pessimistic: bool,
+    need_lock: bool,
+    use_async_commit: bool,
+    expect_async_apply: bool,
+) {
+    let on_handle_apply = "on_handle_apply";
+
+    let expect_locked = |err, key: &[u8], lock_ts: TimeStamp| {
+        let lock_info = extract_key_error(&err).take_locked();
+        assert_eq!(lock_info.get_key(), key);
+        assert_eq!(lock_info.get_lock_version(), lock_ts.into_inner());
+    };
+
+    let start_ts = TimeStamp::from(start_ts);
+
+    // Acquire the pessimistic lock if needed
+    if need_lock {
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::AcquirePessimisticLock::new(
+                    vec![(Key::from_raw(key), false)],
+                    key.to_vec(),
+                    start_ts,
+                    0,
+                    true,
+                    start_ts,
+                    None,
+                    false,
+                    0.into(),
+                    ctx.clone(),
+                ),
+                Box::new(move |r| tx.send(r).unwrap()),
+            )
+            .unwrap();
+        rx.recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    // Prewrite and block it at apply phase.
+    fail::cfg(on_handle_apply, "pause").unwrap();
+    let (tx, rx) = channel();
+    let secondaries = if use_async_commit { Some(vec![]) } else { None };
+    if !is_pessimistic {
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                    key.to_vec(),
+                    start_ts,
+                    0,
+                    false,
+                    1,
+                    0.into(),
+                    0.into(),
+                    secondaries,
+                    ctx.clone(),
+                ),
+                Box::new(move |r| tx.send(r).unwrap()),
+            )
+            .unwrap();
+    } else {
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![(
+                        Mutation::Put((Key::from_raw(key), value.to_vec())),
+                        need_lock,
+                    )],
+                    key.to_vec(),
+                    start_ts,
+                    0,
+                    start_ts,
+                    1,
+                    0.into(),
+                    0.into(),
+                    secondaries,
+                    ctx.clone(),
+                ),
+                Box::new(move |r| tx.send(r).unwrap()),
+            )
+            .unwrap();
+    }
+
+    if expect_async_apply {
+        // The result should be able to be returned.
+        let res = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        assert_eq!(res.locks.len(), 0);
+        assert!(use_async_commit);
+        assert!(commit_ts.is_none());
+        let min_commit_ts = res.min_commit_ts;
+        assert!(
+            min_commit_ts > start_ts,
+            "min_commit_ts({}) not greater than start_ts({})",
+            min_commit_ts,
+            start_ts
+        );
+
+        // The memory lock is not released so reading will encounter the lock.
+        thread::sleep(Duration::from_millis(300));
+        let err = block_on(storage.get(ctx.clone(), Key::from_raw(key), min_commit_ts.next()))
+            .unwrap_err();
+        expect_locked(err, key, start_ts);
+
+        // Commit command will be blocked.
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(key)],
+                    start_ts,
+                    min_commit_ts,
+                    ctx.clone(),
+                ),
+                Box::new(move |r| tx.send(r).unwrap()),
+            )
+            .unwrap();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(300)).unwrap_err(),
+            RecvTimeoutError::Timeout
+        );
+
+        // Continue applying and then the commit command can continue.
+        fail::remove(on_handle_apply);
+        rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+
+        let got_value =
+            block_on(storage.get(ctx, Key::from_raw(key), min_commit_ts.next())).unwrap();
+        assert_eq!(got_value.unwrap().as_slice(), value);
+    } else {
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(300)).unwrap_err(),
+            RecvTimeoutError::Timeout
+        );
+
+        fail::remove(on_handle_apply);
+        let res = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        assert_eq!(res.locks.len(), 0);
+        assert_eq!(res.min_commit_ts, 0.into());
+
+        // Commit it.
+        let commit_ts = commit_ts.unwrap().into();
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(vec![Key::from_raw(key)], start_ts, commit_ts, ctx.clone()),
+                Box::new(move |r| tx.send(r).unwrap()),
+            )
+            .unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+
+        let got_value = block_on(storage.get(ctx, Key::from_raw(key), commit_ts.next())).unwrap();
+        assert_eq!(got_value.unwrap().as_slice(), value);
+    }
+}
+
+#[test]
+fn test_async_apply_prewrite() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let engine = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine,
+        DummyLockManager {},
+    )
+    .set_async_apply_prewrite(true)
+    .build()
+    .unwrap();
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(1);
+    ctx.set_region_epoch(cluster.get_region_epoch(1));
+    ctx.set_peer(cluster.leader_of_region(1).unwrap());
+
+    test_async_apply_prewrite_impl(
+        &storage,
+        ctx.clone(),
+        b"key",
+        b"value1",
+        10,
+        None,
+        false,
+        false,
+        true,
+        true,
+    );
+    test_async_apply_prewrite_impl(
+        &storage,
+        ctx.clone(),
+        b"key",
+        b"value2",
+        20,
+        None,
+        true,
+        false,
+        true,
+        true,
+    );
+    test_async_apply_prewrite_impl(
+        &storage,
+        ctx.clone(),
+        b"key",
+        b"value3",
+        30,
+        None,
+        true,
+        true,
+        true,
+        true,
+    );
+
+    test_async_apply_prewrite_impl(
+        &storage,
+        ctx.clone(),
+        b"key",
+        b"value1",
+        40,
+        Some(45),
+        false,
+        false,
+        false,
+        false,
+    );
+    test_async_apply_prewrite_impl(
+        &storage,
+        ctx.clone(),
+        b"key",
+        b"value2",
+        50,
+        Some(55),
+        true,
+        false,
+        false,
+        false,
+    );
+    test_async_apply_prewrite_impl(
+        &storage,
+        ctx,
+        b"key",
+        b"value3",
+        60,
+        Some(65),
+        true,
+        true,
+        false,
+        false,
+    );
 }

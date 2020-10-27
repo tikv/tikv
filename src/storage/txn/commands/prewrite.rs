@@ -9,7 +9,7 @@ use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
 };
 use crate::storage::txn::actions::prewrite::prewrite;
-use crate::storage::txn::commands::{WriteCommand, WriteContext, WriteResult};
+use crate::storage::txn::commands::{ResponsePolicy, WriteCommand, WriteContext, WriteResult};
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{
     txn::commands::{Command, CommandExt, TypedCommand},
@@ -246,6 +246,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             };
             (pr, WriteData::default(), 0, self.ctx, None, vec![])
         };
+        let response_policy = if !async_commit_ts.is_zero() && context.async_apply_prewrite {
+            ResponsePolicy::OnCommitted
+        } else {
+            ResponsePolicy::OnApplied
+        };
         Ok(WriteResult {
             ctx,
             to_be_write,
@@ -253,6 +258,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             pr,
             lock_info,
             lock_guards,
+            response_policy,
         })
     }
 }
@@ -449,6 +455,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            async_apply_prewrite: false,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         if let ProcessResult::PrewriteResult {
@@ -490,6 +497,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            async_apply_prewrite: false,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -514,6 +522,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            async_apply_prewrite: false,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
