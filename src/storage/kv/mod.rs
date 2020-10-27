@@ -265,6 +265,7 @@ quick_error! {
     pub enum ErrorInner {
         Request(err: ErrorHeader) {
             from()
+            description(err.get_message())
             display("{:?}", err)
         }
         Timeout(d: Duration) {
