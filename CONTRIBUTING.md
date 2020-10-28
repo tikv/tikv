@@ -90,6 +90,8 @@ cargo fmt
 make clippy
 ```
 
+See [Rustdoc of TiKV](https://tikv.github.io) for TiKV code documentation.
+
 See the [style doc](https://github.com/rust-lang/rfcs/blob/master/style-guide/README.md) and the [API guidelines](https://rust-lang-nursery.github.io/api-guidelines/) for details on the conventions.
 
 Please follow this style to make TiKV easy to review, maintain, and develop.
@@ -134,8 +136,6 @@ This is a rough outline of what a contributor's workflow looks like:
 Thanks for your contributions!
 
 ### Finding something to work on
-
-The [Rustdoc of TiKV](https://tikv.github.io) may be helpful.
 
 For beginners, we have prepared many suitable tasks for you. Checkout our [Help Wanted issues](https://github.com/tikv/tikv/issues?q=is%3Aopen+is%3Aissue+label%3Astatus%2Fhelp-wanted) for a list, in which we have also marked the difficulty level.
 
