@@ -1175,7 +1175,7 @@ fn future_get<E: Engine, L: LockManager>(
                         Some(val) => resp.set_value(val),
                         None => resp.set_not_found(true),
                     }
-                },
+                }
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -1216,11 +1216,7 @@ fn future_batch_get<E: Engine, L: LockManager>(
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-    let v  = storage.batch_get(
-        req.take_context(),
-        keys,
-        req.get_version().into(),
-    );
+    let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
 
     async move {
         let v = v.await;
@@ -1727,11 +1723,11 @@ pub mod batch_commands_request {
     }
 }
 
+use crate::storage::errors::extract_kv_pairs_and_statistics;
 #[cfg(feature = "prost-codec")]
 pub use kvproto::tikvpb::batch_commands_request;
 #[cfg(feature = "prost-codec")]
 pub use kvproto::tikvpb::batch_commands_response;
-use crate::storage::errors::extract_kv_pairs_and_statistics;
 
 struct BatchRespCollector;
 impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>

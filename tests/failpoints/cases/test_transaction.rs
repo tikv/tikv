@@ -58,7 +58,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
         .unwrap();
     // sleep a while so prewrite gets max ts before get is triggered
     thread::sleep(Duration::from_millis(200));
-    match block_on(storage.get(Context::default(), Key::from_raw(b"k"), 100.into())).0 {
+    match block_on(storage.get(Context::default(), Key::from_raw(b"k"), 100.into())) {
         // In this case, min_commit_ts is smaller than the start ts, but the lock is visible
         // to the get.
         Err(storage::Error(box storage::ErrorInner::Mvcc(mvcc::Error(
@@ -108,7 +108,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
             }),
         )
         .unwrap();
-    let has_lock = block_on(get_fut).0.is_err();
+    let has_lock = block_on(get_fut).is_err();
     let res = prewrite_rx.recv().unwrap().unwrap();
     // We must make sure either the lock is visible to the reader or min_commit_ts > read_ts.
     assert!(res.min_commit_ts > read_ts || has_lock);
@@ -151,7 +151,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
         .unwrap();
 
     // The prewritten lock is not seen by the reader
-    assert_eq!(block_on(get_fut).0.unwrap(), None);
+    assert_eq!(block_on(get_fut).unwrap().0, None);
     // But we make sure in this case min_commit_ts is greater than start_ts.
     let res = prewrite_rx.recv().unwrap().unwrap();
     assert_eq!(res.min_commit_ts, 101.into());
