@@ -156,7 +156,7 @@ impl Statistics {
         }
     }
 
-    pub fn write_scan_detail(&self, detail_v2: &mut ScanDetailV2){
+    pub fn write_scan_detail(&self, detail_v2: &mut ScanDetailV2) {
         detail_v2.set_processed_versions(self.write.processed_keys as u64);
         detail_v2.set_total_versions(self.write.total_op_count() as u64);
     }

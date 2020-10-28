@@ -1160,7 +1160,7 @@ fn future_get<E: Engine, L: LockManager>(
     );
 
     async move {
-        let (v, statistics , perf_statistics_delta) = v.await;
+        let (v, statistics, perf_statistics_delta) = v.await;
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1212,11 +1212,7 @@ fn future_batch_get<E: Engine, L: LockManager>(
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-    let v = storage.batch_get(
-        req.take_context(),
-        keys,
-        req.get_version().into(),
-    );
+    let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
 
     async move {
         let (v, statistics, perf_statistics_delta) = v.await;

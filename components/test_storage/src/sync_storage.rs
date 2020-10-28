@@ -9,8 +9,8 @@ use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    txn::commands, Engine, PrewriteResult, Result, Storage, TestEngineBuilder, TestStorageBuilder,
-    TxnStatus, Statistics
+    txn::commands, Engine, PrewriteResult, Result, Statistics, Storage, TestEngineBuilder,
+    TestStorageBuilder, TxnStatus,
 };
 use tikv_util::collections::HashMap;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};

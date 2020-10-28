@@ -49,7 +49,8 @@ pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CbContext, CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        PerfStatisticsInstant, PerfStatisticsDelta, RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder
+        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot, Statistics,
+        TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
@@ -326,9 +327,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             thread_rng().next_u64(),
         );
         async move {
-            match res.await {
-                Err(_) => (Err(Error::from(ErrorInner::SchedTooBusy)), Statistics::default(), PerfStatisticsDelta::default()),
-                Ok(Err(e)) => (Err(e), Statistics::default(), PerfStatisticsDelta::default()),
+            match res.map_err(|_| Error::from(ErrorInner::SchedTooBusy)).await {
+                Err(e) | Ok(Err(e)) => (
+                    Err(e),
+                    Statistics::default(),
+                    PerfStatisticsDelta::default(),
+                ),
                 Ok(Ok((r, s, p))) => (r, s, p),
             }
         }
@@ -511,7 +515,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         false,
                     );
                     let result = snap_store
-                        .batch_get(&keys,&mut statistics)
+                        .batch_get(&keys, &mut statistics)
                         .map_err(Error::from)
                         .map(|v| {
                             let kv_pairs: Vec<_> = v
@@ -549,9 +553,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         );
 
         async move {
-            match res.await {
-                Err(_) => (Err(Error::from(ErrorInner::SchedTooBusy)), Statistics::default(), PerfStatisticsDelta::default()),
-                Ok(Err(e)) => (Err(e), Statistics::default(), PerfStatisticsDelta::default()),
+            match res.map_err(|_| Error::from(ErrorInner::SchedTooBusy)).await {
+                Err(e) | Ok(Err(e)) => (
+                    Err(e),
+                    Statistics::default(),
+                    PerfStatisticsDelta::default(),
+                ),
                 Ok(Ok((r, s, p))) => (r, s, p),
             }
         }
