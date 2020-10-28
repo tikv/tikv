@@ -126,7 +126,6 @@ pub mod tests {
             concurrency_manager: cm,
             extra_op: Default::default(),
             statistics: &mut Default::default(),
-            pipelined_pessimistic_lock: false,
             async_apply_prewrite: false,
         };
         let result = command.process_write(snapshot, write_context).unwrap();

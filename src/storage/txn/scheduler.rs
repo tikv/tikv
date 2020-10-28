@@ -478,7 +478,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        debug!("write command finished"; 
+        debug!("write command finished";
             "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -620,7 +620,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             concurrency_manager: self.inner.concurrency_manager.clone(),
             extra_op: task.extra_op,
             statistics,
-            pipelined_pessimistic_lock,
             async_apply_prewrite: self.inner.enable_async_apply_prewrite,
         };
 
