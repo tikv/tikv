@@ -615,8 +615,20 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             if branges.is_empty() {
                 return;
             }
-            // Storage backend has been checked in `Task::new()`.
-            let backend = create_storage(&request.backend).unwrap();
+
+            // Check if we can open external storage.
+            let backend = match create_storage(&request.backend) {
+                Ok(backend) => backend,
+                Err(err) => {
+                    error!(?err; "backup create storage failed");
+                    let mut response = BackupResponse::default();
+                    response.set_error(crate::Error::Io(err).into());
+                    if let Err(err) = tx.unbounded_send(response) {
+                        error!(?err; "backup failed to send response");
+                    }
+                    return;
+                }
+            };
             let storage = LimitedStorage {
                 limiter: request.limiter.clone(),
                 storage: backend,
