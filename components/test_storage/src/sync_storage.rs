@@ -236,7 +236,7 @@ impl<E: Engine> SyncTestStorage<E> {
     ) -> Result<()> {
         wait_op!(|cb| self
             .store
-            .sched_txn_command(commands::Rollback::new(keys, start_ts.into(), ctx), cb,))
+            .sched_txn_command(commands::Rollback::new(keys, start_ts.into(), ctx), cb))
         .unwrap()
     }
 
