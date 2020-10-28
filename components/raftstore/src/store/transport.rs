@@ -3,6 +3,7 @@
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
+use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
 
@@ -16,25 +17,38 @@ pub trait Transport: Send + Clone {
 /// Routes message to target region.
 ///
 /// Messages are not guaranteed to be delivered by this trait.
-pub trait CasualRouter {
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()>;
+pub trait CasualRouter<EK>
+where
+    EK: KvEngine,
+{
+    fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()>;
 }
 
 /// Routes proposal to target region.
-pub trait ProposalRouter {
-    fn send(&self, cmd: RaftCommand) -> std::result::Result<(), TrySendError<RaftCommand>>;
+pub trait ProposalRouter<S>
+where
+    S: Snapshot,
+{
+    fn send(&self, cmd: RaftCommand<S>) -> std::result::Result<(), TrySendError<RaftCommand<S>>>;
 }
 
 /// Routes message to store FSM.
 ///
 /// Messages are not guaranteed to be delivered by this trait.
-pub trait StoreRouter {
-    fn send(&self, msg: StoreMsg) -> Result<()>;
+pub trait StoreRouter<EK>
+where
+    EK: KvEngine,
+{
+    fn send(&self, msg: StoreMsg<EK>) -> Result<()>;
 }
 
-impl CasualRouter for RaftRouter {
+impl<EK, ER> CasualRouter<EK> for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     #[inline]
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
+    fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()> {
         match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
@@ -43,16 +57,27 @@ impl CasualRouter for RaftRouter {
     }
 }
 
-impl ProposalRouter for RaftRouter {
+impl<EK, ER> ProposalRouter<EK::Snapshot> for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     #[inline]
-    fn send(&self, cmd: RaftCommand) -> std::result::Result<(), TrySendError<RaftCommand>> {
+    fn send(
+        &self,
+        cmd: RaftCommand<EK::Snapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>> {
         self.send_raft_command(cmd)
     }
 }
 
-impl StoreRouter for RaftRouter {
+impl<EK, ER> StoreRouter<EK> for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     #[inline]
-    fn send(&self, msg: StoreMsg) -> Result<()> {
+    fn send(&self, msg: StoreMsg<EK>) -> Result<()> {
         match self.send_control(msg) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
@@ -63,8 +88,11 @@ impl StoreRouter for RaftRouter {
     }
 }
 
-impl CasualRouter for mpsc::SyncSender<(u64, CasualMessage)> {
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
+impl<EK> CasualRouter<EK> for mpsc::SyncSender<(u64, CasualMessage<EK>)>
+where
+    EK: KvEngine,
+{
+    fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()> {
         match self.try_send((region_id, msg)) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(_)) => {
@@ -75,8 +103,8 @@ impl CasualRouter for mpsc::SyncSender<(u64, CasualMessage)> {
     }
 }
 
-impl ProposalRouter for mpsc::SyncSender<RaftCommand> {
-    fn send(&self, cmd: RaftCommand) -> std::result::Result<(), TrySendError<RaftCommand>> {
+impl<S: Snapshot> ProposalRouter<S> for mpsc::SyncSender<RaftCommand<S>> {
+    fn send(&self, cmd: RaftCommand<S>) -> std::result::Result<(), TrySendError<RaftCommand<S>>> {
         match self.try_send(cmd) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(cmd)) => Err(TrySendError::Disconnected(cmd)),
@@ -85,8 +113,11 @@ impl ProposalRouter for mpsc::SyncSender<RaftCommand> {
     }
 }
 
-impl StoreRouter for mpsc::Sender<StoreMsg> {
-    fn send(&self, msg: StoreMsg) -> Result<()> {
+impl<EK> StoreRouter<EK> for mpsc::Sender<StoreMsg<EK>>
+where
+    EK: KvEngine,
+{
+    fn send(&self, msg: StoreMsg<EK>) -> Result<()> {
         match self.send(msg) {
             Ok(()) => Ok(()),
             Err(mpsc::SendError(_)) => Err(Error::Transport(DiscardReason::Disconnected)),

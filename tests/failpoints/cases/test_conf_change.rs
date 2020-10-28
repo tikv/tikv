@@ -5,8 +5,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use fail;
-use futures::Future;
+use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
@@ -16,8 +15,6 @@ use tikv_util::HandyRwLock;
 
 #[test]
 fn test_destroy_local_reader() {
-    let _guard = crate::setup();
-
     // 3 nodes cluster.
     let mut cluster = new_node_cluster(0, 3);
 
@@ -56,7 +53,7 @@ fn test_destroy_local_reader() {
     // Make sure region 1 is removed from store 1.
     cluster.must_region_not_exist(r1, 1);
 
-    let region = pd_client.get_region_by_id(r1).wait().unwrap().unwrap();
+    let region = block_on(pd_client.get_region_by_id(r1)).unwrap().unwrap();
 
     // Local reader panics if it finds a delegate.
     let reader_has_delegate = "localreader_on_find_delegate";
@@ -78,8 +75,6 @@ fn test_destroy_local_reader() {
 
 #[test]
 fn test_write_after_destroy() {
-    let _guard = crate::setup();
-
     // 3 nodes cluster.
     let mut cluster = new_server_cluster(0, 3);
 
@@ -113,10 +108,7 @@ fn test_write_after_destroy() {
     admin_req.mut_header().set_peer(new_peer(1, 1));
     let (cb1, rx1) = make_cb(&admin_req);
     let engines_3 = cluster.get_all_engines(3);
-    let region = cluster
-        .pd_client
-        .get_region_by_id(r1)
-        .wait()
+    let region = block_on(cluster.pd_client.get_region_by_id(r1))
         .unwrap()
         .unwrap();
     let reqs = vec![new_put_cmd(b"k5", b"v5")];
@@ -149,9 +141,9 @@ fn test_write_after_destroy() {
 
 #[test]
 fn test_tick_after_destroy() {
-    let _guard = crate::setup();
     // 3 nodes cluster.
     let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
@@ -168,7 +160,7 @@ fn test_tick_after_destroy() {
     must_get_equal(&engine_3, b"k1", b"v1");
 
     let tick_fp = "on_raft_log_gc_tick_1";
-    fail::cfg(tick_fp, "pause").unwrap();
+    fail::cfg(tick_fp, "return").unwrap();
     let poll_fp = "pause_on_peer_destroy_res";
     fail::cfg(poll_fp, "pause").unwrap();
 
@@ -184,8 +176,8 @@ fn test_tick_after_destroy() {
     cluster.clear_send_filters();
     cluster.must_put(b"k3", b"v3");
 
-    thread::sleep(cluster.cfg.raft_store.raft_log_gc_tick_interval.0);
     fail::remove(tick_fp);
+    thread::sleep(cluster.cfg.raft_store.raft_log_gc_tick_interval.0);
     thread::sleep(Duration::from_millis(100));
     fail::remove(poll_fp);
 
@@ -194,7 +186,6 @@ fn test_tick_after_destroy() {
 
 #[test]
 fn test_stale_peer_cache() {
-    let _guard = crate::setup();
     // 3 nodes cluster.
     let mut cluster = new_node_cluster(0, 3);
 
@@ -221,8 +212,6 @@ fn test_stale_peer_cache() {
 // 7. so the disk configuration `[1, 2, 3]` is different from memory configuration `[1, 2, 3, 4]`.
 #[test]
 fn test_redundant_conf_change_by_snapshot() {
-    let _guard = crate::setup();
-
     let mut cluster = new_node_cluster(0, 4);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 5;
     cluster.cfg.raft_store.merge_max_log_gap = 4;
@@ -281,4 +270,40 @@ fn test_redundant_conf_change_by_snapshot() {
     assert!(rx.try_recv().is_err());
 
     fail::remove("apply_on_conf_change_3_1");
+}
+
+#[test]
+fn test_handle_conf_change_when_apply_fsm_resume_pending_state() {
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    cluster.must_put(b"k", b"v");
+
+    let region = pd_client.get_region(b"k").unwrap();
+
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+
+    let yield_apply_conf_change_3_fp = "yield_apply_conf_change_3";
+    fail::cfg(yield_apply_conf_change_3_fp, "return()").unwrap();
+
+    // Make store 1 and 3 become quorum
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
+    // Wait for peer fsm to send committed entries to apply fsm
+    sleep_ms(100);
+    fail::remove(yield_apply_conf_change_3_fp);
+    cluster.clear_send_filters();
+    // Add new peer 4 to store 3
+    pd_client.must_add_peer(r1, new_peer(3, 4));
+
+    for i in 0..10 {
+        cluster.must_put(format!("kk{}", i).as_bytes(), b"v1");
+    }
 }

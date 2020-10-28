@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use tikv::storage::kv::RocksSnapshot;
 use tikv::storage::txn::{FixtureStore, SnapshotStore, Store};
 
@@ -7,7 +8,7 @@ use tikv::storage::txn::{FixtureStore, SnapshotStore, Store};
 pub type MemStore = FixtureStore;
 
 /// `RocksStore` is a store provider that operates over a disk-based RocksDB storage.
-pub type RocksStore = SnapshotStore<RocksSnapshot>;
+pub type RocksStore = SnapshotStore<Arc<RocksSnapshot>>;
 
 pub trait StoreDescriber {
     /// Describes a store for Criterion to output.

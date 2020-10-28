@@ -7,17 +7,9 @@ use std::path::Path;
 impl ImportExt for PanicEngine {
     type IngestExternalFileOptions = PanicIngestExternalFileOptions;
 
-    fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
-        &self,
-        path: P,
-        clone: Q,
-    ) -> Result<()> {
-        panic!()
-    }
-
     fn ingest_external_file_cf(
         &self,
-        cf: &Self::CFHandle,
+        cf: &str,
         opts: &Self::IngestExternalFileOptions,
         files: &[&str],
     ) -> Result<()> {
@@ -26,7 +18,7 @@ impl ImportExt for PanicEngine {
 
     fn validate_sst_for_ingestion<P: AsRef<Path>>(
         &self,
-        cf: &Self::CFHandle,
+        cf: &str,
         path: P,
         expected_size: u64,
         expected_checksum: u32,

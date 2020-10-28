@@ -1,14 +1,14 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
+use std::{borrow::Cow, cmp::Ordering};
 
-use engine::CF_DEFAULT;
-use kvproto::kvrpcpb::IsolationLevel;
+use engine_traits::CF_DEFAULT;
+use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::Result;
+use crate::storage::mvcc::{NewerTsCheckState, Result};
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
 use crate::storage::{Cursor, Snapshot, Statistics};
 
@@ -115,6 +115,7 @@ pub struct ForwardScanner<S: Snapshot, P: ScanPolicy<S>> {
     is_started: bool,
     statistics: Statistics,
     scan_policy: P,
+    met_newer_ts_data: NewerTsCheckState,
 }
 
 impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
@@ -131,6 +132,11 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             default: default_cursor,
         };
         ForwardScanner {
+            met_newer_ts_data: if cfg.check_has_newer_ts_data {
+                NewerTsCheckState::NotMetYet
+            } else {
+                NewerTsCheckState::Unknown
+            },
             cfg,
             cursors,
             statistics: Statistics::default(),
@@ -141,7 +147,14 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
 
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
-        std::mem::replace(&mut self.statistics, Statistics::default())
+        std::mem::take(&mut self.statistics)
+    }
+
+    /// Whether we met newer ts data.
+    /// The result is always `Unknown` if `check_has_newer_ts_data` is not set.
+    #[inline]
+    pub fn met_newer_ts_data(&self) -> NewerTsCheckState {
+        self.met_newer_ts_data
     }
 
     /// Get the next key-value pair, in forward order.
@@ -239,6 +252,9 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             };
 
             if has_lock {
+                if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                    self.met_newer_ts_data = NewerTsCheckState::Met;
+                }
                 current_user_key = match self.scan_policy.handle_lock(
                     current_user_key,
                     &mut self.cfg,
@@ -258,6 +274,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                         &mut self.cursors,
                         &mut self.statistics,
                     )? {
+                        self.statistics.write.processed_keys += 1;
                         return Ok(Some(output));
                     }
                 }
@@ -296,6 +313,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     // Founded, don't need to seek again.
                     needs_seek = false;
                     break;
+                } else if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                    self.met_newer_ts_data = NewerTsCheckState::Met;
                 }
             }
         }
@@ -346,7 +365,6 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     ) -> Result<HandleRes<Self::Output>> {
         let value: Option<Value> = loop {
             let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
-            statistics.write.processed += 1;
 
             match write.write_type {
                 WriteType::Put => {
@@ -447,7 +465,6 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
             }
             let write_value = cursors.write.value(&mut statistics.write);
             let write = WriteRef::parse(write_value)?;
-            statistics.write.processed += 1;
 
             match write.write_type {
                 WriteType::Put => {
@@ -470,6 +487,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                     break Some(TxnEntry::Commit {
                         default: entry_default,
                         write: entry_write,
+                        old_value: None,
                     });
                 }
                 WriteType::Delete => {
@@ -477,6 +495,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                         break Some(TxnEntry::Commit {
                             default: (Vec::new(), Vec::new()),
                             write: (write_key.to_vec(), write_value.to_vec()),
+                            old_value: None,
                         });
                     } else {
                         break None;
@@ -518,8 +537,13 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
                 let lock_value = cursors.lock.value(&mut statistics.lock);
                 Lock::parse(lock_value)?
             };
-            lock.check_ts_conflict(&current_user_key, cfg.ts, &cfg.bypass_locks)
-                .map(|_| ())
+            Lock::check_ts_conflict(
+                Cow::Owned(lock),
+                &current_user_key,
+                cfg.ts,
+                &cfg.bypass_locks,
+            )
+            .map(|_| ())
         }
         IsolationLevel::Rc => Ok(()),
     };
@@ -527,6 +551,7 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
     // Even if there is a lock error, we still need to step the cursor for future
     // calls.
     if result.is_err() {
+        statistics.lock.processed_keys += 1;
         cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
     }
     result
@@ -540,11 +565,12 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
 /// (or locks' `start_ts`s) in range (`from_ts`, `cfg.ts`].
 pub struct DeltaEntryPolicy {
     from_ts: TimeStamp,
+    extra_op: ExtraOp,
 }
 
 impl DeltaEntryPolicy {
-    pub fn new(from_ts: TimeStamp) -> Self {
-        Self { from_ts }
+    pub fn new(from_ts: TimeStamp, extra_op: ExtraOp) -> Self {
+        Self { from_ts, extra_op }
     }
 }
 
@@ -559,8 +585,8 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
         // TODO: Skip pessimistic locks.
-        let lock_value = cursors.lock.value(&mut statistics.lock);
-        let lock = Lock::parse(lock_value)?;
+        let lock_value = cursors.lock.value(&mut statistics.lock).to_owned();
+        let lock = Lock::parse(&lock_value)?;
         let result = if lock.ts > cfg.ts {
             Ok(HandleRes::Skip(current_user_key))
         } else {
@@ -580,10 +606,26 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             } else {
                 Ok((vec![], vec![]))
             };
+            let old_value = if self.extra_op == ExtraOp::ReadOldValue
+                && (lock.lock_type == LockType::Put || lock.lock_type == LockType::Delete)
+            {
+                // When meet a lock, the write cursor must indicate the same user key.
+                // Seek for the last valid committed here.
+                super::seek_for_valid_value(
+                    &mut cursors.write,
+                    cursors.default.as_mut().unwrap(),
+                    &current_user_key,
+                    std::cmp::max(lock.ts, lock.for_update_ts),
+                    statistics,
+                )?
+            } else {
+                None
+            };
             load_default_res.map(|default| {
                 HandleRes::Return(TxnEntry::Prewrite {
                     default,
-                    lock: (current_user_key.into_encoded(), lock_value.to_owned()),
+                    lock: (current_user_key.into_encoded(), lock_value),
+                    old_value,
                 })
             })
         };
@@ -612,16 +654,16 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                 return Ok(HandleRes::Skip(current_user_key));
             }
 
-            let (write_type, start_ts, has_short_value) = {
+            let (write_type, start_ts, short_value) = {
                 let write_ref = WriteRef::parse(write_value)?;
                 (
                     write_ref.write_type,
                     write_ref.start_ts,
-                    write_ref.short_value.is_some(),
+                    write_ref.short_value,
                 )
             };
 
-            if write_type == WriteType::Rollback {
+            if write_type == WriteType::Rollback || write_type == WriteType::Lock {
                 // Skip it and try the next record.
                 cursors.write.next(&mut statistics.write);
                 if !cursors.write.valid()? {
@@ -637,7 +679,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                 continue;
             }
 
-            let default = if write_type == WriteType::Put && !has_short_value {
+            let default = if write_type == WriteType::Put && short_value.is_none() {
                 let default_cursor = cursors.default.as_mut().unwrap();
                 let value = super::near_load_data_by_write(
                     default_cursor,
@@ -651,15 +693,33 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                 (vec![], vec![])
             };
 
+            let write = (
+                cursors.write.key(&mut statistics.write).to_owned(),
+                cursors.write.value(&mut statistics.write).to_owned(),
+            );
+            // Move to the next write record early for getting the old value.
+            cursors.write.next(&mut statistics.write);
+
+            let old_value = if self.extra_op == ExtraOp::ReadOldValue
+                && (write_type == WriteType::Put || write_type == WriteType::Delete)
+            {
+                super::seek_for_valid_value(
+                    &mut cursors.write,
+                    cursors.default.as_mut().unwrap(),
+                    &current_user_key,
+                    commit_ts,
+                    statistics,
+                )?
+            } else {
+                None
+            };
+
             let res = Ok(HandleRes::Return(TxnEntry::Commit {
                 default,
-                write: (
-                    cursors.write.key(&mut statistics.write).to_owned(),
-                    cursors.write.value(&mut statistics.write).to_owned(),
-                ),
+                write,
+                old_value,
             }));
 
-            cursors.write.next(&mut statistics.write);
             return res;
         }
     }
@@ -689,7 +749,7 @@ where
         Ok(self.read_next()?)
     }
     fn take_statistics(&mut self) -> Statistics {
-        std::mem::replace(&mut self.statistics, Statistics::default())
+        std::mem::take(&mut self.statistics)
     }
 }
 
@@ -705,6 +765,7 @@ pub mod test_util {
         pub start_ts: TimeStamp,
         pub commit_ts: TimeStamp,
         pub for_update_ts: TimeStamp,
+        pub old_value: Option<Vec<u8>>,
     }
 
     impl EntryBuilder {
@@ -732,6 +793,10 @@ pub mod test_util {
             self.for_update_ts = for_update_ts;
             self
         }
+        pub fn old_value(&mut self, old_value: &[u8]) -> &mut Self {
+            self.old_value = Some(old_value.to_owned());
+            self
+        }
         pub fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
             let write_key = Key::from_raw(&self.key).append_ts(self.commit_ts);
             let (key, value, short) = if is_short_value {
@@ -754,6 +819,7 @@ pub mod test_util {
             TxnEntry::Commit {
                 default: (key, value),
                 write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
+                old_value: self.old_value.clone(),
             }
         }
         pub fn build_prewrite(&self, lt: LockType, is_short_value: bool) -> TxnEntry {
@@ -788,6 +854,7 @@ pub mod test_util {
             TxnEntry::Prewrite {
                 default: (key, value),
                 lock: (lock_key.into_encoded(), lock_value.to_bytes()),
+                old_value: self.old_value.clone(),
             }
         }
         pub fn build_rollback(&self) -> TxnEntry {
@@ -797,6 +864,7 @@ pub mod test_util {
             TxnEntry::Commit {
                 default: (vec![], vec![]),
                 write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
+                old_value: None,
             }
         }
     }
@@ -810,6 +878,7 @@ mod latest_kv_tests {
     use crate::storage::mvcc::tests::*;
     use crate::storage::Scanner;
 
+    use crate::storage::txn::tests::*;
     use kvproto::kvrpcpb::Context;
 
     /// Check whether everything works as usual when `ForwardKvScanner::get()` goes out of bound.
@@ -1095,8 +1164,8 @@ mod latest_entry_tests {
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::mvcc::tests::*;
+    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use crate::storage::{Engine, TestEngineBuilder};
-
     use kvproto::kvrpcpb::Context;
 
     use super::test_util::EntryBuilder;
@@ -1447,10 +1516,10 @@ mod latest_entry_tests {
 
 #[cfg(test)]
 mod delta_entry_tests {
-
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::mvcc::tests::*;
+    use crate::storage::txn::tests::*;
     use crate::storage::{Engine, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
@@ -1475,7 +1544,7 @@ mod delta_entry_tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
-            .build_delta_scanner(0.into())
+            .build_delta_scanner(0.into(), ExtraOp::Noop)
             .unwrap();
 
         // Initial position: 1 seek_to_first:
@@ -1534,7 +1603,7 @@ mod delta_entry_tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
-            .build_delta_scanner(0.into())
+            .build_delta_scanner(0.into(), ExtraOp::Noop)
             .unwrap();
 
         // The following illustration comments assume that SEEK_BOUND = 4.
@@ -1605,7 +1674,7 @@ mod delta_entry_tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
-            .build_delta_scanner(8.into())
+            .build_delta_scanner(8.into(), ExtraOp::Noop)
             .unwrap();
 
         // The following illustration comments assume that SEEK_BOUND = 4.
@@ -1680,7 +1749,7 @@ mod delta_entry_tests {
         // Test both bound specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
-            .build_delta_scanner(4.into())
+            .build_delta_scanner(4.into(), ExtraOp::Noop)
             .unwrap();
 
         let entry = |key, ts| {
@@ -1699,7 +1768,7 @@ mod delta_entry_tests {
         // Test left bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(None, Some(Key::from_raw(&[3u8])))
-            .build_delta_scanner(4.into())
+            .build_delta_scanner(4.into(), ExtraOp::Noop)
             .unwrap();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[1u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[2u8], 7.into())));
@@ -1708,7 +1777,7 @@ mod delta_entry_tests {
         // Test right bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(Some(Key::from_raw(&[5u8])), None)
-            .build_delta_scanner(4.into())
+            .build_delta_scanner(4.into(), ExtraOp::Noop)
             .unwrap();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[5u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[6u8], 7.into())));
@@ -1717,7 +1786,7 @@ mod delta_entry_tests {
         // Test both bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
-            .build_delta_scanner(4.into())
+            .build_delta_scanner(4.into(), ExtraOp::Noop)
             .unwrap();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[1u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[2u8], 7.into())));
@@ -1832,7 +1901,7 @@ mod delta_entry_tests {
                         }
 
                         // Rollbacks are ignored.
-                        if *write_type == WriteType::Rollback {
+                        if *write_type == WriteType::Rollback || *write_type == WriteType::Lock {
                             continue;
                         }
 
@@ -1943,7 +2012,7 @@ mod delta_entry_tests {
             .hint_min_ts(Some(from_ts.into()))
             .hint_max_ts(Some(to_ts.into()))
             .range(from_key, to_key)
-            .build_delta_scanner(from_ts.into())
+            .build_delta_scanner(from_ts.into(), ExtraOp::Noop)
             .unwrap();
 
             let mut actual = vec![];
@@ -1955,7 +2024,7 @@ mod delta_entry_tests {
                 assert_eq!(
                     actual[i], expected[i],
                     "item {} not match: expected {:?}, but got {:?}",
-                    i, actual[i], expected[i]
+                    i, &expected[i], &actual[i]
                 );
             }
         };
@@ -1972,5 +2041,107 @@ mod delta_entry_tests {
         check(b"", b"a", 80, 90);
         check(b"h", b"", 24, u64::max_value());
         check(b"c", b"d", 0, u64::max_value());
+    }
+
+    #[test]
+    fn test_output_old_value() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Generate put for [a] at 1.
+        must_prewrite_put(&engine, b"a", b"a_1", b"a", 1);
+        must_commit(&engine, b"a", 1, 1);
+
+        // Generate put for [a] at 3.
+        must_prewrite_put(&engine, b"a", b"a_3", b"a", 3);
+        must_commit(&engine, b"a", 3, 3);
+
+        // Generate delete for [a] at 5.
+        must_prewrite_delete(&engine, b"a", b"a", 5);
+
+        // Generate put for [b] at 2.
+        must_prewrite_put(&engine, b"b", b"b_2", b"b", 2);
+        must_commit(&engine, b"b", 2, 2);
+
+        // Generate rollbacks for [b] at 6, 7, 8.
+        for ts in 6..9 {
+            must_rollback(&engine, b"b", ts);
+        }
+
+        // Generate delete for [b] at 10.
+        must_prewrite_delete(&engine, b"b", b"b", 10);
+        must_commit(&engine, b"b", 10, 10);
+
+        // Generate put for [b] at 15.
+        must_acquire_pessimistic_lock(&engine, b"b", b"b", 9, 15);
+        must_pessimistic_prewrite_put(&engine, b"b", b"b_15", b"b", 9, 15, true);
+
+        let entry_a_1 = EntryBuilder::default()
+            .key(b"a")
+            .value(b"a_1")
+            .start_ts(1.into())
+            .commit_ts(1.into())
+            .build_commit(WriteType::Put, true);
+        let entry_a_3 = EntryBuilder::default()
+            .key(b"a")
+            .value(b"a_3")
+            .start_ts(3.into())
+            .commit_ts(3.into())
+            .old_value(b"a_1")
+            .build_commit(WriteType::Put, true);
+        let entry_a_5 = EntryBuilder::default()
+            .key(b"a")
+            .start_ts(5.into())
+            .primary(b"a")
+            .old_value(b"a_3")
+            .build_prewrite(LockType::Delete, true);
+        let entry_b_2 = EntryBuilder::default()
+            .key(b"b")
+            .value(b"b_2")
+            .start_ts(2.into())
+            .commit_ts(2.into())
+            .build_commit(WriteType::Put, true);
+        let entry_b_10 = EntryBuilder::default()
+            .key(b"b")
+            .start_ts(10.into())
+            .commit_ts(10.into())
+            .old_value(b"b_2")
+            .build_commit(WriteType::Delete, true);
+        let entry_b_15 = EntryBuilder::default()
+            .key(b"b")
+            .value(b"b_15")
+            .primary(b"b")
+            .start_ts(9.into())
+            .for_update_ts(15.into())
+            .build_prewrite(LockType::Put, true);
+
+        let check = |after_ts: u64, expected: Vec<&TxnEntry>| {
+            let snapshot = engine.snapshot(&Context::default()).unwrap();
+            let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max(), false)
+                .range(None, None)
+                .build_delta_scanner(after_ts.into(), ExtraOp::ReadOldValue)
+                .unwrap();
+            for entry in expected {
+                assert_eq!(scanner.next_entry().unwrap().as_ref(), Some(entry));
+            }
+            let last = scanner.next_entry().unwrap();
+            assert!(last.is_none(), "{:?}", last);
+        };
+
+        // Scanning entries in (10, max] should get all prewrites
+        check(10, vec![&entry_a_5, &entry_b_15]);
+        // Scanning entries include delete in (7, max] should get a_5, b_10 and b_15
+        check(7, vec![&entry_a_5, &entry_b_15, &entry_b_10]);
+        // Scanning entries in (0, max] should get a_1, a_3, a_5, b_2, b_10, and b_15
+        check(
+            0,
+            vec![
+                &entry_a_5,
+                &entry_a_3,
+                &entry_a_1,
+                &entry_b_15,
+                &entry_b_10,
+                &entry_b_2,
+            ],
+        );
     }
 }

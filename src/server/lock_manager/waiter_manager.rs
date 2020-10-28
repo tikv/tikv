@@ -14,6 +14,7 @@ use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -21,13 +22,18 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use futures::{Async, Future, Poll};
+use futures::compat::Compat01As03;
+use futures::compat::Future01CompatExt;
+use futures::future::Future;
+use futures::task::{Context, Poll};
 use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
-use tokio_core::reactor::Handle;
+use tikv_util::config::ReadableDuration;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tokio::task::spawn_local;
 
 struct DelayInner {
-    timer: tokio_timer::Delay,
+    timer: Compat01As03<tokio_timer::Delay>,
     cancelled: bool,
 }
 
@@ -47,7 +53,7 @@ impl Delay {
     /// Create a new `Delay` instance that elapses at `deadline`.
     fn new(deadline: Instant) -> Self {
         let inner = DelayInner {
-            timer: tokio_timer::Delay::new(deadline),
+            timer: GLOBAL_TIMER_HANDLE.delay(deadline).compat(),
             cancelled: false,
         };
         Self {
@@ -59,7 +65,7 @@ impl Delay {
     /// Resets the instance to an earlier deadline.
     fn reset(&self, deadline: Instant) {
         if deadline < self.deadline {
-            self.inner.borrow_mut().timer.reset(deadline);
+            self.inner.borrow_mut().timer.get_mut().reset(deadline);
         }
     }
 
@@ -75,18 +81,15 @@ impl Delay {
 
 impl Future for Delay {
     // Whether the instance is triggered normally(true) or cancelled(false).
-    type Item = bool;
-    type Error = tokio_timer::Error;
+    type Output = bool;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
         if self.is_cancelled() {
-            return Ok(Async::Ready(false));
+            return Poll::Ready(false);
         }
-        self.inner
-            .borrow_mut()
-            .timer
-            .poll()
-            .map(|ready| ready.map(|_| true))
+        Pin::new(&mut self.inner.borrow_mut().timer)
+            .poll(cx)
+            .map(|_| true)
     }
 }
 
@@ -117,11 +120,11 @@ pub enum Task {
         deadlock_key_hash: u64,
     },
     ChangeConfig {
-        timeout: Option<u64>,
-        delay: Option<u64>,
+        timeout: Option<ReadableDuration>,
+        delay: Option<ReadableDuration>,
     },
     #[cfg(any(test, feature = "testexport"))]
-    Validate(Box<dyn FnOnce(u64, u64) + Send>),
+    Validate(Box<dyn FnOnce(ReadableDuration, ReadableDuration) + Send>),
 }
 
 /// Debug for task.
@@ -191,20 +194,16 @@ impl Waiter {
     }
 
     /// The `F` will be invoked if the `Waiter` times out normally.
-    fn on_timeout<F: FnOnce()>(&self, f: F) -> impl Future<Item = (), Error = ()> {
+    fn on_timeout<F: FnOnce()>(&self, f: F) -> impl Future<Output = ()> {
         let timer = self.delay.clone();
-        timer
-            .map_err(|e| warn!("waiter delay timer errored"; "err" => ?e))
-            .then(move |res| {
-                match res {
-                    // The timer is cancelled. Don't call timeout handler.
-                    Ok(false) => (),
-                    // Timer times out or error occurs.
-                    // It should call timeout handler to prevent starvation.
-                    _ => f(),
-                };
-                Ok(())
-            })
+        async move {
+            if timer.await {
+                // Timer times out or error occurs.
+                // It should call timeout handler to prevent starvation.
+                f();
+            }
+            // The timer is cancelled. Don't call timeout handler.
+        }
     }
 
     fn reset_timeout(&self, deadline: Instant) {
@@ -252,9 +251,9 @@ impl Waiter {
     /// Extracts key and primary key from `ProcessResult`.
     fn extract_key_info(&mut self) -> (Vec<u8>, Vec<u8>) {
         match &mut self.pr {
-            ProcessResult::MultiRes { results } => match results.pop().expect("mustn't be empty") {
+            ProcessResult::PessimisticLockRes { res } => match res {
                 Err(StorageError(box StorageErrorInner::Txn(TxnError(
-                    box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(mut info))),
+                    box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))),
                 )))) => (info.take_key(), info.take_primary_lock()),
                 _ => panic!("unexpected mvcc error"),
             },
@@ -432,12 +431,16 @@ impl Scheduler {
         });
     }
 
-    pub fn change_config(&self, timeout: Option<u64>, delay: Option<u64>) {
+    pub fn change_config(
+        &self,
+        timeout: Option<ReadableDuration>,
+        delay: Option<ReadableDuration>,
+    ) {
         self.notify_scheduler(Task::ChangeConfig { timeout, delay });
     }
 
     #[cfg(any(test, feature = "testexport"))]
-    pub fn validate(&self, f: Box<dyn FnOnce(u64, u64) + Send>) {
+    pub fn validate(&self, f: Box<dyn FnOnce(ReadableDuration, ReadableDuration) + Send>) {
         self.notify_scheduler(Task::Validate(f));
     }
 }
@@ -447,12 +450,12 @@ pub struct WaiterManager {
     wait_table: Rc<RefCell<WaitTable>>,
     detector_scheduler: DetectorScheduler,
     /// It is the default and maximum timeout of waiter.
-    default_wait_for_lock_timeout: u64,
+    default_wait_for_lock_timeout: ReadableDuration,
     /// If more than one waiters are waiting for the same lock, only the
     /// oldest one will be waked up immediately when the lock is released.
     /// Others will be waked up after `wake_up_delay_duration` to reduce
     /// contention and make the oldest one more likely acquires the lock.
-    wake_up_delay_duration: u64,
+    wake_up_delay_duration: ReadableDuration,
 }
 
 unsafe impl Send for WaiterManager {}
@@ -472,32 +475,25 @@ impl WaiterManager {
     }
 
     pub fn normalize_deadline(&self, timeout: WaitTimeout) -> Instant {
-        Instant::now() + timeout.into_duration_with_ceiling(self.default_wait_for_lock_timeout)
+        Instant::now()
+            + timeout.into_duration_with_ceiling(self.default_wait_for_lock_timeout.as_millis())
     }
 
-    fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter) {
+    fn handle_wait_for(&mut self, waiter: Waiter) {
         let (waiter_ts, lock) = (waiter.start_ts, waiter.lock);
         let wait_table = self.wait_table.clone();
         let detector_scheduler = self.detector_scheduler.clone();
         // Remove the waiter from wait table when it times out.
         let f = waiter.on_timeout(move || {
-            wait_table
-                .borrow_mut()
-                .remove_waiter(lock, waiter_ts)
-                .and_then(|waiter| {
-                    detector_scheduler.clean_up_wait_for(waiter.start_ts, waiter.lock);
-                    waiter.notify();
-                    Some(())
-                });
+            if let Some(waiter) = wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
+                detector_scheduler.clean_up_wait_for(waiter.start_ts, waiter.lock);
+                waiter.notify();
+            }
         });
-        self.wait_table
-            .borrow_mut()
-            .add_waiter(waiter)
-            .and_then(|old| {
-                old.notify();
-                Some(())
-            });
-        handle.spawn(f);
+        if let Some(old) = self.wait_table.borrow_mut().add_waiter(waiter) {
+            old.notify();
+        };
+        spawn_local(f);
     }
 
     fn handle_wake_up(&mut self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
@@ -505,7 +501,8 @@ impl WaiterManager {
         if wait_table.is_empty() {
             return;
         }
-        let new_timeout = Instant::now() + Duration::from_millis(self.wake_up_delay_duration);
+        let duration: Duration = self.wake_up_delay_duration.into();
+        let new_timeout = Instant::now() + duration;
         for hash in hashes {
             let lock = Lock { ts: lock_ts, hash };
             if let Some((mut oldest, others)) = wait_table.remove_oldest_waiter(lock) {
@@ -536,17 +533,17 @@ impl WaiterManager {
     }
 
     fn handle_deadlock(&mut self, waiter_ts: TimeStamp, lock: Lock, deadlock_key_hash: u64) {
-        self.wait_table
-            .borrow_mut()
-            .remove_waiter(lock, waiter_ts)
-            .and_then(|mut waiter| {
-                waiter.deadlock_with(deadlock_key_hash);
-                waiter.notify();
-                Some(())
-            });
+        if let Some(mut waiter) = self.wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
+            waiter.deadlock_with(deadlock_key_hash);
+            waiter.notify();
+        }
     }
 
-    fn handle_config_change(&mut self, timeout: Option<u64>, delay: Option<u64>) {
+    fn handle_config_change(
+        &mut self,
+        timeout: Option<ReadableDuration>,
+        delay: Option<ReadableDuration>,
+    ) {
         if let Some(timeout) = timeout {
             self.default_wait_for_lock_timeout = timeout;
         }
@@ -555,14 +552,14 @@ impl WaiterManager {
         }
         info!(
             "Waiter manager config changed";
-            "default_wait_for_lock_timeout" => self.default_wait_for_lock_timeout,
-            "wake_up_delay_duration" => self.wake_up_delay_duration
+            "default_wait_for_lock_timeout" => self.default_wait_for_lock_timeout.to_string(),
+            "wake_up_delay_duration" => self.wake_up_delay_duration.to_string()
         );
     }
 }
 
 impl FutureRunnable<Task> for WaiterManager {
-    fn run(&mut self, task: Task, handle: &Handle) {
+    fn run(&mut self, task: Task) {
         match task {
             Task::WaitFor {
                 start_ts,
@@ -572,11 +569,8 @@ impl FutureRunnable<Task> for WaiterManager {
                 timeout,
             } => {
                 let waiter = Waiter::new(start_ts, cb, pr, lock, self.normalize_deadline(timeout));
-                self.handle_wait_for(handle, waiter);
-                TASK_COUNTER_METRICS.with(|m| {
-                    m.wait_for.inc();
-                    m.may_flush_all()
-                });
+                self.handle_wait_for(waiter);
+                TASK_COUNTER_METRICS.wait_for.inc();
             }
             Task::WakeUp {
                 lock_ts,
@@ -584,17 +578,11 @@ impl FutureRunnable<Task> for WaiterManager {
                 commit_ts,
             } => {
                 self.handle_wake_up(lock_ts, hashes, commit_ts);
-                TASK_COUNTER_METRICS.with(|m| {
-                    m.wake_up.inc();
-                    m.may_flush_all()
-                });
+                TASK_COUNTER_METRICS.wake_up.inc();
             }
             Task::Dump { cb } => {
                 self.handle_dump(cb);
-                TASK_COUNTER_METRICS.with(|m| {
-                    m.dump.inc();
-                    m.may_flush_all()
-                });
+                TASK_COUNTER_METRICS.dump.inc();
             }
             Task::Deadlock {
                 start_ts,
@@ -616,14 +604,18 @@ impl FutureRunnable<Task> for WaiterManager {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::storage::PessimisticLockRes;
     use tikv_util::future::paired_future_callback;
     use tikv_util::worker::FutureWorker;
 
     use std::sync::mpsc;
+    use std::time::Duration;
 
+    use futures::executor::block_on;
+    use futures::future::FutureExt;
     use kvproto::kvrpcpb::LockInfo;
     use rand::prelude::*;
-    use tokio_core::reactor::Core;
+    use tikv_util::config::ReadableDuration;
 
     fn dummy_waiter(start_ts: TimeStamp, lock_ts: TimeStamp, hash: u64) -> Waiter {
         Waiter {
@@ -649,13 +641,10 @@ pub mod tests {
 
     #[test]
     fn test_delay() {
-        // tokio_timer can only run with tokio executor.
-        let mut core = Core::new().unwrap();
         let delay = Delay::new(Instant::now() + Duration::from_millis(100));
         assert_elapsed(
             || {
-                core.run(delay.map(|not_cancelled| assert!(not_cancelled)))
-                    .unwrap()
+                block_on(delay.map(|not_cancelled| assert!(not_cancelled)));
             },
             50,
             200,
@@ -667,8 +656,7 @@ pub mod tests {
         delay_clone.reset(Instant::now() + Duration::from_millis(50));
         assert_elapsed(
             || {
-                core.run(delay.map(|not_cancelled| assert!(not_cancelled)))
-                    .unwrap()
+                block_on(delay.map(|not_cancelled| assert!(not_cancelled)));
             },
             20,
             100,
@@ -680,8 +668,7 @@ pub mod tests {
         delay_clone.reset(Instant::now() + Duration::from_millis(300));
         assert_elapsed(
             || {
-                core.run(delay.map(|not_cancelled| assert!(not_cancelled)))
-                    .unwrap()
+                block_on(delay.map(|not_cancelled| assert!(not_cancelled)));
             },
             50,
             200,
@@ -693,8 +680,7 @@ pub mod tests {
         delay_clone.cancel();
         assert_elapsed(
             || {
-                core.run(delay.map(|not_cancelled| assert!(!not_cancelled)))
-                    .unwrap()
+                block_on(delay.map(|not_cancelled| assert!(!not_cancelled)));
             },
             0,
             200,
@@ -705,7 +691,9 @@ pub mod tests {
     pub(crate) type WaiterCtx = (
         Waiter,
         LockInfo,
-        tokio_sync::oneshot::Receiver<Result<Vec<Result<(), StorageError>>, StorageError>>,
+        futures::channel::oneshot::Receiver<
+            Result<Result<PessimisticLockRes, StorageError>, StorageError>,
+        >,
     );
 
     pub(crate) fn new_test_waiter(
@@ -721,10 +709,10 @@ pub mod tests {
         info.set_primary_lock(primary);
         info.set_lock_ttl(3000);
         info.set_txn_size(16);
-        let pr = ProcessResult::MultiRes {
-            results: vec![Err(StorageError::from(TxnError::from(MvccError::from(
+        let pr = ProcessResult::PessimisticLockRes {
+            res: Err(StorageError::from(TxnError::from(MvccError::from(
                 MvccErrorInner::KeyIsLocked(info.clone()),
-            ))))],
+            )))),
         };
         let lock = Lock {
             ts: lock_ts,
@@ -733,7 +721,7 @@ pub mod tests {
         let (cb, f) = paired_future_callback();
         let waiter = Waiter::new(
             waiter_ts,
-            StorageCallback::Booleans(cb),
+            StorageCallback::PessimisticLock(cb),
             pr,
             lock,
             Instant::now() + Duration::from_millis(3000),
@@ -823,7 +811,7 @@ pub mod tests {
     fn test_waiter_notify() {
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
         waiter.notify();
-        expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info);
+        expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info);
 
         // A waiter can conflict with other transactions more than once.
         for conflict_times in 1..=3 {
@@ -836,7 +824,12 @@ pub mod tests {
                 lock_info.set_lock_version(lock_ts.into_inner());
             }
             waiter.notify();
-            expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, conflict_commit_ts);
+            expect_write_conflict(
+                block_on(f).unwrap(),
+                waiter_ts,
+                lock_info,
+                conflict_commit_ts,
+            );
         }
 
         // Deadlock
@@ -844,7 +837,7 @@ pub mod tests {
         let (mut waiter, lock_info, f) = new_test_waiter(waiter_ts, 20.into(), 20);
         waiter.deadlock_with(111);
         waiter.notify();
-        expect_deadlock(f.wait().unwrap(), waiter_ts, lock_info, 111);
+        expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111);
 
         // Conflict then deadlock.
         let waiter_ts = TimeStamp::new(10);
@@ -852,19 +845,17 @@ pub mod tests {
         waiter.conflict_with(20.into(), 30.into());
         waiter.deadlock_with(111);
         waiter.notify();
-        expect_deadlock(f.wait().unwrap(), waiter_ts, lock_info, 111);
+        expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111);
     }
 
     #[test]
     fn test_waiter_on_timeout() {
-        let mut core = Core::new().unwrap();
-
         // The timeout handler should be invoked after timeout.
         let (waiter, _, _) = new_test_waiter(10.into(), 20.into(), 20);
         waiter.reset_timeout(Instant::now() + Duration::from_millis(100));
         let (tx, rx) = mpsc::sync_channel(1);
         let f = waiter.on_timeout(move || tx.send(1).unwrap());
-        assert_elapsed(|| core.run(f).unwrap(), 50, 200);
+        assert_elapsed(|| block_on(f), 50, 200);
         rx.try_recv().unwrap();
 
         // The timeout handler shouldn't be invoked after waiter has been notified.
@@ -873,7 +864,7 @@ pub mod tests {
         let (tx, rx) = mpsc::sync_channel(1);
         let f = waiter.on_timeout(move || tx.send(1).unwrap());
         waiter.notify();
-        assert_elapsed(|| core.run(f).unwrap(), 0, 200);
+        assert_elapsed(|| block_on(f), 0, 200);
         rx.try_recv().unwrap_err();
     }
 
@@ -1031,8 +1022,8 @@ pub mod tests {
         let detector_scheduler = DetectorScheduler::new(detect_worker.scheduler());
 
         let mut cfg = Config::default();
-        cfg.wait_for_lock_timeout = wait_for_lock_timeout;
-        cfg.wake_up_delay_duration = wake_up_delay_duration;
+        cfg.wait_for_lock_timeout = ReadableDuration::millis(wait_for_lock_timeout);
+        cfg.wake_up_delay_duration = ReadableDuration::millis(wake_up_delay_duration);
         let mut waiter_mgr_worker = FutureWorker::new("test-waiter-manager");
         let waiter_mgr_runner =
             WaiterManager::new(Arc::new(AtomicUsize::new(0)), detector_scheduler, &cfg);
@@ -1055,7 +1046,7 @@ pub mod tests {
             WaitTimeout::Millis(1000),
         );
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
+            || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
             900,
             1200,
         );
@@ -1070,7 +1061,7 @@ pub mod tests {
             WaitTimeout::Millis(100),
         );
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
+            || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
             50,
             300,
         );
@@ -1085,7 +1076,7 @@ pub mod tests {
             WaitTimeout::Millis(3000),
         );
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
+            || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
             900,
             1200,
         );
@@ -1119,7 +1110,7 @@ pub mod tests {
         scheduler.wake_up(lock_ts, lock_hashes, commit_ts);
         for (waiter_ts, lock_info, f) in waiters_info {
             assert_elapsed(
-                || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, commit_ts),
+                || expect_write_conflict(block_on(f).unwrap(), waiter_ts, lock_info, commit_ts),
                 0,
                 200,
             );
@@ -1152,7 +1143,7 @@ pub mod tests {
             scheduler.wake_up(lock.ts, vec![lock.hash], commit_ts);
             lock_info.set_lock_version(lock.ts.into_inner());
             assert_elapsed(
-                || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, commit_ts),
+                || expect_write_conflict(block_on(f).unwrap(), waiter_ts, lock_info, commit_ts),
                 0,
                 200,
             );
@@ -1166,7 +1157,14 @@ pub mod tests {
         // It conflicts with the last transaction.
         lock_info.set_lock_version(lock.ts.into_inner() - 1);
         assert_elapsed(
-            || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, *commit_ts.decr()),
+            || {
+                expect_write_conflict(
+                    block_on(f).unwrap(),
+                    waiter_ts,
+                    lock_info,
+                    *commit_ts.decr(),
+                )
+            },
             wake_up_delay_duration - 50,
             wake_up_delay_duration + 200,
         );
@@ -1198,7 +1196,7 @@ pub mod tests {
         std::thread::spawn(move || {
             // Waiters2's lifetime can't exceed it timeout.
             assert_elapsed(
-                || expect_write_conflict(f2.wait().unwrap(), 30.into(), lock_info2, 15.into()),
+                || expect_write_conflict(block_on(f2).unwrap(), 30.into(), lock_info2, 15.into()),
                 30,
                 100,
             );
@@ -1207,7 +1205,7 @@ pub mod tests {
         // It will increase waiter2's timeout to wake_up_delay_duration.
         scheduler.wake_up(lock.ts, vec![lock.hash], commit_ts);
         assert_elapsed(
-            || expect_write_conflict(f1.wait().unwrap(), 20.into(), lock_info1, commit_ts),
+            || expect_write_conflict(block_on(f1).unwrap(), 20.into(), lock_info1, commit_ts),
             0,
             200,
         );
@@ -1236,7 +1234,7 @@ pub mod tests {
         );
         scheduler.deadlock(waiter_ts, lock, 30);
         assert_elapsed(
-            || expect_deadlock(f.wait().unwrap(), waiter_ts, lock_info, 30),
+            || expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 30),
             0,
             200,
         );
@@ -1271,13 +1269,13 @@ pub mod tests {
         );
         // Should notify duplicated waiter immediately.
         assert_elapsed(
-            || expect_key_is_locked(f1.wait().unwrap().unwrap().pop().unwrap(), lock_info1),
+            || expect_key_is_locked(block_on(f1).unwrap().unwrap(), lock_info1),
             0,
             200,
         );
         // The new waiter will be wake up after timeout.
         assert_elapsed(
-            || expect_key_is_locked(f2.wait().unwrap().unwrap().pop().unwrap(), lock_info2),
+            || expect_key_is_locked(block_on(f2).unwrap().unwrap(), lock_info2),
             900,
             1200,
         );
@@ -1300,7 +1298,7 @@ pub mod tests {
             .add_waiter(dummy_waiter(10.into(), 20.into(), 10000));
         let hashes: Vec<u64> = (0..1000).collect();
         b.iter(|| {
-            test::black_box(|| waiter_mgr.handle_wake_up(20.into(), hashes.clone(), 30.into()));
+            waiter_mgr.handle_wake_up(20.into(), hashes.clone(), 30.into());
         });
     }
 }

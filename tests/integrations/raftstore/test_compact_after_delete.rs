@@ -1,9 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::util::get_cf_handle;
-use engine::rocks::Range;
-use engine::CF_WRITE;
+use engine_rocks::raw::Range;
+use engine_rocks::util::get_cf_handle;
+use engine_traits::{MiscExt, CF_WRITE};
 use keys::{data_key, DATA_MAX_KEY};
+use std::sync::mpsc;
+use std::sync::Mutex;
+use std::time::Duration;
 use test_raftstore::*;
 use tikv::storage::mvcc::{TimeStamp, Write, WriteType};
 use tikv_util::config::*;
@@ -40,27 +43,36 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_put_cf(CF_WRITE, &k, &v);
     }
     for engines in cluster.engines.values() {
-        let cf = get_cf_handle(&engines.kv, CF_WRITE).unwrap();
-        engines.kv.flush_cf(cf, true).unwrap();
+        engines.kv.flush_cf(CF_WRITE, true).unwrap();
     }
-
+    let (sender, receiver) = mpsc::channel();
+    let sync_sender = Mutex::new(sender);
+    fail::cfg_callback(
+        "raftstore::compact::CheckAndCompact:AfterCompact",
+        move || {
+            let sender = sync_sender.lock().unwrap();
+            sender.send(true).unwrap();
+        },
+    )
+    .unwrap();
     for i in 0..1000 {
         let k = format!("k{}", i);
         let k = gen_delete_k(k.as_bytes(), 2.into());
         cluster.must_delete_cf(CF_WRITE, &k);
     }
     for engines in cluster.engines.values() {
-        let cf = get_cf_handle(&engines.kv, CF_WRITE).unwrap();
-        engines.kv.flush_cf(cf, true).unwrap();
+        let cf = get_cf_handle(&engines.kv.as_inner(), CF_WRITE).unwrap();
+        engines.kv.as_inner().flush_cf(cf, true).unwrap();
     }
 
     // wait for compaction.
-    sleep_ms(300);
+    receiver.recv_timeout(Duration::from_millis(5000)).unwrap();
 
     for engines in cluster.engines.values() {
-        let cf_handle = get_cf_handle(&engines.kv, CF_WRITE).unwrap();
+        let cf_handle = get_cf_handle(&engines.kv.as_inner(), CF_WRITE).unwrap();
         let approximate_size = engines
             .kv
+            .as_inner()
             .get_approximate_sizes_cf(cf_handle, &[Range::new(b"", DATA_MAX_KEY)])[0];
         assert_eq!(approximate_size, 0);
     }

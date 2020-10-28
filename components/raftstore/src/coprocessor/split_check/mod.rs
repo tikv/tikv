@@ -5,7 +5,6 @@ mod keys;
 mod size;
 mod table;
 
-use engine::rocks::DB;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
@@ -22,14 +21,14 @@ pub use self::size::{
 };
 pub use self::table::TableCheckObserver;
 
-pub struct Host<'a> {
-    checkers: Vec<Box<dyn SplitChecker>>,
+pub struct Host<'a, E> {
+    checkers: Vec<Box<dyn SplitChecker<E>>>,
     auto_split: bool,
     cfg: &'a Config,
 }
 
-impl<'a> Host<'a> {
-    pub fn new(auto_split: bool, cfg: &'a Config) -> Host<'a> {
+impl<'a, E> Host<'a, E> {
+    pub fn new(auto_split: bool, cfg: &'a Config) -> Host<'a, E> {
         Host {
             auto_split,
             checkers: vec![],
@@ -79,7 +78,7 @@ impl<'a> Host<'a> {
         vec![]
     }
 
-    pub fn approximate_split_keys(&mut self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
+    pub fn approximate_split_keys(&mut self, region: &Region, engine: &E) -> Result<Vec<Vec<u8>>> {
         for checker in &mut self.checkers {
             let keys = box_try!(checker.approximate_split_keys(region, engine));
             if !keys.is_empty() {
@@ -90,7 +89,7 @@ impl<'a> Host<'a> {
     }
 
     #[inline]
-    pub fn add_checker(&mut self, checker: Box<dyn SplitChecker>) {
+    pub fn add_checker(&mut self, checker: Box<dyn SplitChecker<E>>) {
         self.checkers.push(checker);
     }
 }

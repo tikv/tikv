@@ -2,8 +2,8 @@
 
 use crate::engine::PanicEngine;
 use engine_traits::{
-    CfName, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result, SeekKey, SstExt,
-    SstReader, SstWriter, SstWriterBuilder,
+    CfName, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result, SeekKey,
+    SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder,
 };
 use std::path::PathBuf;
 
@@ -99,12 +99,19 @@ impl SstWriterBuilder<PanicEngine> for PanicSstWriterBuilder {
     fn set_db(self, db: &PanicEngine) -> Self {
         panic!()
     }
-    fn set_cf(self, cf: CfName) -> Self {
+    fn set_cf(self, cf: &str) -> Self {
         panic!()
     }
     fn set_in_memory(self, in_memory: bool) -> Self {
         panic!()
     }
+    fn set_compression_type(self, compression: Option<SstCompressionType>) -> Self {
+        panic!()
+    }
+    fn set_compression_level(self, level: i32) -> Self {
+        panic!()
+    }
+
     fn build(self, path: &str) -> Result<PanicSstWriter> {
         panic!()
     }

@@ -6,6 +6,7 @@ use super::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
 use super::compact::{Runner as CompactRunner, Task as CompactTask};
 
 use crate::store::StoreRouter;
+use engine_traits::KvEngine;
 use pd_client::PdClient;
 use tikv_util::worker::Runnable;
 
@@ -23,13 +24,25 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<C, S> {
-    compact: CompactRunner,
-    cleanup_sst: CleanupSSTRunner<C, S>,
+pub struct Runner<E, C, S>
+where
+    E: KvEngine,
+    S: StoreRouter<E>,
+{
+    compact: CompactRunner<E>,
+    cleanup_sst: CleanupSSTRunner<E, C, S>,
 }
 
-impl<C: PdClient, S: StoreRouter> Runner<C, S> {
-    pub fn new(compact: CompactRunner, cleanup_sst: CleanupSSTRunner<C, S>) -> Runner<C, S> {
+impl<E, C, S> Runner<E, C, S>
+where
+    E: KvEngine,
+    C: PdClient,
+    S: StoreRouter<E>,
+{
+    pub fn new(
+        compact: CompactRunner<E>,
+        cleanup_sst: CleanupSSTRunner<E, C, S>,
+    ) -> Runner<E, C, S> {
         Runner {
             compact,
             cleanup_sst,
@@ -37,7 +50,14 @@ impl<C: PdClient, S: StoreRouter> Runner<C, S> {
     }
 }
 
-impl<C: PdClient, S: StoreRouter> Runnable<Task> for Runner<C, S> {
+impl<E, C, S> Runnable for Runner<E, C, S>
+where
+    E: KvEngine,
+    C: PdClient,
+    S: StoreRouter<E>,
+{
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::Compact(t) => self.compact.run(t),

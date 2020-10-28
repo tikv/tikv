@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use fail;
 use test_raftstore::*;
 
 /// When a follower applies log slowly, leader should not transfer leader
@@ -8,8 +7,6 @@ use test_raftstore::*;
 /// requests.
 #[test]
 fn test_transfer_leader_slow_apply() {
-    let _guard = crate::setup();
-
     // 3 nodes cluster.
     let mut cluster = new_node_cluster(0, 3);
 

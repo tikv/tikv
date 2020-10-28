@@ -7,36 +7,35 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use engine::rocks;
-use engine::rocks::util::CFOptions;
-use engine::rocks::{
-    ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, Writable, WriteBatch, DB,
+use engine_rocks::raw::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
+use engine_rocks::raw_util::CFOptions;
+use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{
+    Engines, IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, ReadOptions, SeekKey,
+    WriteBatchExt,
 };
-use engine::Engines;
-use engine::IterOption;
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_rocks::RocksEngineIterator;
-use engine_traits::{Iterable, Iterator, Peekable, SeekKey};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
 
 use crate::storage::config::BlockCacheConfig;
 use tikv_util::escape;
+use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    Callback, CbContext, Cursor, Engine, Error, ErrorInner, Iterator as EngineIterator, Modify,
-    Result, ScanMode, Snapshot,
+    Callback, CbContext, Cursor, Engine, Error, ErrorInner, ExtCallback,
+    Iterator as EngineIterator, Modify, Result, ScanMode, Snapshot, WriteData,
 };
 
-pub use engine_rocks::RocksSyncSnapshot as RocksSnapshot;
+pub use engine_rocks::RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
-    Snapshot(Callback<RocksSnapshot>),
+    Snapshot(Callback<Arc<RocksSnapshot>>),
     Pause(Duration),
 }
 
@@ -50,16 +49,17 @@ impl Display for Task {
     }
 }
 
-struct Runner(Engines);
+struct Runner(Engines<BaseRocksEngine, BaseRocksEngine>);
 
-impl Runnable<Task> for Runner {
+impl Runnable for Runner {
+    type Task = Task;
+
     fn run(&mut self, t: Task) {
         match t {
-            Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
-            Task::Snapshot(cb) => cb((
-                CbContext::new(),
-                Ok(RocksSnapshot::new(Arc::clone(&self.0.kv))),
-            )),
+            Task::Write(modifies, cb) => {
+                cb((CbContext::new(), write_modifies(&self.0.kv, modifies)))
+            }
+            Task::Snapshot(cb) => cb((CbContext::new(), Ok(Arc::new(self.0.kv.snapshot())))),
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
@@ -88,7 +88,7 @@ impl Drop for RocksEngineCore {
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
-    engines: Engines,
+    engines: Engines<BaseRocksEngine, BaseRocksEngine>,
     not_leader: Arc<AtomicBool>,
 }
 
@@ -108,10 +108,16 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = Arc::new(rocks::util::new_engine(&path, None, cfs, cfs_opts)?);
+        let db = Arc::new(engine_rocks::raw_util::new_engine(
+            &path, None, cfs, cfs_opts,
+        )?);
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let engines = Engines::new(db.clone(), db, shared_block_cache);
+        let mut kv_engine = BaseRocksEngine::from_db(db.clone());
+        let mut raft_engine = BaseRocksEngine::from_db(db);
+        kv_engine.set_shared_block_cache(shared_block_cache);
+        raft_engine.set_shared_block_cache(shared_block_cache);
+        let engines = Engines::new(kv_engine, raft_engine);
         box_try!(worker.start(Runner(engines.clone())));
         Ok(RocksEngine {
             sched: worker.scheduler(),
@@ -129,8 +135,12 @@ impl RocksEngine {
         self.sched.schedule(Task::Pause(dur)).unwrap();
     }
 
-    pub fn get_rocksdb(&self) -> Arc<DB> {
-        Arc::clone(&self.engines.kv)
+    pub fn engines(&self) -> Engines<BaseRocksEngine, BaseRocksEngine> {
+        self.engines.clone()
+    }
+
+    pub fn get_rocksdb(&self) -> BaseRocksEngine {
+        self.engines.kv.clone()
     }
 
     pub fn stop(&self) {
@@ -192,20 +202,26 @@ impl TestEngineBuilder {
 
     /// Build a `RocksEngine`.
     pub fn build(self) -> Result<RocksEngine> {
+        let cfg_rocksdb = crate::config::DbConfig::default();
+        self.build_with_cfg(&cfg_rocksdb)
+    }
+
+    pub fn build_with_cfg(self, cfg_rocksdb: &crate::config::DbConfig) -> Result<RocksEngine> {
         let path = match self.path {
             None => TEMP_DIR.to_owned(),
             Some(p) => p.to_str().unwrap().to_owned(),
         };
         let cfs = self.cfs.unwrap_or_else(|| crate::storage::ALL_CFS.to_vec());
-        let cfg_rocksdb = crate::config::DbConfig::default();
         let cache = BlockCacheConfig::default().build_shared_cache();
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
-                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
-                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
-                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                CF_DEFAULT => {
+                    CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None))
+                }
+                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache, None)),
+                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache, None)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
@@ -213,8 +229,11 @@ impl TestEngineBuilder {
     }
 }
 
-fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
-    let wb = WriteBatch::default();
+/// Write modifications into a `BaseRocksEngine` instance.
+pub fn write_modifies(kv_engine: &BaseRocksEngine, modifies: Vec<Modify>) -> Result<()> {
+    fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
+
+    let mut wb = kv_engine.write_batch();
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => {
@@ -223,8 +242,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     wb.delete(k.as_encoded())
                 } else {
                     trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                    wb.delete_cf(handle, k.as_encoded())
+                    wb.delete_cf(cf, k.as_encoded())
                 }
             }
             Modify::Put(cf, k, v) => {
@@ -233,8 +251,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     wb.put(k.as_encoded(), &v)
                 } else {
                     trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                    wb.put_cf(handle, k.as_encoded(), &v)
+                    wb.put_cf(cf, k.as_encoded(), &v)
                 }
             }
             Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
@@ -246,8 +263,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     "notify_only" => notify_only,
                 );
                 if !notify_only {
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                    wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
+                    wb.delete_range_cf(cf, start_key.as_encoded(), end_key.as_encoded())
                 } else {
                     Ok(())
                 }
@@ -258,22 +274,59 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
             return Err(box_err!("{}", msg));
         }
     }
-    engine.write_kv(&wb)?;
+    kv_engine.write(&wb)?;
     Ok(())
 }
 
 impl Engine for RocksEngine {
-    type Snap = RocksSnapshot;
+    type Snap = Arc<RocksSnapshot>;
+    type Local = BaseRocksEngine;
 
-    fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
-        if modifies.is_empty() {
+    fn kv_engine(&self) -> BaseRocksEngine {
+        self.engines.kv.clone()
+    }
+
+    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
+        self.snapshot(&Context::default())
+    }
+
+    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
+        write_modifies(&self.engines.kv, modifies)
+    }
+
+    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
+        self.async_write_ext(ctx, batch, cb, None, None)
+    }
+
+    fn async_write_ext(
+        &self,
+        _: &Context,
+        batch: WriteData,
+        cb: Callback<()>,
+        proposed_cb: Option<ExtCallback>,
+        committed_cb: Option<ExtCallback>,
+    ) -> Result<()> {
+        fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
+
+        if batch.modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
-        box_try!(self.sched.schedule(Task::Write(modifies, cb)));
+        if let Some(cb) = proposed_cb {
+            cb();
+        }
+        if let Some(cb) = committed_cb {
+            cb();
+        }
+        box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
         Ok(())
     }
 
-    fn async_snapshot(&self, _: &Context, cb: Callback<Self::Snap>) -> Result<()> {
+    fn async_snapshot(
+        &self,
+        _: &Context,
+        _: Option<ThreadReadId>,
+        cb: Callback<Self::Snap>,
+    ) -> Result<()> {
         fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
             "snapshot failed"
         )));
@@ -293,7 +346,7 @@ impl Engine for RocksEngine {
     }
 }
 
-impl Snapshot for RocksSnapshot {
+impl Snapshot for Arc<RocksSnapshot> {
     type Iter = RocksEngineIterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
@@ -308,21 +361,29 @@ impl Snapshot for RocksSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>> {
+        trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
+        let v = box_try!(self.get_value_cf_opt(&opts, cf, key.as_encoded()));
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create iterator");
+        let prefix_seek = iter_opt.prefix_seek_used();
         let iter = self.iterator_opt(iter_opt)?;
-        Ok(Cursor::new(iter, mode))
+        Ok(Cursor::new(iter, mode, prefix_seek))
     }
 
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOptions,
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create cf iterator");
+        let prefix_seek = iter_opt.prefix_seek_used();
         let iter = self.iterator_cf_opt(cf, iter_opt)?;
-        Ok(Cursor::new(iter, mode))
+        Ok(Cursor::new(iter, mode, prefix_seek))
     }
 }
 
@@ -408,6 +469,7 @@ mod tests {
     use super::super::tests::*;
     use super::super::CfStatistics;
     use super::*;
+    use txn_types::TimeStamp;
 
     #[test]
     fn test_rocksdb() {
@@ -469,6 +531,28 @@ mod tests {
         test_perf_statistics(&engine);
     }
 
+    #[test]
+    fn test_max_skippable_internal_keys_error() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        must_put(&engine, b"foo", b"bar");
+        must_delete(&engine, b"foo");
+        must_put(&engine, b"foo1", b"bar1");
+        must_delete(&engine, b"foo1");
+        must_put(&engine, b"foo2", b"bar2");
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let iter_opt = IterOptions::default().set_max_skippable_internal_keys(1);
+        let mut iter = snapshot.iter(iter_opt, ScanMode::Forward).unwrap();
+
+        let mut statistics = CfStatistics::default();
+        let res = iter.seek(&Key::from_raw(b"foo"), &mut statistics);
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("Result incomplete: Too many internal keys skipped"));
+    }
+
     fn test_perf_statistics<E: Engine>(engine: &E) {
         must_put(engine, b"foo", b"bar1");
         must_put(engine, b"foo2", b"bar2");
@@ -483,7 +567,7 @@ mod tests {
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
-            .iter(IterOption::default(), ScanMode::Forward)
+            .iter(IterOptions::default(), ScanMode::Forward)
             .unwrap();
 
         let mut statistics = CfStatistics::default();
@@ -507,5 +591,110 @@ mod tests {
 
         iter.prev(&mut statistics);
         assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 3);
+    }
+
+    #[test]
+    fn test_prefix_seek_skip_tombstone() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        engine
+            .put_cf(
+                &Context::default(),
+                "write",
+                Key::from_raw(b"aoo").append_ts(TimeStamp::zero()),
+                b"ba".to_vec(),
+            )
+            .unwrap();
+        for key in &[
+            b"foo".to_vec(),
+            b"foo1".to_vec(),
+            b"foo2".to_vec(),
+            b"foo3".to_vec(),
+        ] {
+            engine
+                .put_cf(
+                    &Context::default(),
+                    "write",
+                    Key::from_raw(key).append_ts(TimeStamp::zero()),
+                    b"bar".to_vec(),
+                )
+                .unwrap();
+            engine
+                .delete_cf(
+                    &Context::default(),
+                    "write",
+                    Key::from_raw(key).append_ts(TimeStamp::zero()),
+                )
+                .unwrap();
+        }
+
+        engine
+            .put_cf(
+                &Context::default(),
+                "write",
+                Key::from_raw(b"foo4").append_ts(TimeStamp::zero()),
+                b"bar4".to_vec(),
+            )
+            .unwrap();
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let iter_opt = IterOptions::default()
+            .use_prefix_seek()
+            .set_prefix_same_as_start(true);
+        let mut iter = snapshot
+            .iter_cf("write", iter_opt, ScanMode::Forward)
+            .unwrap();
+
+        let mut statistics = CfStatistics::default();
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.seek(
+            &Key::from_raw(b"aoo").append_ts(TimeStamp::zero()),
+            &mut statistics,
+        )
+        .unwrap();
+        assert_eq!(iter.valid().unwrap(), true);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.seek(
+            &Key::from_raw(b"foo").append_ts(TimeStamp::zero()),
+            &mut statistics,
+        )
+        .unwrap();
+        assert_eq!(iter.valid().unwrap(), false);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 1);
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.seek(
+            &Key::from_raw(b"foo1").append_ts(TimeStamp::zero()),
+            &mut statistics,
+        )
+        .unwrap();
+        assert_eq!(iter.valid().unwrap(), false);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 1);
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.seek(
+            &Key::from_raw(b"foo2").append_ts(TimeStamp::zero()),
+            &mut statistics,
+        )
+        .unwrap();
+        assert_eq!(iter.valid().unwrap(), false);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 1);
+        let perf_statistics = PerfStatisticsInstant::new();
+        assert_eq!(
+            iter.seek(
+                &Key::from_raw(b"foo4").append_ts(TimeStamp::zero()),
+                &mut statistics
+            )
+            .unwrap(),
+            true
+        );
+        assert_eq!(iter.valid().unwrap(), true);
+        assert_eq!(
+            iter.key(&mut statistics),
+            Key::from_raw(b"foo4")
+                .append_ts(TimeStamp::zero())
+                .as_encoded()
+                .as_slice()
+        );
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
     }
 }

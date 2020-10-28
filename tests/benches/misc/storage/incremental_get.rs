@@ -1,13 +1,14 @@
 use test::{black_box, Bencher};
 
-use engine_rocks::RocksSyncSnapshot;
+use engine_rocks::RocksSnapshot;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
+use std::sync::Arc;
 use test_storage::SyncTestStorageBuilder;
-use tidb_query::codec::table;
+use tidb_query_datatype::codec::table;
 use tikv::storage::{Engine, SnapshotStore, Statistics, Store};
 use txn_types::{Key, Mutation};
 
-fn table_lookup_gen_data() -> (SnapshotStore<RocksSyncSnapshot>, Vec<Key>) {
+fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
     let store = SyncTestStorageBuilder::new().build().unwrap();
     let mut mutations = Vec::new();
     let mut keys = Vec::new();
@@ -28,7 +29,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<RocksSyncSnapshot>, Vec<Key>) {
     store.commit(Context::default(), keys, 1, 2).unwrap();
 
     let engine = store.get_engine();
-    let db = engine.get_rocksdb();
+    let db = engine.get_rocksdb().get_sync_db();
     db.compact_range_cf(db.cf_handle("write").unwrap(), None, None);
     db.compact_range_cf(db.cf_handle("default").unwrap(), None, None);
     db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
@@ -40,6 +41,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<RocksSyncSnapshot>, Vec<Key>) {
         IsolationLevel::Si,
         true,
         Default::default(),
+        false,
     );
 
     // Keys are given in order, and are far away from each other to simulate a normal table lookup

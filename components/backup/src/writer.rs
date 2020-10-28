@@ -3,9 +3,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::{CfName, CF_DEFAULT, CF_WRITE, DB};
+use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
-use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
+use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
+use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
 use futures_util::io::AllowStdIo;
 use kvproto::backup::File;
@@ -56,6 +57,7 @@ impl Writer {
         }
         Ok(())
     }
+
     fn update_raw_with(&mut self, key: &[u8], value: &[u8], need_checksum: bool) -> Result<()> {
         self.total_kvs += 1;
         self.total_bytes += (key.len() + value.len()) as u64;
@@ -99,6 +101,7 @@ impl Writer {
         file.set_total_kvs(self.total_kvs);
         file.set_total_bytes(self.total_bytes);
         file.set_cf(cf.to_owned());
+        file.set_size(sst_info.file_size());
         Ok(file)
     }
 
@@ -117,16 +120,26 @@ pub struct BackupWriter {
 
 impl BackupWriter {
     /// Create a new BackupWriter.
-    pub fn new(db: Arc<DB>, name: &str, limiter: Limiter) -> Result<BackupWriter> {
+    pub fn new(
+        db: Arc<DB>,
+        name: &str,
+        limiter: Limiter,
+        compression_type: Option<SstCompressionType>,
+        compression_level: i32,
+    ) -> Result<BackupWriter> {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
             .set_db(RocksEngine::from_ref(&db))
+            .set_compression_type(compression_type)
+            .set_compression_level(compression_level)
             .build(name)?;
         let write = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_WRITE)
             .set_db(RocksEngine::from_ref(&db))
+            .set_compression_type(compression_type)
+            .set_compression_level(compression_level)
             .build(name)?;
         let name = name.to_owned();
         Ok(BackupWriter {
@@ -145,7 +158,7 @@ impl BackupWriter {
         for e in entries {
             let mut value_in_default = false;
             match &e {
-                TxnEntry::Commit { default, write } => {
+                TxnEntry::Commit { default, write, .. } => {
                     // Default may be empty if value is small.
                     if !default.0.is_empty() {
                         self.default.write(&default.0, &default.1)?;
@@ -209,11 +222,20 @@ pub struct BackupRawKVWriter {
 
 impl BackupRawKVWriter {
     /// Create a new BackupRawKVWriter.
-    pub fn new(db: Arc<DB>, name: &str, cf: CfName, limiter: Limiter) -> Result<BackupRawKVWriter> {
+    pub fn new(
+        db: Arc<DB>,
+        name: &str,
+        cf: CfName,
+        limiter: Limiter,
+        compression_type: Option<SstCompressionType>,
+        compression_level: i32,
+    ) -> Result<BackupRawKVWriter> {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(cf)
             .set_db(RocksEngine::from_ref(&db))
+            .set_compression_type(compression_type)
+            .set_compression_level(compression_level)
             .build(name)?;
         Ok(BackupRawKVWriter {
             name: name.to_owned(),
@@ -267,28 +289,29 @@ impl BackupRawKVWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::Iterable;
+    use engine_traits::Iterable;
     use std::collections::BTreeMap;
     use std::f64::INFINITY;
     use std::path::Path;
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
 
-    type CfKvs<'a> = (engine::CfName, &'a [(&'a [u8], &'a [u8])]);
+    type CfKvs<'a> = (engine_traits::CfName, &'a [(&'a [u8], &'a [u8])]);
 
-    fn check_sst(ssts: &[(engine::CfName, &Path)], kvs: &[CfKvs]) {
+    fn check_sst(ssts: &[(engine_traits::CfName, &Path)], kvs: &[CfKvs]) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
-            .cfs(&[engine::CF_DEFAULT, engine::CF_WRITE])
+            .cfs(&[engine_traits::CF_DEFAULT, engine_traits::CF_WRITE])
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
 
-        let opt = engine::rocks::IngestExternalFileOptions::new();
+        let opt = engine_rocks::raw::IngestExternalFileOptions::new();
         for (cf, sst) in ssts {
-            let handle = db.cf_handle(cf).unwrap();
-            db.ingest_external_file_cf(handle, &opt, &[sst.to_str().unwrap()])
+            let handle = db.as_inner().cf_handle(cf).unwrap();
+            db.as_inner()
+                .ingest_external_file_cf(handle, &opt, &[sst.to_str().unwrap()])
                 .unwrap();
         }
         for (cf, kv) in kvs {
@@ -304,7 +327,7 @@ mod tests {
                 },
             )
             .unwrap();
-            assert_eq!(map.len(), kv.len(), "{:?} {:?}", map, kv);
+            assert_eq!(map.len(), kv.len(), "{} {:?} {:?}", cf, map, kv);
             for (k, v) in *kv {
                 assert_eq!(&v.to_vec(), map.get(&k.to_vec()).unwrap());
             }
@@ -316,7 +339,11 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
-            .cfs(&[engine::CF_DEFAULT, engine::CF_LOCK, engine::CF_WRITE])
+            .cfs(&[
+                engine_traits::CF_DEFAULT,
+                engine_traits::CF_LOCK,
+                engine_traits::CF_WRITE,
+            ])
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
@@ -324,17 +351,20 @@ mod tests {
         let storage = external_storage::create_storage(&backend).unwrap();
 
         // Test empty file.
-        let mut writer = BackupWriter::new(db.clone(), "foo", Limiter::new(INFINITY)).unwrap();
+        let mut writer =
+            BackupWriter::new(db.get_sync_db(), "foo", Limiter::new(INFINITY), None, 0).unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
-        let mut writer = BackupWriter::new(db.clone(), "foo1", Limiter::new(INFINITY)).unwrap();
+        let mut writer =
+            BackupWriter::new(db.get_sync_db(), "foo1", Limiter::new(INFINITY), None, 0).unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {
                     default: (vec![], vec![]),
                     write: (vec![b'a'], vec![b'a']),
+                    old_value: None,
                 }]
                 .into_iter(),
                 false,
@@ -343,18 +373,33 @@ mod tests {
         let files = writer.save(&storage).unwrap();
         assert_eq!(files.len(), 1);
         check_sst(
-            &[(engine::CF_WRITE, &temp.path().join(files[0].get_name()))],
-            &[(engine::CF_WRITE, &[(&keys::data_key(&[b'a']), &[b'a'])])],
+            &[(
+                engine_traits::CF_WRITE,
+                &temp.path().join(files[0].get_name()),
+            )],
+            &[(
+                engine_traits::CF_WRITE,
+                &[(&keys::data_key(&[b'a']), &[b'a'])],
+            )],
         );
 
         // Test write and default.
-        let mut writer = BackupWriter::new(db, "foo2", Limiter::new(INFINITY)).unwrap();
+        let mut writer =
+            BackupWriter::new(db.get_sync_db(), "foo2", Limiter::new(INFINITY), None, 0).unwrap();
         writer
             .write(
-                vec![TxnEntry::Commit {
-                    default: (vec![b'a'], vec![b'a']),
-                    write: (vec![b'a'], vec![b'a']),
-                }]
+                vec![
+                    TxnEntry::Commit {
+                        default: (vec![b'a'], vec![b'a']),
+                        write: (vec![b'a'], vec![b'a']),
+                        old_value: None,
+                    },
+                    TxnEntry::Commit {
+                        default: (vec![], vec![]),
+                        write: (vec![b'b'], vec![]),
+                        old_value: None,
+                    },
+                ]
                 .into_iter(),
                 false,
             )
@@ -363,12 +408,27 @@ mod tests {
         assert_eq!(files.len(), 2);
         check_sst(
             &[
-                (engine::CF_DEFAULT, &temp.path().join(files[0].get_name())),
-                (engine::CF_WRITE, &temp.path().join(files[1].get_name())),
+                (
+                    engine_traits::CF_DEFAULT,
+                    &temp.path().join(files[0].get_name()),
+                ),
+                (
+                    engine_traits::CF_WRITE,
+                    &temp.path().join(files[1].get_name()),
+                ),
             ],
             &[
-                (engine::CF_DEFAULT, &[(&keys::data_key(&[b'a']), &[b'a'])]),
-                (engine::CF_WRITE, &[(&keys::data_key(&[b'a']), &[b'a'])]),
+                (
+                    engine_traits::CF_DEFAULT,
+                    &[(&keys::data_key(&[b'a']), &[b'a'])],
+                ),
+                (
+                    engine_traits::CF_WRITE,
+                    &[
+                        (&keys::data_key(&[b'a']), &[b'a']),
+                        (&keys::data_key(&[b'b']), &[]),
+                    ],
+                ),
             ],
         );
     }

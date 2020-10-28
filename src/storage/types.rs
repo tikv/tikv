@@ -88,23 +88,67 @@ pub enum TxnStatus {
     LockNotExist,
     /// The txn haven't yet been committed.
     Uncommitted {
-        lock_ttl: u64,
-        min_commit_ts: TimeStamp,
+        lock: Lock,
+        min_commit_ts_pushed: bool,
     },
     /// The txn was committed.
     Committed { commit_ts: TimeStamp },
 }
 
 impl TxnStatus {
-    pub fn uncommitted(lock_ttl: u64, min_commit_ts: TimeStamp) -> Self {
+    pub fn uncommitted(lock: Lock, min_commit_ts_pushed: bool) -> Self {
         Self::Uncommitted {
-            lock_ttl,
-            min_commit_ts,
+            lock,
+            min_commit_ts_pushed,
         }
     }
 
     pub fn committed(commit_ts: TimeStamp) -> Self {
         Self::Committed { commit_ts }
+    }
+}
+
+#[derive(Debug)]
+pub struct PrewriteResult {
+    pub locks: Vec<Result<()>>,
+    pub min_commit_ts: TimeStamp,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PessimisticLockRes {
+    Values(Vec<Option<Value>>),
+    Empty,
+}
+
+impl PessimisticLockRes {
+    pub fn push(&mut self, value: Option<Value>) {
+        match self {
+            PessimisticLockRes::Values(v) => v.push(value),
+            _ => panic!("unexpected PessimisticLockRes"),
+        }
+    }
+
+    pub fn into_vec(self) -> Vec<Value> {
+        match self {
+            PessimisticLockRes::Values(v) => v.into_iter().map(Option::unwrap_or_default).collect(),
+            PessimisticLockRes::Empty => vec![],
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum SecondaryLocksStatus {
+    Locked(Vec<kvrpcpb::LockInfo>),
+    Committed(TimeStamp),
+    RolledBack,
+}
+
+impl SecondaryLocksStatus {
+    pub fn push(&mut self, lock: kvrpcpb::LockInfo) {
+        match self {
+            SecondaryLocksStatus::Locked(v) => v.push(lock),
+            _ => panic!("unexpected SecondaryLocksStatus"),
+        }
     }
 }
 
@@ -142,6 +186,9 @@ storage_callback! {
     MvccInfoByStartTs(Option<(Key, MvccInfo)>) ProcessResult::MvccStartTs { mvcc } => mvcc,
     Locks(Vec<kvrpcpb::LockInfo>) ProcessResult::Locks { locks } => locks,
     TxnStatus(TxnStatus) ProcessResult::TxnStatus { txn_status } => txn_status,
+    Prewrite(PrewriteResult) ProcessResult::PrewriteResult { result } => result,
+    PessimisticLock(Result<PessimisticLockRes>) ProcessResult::PessimisticLockRes { res } => res,
+    SecondaryLocksStatus(SecondaryLocksStatus) ProcessResult::SecondaryLocksStatus { status } => status,
 }
 
 pub trait StorageCallbackType: Sized {

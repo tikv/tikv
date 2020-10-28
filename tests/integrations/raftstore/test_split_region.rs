@@ -11,8 +11,8 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
-use engine::Iterable;
-use engine::CF_WRITE;
+use engine_rocks::Compat;
+use engine_traits::{Iterable, Peekable, CF_WRITE};
 use keys::data_key;
 use pd_client::PdClient;
 use raftstore::store::{Callback, WriteResponse};
@@ -132,7 +132,7 @@ fn test_server_split_region_twice() {
         assert_eq!(region2.get_end_key(), right.get_end_key());
         tx.send(right).unwrap();
     });
-    cluster.split_region(&region, split_key, Callback::Write(c));
+    cluster.split_region(&region, split_key, Callback::write(c));
     let region3 = rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     cluster.must_put(split_key, b"v2");
@@ -144,7 +144,7 @@ fn test_server_split_region_twice() {
         assert!(!write_resp.response.has_admin_response());
         tx1.send(()).unwrap();
     });
-    cluster.split_region(&region3, split_key, Callback::Write(c));
+    cluster.split_region(&region3, split_key, Callback::write(c));
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
@@ -278,14 +278,22 @@ fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_
             Some(l) => break l,
         }
     };
+    let mut missing_count = 0;
     for i in 1..=region.get_peers().len() as u64 {
         let engine = cluster.get_engine(i);
         if all_committed || i == leader.get_store_id() {
             must_get_equal(&engine, k, v);
         } else {
-            must_get_none(&engine, k);
+            // Note that a follower can still commit the log by an empty MsgAppend
+            // when bcast commit is disabled. A heartbeat response comes to leader
+            // before MsgAppendResponse will trigger MsgAppend.
+            match engine.c().get_value(&keys::data_key(k)).unwrap() {
+                Some(res) => assert_eq!(v, &res[..]),
+                None => missing_count += 1,
+            }
         }
     }
+    assert!(all_committed || missing_count > 0);
 }
 
 /// TiKV enables lazy broadcast commit optimization, which can delay split
@@ -839,10 +847,12 @@ fn test_node_split_update_region_right_derive() {
 #[test]
 fn test_split_with_epoch_not_match() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.run();
-    cluster.must_transfer_leader(1, new_peer(1, 1));
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // Remove a peer to make conf version become 2.
     pd_client.must_remove_peer(1, new_peer(2, 2));

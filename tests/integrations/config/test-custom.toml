@@ -1,10 +1,10 @@
 log-level = "debug"
 log-file = "foo"
+log-format = "json"
+slow-log-file = "slow_foo"
+slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
-
-[readpool]
-unify-read-pool = true
 
 [readpool.unified]
 min-thread-count = 5
@@ -13,6 +13,7 @@ stack-size = "20MB"
 max-tasks-per-worker = 2200
 
 [readpool.storage]
+use-unified-pool = true
 high-concurrency = 1
 normal-concurrency = 3
 low-concurrency = 7
@@ -22,6 +23,7 @@ max-tasks-per-worker-low = 2500
 stack-size = "20MB"
 
 [readpool.coprocessor]
+use-unified-pool = false
 high-concurrency = 2
 normal-concurrency = 4
 low-concurrency = 6
@@ -34,7 +36,9 @@ stack-size = "12MB"
 addr = "example.com:443"
 advertise-addr = "example.com:443"
 status-addr = "example.com:443"
+advertise-status-addr = "example.com:443"
 status-thread-pool-size = 1
+max-grpc-send-msg-len = 6291456
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234
@@ -58,8 +62,6 @@ stats-concurrency = 10
 heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
-request-batch-enable-cross-command = false
-request-batch-wait-duration = "10ms"
 
 [server.labels]
 a = "b"
@@ -71,6 +73,7 @@ max-key-size = 8192
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
+enable-async-apply-prewrite = true
 
 [storage.block-cache]
 shared = true
@@ -86,8 +89,6 @@ endpoints = [
 ]
 
 [metric]
-interval = "12s"
-address = "example.com:443"
 job = "tikv_1"
 
 [raftstore]
@@ -107,12 +108,14 @@ raft-log-gc-tick-interval = "12s"
 raft-log-gc-threshold = 12
 raft-log-gc-count-limit = 12
 raft-log-gc-size-limit = "1KB"
+raft-log-reserve-max-ticks = 100
+raft-engine-purge-interval = "20m"
 raft-entry-cache-life-time = "12s"
 raft-reject-transfer-leader-duration = "3s"
 split-region-check-tick-interval = "12s"
 region-split-check-diff = "6MB"
 region-compact-check-interval = "12s"
-clean-stale-peer-delay = "13s"
+clean-stale-peer-delay = "0s"
 region-compact-check-step = 1234
 region-compact-min-tombstones = 999
 region-compact-tombstones-percent = 33
@@ -142,10 +145,17 @@ cleanup-import-sst-interval = "12m"
 local-read-batch-size = 33
 apply-max-batch-size = 22
 apply-pool-size = 4
+apply-reschedule-duration = "3s"
+apply-yield-duration = "333ms"
 store-max-batch-size = 21
 store-pool-size = 3
+store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
+hibernate-timeout = "1h"
+early-apply = false
+dev-assert = true
+perf-level = 5
 
 [coprocessor]
 split-region-on-table = false
@@ -154,6 +164,7 @@ region-max-size = "12MB"
 region-split-size = "12MB"
 region-max-keys = 100000
 region-split-keys = 100000
+consistency-check-method = "raw"
 
 [rocksdb]
 wal-recovery-mode = 1
@@ -173,8 +184,9 @@ info-log-roll-time = "12s"
 info-log-keep-log-file-num = 1000
 info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
+rate-limiter-refill-period = "10ms"
 rate-limiter-mode = 3
-auto-tuned = true
+auto-tuned = false
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"
 max-sub-compactions = 12
@@ -182,6 +194,7 @@ writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
 enable-unordered-write = true
+enable-multi-batch-write = false
 
 [rocksdb.titan]
 enabled = true
@@ -228,10 +241,13 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
-force-consistency-checks = false
+force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 enable-doubly-skiplist = false
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -243,6 +259,10 @@ discardable-ratio = 0.00156
 sample-ratio = 0.982
 merge-small-file-threshold = "21KB"
 blob-run-mode = "fallback"
+level-merge = true
+range-merge = true
+max-sorted-runs = 100
+gc-merge-rewrite = true
 
 [rocksdb.writecf]
 block-size = "12KB"
@@ -282,9 +302,12 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
-force-consistency-checks = false
+force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -324,9 +347,12 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
-force-consistency-checks = false
+force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -366,9 +392,73 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
-force-consistency-checks = false
+force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
+
+[rocksdb.ver-defaultcf]
+block-size = "12KB"
+block-cache-size = "12GB"
+disable-block-cache = false
+cache-index-and-filter-blocks = false
+pin-l0-filter-and-index-blocks = false
+use-bloom-filter = false
+optimize-filters-for-hits = false
+whole-key-filtering = true
+bloom-filter-bits-per-key = 123
+block-based-bloom-filter = true
+read-amp-bytes-per-bit = 0
+compression-per-level = [
+    "no",
+    "no",
+    "zstd",
+    "zstd",
+    "no",
+    "zstd",
+    "lz4",
+]
+write-buffer-size = "1MB"
+max-write-buffer-number = 12
+min-write-buffer-number-to-merge = 12
+max-bytes-for-level-base = "12KB"
+target-file-size-base = "123KB"
+level0-file-num-compaction-trigger = 123
+level0-slowdown-writes-trigger = 123
+level0-stop-writes-trigger = 123
+max-compaction-bytes = "1GB"
+compaction-pri = 3
+dynamic-level-bytes = true
+num-levels = 4
+max-bytes-for-level-multiplier = 8
+compaction-style = 1
+disable-auto-compactions = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
+force-consistency-checks = true
+prop-size-index-distance = 4000000
+prop-keys-index-distance = 40000
+enable-doubly-skiplist = false
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
+
+[rocksdb.ver-defaultcf.titan]
+min-blob-size = "2018B"
+blob-file-compression = "zstd"
+blob-cache-size = "12GB"
+min-gc-batch-size = "12KB"
+max-gc-batch-size = "12MB"
+discardable-ratio = 0.00156
+sample-ratio = 0.982
+merge-small-file-threshold = "21KB"
+blob-run-mode = "fallback"
+level-merge = true
+range-merge = true
+max-sorted-runs = 100
+gc-merge-rewrite = true
 
 [raftdb]
 wal-recovery-mode = 3
@@ -391,7 +481,7 @@ max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
-allow-concurrent-memtable-write = true
+allow-concurrent-memtable-write = false
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"
 
@@ -440,9 +530,12 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
-force-consistency-checks = false
+force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
 
 [raftdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -454,18 +547,56 @@ discardable-ratio = 0.00156
 sample-ratio = 0.982
 merge-small-file-threshold = "21KB"
 blob-run-mode = "fallback"
+level-merge = true
+range-merge = true
+max-sorted-runs = 100
+gc-merge-rewrite = true
+
+[raft-engine]
+enable = true
+dir = "test-dir"
 
 [security]
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
-cipher-file = "invalid path"
+redact-info-log = true
+cert-allowed-cn = [
+    "example.tikv.com",
+]
+
+[security.encryption]
+data-encryption-method = "aes128-ctr"
+data-key-rotation-period = "14d"
+
+[security.encryption.master-key]
+type = "file"
+path = "/master/key/path"
+
+[security.encryption.previous-master-key]
+type = "plaintext"
+
+[backup]
+num-threads = 456
 
 [import]
 num-threads = 123
 stream-channel-window = 123
+import-mode-timeout = "1453s"
 
 [gc]
 ratio-threshold = 1.2
 batch-keys = 256
 max-write-bytes-per-sec = "10MB"
+enable-compaction-filter = true
+compaction-filter-skip-version-check = true
+
+[pessimistic-txn]
+enabled = false # test backward compatibility
+wait-for-lock-timeout = "10ms"
+wake-up-delay-duration = 100 # test backward compatibility
+pipelined = false
+
+[cdc]
+min-ts-interval = "4s"
+old-value-cache-size = 512

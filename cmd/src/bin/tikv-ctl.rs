@@ -8,9 +8,10 @@ extern crate vlog;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::error::Error;
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufRead, BufReader};
 use std::iter::FromIterator;
+use std::path::{Path, PathBuf};
 use std::string::ToString;
 use std::sync::Arc;
 use std::thread;
@@ -18,34 +19,41 @@ use std::time::Duration;
 use std::{process, str, u64};
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
-use futures::{future, stream, Future, Stream};
+use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
-use engine::rocks;
-use engine::rocks::util::security::encrypted_env_from_cipher_file;
-use engine::Engines;
-use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use keys;
+use encryption::{
+    encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
+};
+use engine_rocks::encryption::get_env;
+use engine_rocks::RocksEngine;
+use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{Engines, RaftEngine};
 use kvproto::debugpb::{Db as DBType, *};
+use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
-use raft::eraftpb::{ConfChange, Entry, EntryType};
+use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
+use raft_log_engine::RaftLogEngine;
 use raftstore::store::INIT_EPOCH_CONF_VER;
-use tikv::config::TiKvConfig;
+use security::{SecurityConfig, SecurityManager};
+use std::pin::Pin;
+use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv_util::security::{SecurityConfig, SecurityManager};
-use tikv_util::{escape, unescape};
+use tikv_util::{escape, file::calc_crc32, unescape};
 use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
 const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 const METRICS_JEMALLOC: &str = "jemalloc";
+
+type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     ve1!("{}: {}", prefix, e);
@@ -62,36 +70,56 @@ fn new_debug_executor(
 ) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
+            let key_manager =
+                DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                    .unwrap()
+                    .map(|key_manager| Arc::new(key_manager));
             let cache = cfg.storage.block_cache.build_shared_cache();
+            let shared_block_cache = cache.is_some();
+            let env = get_env(key_manager, None).unwrap();
+
             let mut kv_db_opts = cfg.rocksdb.build_opt();
+            kv_db_opts.set_env(env.clone());
             kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
-            let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
+            let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache, None);
+            let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
+            let kv_path = kv_path.to_str().unwrap();
+            let kv_db =
+                engine_rocks::raw_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+            let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
+            kv_db.set_shared_block_cache(shared_block_cache);
 
-            if !mgr.cipher_file().is_empty() {
-                let encrypted_env =
-                    encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
-                kv_db_opts.set_env(encrypted_env);
-            }
-            let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
-
-            let raft_path = raft_db
+            let mut raft_path = raft_db
                 .map(ToString::to_string)
                 .unwrap_or_else(|| format!("{}/../raft", kv_path));
-            let mut raft_db_opts = cfg.raftdb.build_opt();
-            let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
+            raft_path = PathBuf::from(raft_path)
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .map(ToString::to_string)
+                .unwrap();
 
-            if !mgr.cipher_file().is_empty() {
-                let encrypted_env =
-                    encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
-                raft_db_opts.set_env(encrypted_env);
+            let cfg_controller = ConfigController::default();
+            if !cfg.raft_engine.enable {
+                let mut raft_db_opts = cfg.raftdb.build_opt();
+                raft_db_opts.set_env(env);
+                let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache, None);
+                let raft_db = engine_rocks::raw_util::new_engine_opt(
+                    &raft_path,
+                    raft_db_opts,
+                    raft_db_cf_opts,
+                )
+                .unwrap();
+                let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
+                raft_db.set_shared_block_cache(shared_block_cache);
+                let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
+                Box::new(debugger) as Box<dyn DebugExecutor>
+            } else {
+                let config = cfg.raft_engine.config();
+                let raft_db = RaftLogEngine::new(config);
+                let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
+                Box::new(debugger) as Box<dyn DebugExecutor>
             }
-            let raft_db =
-                rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
-
-            Box::new(Debugger::new(
-                Engines::new(Arc::new(kv_db), Arc::new(raft_db), cache.is_some()),
-                None,
-            )) as Box<dyn DebugExecutor>
         }
         (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
         _ => unreachable!(),
@@ -194,6 +222,15 @@ trait DebugExecutor {
                 cmd.merge_from_bytes(&ctx).unwrap();
                 v1!("ConfChange.RaftCmdRequest: {:#?}", cmd);
             }
+            EntryType::EntryConfChangeV2 => {
+                let mut msg = ConfChangeV2::new();
+                msg.merge_from_bytes(&data).unwrap();
+                let ctx = msg.take_context();
+                v1!("ConfChangeV2: {:?}", msg);
+                let mut cmd = RaftCmdRequest::default();
+                cmd.merge_from_bytes(&ctx).unwrap();
+                v1!("ConfChangeV2.RaftCmdRequest: {:#?}", cmd);
+            }
         }
     }
 
@@ -225,7 +262,7 @@ trait DebugExecutor {
 
         let scan_future =
             self.get_mvcc_infos(from.clone(), to, limit)
-                .for_each(move |(key, mvcc)| {
+                .try_for_each(move |(key, mvcc)| {
                     if point_query && key != from {
                         v1!("no mvcc infos for {}", escape(&from));
                         return future::err::<(), String>("no mvcc infos".to_owned());
@@ -257,7 +294,7 @@ trait DebugExecutor {
                     v1!("");
                     future::ok::<(), String>(())
                 });
-        if let Err(e) = scan_future.wait() {
+        if let Err(e) = block_on(scan_future) {
             ve1!("{}", e);
             process::exit(-1);
         }
@@ -327,15 +364,15 @@ trait DebugExecutor {
 
                 let mut take_item = |i: usize| -> Option<(Vec<u8>, MvccInfo)> {
                     let wait = match i {
-                        1 => future::poll_fn(|| mvcc_infos_1.poll()).wait(),
-                        _ => future::poll_fn(|| mvcc_infos_2.poll()).wait(),
+                        1 => block_on(future::poll_fn(|cx| mvcc_infos_1.poll_next_unpin(cx))),
+                        _ => block_on(future::poll_fn(|cx| mvcc_infos_2.poll_next_unpin(cx))),
                     };
-                    match wait {
-                        Ok(item1) => item1,
+                    match wait? {
                         Err(e) => {
                             v1!("db{} scan data in region {} fail: {}", i, region, e);
                             process::exit(-1);
                         }
+                        Ok(s) => Some(s),
                     }
                 };
 
@@ -455,9 +492,7 @@ trait DebugExecutor {
         let regions = region_ids
             .into_iter()
             .map(|region_id| {
-                if let Some(region) = rpc_client
-                    .get_region_by_id(region_id)
-                    .wait()
+                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id))
                     .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
                 {
                     return region;
@@ -498,9 +533,7 @@ trait DebugExecutor {
         let regions = region_ids
             .into_iter()
             .map(|region_id| {
-                if let Some(region) = rpc_client
-                    .get_region_by_id(region_id)
-                    .wait()
+                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id))
                     .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
                 {
                     return region;
@@ -527,12 +560,7 @@ trait DebugExecutor {
 
     fn get_raft_log(&self, region: u64, index: u64) -> Entry;
 
-    fn get_mvcc_infos(
-        &self,
-        from: Vec<u8>,
-        to: Vec<u8>,
-        limit: u64,
-    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
+    fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream;
 
     fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str);
 
@@ -554,11 +582,13 @@ trait DebugExecutor {
 
     fn recover_all(&self, threads: usize, read_only: bool);
 
-    fn modify_tikv_config(&self, module: Module, config_name: &str, config_value: &str);
+    fn modify_tikv_config(&self, config_name: &str, config_value: &str);
 
     fn dump_metrics(&self, tags: Vec<&str>);
 
     fn dump_region_properties(&self, region_id: u64);
+
+    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>);
 
     fn dump_store_info(&self);
 
@@ -627,22 +657,17 @@ impl DebugExecutor for DebugClient {
             .take_entry()
     }
 
-    fn get_mvcc_infos(
-        &self,
-        from: Vec<u8>,
-        to: Vec<u8>,
-        limit: u64,
-    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
+    fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream {
         let mut req = ScanMvccRequest::default();
         req.set_from_key(from);
         req.set_to_key(to);
         req.set_limit(limit);
-        Box::new(
+        Box::pin(
             self.scan_mvcc(&req)
                 .unwrap()
                 .map_err(|e| e.to_string())
-                .map(|mut resp| (resp.take_key(), resp.take_info())),
-        ) as Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
+                .map_ok(|mut resp| (resp.take_key(), resp.take_info())),
+        )
     }
 
     fn raw_scan_impl(&self, _: &[u8], _: &[u8], _: usize, _: &str) {
@@ -729,9 +754,8 @@ impl DebugExecutor for DebugClient {
         v1!("success!");
     }
 
-    fn modify_tikv_config(&self, module: Module, config_name: &str, config_value: &str) {
+    fn modify_tikv_config(&self, config_name: &str, config_value: &str) {
         let mut req = ModifyTikvConfigRequest::default();
-        req.set_module(module);
         req.set_config_name(config_name.to_owned());
         req.set_config_value(config_value.to_owned());
         self.modify_tikv_config(&req)
@@ -748,6 +772,10 @@ impl DebugExecutor for DebugClient {
         for prop in resp.get_props() {
             v1!("{}: {}", prop.get_name(), prop.get_value());
         }
+    }
+
+    fn dump_range_properties(&self, _: Vec<u8>, _: Vec<u8>) {
+        unimplemented!("only available for local mode");
     }
 
     fn dump_store_info(&self) {
@@ -767,7 +795,7 @@ impl DebugExecutor for DebugClient {
     }
 }
 
-impl DebugExecutor for Debugger {
+impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     fn check_local_mode(&self) {}
 
     fn get_all_meta_regions(&self) -> Vec<u64> {
@@ -798,17 +826,12 @@ impl DebugExecutor for Debugger {
             .unwrap_or_else(|e| perror_and_exit("Debugger::raft_log", e))
     }
 
-    fn get_mvcc_infos(
-        &self,
-        from: Vec<u8>,
-        to: Vec<u8>,
-        limit: u64,
-    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
+    fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream {
         let iter = self
             .scan_mvcc(&from, &to, limit)
             .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
-        let stream = stream::iter_result(iter).map_err(|e| e.to_string());
-        Box::new(stream) as Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
+        let stream = stream::iter(iter).map_err(|e| e.to_string());
+        Box::pin(stream)
     }
 
     fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str) {
@@ -904,7 +927,7 @@ impl DebugExecutor for Debugger {
         let rpc_client =
             RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
-        let mut region = match rpc_client.get_region_by_id(region_id).wait() {
+        let mut region = match block_on(rpc_client.get_region_by_id(region_id)) {
             Ok(Some(region)) => region,
             Ok(None) => {
                 ve1!("no such region {} on PD", region_id);
@@ -952,7 +975,7 @@ impl DebugExecutor for Debugger {
         process::exit(-1);
     }
 
-    fn modify_tikv_config(&self, _: Module, _: &str, _: &str) {
+    fn modify_tikv_config(&self, _: &str, _: &str) {
         ve1!("only support remote mode");
         process::exit(-1);
     }
@@ -961,6 +984,15 @@ impl DebugExecutor for Debugger {
         let props = self
             .get_region_properties(region_id)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
+        for (name, value) in props {
+            v1!("{}: {}", name, value);
+        }
+    }
+
+    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>) {
+        let props = self
+            .get_range_properties(&start, &end)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_range_properties", e));
         for (name, value) in props {
             v1!("{}: {}", name, value);
         }
@@ -981,11 +1013,28 @@ impl DebugExecutor for Debugger {
     }
 }
 
+fn warning_prompt(message: &str) -> bool {
+    const EXPECTED: &str = "I consent";
+    println!("{}", message);
+    let input: String = promptly::prompt(format!(
+        "Type \"{}\" to continue, anything else to exit",
+        EXPECTED
+    ))
+    .unwrap();
+    if input == EXPECTED {
+        true
+    } else {
+        println!("exit.");
+        false
+    }
+}
+
 fn main() {
     vlog::set_verbosity_level(1);
 
     let raw_key_hint: &'static str = "Raw key (generally starts with \"z\") in escaped form";
-    let version_info = tikv::tikv_version_info();
+    let build_timestamp = option_env!("TIKV_BUILD_TIME");
+    let version_info = tikv::tikv_version_info(build_timestamp);
 
     let mut app = App::new("TiKV Control (tikv-ctl)")
         .about("A tool for interacting with TiKV deployments.")
@@ -1046,10 +1095,6 @@ fn main() {
                 .help("Set the private key path"),
         )
         .arg(
-            Arg::with_name("cipher_file")
-            .required(false).long("cipher-file").takes_value(true).help("set cipher file path")
-        )
-        .arg(
             Arg::with_name("hex-to-escaped")
                 .conflicts_with("escaped-to-hex")
                 .long("to-escaped")
@@ -1076,7 +1121,7 @@ fn main() {
                 .long("encode")
                 .takes_value(true)
                 .help("Encode a key in escaped format"),
-            )
+        )
         .arg(
             Arg::with_name("pd")
                 .long("pd")
@@ -1367,10 +1412,10 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("region")
-                    .short("r")
-                    .long("region")
-                    .takes_value(true)
-                    .help("Set the region id"),
+                        .short("r")
+                        .long("region")
+                        .takes_value(true)
+                        .help("Set the region id"),
                 )
                 .arg(
                     Arg::with_name("bottommost")
@@ -1519,7 +1564,7 @@ fn main() {
                         .short("r")
                         .takes_value(true)
                         .help("The origin region id"),
-                        ),
+                ),
         )
         .subcommand(
             SubCommand::with_name("metrics")
@@ -1556,30 +1601,20 @@ fn main() {
         .subcommand(SubCommand::with_name("bad-regions").about("Get all regions with corrupt raft"))
         .subcommand(
             SubCommand::with_name("modify-tikv-config")
-                .about("Modify tikv config, eg. tikv-ctl --host ip:port modify-tikv-config -m kvdb -n default.disable_auto_compactions -v true")
-                .arg(
-                    Arg::with_name("module")
-                        .required(true)
-                        .short("m")
-                        .takes_value(true)
-                        .help("Module of tikv, eg. kvdb or raftdb"),
-                )
+                .about("Modify tikv config, eg. tikv-ctl --host ip:port modify-tikv-config -n rocksdb.defaultcf.disable-auto-compactions -v true")
                 .arg(
                     Arg::with_name("config_name")
                         .required(true)
                         .short("n")
                         .takes_value(true)
-                        .help("Config name of the module, for kvdb or raftdb, you can choose \
-                            max_background_jobs to modify db options or default.disable_auto_compactions to modify column family(cf) options, \
-                            and so on, default stands for default cf, \
-                            for kvdb, default|write|lock|raft can be chosen, for raftdb, default can be chosen"),
+                        .help("The config name are same as the name used on config file, eg. raftstore.messages-per-tick, raftdb.max-background-jobs"),
                 )
                 .arg(
                     Arg::with_name("config_value")
                         .required(true)
                         .short("v")
                         .takes_value(true)
-                        .help("Config value of the module, eg. 8 for max_background_jobs or true for disable_auto_compactions"),
+                        .help("The config value, eg. 8, true, 1h, 8MB"),
                 ),
         )
         .subcommand(
@@ -1661,6 +1696,26 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("range-properties")
+                .about("Show range properties")
+                .arg(
+                    Arg::with_name("start")
+                        .long("start")
+                        .required(true)
+                        .takes_value(true)
+                        .default_value("")
+                        .help("hex start key"),
+                )
+                .arg(
+                    Arg::with_name("end")
+                        .long("end")
+                        .required(true)
+                        .takes_value(true)
+                        .default_value("")
+                        .help("hex end key"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("split-region")
                 .about("Split the region")
                 .arg(
@@ -1683,22 +1738,22 @@ fn main() {
                 .about("Inject failures to TiKV and recovery")
                 .subcommand(
                     SubCommand::with_name("inject")
-                    .about("Inject failures")
-                    .arg(
-                        Arg::with_name("args")
-                            .multiple(true)
-                            .takes_value(true)
-                            .help(
-                                "Inject fail point and actions pairs.\
+                        .about("Inject failures")
+                        .arg(
+                            Arg::with_name("args")
+                                .multiple(true)
+                                .takes_value(true)
+                                .help(
+                                    "Inject fail point and actions pairs.\
                                 E.g. tikv-ctl fail inject a=off b=panic",
-                            ),
-                    )
-                    .arg(
-                        Arg::with_name("file")
-                            .short("f")
-                            .takes_value(true)
-                            .help("Read a file of fail points and actions to inject"),
-                    ),
+                                ),
+                        )
+                        .arg(
+                            Arg::with_name("file")
+                                .short("f")
+                                .takes_value(true)
+                                .help("Read a file of fail points and actions to inject"),
+                        ),
                 )
                 .subcommand(
                     SubCommand::with_name("recover")
@@ -1719,25 +1774,55 @@ fn main() {
                 .subcommand(SubCommand::with_name("list").about("List all fail points"))
         )
         .subcommand(
-            SubCommand::with_name("random-hex")
-                .about("Generate random bytes with specified length and print as hex")
-                .arg(
-                    Arg::with_name("len")
-                        .short("l")
-                        .long("len")
-                        .takes_value(true)
-                        .required(true)
-                        .default_value("1024")
-                        .help("the length"),
-                ),
-        )
-        .subcommand(
             SubCommand::with_name("store")
                 .about("Print the store id"),
         )
         .subcommand(
             SubCommand::with_name("cluster")
                 .about("Print the cluster id"),
+        )
+        .subcommand(
+            SubCommand::with_name("decrypt-file")
+                .about("Decrypt an encrypted file")
+                .arg(
+                    Arg::with_name("file")
+                        .long("file")
+                        .takes_value(true)
+                        .required(true)
+                        .help("input file path"),
+                )
+                .arg(
+                    Arg::with_name("out-file")
+                        .long("out-file")
+                        .takes_value(true)
+                        .required(true)
+                        .help("output file path"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("encryption-meta")
+                .about("Dump encryption metadata")
+                .subcommand(
+                    SubCommand::with_name("dump-key")
+                        .about("Dump data keys")
+                        .arg(
+                            Arg::with_name("ids")
+                                .long("ids")
+                                .takes_value(true)
+                                .use_delimiter(true)
+                                .help("List of data key ids. Dump all keys if not provided."),
+                        ),
+                )
+                .subcommand(
+                    SubCommand::with_name("dump-file")
+                        .about("Dump file encryption info")
+                        .arg(
+                            Arg::with_name("path")
+                                .long("path")
+                                .takes_value(true)
+                                .help("Path to the file. Dump for all files if not provided."),
+                        ),
+                ),
         );
 
     let matches = app.clone().get_matches();
@@ -1761,11 +1846,6 @@ fn main() {
     if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
         let path = matches.value_of("file").unwrap();
         return dump_snap_meta_file(path);
-    } else if let Some(matches) = matches.subcommand_matches("random-hex") {
-        let len = value_t_or_exit!(matches.value_of("len"), usize);
-        let random_bytes = gen_random_bytes(len);
-        v1!("{}", hex::encode_upper(&random_bytes));
-        return;
     }
 
     if matches.args.is_empty() {
@@ -1789,6 +1869,86 @@ fn main() {
         return;
     } else if let Some(decoded) = matches.value_of("encode") {
         v1!("{}", Key::from_raw(&unescape(decoded)));
+        return;
+    }
+
+    if let Some(matches) = matches.subcommand_matches("decrypt-file") {
+        let message = "This action will expose sensitive data as plaintext on persistent storage";
+        if !warning_prompt(message) {
+            return;
+        }
+        let infile = matches.value_of("file").unwrap();
+        let outfile = matches.value_of("out-file").unwrap();
+        v1!("infile: {}, outfile: {}", infile, outfile);
+
+        let key_manager =
+            match DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                .expect("DataKeyManager::from_config should success")
+            {
+                Some(mgr) => mgr,
+                None => {
+                    v1!("Encryption is disabled");
+                    v1!("crc32: {}", calc_crc32(infile).unwrap());
+                    return;
+                }
+            };
+
+        let infile1 = Path::new(infile).canonicalize().unwrap();
+        let file_info = key_manager.get_file(infile1.to_str().unwrap()).unwrap();
+
+        let mthd = encryption_method_from_db_encryption_method(file_info.method);
+        if mthd == EncryptionMethod::Plaintext {
+            v1!(
+                "{} is not encrypted, skip to decrypt it into {}",
+                infile,
+                outfile
+            );
+            v1!("crc32: {}", calc_crc32(infile).unwrap());
+            return;
+        }
+
+        let mut outf = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(outfile)
+            .unwrap();
+
+        let iv = Iv::from_slice(&file_info.iv).unwrap();
+        let f = File::open(&infile).unwrap();
+        let mut reader = DecrypterReader::new(f, mthd, &file_info.key, iv).unwrap();
+
+        io::copy(&mut reader, &mut outf).unwrap();
+        v1!("crc32: {}", calc_crc32(outfile).unwrap());
+        return;
+    }
+
+    if let Some(matches) = matches.subcommand_matches("encryption-meta") {
+        match matches.subcommand() {
+            ("dump-key", Some(matches)) => {
+                let message =
+                    "This action will expose encryption key(s) as plaintext. Do not output the \
+                    result in file on disk.";
+                if !warning_prompt(message) {
+                    return;
+                }
+                DataKeyManager::dump_key_dict(
+                    &cfg.security.encryption,
+                    &cfg.storage.data_dir,
+                    matches
+                        .values_of("ids")
+                        .map(|ids| ids.map(|id| id.parse::<u64>().unwrap()).collect()),
+                )
+                .unwrap();
+            }
+            ("dump-file", Some(matches)) => {
+                let path = matches
+                    .value_of("path")
+                    .map(|path| fs::canonicalize(path).unwrap().to_str().unwrap().to_owned());
+                DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
+            }
+            _ => ve1!("{}", matches.usage()),
+        }
         return;
     }
 
@@ -1996,16 +2156,19 @@ fn main() {
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
     } else if let Some(matches) = matches.subcommand_matches("modify-tikv-config") {
-        let module = matches.value_of("module").unwrap();
         let config_name = matches.value_of("config_name").unwrap();
         let config_value = matches.value_of("config_value").unwrap();
-        debug_executor.modify_tikv_config(get_module_type(module), config_name, config_value);
+        debug_executor.modify_tikv_config(config_name, config_value);
     } else if let Some(matches) = matches.subcommand_matches("metrics") {
         let tags = Vec::from_iter(matches.values_of("tag").unwrap());
         debug_executor.dump_metrics(tags)
     } else if let Some(matches) = matches.subcommand_matches("region-properties") {
         let region_id = value_t_or_exit!(matches.value_of("region"), u64);
         debug_executor.dump_region_properties(region_id)
+    } else if let Some(matches) = matches.subcommand_matches("range-properties") {
+        let start_key = from_hex(matches.value_of("start").unwrap()).unwrap();
+        let end_key = from_hex(matches.value_of("end").unwrap()).unwrap();
+        debug_executor.dump_range_properties(start_key, end_key);
     } else if let Some(matches) = matches.subcommand_matches("fail") {
         if host.is_none() {
             ve1!("command fail requires host");
@@ -2067,26 +2230,6 @@ fn main() {
     }
 }
 
-fn gen_random_bytes(len: usize) -> Vec<u8> {
-    (0..len).map(|_| rand::random::<u8>()).collect()
-}
-
-fn get_module_type(module: &str) -> Module {
-    match module {
-        "kvdb" => Module::Kvdb,
-        "raftdb" => Module::Raftdb,
-        "readpool" => Module::Readpool,
-        "server" => Module::Server,
-        "storage" => Module::Storage,
-        "ps" => Module::Pd,
-        "metric" => Module::Metric,
-        "coprocessor" => Module::Coprocessor,
-        "security" => Module::Security,
-        "import" => Module::Import,
-        _ => Module::Unused,
-    }
-}
-
 fn from_hex(key: &str) -> Result<Vec<u8>, hex::FromHexError> {
     if key.starts_with("0x") || key.starts_with("0X") {
         return hex::decode(&key[2..]);
@@ -2118,24 +2261,18 @@ fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
     let ca_path = matches.value_of("ca_path");
     let cert_path = matches.value_of("cert_path");
     let key_path = matches.value_of("key_path");
-    let cipher_file = matches.value_of("cipher_file");
 
     let mut cfg = SecurityConfig::default();
-    if ca_path.is_none() && cert_path.is_none() && key_path.is_none() && cipher_file.is_none() {
-        return Arc::new(SecurityManager::new(&cfg).unwrap());
-    }
-
     if ca_path.is_some() || cert_path.is_some() || key_path.is_some() {
-        if ca_path.is_none() || cert_path.is_none() || key_path.is_none() {
-            panic!("CA certificate and private key should all be set.");
-        }
-        cfg.ca_path = ca_path.unwrap().to_owned();
-        cfg.cert_path = cert_path.unwrap().to_owned();
-        cfg.key_path = key_path.unwrap().to_owned();
-    }
-
-    if let Some(cipher_file) = cipher_file {
-        cfg.cipher_file = cipher_file.to_owned();
+        cfg.ca_path = ca_path
+            .expect("CA path should be set when cert path or key path is set.")
+            .to_owned();
+        cfg.cert_path = cert_path
+            .expect("cert path should be set when CA path or key path is set.")
+            .to_owned();
+        cfg.key_path = key_path
+            .expect("key path should be set when cert path or CA path is set.")
+            .to_owned();
     }
 
     Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
@@ -2166,9 +2303,7 @@ fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
 }
 
 fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64, key: Vec<u8>) {
-    let region = pd_client
-        .get_region_by_id(region_id)
-        .wait()
+    let region = block_on(pd_client.get_region_by_id(region_id))
         .expect("get_region_by_id should success")
         .expect("must have the region");
 
@@ -2233,6 +2368,7 @@ fn compact_whole_cluster(
         let (from, to) = (from.clone(), to.clone());
         let cfs: Vec<String> = cfs.iter().map(|cf| (*cf).to_string()).collect();
         let h = thread::spawn(move || {
+            tikv_alloc::add_thread_memory_accessor();
             let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
             for cf in cfs {
                 debug_executor.compact(
@@ -2245,6 +2381,7 @@ fn compact_whole_cluster(
                     bottommost,
                 );
             }
+            tikv_alloc::remove_thread_memory_accessor();
         });
         handles.push(h);
     }
@@ -2276,13 +2413,14 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
         None => Vec::new(),
     };
     args.insert(0, "ldb".to_owned());
+    let key_manager = DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+        .unwrap()
+        .map(|key_manager| Arc::new(key_manager));
+    let env = get_env(key_manager, None).unwrap();
     let mut opts = cfg.rocksdb.build_opt();
-    if !cfg.security.cipher_file.is_empty() {
-        let encrypted_env =
-            encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
-        opts.set_env(encrypted_env);
-    }
-    engine::rocks::run_ldb_tool(&args, &opts);
+    opts.set_env(env);
+
+    engine_rocks::raw::run_ldb_tool(&args, &opts);
 }
 
 #[cfg(test)]
@@ -2295,11 +2433,5 @@ mod tests {
         assert_eq!(from_hex("74").unwrap(), result);
         assert_eq!(from_hex("0x74").unwrap(), result);
         assert_eq!(from_hex("0X74").unwrap(), result);
-    }
-
-    #[test]
-    fn test_gen_random_bytes() {
-        assert_eq!(gen_random_bytes(8).len(), 8);
-        assert_eq!(gen_random_bytes(0).len(), 0);
     }
 }

@@ -1,0 +1,19 @@
+[package]
+name = "tidb_query_vec_aggr"
+version = "0.0.1"
+edition = "2018"
+publish = false
+description = "Vector aggr functions of query engine to run TiDB pushed down executors"
+
+[dependencies]
+match_template = { path = "../match_template" }
+tidb_query_codegen = { path = "../tidb_query_codegen" }
+tidb_query_datatype = { path = "../tidb_query_datatype" }
+tidb_query_common = { path = "../tidb_query_common" }
+tidb_query_vec_expr = { path = "../tidb_query_vec_expr" }
+tikv_util = { path = "../tikv_util" }
+tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
+
+[dev-dependencies]
+panic_hook = { path = "../panic_hook" }
+tipb_helper = { path = "../tipb_helper" }

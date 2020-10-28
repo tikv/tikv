@@ -1067,7 +1067,6 @@ impl<T: BufferWriter> NumberEncoder for T {}
 #[cfg(test)]
 mod tests {
     use protobuf::CodedOutputStream;
-    use rand;
 
     fn get_u8_samples() -> Vec<u8> {
         vec![
@@ -1819,7 +1818,6 @@ mod tests {
 mod benches {
     use crate::ErrorInner;
 
-    use byteorder;
     use protobuf::CodedOutputStream;
 
     /// Encode u64 little endian using `NumberCodec` and store position in extra variable.

@@ -10,7 +10,7 @@ use rand::random;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
 
-use engine::{CF_DEFAULT, CF_LOCK};
+use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
@@ -36,6 +36,18 @@ fn test_txn_store_get_with_type_lock() {
     store.put_ok(b"k1", b"v1", 1, 2);
     store.prewrite_ok(vec![Mutation::Lock(Key::from_raw(b"k1"))], b"k1", 5);
     store.get_ok(b"k1", 20, b"v1");
+}
+
+#[test]
+fn test_txn_store_batch_get_command() {
+    let store = AssertionStorage::default();
+    // not exist
+    store.get_none(b"a", 10);
+    store.get_none(b"b", 10);
+    // after put
+    store.put_ok(b"a", b"x", 5, 10);
+    store.put_ok(b"b", b"x", 5, 10);
+    store.batch_get_command_ok(&[b"a", b"b", b"c"], 10, vec![b"x", b"x", b""]);
 }
 
 #[test]

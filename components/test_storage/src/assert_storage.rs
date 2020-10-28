@@ -231,6 +231,20 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
+    pub fn batch_get_command_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
+        let result: Vec<Option<Vec<u8>>> = self
+            .store
+            .batch_get_command(self.ctx.clone(), &keys, ts)
+            .unwrap()
+            .into_iter()
+            .collect();
+        let expect: Vec<Option<Vec<u8>>> = expect
+            .into_iter()
+            .map(|x| if x.is_empty() { None } else { Some(x.to_vec()) })
+            .collect();
+        assert_eq!(result, expect);
+    }
+
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
         match err {
             StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
@@ -443,6 +457,7 @@ impl<E: Engine> AssertionStorage<E> {
             )
             .unwrap();
         let locks: Vec<(&[u8], &[u8], TimeStamp)> = res
+            .locks
             .iter()
             .filter_map(|x| {
                 if let Err(StorageError(box StorageErrorInner::Txn(TxnError(

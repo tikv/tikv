@@ -9,8 +9,6 @@ use test_storage::*;
 
 #[test]
 fn test_deadline() {
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -18,15 +16,12 @@ fn test_deadline() {
     fail::cfg("deadline_check_fail", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
 
-    assert!(resp.get_other_error().contains("exceeding max time limit"));
+    assert!(resp.get_other_error().contains("exceeding the deadline"));
 }
 
 #[test]
 fn test_deadline_2() {
     // It should not even take any snapshots when request is outdated from the beginning.
-
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -35,15 +30,13 @@ fn test_deadline_2() {
     fail::cfg("deadline_check_fail", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
 
-    assert!(resp.get_other_error().contains("exceeding max time limit"));
+    assert!(resp.get_other_error().contains("exceeding the deadline"));
 }
 
 /// Test deadline exceeded when request is handling
 /// Note: only
 #[test]
 fn test_deadline_3() {
-    let _guard = crate::setup();
-
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),
@@ -56,14 +49,12 @@ fn test_deadline_3() {
         let engine = tikv::storage::TestEngineBuilder::new().build().unwrap();
         let mut cfg = tikv::server::Config::default();
         cfg.end_point_request_max_handle_duration = tikv_util::config::ReadableDuration::secs(1);
-        // Batch execution will check deadline after the first batch is executed, but our
-        // test data is not large enough for the second batch. So let's disable it.
-        cfg.end_point_enable_batch_if_possible = false;
         init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)
     };
     let req = DAGSelect::from(&product).build();
 
     fail::cfg("kv_cursor_seek", "sleep(2000)").unwrap();
+    fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
     let cop_resp = handle_request(&endpoint, req);
     let mut resp = SelectResponse::default();
     resp.merge_from_bytes(cop_resp.get_data()).unwrap();
@@ -72,13 +63,11 @@ fn test_deadline_3() {
     assert!(resp
         .get_error()
         .get_msg()
-        .contains("exceeding max time limit"));
+        .contains("exceeding the deadline"));
 }
 
 #[test]
 fn test_parse_request_failed() {
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -92,9 +81,6 @@ fn test_parse_request_failed() {
 #[test]
 fn test_parse_request_failed_2() {
     // It should not even take any snapshots when parse failed.
-
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -108,8 +94,6 @@ fn test_parse_request_failed_2() {
 
 #[test]
 fn test_readpool_full() {
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -122,8 +106,6 @@ fn test_readpool_full() {
 
 #[test]
 fn test_snapshot_failed() {
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -136,8 +118,6 @@ fn test_snapshot_failed() {
 
 #[test]
 fn test_snapshot_failed_2() {
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -150,8 +130,6 @@ fn test_snapshot_failed_2() {
 
 #[test]
 fn test_storage_error() {
-    let _guard = crate::setup();
-
     let data = vec![(1, Some("name:0"), 2), (2, Some("name:4"), 3)];
 
     let product = ProductTable::new();
@@ -166,8 +144,6 @@ fn test_storage_error() {
 
 #[test]
 fn test_region_error_in_scan() {
-    let _guard = crate::setup();
-
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),

@@ -3,6 +3,7 @@
 pub mod bytes;
 pub mod number;
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use std::io::{self, ErrorKind};
 
 pub type BytesSlice<'a> = &'a [u8];
@@ -24,11 +25,11 @@ quick_error! {
         Io(err: io::Error) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
-        KeyLength {description("bad format key(length)")}
-        KeyPadding {description("bad format key(padding)")}
-        KeyNotFound {description("key not found")}
+        KeyLength {display("bad format key(length)")}
+        KeyPadding {display("bad format key(padding)")}
+        KeyNotFound {display("key not found")}
     }
 }
 
@@ -47,3 +48,14 @@ impl Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::Io(_) => error_code::codec::IO,
+            Error::KeyLength => error_code::codec::KEY_LENGTH,
+            Error::KeyPadding => error_code::codec::BAD_PADDING,
+            Error::KeyNotFound => error_code::codec::KEY_NOT_FOUND,
+        }
+    }
+}

@@ -18,11 +18,10 @@ pub enum ConfigValue {
     Usize(usize),
     Bool(bool),
     String(String),
-    // `String` represent config field that has type `String`,
-    // `Other` represent config field with type that can be
-    // coverted to `String` as temporary representation i.e enum type.
-    Other(String),
+    BlobRunMode(String),
+    OptionSize(Option<u64>),
     Module(ConfigChange),
+    Skip,
 }
 
 impl Display for ConfigValue {
@@ -30,6 +29,8 @@ impl Display for ConfigValue {
         match self {
             ConfigValue::Duration(v) => write!(f, "{}ms", v),
             ConfigValue::Size(v) => write!(f, "{}b", v),
+            ConfigValue::OptionSize(Some(v)) => write!(f, "{}b", v),
+            ConfigValue::OptionSize(None) => write!(f, ""),
             ConfigValue::U64(v) => write!(f, "{}", v),
             ConfigValue::F64(v) => write!(f, "{}", v),
             ConfigValue::I32(v) => write!(f, "{}", v),
@@ -37,8 +38,9 @@ impl Display for ConfigValue {
             ConfigValue::Usize(v) => write!(f, "{}", v),
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
-            ConfigValue::Other(v) => write!(f, "{}", v),
+            ConfigValue::BlobRunMode(v) => write!(f, "{}", v),
             ConfigValue::Module(v) => write!(f, "{:?}", v),
+            ConfigValue::Skip => write!(f, "ConfigValue::Skip"),
         }
     }
 }
@@ -114,11 +116,13 @@ pub trait Configuration<'a> {
     /// Get encoder that can be serialize with `serde::Serializer`
     /// with the disappear of `#[config(hidden)]` field
     fn get_encoder(&'a self) -> Self::Encoder;
+    /// Get all fields and their type of the config
+    fn typed(&self) -> ConfigChange;
 }
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-pub trait ConfigManager: Send {
+pub trait ConfigManager: Send + Sync {
     fn dispatch(&mut self, _: ConfigChange) -> Result<()>;
 }
 

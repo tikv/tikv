@@ -1,7 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This crate provides a macro that can be used to append a match expression with multiple
-//! arms, where token can be substituted for each arm.
+//! arms, where the tokens in the first arm, as a template, can be subsitituted and the template
+//! arm will be expanded into multiple arms.
 //!
 //! For example, the following code
 //!
@@ -10,6 +11,7 @@
 //!     T = [Int, Real, Double],
 //!     match Foo {
 //!         EvalType::T => { panic!("{}", EvalType::T); },
+//!         EvalType::Other => unreachable!(),
 //!     }
 //! }
 //! ```
@@ -21,6 +23,7 @@
 //!     EvalType::Int => { panic!("{}", EvalType::Int); },
 //!     EvalType::Real => { panic!("{}", EvalType::Real); },
 //!     EvalType::Double => { panic!("{}", EvalType::Double); },
+//!     EvalType::Other => unreachable!(),
 //! }
 //! ```
 //!
@@ -67,8 +70,8 @@ struct MatchTemplate {
     template_ident: Ident,
     substitutes: Punctuated<Substitution, Token![,]>,
     match_exp: Box<Expr>,
-    match_arm: Arm,
-    wildcard_match_arm: Option<Arm>,
+    template_arm: Arm,
+    remaining_arms: Vec<Arm>,
 }
 
 impl Parse for MatchTemplate {
@@ -81,30 +84,18 @@ impl Parse for MatchTemplate {
             Punctuated::<Substitution, Token![,]>::parse_terminated(&substitutes_tokens)?;
         input.parse::<Token![,]>()?;
         let m: ExprMatch = input.parse()?;
-        assert!(!m.arms.is_empty(), "Expect at least 1 match arm");
-        assert!(m.arms.len() <= 2, "Expect at most 2 match arm");
-        let mut arms = m.arms.into_iter();
-
-        let mut arm = arms.next().unwrap();
-        assert!(arm.guard.is_none(), "Expect no match arm guard");
-        arm.comma = None;
-
-        let mut wildcard_arm = None;
-        if let Some(arm) = arms.next() {
-            assert!(arm.guard.is_none(), "Expect no match arm guard");
-            if let Pat::Wild(_) = arm.pat {
-                wildcard_arm = Some(arm);
-            } else {
-                panic!("Expect wildcard arm");
-            }
-        }
+        let mut arms = m.arms;
+        arms.iter_mut().for_each(|arm| arm.comma = None);
+        assert!(!arms.is_empty(), "Expect at least 1 match arm");
+        let template_arm = arms.remove(0);
+        assert!(template_arm.guard.is_none(), "Expect no match arm guard");
 
         Ok(Self {
             template_ident,
             substitutes,
             match_exp: m.expr,
-            match_arm: arm,
-            wildcard_match_arm: wildcard_arm,
+            template_arm,
+            remaining_arms: arms,
         })
     }
 }
@@ -115,8 +106,8 @@ impl MatchTemplate {
             template_ident,
             substitutes,
             match_exp,
-            match_arm,
-            wildcard_match_arm,
+            template_arm,
+            remaining_arms,
         } = self;
         let match_arms = substitutes.into_iter().map(|substitute| {
             let mut folder = match substitute {
@@ -131,12 +122,12 @@ impl MatchTemplate {
                     right_ident,
                 },
             };
-            folder.fold_arm(match_arm.clone())
+            folder.fold_arm(template_arm.clone())
         });
         quote! {
             match #match_exp {
                 #(#match_arms,)*
-                #wildcard_match_arm
+                #(#remaining_arms,)*
             }
         }
     }
@@ -226,6 +217,7 @@ mod tests {
             T = [Int, Real, Double],
             match foo() {
                 EvalType::T => { panic!("{}", EvalType::T); },
+                EvalType::Other => unreachable!(),
             }
         "#;
 
@@ -234,6 +226,7 @@ mod tests {
                 EvalType::Int => { panic!("{}", EvalType::Int); },
                 EvalType::Real => { panic!("{}", EvalType::Real); },
                 EvalType::Double => { panic!("{}", EvalType::Double); },
+                EvalType::Other => unreachable!(),
             }
         "#;
         let expect_output_stream: TokenStream = expect_output.parse().unwrap();
@@ -273,6 +266,7 @@ mod tests {
             TT = [Foo, Bar => Baz],
             match v {
                 VectorValue::TT => EvalType::TT,
+                EvalType::Other => unreachable!(),
             }
         "#;
 
@@ -280,6 +274,7 @@ mod tests {
             match v {
                 VectorValue::Foo => EvalType::Foo,
                 VectorValue::Bar => EvalType::Baz,
+                EvalType::Other => unreachable!(),
             }
         "#;
         let expect_output_stream: TokenStream = expect_output.parse().unwrap();

@@ -5,7 +5,8 @@ use std::{thread, usize};
 use test::Bencher;
 
 use crossbeam::channel;
-use futures::{Future, Stream};
+use futures::executor::block_on;
+use futures::stream::StreamExt;
 use tikv_util::mpsc;
 
 #[bench]
@@ -125,19 +126,18 @@ fn bench_receiver_stream_batch(b: &mut Bencher) {
         });
     }
 
-    let mut rx = Some(mpsc::batch::BatchReceiver::new(rx, 32, Vec::new, |v, t| {
-        v.push(t)
-    }));
+    let mut rx = Some(mpsc::batch::BatchReceiver::new(
+        rx,
+        32,
+        Vec::new,
+        mpsc::batch::VecCollector,
+    ));
 
     b.iter(|| {
         let mut count = 0;
         let mut rx1 = rx.take().unwrap();
         loop {
-            let (item, s) = rx1
-                .into_future()
-                .wait()
-                .map_err(|_| unreachable!())
-                .unwrap();
+            let (item, s) = block_on(rx1.into_future());
             rx1 = s;
             if let Some(v) = item {
                 count += v.len();
@@ -168,11 +168,7 @@ fn bench_receiver_stream(b: &mut Bencher) {
         let mut count = 0;
         let mut rx1 = rx.take().unwrap();
         loop {
-            let (item, s) = rx1
-                .into_future()
-                .wait()
-                .map_err(|_| unreachable!())
-                .unwrap();
+            let (item, s) = block_on(rx1.into_future());
             rx1 = s;
             if item.is_some() {
                 count += 1;

@@ -11,7 +11,8 @@ use rand::Rng;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use raft::eraftpb::MessageType;
 
-use engine::Peekable;
+use engine_rocks::Compat;
+use engine_traits::Peekable;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -32,11 +33,18 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.must_get(key), Some(value.to_vec()));
 
+    let region_id = cluster.get_region_id(b"");
+    let prev_committed_index = cluster
+        .raft_local_state(region_id, 1)
+        .get_hard_state()
+        .get_commit();
+    let prev_apply_state = cluster.apply_state(region_id, 1);
+
     // sleep 200ms in case the commit packet is dropped by simulated transport.
     thread::sleep(Duration::from_millis(200));
 
     cluster.assert_quorum(
-        |engine| match engine.get_value(&keys::data_key(key)).unwrap() {
+        |engine| match engine.c().get_value(&keys::data_key(key)).unwrap() {
             None => false,
             Some(v) => &*v == value,
         },
@@ -48,8 +56,34 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     // sleep 200ms in case the commit packet is dropped by simulated transport.
     thread::sleep(Duration::from_millis(200));
 
-    cluster.assert_quorum(|engine| engine.get_value(&keys::data_key(key)).unwrap().is_none());
+    cluster.assert_quorum(|engine| {
+        engine
+            .c()
+            .get_value(&keys::data_key(key))
+            .unwrap()
+            .is_none()
+    });
 
+    let last_index = cluster.raft_local_state(region_id, 1).get_last_index();
+    let apply_state = cluster.apply_state(region_id, 1);
+    assert_lt!(apply_state.get_last_commit_index(), last_index);
+    if apply_state != prev_apply_state {
+        // Ensures last commit index is advanced.
+        assert_ge!(
+            apply_state.get_last_commit_index(),
+            prev_committed_index,
+            "{:?} {:?}",
+            apply_state,
+            prev_apply_state
+        );
+        assert_gt!(
+            apply_state.get_last_commit_index(),
+            prev_apply_state.get_last_commit_index(),
+            "{:?} {:?}",
+            apply_state,
+            prev_apply_state
+        );
+    }
     // TODO add epoch not match test cases.
 }
 
@@ -76,9 +110,12 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put(key2, value2);
     cluster.must_delete(key1);
-    must_get_none(&cluster.engines[&last_leader.get_store_id()].kv, key2);
+    must_get_none(
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
+        key2,
+    );
     must_get_equal(
-        &cluster.engines[&last_leader.get_store_id()].kv,
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
         key1,
         value1,
     );
@@ -87,11 +124,14 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run_node(last_leader.get_store_id()).unwrap();
 
     must_get_equal(
-        &cluster.engines[&last_leader.get_store_id()].kv,
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
         key2,
         value2,
     );
-    must_get_none(&cluster.engines[&last_leader.get_store_id()].kv, key1);
+    must_get_none(
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
+        key1,
+    );
 }
 
 fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -452,7 +492,7 @@ fn test_node_leader_change_with_log_overlap() {
         .get_node_router(1)
         .send_command(
             put_req,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 called_.store(true, Ordering::SeqCst);
                 assert!(resp.response.get_header().has_error());
                 assert!(resp.response.get_header().get_error().has_stale_command());
@@ -704,7 +744,7 @@ fn test_node_dropped_proposal() {
         .get_node_router(1)
         .send_command(
             put_req,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 let _ = tx.send(resp.response);
             })),
         )
@@ -776,4 +816,34 @@ fn test_batch_write<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_server_batch_write() {
     let mut cluster = new_server_cluster(0, 3);
     test_batch_write(&mut cluster);
+}
+
+// Tests whether logs are catch up quickly.
+#[test]
+fn test_node_catch_up_logs() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(500);
+    cluster.cfg.raft_store.raft_max_size_per_msg = ReadableSize(5);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::hours(1);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(30);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::hours(1);
+    // disable compact log to make test more stable.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 3000;
+    cluster.pd_client.disable_default_operator();
+    // We use three peers([1, 2, 3]) for this test.
+    let r1 = cluster.run_conf_change();
+    cluster.pd_client.must_add_peer(r1, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    cluster.stop_node(3);
+    for i in 0..10 {
+        let v = format!("{:04}", i);
+        cluster.async_put(v.as_bytes(), v.as_bytes()).unwrap();
+    }
+    must_get_equal(&cluster.get_engine(1), b"0009", b"0009");
+    cluster.run_node(3).unwrap();
+    must_get_equal(&cluster.get_engine(3), b"0009", b"0009");
 }
