@@ -68,7 +68,7 @@ impl Dicts {
         let base = Path::new(path);
 
         // File dict is saved in plaintext.
-        let log_content = LogFile::open(base, FILE_DICT_NAME, file_rewrite_threshold);
+        let log_content = LogFile::open(base, FILE_DICT_NAME, file_rewrite_threshold, false);
 
         let key_file = EncryptedFile::new(base, KEY_DICT_NAME);
         let key_bytes = key_file.read(master_key);
@@ -548,18 +548,13 @@ impl DataKeyManager {
     }
 
     pub fn dump_file_dict(dict_path: &str, file_path: Option<&str>) -> Result<()> {
-        let dict_file = EncryptedFile::new(Path::new(dict_path), FILE_DICT_NAME);
-        let config = MasterKeyConfig::Plaintext;
-        let backend = create_backend(&config)?;
-        let dict_bytes = dict_file.read(backend.as_ref())?;
-        let mut dict = FileDictionary::default();
-        dict.merge_from_bytes(&dict_bytes)?;
+        let (_, file_dict) = LogFile::open(dict_path, FILE_DICT_NAME, 1, true)?;
         if let Some(file_path) = file_path {
-            if let Some(info) = dict.files.get(file_path) {
+            if let Some(info) = file_dict.files.get(file_path) {
                 println!("{}: {:?}", file_path, info);
             }
         } else {
-            for (path, info) in dict.files.iter() {
+            for (path, info) in file_dict.files.iter() {
                 println!("{}: {:?}", path, info);
             }
         }

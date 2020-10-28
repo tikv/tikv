@@ -71,7 +71,7 @@ impl LogFile {
             file_rewrite_threshold,
             removed: 0,
         };
-        log_file.write(&log_file.file_dict.clone())?;
+        log_file.rewrite()?;
         Ok(log_file)
     }
 
@@ -79,6 +79,7 @@ impl LogFile {
         base: P,
         name: &str,
         file_rewrite_threshold: u64,
+        skip_rewrite: bool,
     ) -> Result<(LogFile, FileDictionary)> {
         let mut log_file = LogFile {
             base: base.as_ref().to_path_buf(),
@@ -90,12 +91,14 @@ impl LogFile {
         };
 
         let file_dict = log_file.recovery()?;
-        log_file.write(&file_dict)?;
+        if !skip_rewrite {
+            log_file.rewrite()?;
+        }
         Ok((log_file, file_dict))
     }
 
     /// Rewrite the log file to reduce file size and reduce the time of next recovery.
-    pub fn write(&mut self, file_dict: &FileDictionary) -> Result<()> {
+    pub fn rewrite(&mut self) -> Result<()> {
         let origin_path = self.base.join(&self.name);
         let mut tmp_path = origin_path.clone();
         tmp_path.set_extension(format!("{}.{}", thread_rng().next_u64(), TMP_FILE_SUFFIX));
@@ -105,7 +108,7 @@ impl LogFile {
             .open(&tmp_path)
             .unwrap();
 
-        let file_dict_bytes = file_dict.write_to_bytes()?;
+        let file_dict_bytes = self.file_dict.write_to_bytes()?;
         let header = Header::new(&file_dict_bytes, Version::V2);
         tmp_file.write_all(&header.to_bytes())?;
         tmp_file.write_all(&file_dict_bytes)?;
@@ -224,7 +227,7 @@ impl LogFile {
     fn check_compact(&mut self) -> Result<()> {
         if self.removed > self.file_rewrite_threshold {
             self.removed = 0;
-            self.write(&self.file_dict.clone())?;
+            self.rewrite()?;
         }
         Ok(())
     }
@@ -330,6 +333,7 @@ mod tests {
         let info1 = create_file_info(1, EncryptionMethod::Aes256Ctr);
         let info2 = create_file_info(2, EncryptionMethod::Unknown);
         let info3 = create_file_info(3, EncryptionMethod::Aes128Ctr);
+        let info4 = create_file_info(4, EncryptionMethod::Aes128Ctr);
 
         log_file.insert("info1", &info1).unwrap();
         log_file.insert("info2", &info2).unwrap();
@@ -343,15 +347,14 @@ mod tests {
         assert_eq!(file_dict.files.len(), 3);
 
         log_file.remove("info2").unwrap();
+        log_file.remove("info1").unwrap();
+        log_file.insert("info2", &info4).unwrap();
 
         let file_dict = log_file.recovery().unwrap();
-        assert_eq!(*file_dict.files.get("info1").unwrap(), info1);
-        assert_eq!(file_dict.files.get("info2"), None);
+        assert_eq!(file_dict.files.get("info1"), None);
+        assert_eq!(*file_dict.files.get("info2").unwrap(), info4);
         assert_eq!(*file_dict.files.get("info3").unwrap(), info3);
         assert_eq!(file_dict.files.len(), 2);
-
-        log_file.write(&file_dict).unwrap();
-        assert_eq!(file_dict, log_file.recovery().unwrap());
     }
 
     #[test]
@@ -360,18 +363,16 @@ mod tests {
         let mut log_file = LogFile::new(tempdir.path(), "test_log_file", 2).unwrap();
 
         let info = create_file_info(1, EncryptionMethod::Aes256Ctr);
-        let mut dict = FileDictionary::default();
-        dict.files.insert("info".to_owned(), info);
-        log_file.write(&dict).unwrap();
+        log_file.insert("info", &info).unwrap();
 
-        let (_, file_dict) = LogFile::open(tempdir.path(), "test_log_file", 2).unwrap();
-        assert_eq!(file_dict, dict);
+        let (_, file_dict) = LogFile::open(tempdir.path(), "test_log_file", 2, false).unwrap();
+        assert_eq!(*file_dict.files.get("info").unwrap(), info);
     }
 
     #[test]
     fn test_log_file_not_existed() {
         let tempdir = tempfile::tempdir().unwrap();
-        let ret = LogFile::open(tempdir.path(), "test_log_file", 2);
+        let ret = LogFile::open(tempdir.path(), "test_log_file", 2, false);
         assert!(matches!(ret, Err(Error::Io(_))));
     }
 
@@ -392,7 +393,7 @@ mod tests {
         )
         .unwrap();
 
-        let (_, file_dict_read) = LogFile::open(tempdir.path(), "test_log_file", 2).unwrap();
+        let (_, file_dict_read) = LogFile::open(tempdir.path(), "test_log_file", 2, false).unwrap();
         assert_eq!(file_dict, file_dict_read);
     }
 
