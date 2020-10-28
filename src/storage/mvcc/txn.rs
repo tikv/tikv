@@ -1287,7 +1287,7 @@ mod tests {
     fn test_write_size_imp(k: &[u8], v: &[u8], pk: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(10.into());
         let mut txn = MvccTxn::new(snapshot, 10.into(), true, cm.clone());
         let key = Key::from_raw(k);
@@ -1311,7 +1311,7 @@ mod tests {
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
             .unwrap();
 
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(snapshot, 10.into(), true, cm);
         commit(&mut txn, key, 15.into()).unwrap();
         assert!(txn.write_size() > 0);
@@ -1336,8 +1336,7 @@ mod tests {
         must_prewrite_put(&engine, key, value, key, 5);
         must_commit(&engine, key, 5, 10);
 
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(10.into());
         let mut txn = MvccTxn::new(snapshot, 5.into(), true, cm.clone());
         assert!(prewrite(
@@ -1354,8 +1353,7 @@ mod tests {
         )
         .is_err());
 
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5.into(), true, cm);
         assert!(prewrite(
             &mut txn,
@@ -1451,7 +1449,7 @@ mod tests {
         );
         must_commit(&engine, &[6], 3, 6);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader =
             MvccReader::new(snapshot, Some(ScanMode::Forward), true, IsolationLevel::Si);
 
@@ -1495,7 +1493,7 @@ mod tests {
         must_prewrite_put(&engine, &[6], b"xxx", &[6], 3);
         must_commit(&engine, &[6], 3, 6);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader =
             MvccReader::new(snapshot, Some(ScanMode::Forward), true, IsolationLevel::Si);
 
@@ -1809,7 +1807,7 @@ mod tests {
         };
 
         let new_txn = |start_ts, cm| {
-            let snapshot = engine.snapshot(&ctx).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             MvccTxn::new(snapshot, start_ts, true, cm)
         };
 
@@ -1893,7 +1891,7 @@ mod tests {
         let cm = ConcurrencyManager::new(42.into());
 
         let do_prewrite = || {
-            let snapshot = engine.snapshot(&ctx).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
             let min_commit_ts = prewrite(
@@ -1920,7 +1918,7 @@ mod tests {
 
         assert_eq!(do_prewrite(), 43.into());
 
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
         assert_eq!(lock.ts, TimeStamp::new(2));
@@ -1946,7 +1944,7 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, b"key", b"key", 2, 2);
 
         let do_pessimistic_prewrite = || {
-            let snapshot = engine.snapshot(&ctx).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
             let min_commit_ts = pessimistic_prewrite(
@@ -1974,7 +1972,7 @@ mod tests {
 
         assert_eq!(do_pessimistic_prewrite(), 43.into());
 
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
         assert_eq!(lock.ts, TimeStamp::new(2));
@@ -1994,13 +1992,12 @@ mod tests {
     #[test]
     fn test_async_commit_pushed_min_commit_ts() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let ctx = Context::default();
         let cm = ConcurrencyManager::new(42.into());
 
         // Simulate that min_commit_ts is pushed forward larger than latest_ts
         must_acquire_pessimistic_lock_impl(&engine, b"key", b"key", 2, 20000, 2, false, 100);
 
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm);
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
         let min_commit_ts = pessimistic_prewrite(

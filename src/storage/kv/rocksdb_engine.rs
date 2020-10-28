@@ -21,12 +21,11 @@ use txn_types::{Key, Value};
 
 use crate::storage::config::BlockCacheConfig;
 use tikv_util::escape;
-use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
     Callback, CbContext, Cursor, Engine, Error, ErrorInner, ExtCallback,
-    Iterator as EngineIterator, Modify, Result, ScanMode, Snapshot, WriteData,
+    Iterator as EngineIterator, Modify, Result, ScanMode, SnapContext, Snapshot, WriteData,
 };
 
 pub use engine_rocks::RocksSnapshot;
@@ -287,7 +286,7 @@ impl Engine for RocksEngine {
     }
 
     fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
-        self.snapshot(&Context::default())
+        self.snapshot(Default::default())
     }
 
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
@@ -321,12 +320,7 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    fn async_snapshot(
-        &self,
-        _: &Context,
-        _: Option<ThreadReadId>,
-        cb: Callback<Self::Snap>,
-    ) -> Result<()> {
+    fn async_snapshot(&self, _: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
         fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
             "snapshot failed"
         )));
@@ -540,7 +534,7 @@ mod tests {
         must_delete(&engine, b"foo1");
         must_put(&engine, b"foo2", b"bar2");
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let iter_opt = IterOptions::default().set_max_skippable_internal_keys(1);
         let mut iter = snapshot.iter(iter_opt, ScanMode::Forward).unwrap();
 
@@ -565,7 +559,7 @@ mod tests {
         must_delete(engine, b"foo42");
         must_delete(engine, b"foo5");
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut iter = snapshot
             .iter(IterOptions::default(), ScanMode::Forward)
             .unwrap();
@@ -636,7 +630,7 @@ mod tests {
             )
             .unwrap();
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let iter_opt = IterOptions::default()
             .use_prefix_seek()
             .set_prefix_same_as_start(true);

@@ -45,6 +45,7 @@ pub mod txn;
 mod read_pool;
 mod types;
 
+use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
@@ -226,10 +227,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get a snapshot of `engine`.
     fn snapshot(
         engine: &E,
-        read_id: Option<ThreadReadId>,
-        ctx: &Context,
+        ctx: SnapContext<'_>,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
-        kv::snapshot(engine, read_id, ctx)
+        kv::snapshot(engine, ctx)
             .map_err(txn::Error::from)
             .map_err(Error::from)
     }
@@ -278,17 +278,30 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
 
-                // Update max_ts and check the in-memory lock table before getting the snapshot
-                async_commit_check_keys(
-                    &concurrency_manager,
-                    iter::once(&key),
-                    start_ts,
-                    ctx.get_isolation_level(),
-                    &bypass_locks,
-                )?;
+                let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
+                    SnapContext {
+                        pb_ctx: &ctx,
+                        read_id: None,
+                        start_ts,
+                        key_ranges: vec![point_key_range(key.clone())],
+                    }
+                } else {
+                    // Update max_ts and check the in-memory lock table before getting the snapshot
+                    async_commit_check_keys(
+                        &concurrency_manager,
+                        iter::once(&key),
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        &bypass_locks,
+                    )?;
+                    SnapContext {
+                        pb_ctx: &ctx,
+                        ..Default::default()
+                    }
+                };
 
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
@@ -368,21 +381,34 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let fill_cache = !ctx.get_not_fill_cache();
                         let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                         let region_id = ctx.get_region_id();
-                        // Update max_ts and check the in-memory lock table before getting the snapshot
-                        if let Err(e) = async_commit_check_keys(
-                            &concurrency_manager,
-                            iter::once(&key),
-                            start_ts,
-                            ctx.get_isolation_level(),
-                            &bypass_locks,
-                        ) {
-                            req_snaps.push(Err(e));
-                            continue;
-                        }
 
-                        let snap = Self::with_tls_engine(|engine| {
-                            Self::snapshot(engine, read_id.clone(), &ctx)
-                        });
+                        let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
+                            SnapContext {
+                                pb_ctx: &ctx,
+                                read_id: read_id.clone(),
+                                start_ts,
+                                key_ranges: vec![point_key_range(key.clone())],
+                            }
+                        } else {
+                            // Update max_ts and check the in-memory lock table before getting the snapshot
+                            if let Err(e) = async_commit_check_keys(
+                                &concurrency_manager,
+                                iter::once(&key),
+                                start_ts,
+                                ctx.get_isolation_level(),
+                                &bypass_locks,
+                            ) {
+                                req_snaps.push(Err(e));
+                                continue;
+                            }
+                            SnapContext {
+                                pb_ctx: &ctx,
+                                read_id: read_id.clone(),
+                                ..Default::default()
+                            }
+                        };
+
+                        let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
                         req_snaps.push(Ok((
                             snap,
                             key,
@@ -483,17 +509,30 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
-                // Update max_ts and check the in-memory lock table before getting the snapshot
-                async_commit_check_keys(
-                    &concurrency_manager,
-                    &keys,
-                    start_ts,
-                    ctx.get_isolation_level(),
-                    &bypass_locks,
-                )?;
+                let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
+                    SnapContext {
+                        pb_ctx: &ctx,
+                        read_id: None,
+                        start_ts,
+                        key_ranges: keys.iter().cloned().map(point_key_range).collect(),
+                    }
+                } else {
+                    // Update max_ts and check the in-memory lock table before getting the snapshot
+                    async_commit_check_keys(
+                        &concurrency_manager,
+                        &keys,
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        &bypass_locks,
+                    )?;
+                    SnapContext {
+                        pb_ctx: &ctx,
+                        ..Default::default()
+                    }
+                };
 
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
 
@@ -597,23 +636,41 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
-                // Update max_ts and check the in-memory lock table before getting the snapshot
-                concurrency_manager.update_max_ts(start_ts);
-                if ctx.get_isolation_level() == IsolationLevel::Si {
-                    concurrency_manager
-                        .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
-                            Lock::check_ts_conflict(
-                                Cow::Borrowed(lock),
-                                &key,
-                                start_ts,
-                                &bypass_locks,
-                            )
-                        })
-                        .map_err(mvcc::Error::from)?;
-                }
+                let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
+                    let mut key_range = KeyRange::default();
+                    key_range.set_start_key(start_key.as_encoded().to_vec());
+                    if let Some(end_key) = &end_key {
+                        key_range.set_end_key(end_key.as_encoded().to_vec());
+                    }
+                    SnapContext {
+                        pb_ctx: &ctx,
+                        read_id: None,
+                        start_ts,
+                        key_ranges: vec![key_range],
+                    }
+                } else {
+                    // Update max_ts and check the in-memory lock table before getting the snapshot
+                    concurrency_manager.update_max_ts(start_ts);
+                    if ctx.get_isolation_level() == IsolationLevel::Si {
+                        concurrency_manager
+                            .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
+                                Lock::check_ts_conflict(
+                                    Cow::Borrowed(lock),
+                                    &key,
+                                    start_ts,
+                                    &bypass_locks,
+                                )
+                            })
+                            .map_err(mvcc::Error::from)?;
+                    }
+                    SnapContext {
+                        pb_ctx: &ctx,
+                        ..Default::default()
+                    }
+                };
 
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
 
@@ -786,8 +843,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
@@ -842,9 +903,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let mut results = Vec::default();
                 let mut snaps = vec![];
                 for req in gets {
-                    let snap = Self::with_tls_engine(|engine| {
-                        Self::snapshot(engine, read_id.clone(), req.get_context())
-                    });
+                    let snap_ctx = SnapContext {
+                        pb_ctx: req.get_context(),
+                        read_id: read_id.clone(),
+                        ..Default::default()
+                    };
+                    let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
                     snaps.push((req, snap));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
@@ -907,8 +971,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
@@ -1213,9 +1281,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
-
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
 
@@ -1328,9 +1399,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
                 let command_duration = tikv_util::time::Instant::now_coarse();
-
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now();
                     let mut statistics = Statistics::default();
@@ -1478,6 +1552,20 @@ fn async_commit_check_keys<'a>(
         }
     }
     Ok(())
+}
+
+fn need_check_locks_in_replica_read(ctx: &Context) -> bool {
+    ctx.get_replica_read() && ctx.get_isolation_level() == IsolationLevel::Si
+}
+
+fn point_key_range(key: Key) -> KeyRange {
+    let mut end_key = key.as_encoded().to_vec();
+    end_key.push(0);
+    let end_key = Key::from_encoded(end_key);
+    let mut key_range = KeyRange::default();
+    key_range.set_start_key(key.into_encoded());
+    key_range.set_end_key(end_key.into_encoded());
+    key_range
 }
 
 /// A builder to build a temporary `Storage<E>`.
@@ -3489,7 +3577,6 @@ mod tests {
         );
 
         // End key tests. Confirm that lower/upper bound works correctly.
-        let ctx = Context::default();
         let results = vec![
             (b"c1".to_vec(), b"cc11".to_vec()),
             (b"c2".to_vec(), b"cc22".to_vec()),
@@ -3504,8 +3591,11 @@ mod tests {
         expect_multi_values(
             results.clone().collect(),
             block_on(async {
-                let snapshot =
-                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, None, &ctx).await?;
+                let snapshot = <Storage<RocksEngine, DummyLockManager>>::snapshot(
+                    &engine,
+                    SnapContext::default(),
+                )
+                .await?;
                 <Storage<RocksEngine, DummyLockManager>>::forward_raw_scan(
                     &snapshot,
                     &"".to_string(),
@@ -3520,8 +3610,11 @@ mod tests {
         expect_multi_values(
             results.rev().collect(),
             block_on(async move {
-                let snapshot =
-                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, None, &ctx).await?;
+                let snapshot = <Storage<RocksEngine, DummyLockManager>>::snapshot(
+                    &engine,
+                    SnapContext::default(),
+                )
+                .await?;
                 <Storage<RocksEngine, DummyLockManager>>::reverse_raw_scan(
                     &snapshot,
                     &"".to_string(),

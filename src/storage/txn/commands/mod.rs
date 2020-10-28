@@ -654,8 +654,7 @@ pub mod test_util {
         start_ts: u64,
         one_pc_max_commit_ts: Option<u64>,
     ) -> Result<()> {
-        let ctx = Context::default();
-        let snap = engine.snapshot(&ctx)?;
+        let snap = engine.snapshot(Default::default())?;
         let cmd = if let Some(max_commit_ts) = one_pc_max_commit_ts {
             Prewrite::with_1pc(
                 mutations,
@@ -722,8 +721,7 @@ pub mod test_util {
         for_update_ts: u64,
         one_pc_max_commit_ts: Option<u64>,
     ) -> Result<()> {
-        let ctx = Context::default();
-        let snap = engine.snapshot(&ctx)?;
+        let snap = engine.snapshot(Default::default())?;
         let cmd = if let Some(max_commit_ts) = one_pc_max_commit_ts {
             PrewritePessimistic::with_1pc(
                 mutations,
@@ -772,7 +770,7 @@ pub mod test_util {
         commit_ts: u64,
     ) -> Result<()> {
         let ctx = Context::default();
-        let snap = engine.snapshot(&ctx)?;
+        let snap = engine.snapshot(Default::default())?;
         let concurrency_manager = ConcurrencyManager::new(lock_ts.into());
         let cmd = Commit::new(
             keys,
@@ -802,7 +800,7 @@ pub mod test_util {
         start_ts: u64,
     ) -> Result<()> {
         let ctx = Context::default();
-        let snap = engine.snapshot(&ctx)?;
+        let snap = engine.snapshot(Default::default())?;
         let concurrency_manager = ConcurrencyManager::new(start_ts.into());
         let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let context = WriteContext {

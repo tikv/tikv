@@ -879,7 +879,6 @@ mod latest_kv_tests {
     use crate::storage::Scanner;
 
     use crate::storage::txn::tests::*;
-    use kvproto::kvrpcpb::Context;
 
     /// Check whether everything works as usual when `ForwardKvScanner::get()` goes out of bound.
     #[test]
@@ -895,7 +894,7 @@ mod latest_kv_tests {
             must_rollback(&engine, b"b", ts);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
             .build()
@@ -949,7 +948,7 @@ mod latest_kv_tests {
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
             .build()
@@ -1012,7 +1011,7 @@ mod latest_kv_tests {
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND);
         must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
             .build()
@@ -1079,7 +1078,7 @@ mod latest_kv_tests {
             must_commit(&engine, &[i], 14, 14);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         // Test both bound specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
@@ -1166,7 +1165,6 @@ mod latest_entry_tests {
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use crate::storage::{Engine, TestEngineBuilder};
-    use kvproto::kvrpcpb::Context;
 
     use super::test_util::EntryBuilder;
 
@@ -1184,7 +1182,7 @@ mod latest_entry_tests {
             must_rollback(&engine, b"b", ts);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
             .build_entry_scanner(0.into(), false)
@@ -1243,7 +1241,7 @@ mod latest_entry_tests {
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
             .build_entry_scanner(0.into(), false)
@@ -1312,7 +1310,7 @@ mod latest_entry_tests {
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND);
         must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
             .build_entry_scanner(0.into(), false)
@@ -1385,7 +1383,7 @@ mod latest_entry_tests {
             must_commit(&engine, &[i], 14, 14);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         // Test both bound specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
@@ -1488,7 +1486,7 @@ mod latest_entry_tests {
             .build_commit(WriteType::Delete, true);
 
         let check = |ts: u64, after_ts: u64, output_delete, expected: Vec<&TxnEntry>| {
-            let snapshot = engine.snapshot(&Context::default()).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut scanner = ScannerBuilder::new(snapshot, ts.into(), false)
                 .range(None, None)
                 .build_entry_scanner(after_ts.into(), output_delete)
@@ -1522,7 +1520,6 @@ mod delta_entry_tests {
     use crate::storage::txn::tests::*;
     use crate::storage::{Engine, TestEngineBuilder};
 
-    use kvproto::kvrpcpb::Context;
     use txn_types::{is_short_value, SHORT_VALUE_MAX_LEN};
 
     use super::test_util::EntryBuilder;
@@ -1541,7 +1538,7 @@ mod delta_entry_tests {
             must_rollback(&engine, b"b", ts);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
             .build_delta_scanner(0.into(), ExtraOp::Noop)
@@ -1600,7 +1597,7 @@ mod delta_entry_tests {
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
             .build_delta_scanner(0.into(), ExtraOp::Noop)
@@ -1671,7 +1668,7 @@ mod delta_entry_tests {
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND + 1);
         must_commit(&engine, b"b", SEEK_BOUND + 1, SEEK_BOUND + 1);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
             .build_delta_scanner(8.into(), ExtraOp::Noop)
@@ -1744,7 +1741,7 @@ mod delta_entry_tests {
             must_commit(&engine, &[i], 14, 14);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         // Test both bound specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
@@ -2005,7 +2002,7 @@ mod delta_entry_tests {
                 Some(Key::from_raw(to_key))
             };
             let mut scanner = ScannerBuilder::new(
-                engine.snapshot(&Context::default()).unwrap(),
+                engine.snapshot(Default::default()).unwrap(),
                 to_ts.into(),
                 false,
             )
@@ -2115,7 +2112,7 @@ mod delta_entry_tests {
             .build_prewrite(LockType::Put, true);
 
         let check = |after_ts: u64, expected: Vec<&TxnEntry>| {
-            let snapshot = engine.snapshot(&Context::default()).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max(), false)
                 .range(None, None)
                 .build_delta_scanner(after_ts.into(), ExtraOp::ReadOldValue)
