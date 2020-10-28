@@ -66,7 +66,7 @@ pub mod sys_quota {
 #[cfg(not(target_os = "linux"))]
 pub mod sys_quota {
     use super::super::config::KB;
-    use super::{env_var_cpu_cores_quota, SystemExt, SYS_INFO};
+    use super::{SystemExt, SYS_INFO};
 
     pub struct SysQuota {}
 
