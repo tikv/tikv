@@ -110,7 +110,7 @@ pub struct MvccTxn<S: Snapshot> {
     writes: WriteData,
     // When 1PC is enabled, locks will be collected here instead of marshalled and put into `writes`,
     // so it can be further processed. The elements are tuples representing
-    // (key,lock, remove_pessimistic_lock)
+    // (key, lock, remove_pessimistic_lock)
     pub(crate) locks_for_1pc: Vec<(Key, Lock, bool)>,
     // collapse continuous rollbacks.
     pub(crate) collapse_rollback: bool,
