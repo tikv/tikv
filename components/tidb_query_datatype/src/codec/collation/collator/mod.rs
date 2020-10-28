@@ -16,9 +16,9 @@ use std::str;
 
 use codec::prelude::*;
 
-use crate::codec::Result;
 use super::charset::*;
 use super::Collator;
+use crate::codec::Result;
 
 const TRIM_PADDING_SPACE: char = 0x20 as char;
 
