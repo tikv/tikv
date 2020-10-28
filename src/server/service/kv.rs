@@ -1167,10 +1167,8 @@ fn future_get<E: Engine, L: LockManager>(
         } else {
             match v {
                 Ok((val, statistics, perf_statistics_delta)) => {
-                    let mut detail_v2 = ScanDetailV2::default();
-                    statistics.write_scan_detail(&mut detail_v2);
-                    perf_statistics_delta.write_scan_detail(&mut detail_v2);
-                    resp.set_scan_detail_v2(detail_v2);
+                    statistics.write_scan_detail(resp.mut_scan_detail_v2());
+                    perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
                     match val {
                         Some(val) => resp.set_value(val),
                         None => resp.set_not_found(true),
@@ -1225,10 +1223,8 @@ fn future_batch_get<E: Engine, L: LockManager>(
             resp.set_region_error(err);
         } else {
             let (val, statistics, perf_statistics_delta) = extract_kv_pairs_and_statistics(v);
-            let mut detail_v2 = ScanDetailV2::default();
-            statistics.write_scan_detail(&mut detail_v2);
-            perf_statistics_delta.write_scan_detail(&mut detail_v2);
-            resp.set_scan_detail_v2(detail_v2);
+            statistics.write_scan_detail(resp.mut_scan_detail_v2());
+            perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
             resp.set_pairs(val.into());
         }
         Ok(resp)
