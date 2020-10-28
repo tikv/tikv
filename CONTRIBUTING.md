@@ -186,4 +186,3 @@ The body of the commit message should describe why the change was made and at a 
 The project uses [DCO check](https://github.com/probot/dco#how-it-works) and the commit message must contain a `Signed-off-by` line for [Developer Certificate of Origin](https://developercertificate.org/).
 
 Use option `git commit -s` to sign off your commits.
- 
