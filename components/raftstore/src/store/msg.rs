@@ -128,6 +128,17 @@ impl PeerTicks {
             _ => unreachable!(),
         }
     }
+    pub fn get_all_ticks() -> &'static [PeerTicks] {
+        const TICKS: &[PeerTicks] = &[
+            PeerTicks::RAFT,
+            PeerTicks::RAFT_LOG_GC,
+            PeerTicks::SPLIT_REGION_CHECK,
+            PeerTicks::PD_HEARTBEAT,
+            PeerTicks::CHECK_MERGE,
+            PeerTicks::CHECK_PEER_STALE_STATE,
+        ];
+        TICKS
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -239,6 +250,12 @@ pub enum CasualMessage<E: KvEngine> {
 
     /// A message to access peer's internal state.
     AccessPeer(Box<dyn FnOnce(&mut PeerFsm<E>) + Send + 'static>),
+
+    /// Region info from PD
+    QueryRegionLeaderResp {
+        region: metapb::Region,
+        leader: metapb::Peer,
+    },
 }
 
 impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
@@ -277,6 +294,7 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
+            CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
         }
     }
 }

@@ -122,6 +122,9 @@ pub enum Task {
         read_io_rates: RecordPairVec,
         write_io_rates: RecordPairVec,
     },
+    QueryRegionLeader {
+        region_id: u64,
+    },
 }
 
 pub struct StoreStat {
@@ -184,7 +187,7 @@ impl Display for Task {
                 f,
                 "ask split region {} with key {}",
                 region.get_id(),
-                hex::encode_upper(&split_key),
+                log_wrappers::Value::key(&split_key),
             ),
             Task::AutoSplit {
                 ref split_infos,
@@ -239,6 +242,11 @@ impl Display for Task {
                 f,
                 "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
                 cpu_usages, read_io_rates, write_io_rates,
+            ),
+            Task::QueryRegionLeader { region_id } => write!(
+                f,
+                "query the leader of region {}",
+                region_id
             ),
         }
     }
@@ -878,6 +886,29 @@ impl<T: PdClient> Runner<T> {
         self.store_stat.store_read_io_rates = read_io_rates;
         self.store_stat.store_write_io_rates = write_io_rates;
     }
+
+    fn handle_query_region_leader(&self, handle: &Handle, region_id: u64) {
+        let router = self.router.clone();
+        let f = self
+            .pd_client
+            .get_region_leader_by_id(region_id)
+            .then(move |resp| {
+                match resp {
+                    Ok(Some((region, leader))) => {
+                        let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
+                        if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
+                            error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        error!("get region failed"; "err" => ?e);
+                    }
+                }
+                Ok(())
+            });
+        handle.spawn(f);
+    }
 }
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
@@ -1017,6 +1048,9 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 read_io_rates,
                 write_io_rates,
             } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
+            Task::QueryRegionLeader { region_id } => {
+                self.handle_query_region_leader(handle, region_id)
+            }
         };
     }
 

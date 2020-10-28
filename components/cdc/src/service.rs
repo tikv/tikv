@@ -108,12 +108,12 @@ impl EventBatcher {
 
 pub struct Conn {
     id: ConnID,
-    sink: BatchSender<(usize, Event)>,
+    sink: BatchSender<CdcEvent>,
     downstreams: HashMap<u64, DownstreamID>,
 }
 
 impl Conn {
-    pub fn new(sink: BatchSender<(usize, Event)>) -> Conn {
+    pub fn new(sink: BatchSender<CdcEvent>) -> Conn {
         Conn {
             id: ConnID::new(),
             sink,
@@ -129,7 +129,7 @@ impl Conn {
         self.downstreams
     }
 
-    pub fn get_sink(&self) -> BatchSender<(usize, Event)> {
+    pub fn get_sink(&self) -> BatchSender<CdcEvent> {
         self.sink.clone()
     }
 

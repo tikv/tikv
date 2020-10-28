@@ -100,9 +100,6 @@ impl Task {
             cf: req.get_cf().to_owned(),
         })?;
 
-        // Check storage backend eagerly.
-        create_storage(req.get_storage_backend())?;
-
         let task = Task {
             request: Request {
                 start_key: req.get_start_key().to_owned(),
@@ -817,16 +814,23 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
     }
 }
 
-/// Construct an backup file name based on the given store id and region.
-/// A name consists with three parts: store id, region_id and a epoch version.
+/// Construct an backup file name based on the given store id, region, range start key and local unix timestamp.
+/// A name consists with five parts: store id, region_id, a epoch version, the hash of range start key and timestamp.
+/// range start key is used to keep the unique file name for file, to handle different tables exists on the same region.
+/// local unix timestamp is used to keep the unique file name for file, to handle receive the same request after connection reset.
 fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
+    let start = SystemTime::now();
+    let since_the_epoch = start
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards");
     match key {
         Some(k) => format!(
-            "{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}",
             store_id,
             region.get_id(),
             region.get_region_epoch().get_version(),
-            k
+            k,
+            since_the_epoch.as_millis()
         ),
         None => format!(
             "{}_{}_{}",
@@ -1124,8 +1128,6 @@ pub mod tests {
             req.set_start_version(0);
             req.set_end_version(ts.into_inner());
             let (tx, rx) = unbounded();
-            // Empty path should return an error.
-            Task::new(req.clone(), tx.clone()).unwrap_err();
 
             // Set an unique path to avoid AlreadyExists error.
             req.set_storage_backend(make_local_backend(&tmp.path().join(ts.to_string())));

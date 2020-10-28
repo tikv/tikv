@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
@@ -12,7 +12,6 @@ use engine_rocks::{Compat, RocksEngine, RocksSnapshot, WRITE_BATCH_MAX_KEYS};
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, Peekable};
 use error_code::ErrorCodeExt;
-use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -518,6 +517,28 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.has_ready = true;
             }
             CasualMessage::AccessPeer(cb) => cb(self.fsm),
+            CasualMessage::QueryRegionLeaderResp { region, leader } => {
+                // the leader already updated
+                if self.fsm.peer.raft_group.raft.leader_id != raft::INVALID_ID
+                    // the returned region is stale
+                    || util::is_epoch_stale(
+                        region.get_region_epoch(),
+                        self.fsm.peer.region().get_region_epoch(),
+                    )
+                {
+                    // Stale message
+                    return;
+                }
+
+                // Wake up the leader if the peer is on the leader's peer list
+                if region
+                    .get_peers()
+                    .iter()
+                    .any(|p| p.get_id() == self.fsm.peer_id())
+                {
+                    self.fsm.peer.send_wake_up_message(&mut self.ctx, &leader);
+                }
+            }
         }
     }
 
@@ -849,17 +870,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     #[inline]
-    fn schedule_tick(&mut self, tick: PeerTicks, timeout: Duration) {
+    fn schedule_tick(&mut self, tick: PeerTicks) {
         if self.fsm.tick_registry.contains(tick) {
             return;
         }
-        if is_zero_duration(&timeout) {
+        let idx = tick.bits() as usize;
+        if is_zero_duration(&self.ctx.tick_batch[idx].wait_duration) {
             return;
         }
         trace!(
             "schedule tick";
             "tick" => ?tick,
-            "timeout" => ?timeout,
+            "timeout" => ?self.ctx.tick_batch[idx].wait_duration,
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
         );
@@ -880,42 +902,27 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
         };
         let peer_id = self.fsm.peer.peer_id();
-        let f = self
-            .ctx
-            .timer
-            .delay(timeout)
-            .map(move |_| {
-                fail_point!(
-                    "on_raft_log_gc_tick_1",
-                    peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
-                    |_| unreachable!()
+        let cb = Box::new(move || {
+            // This can happen only when the peer is about to be destroyed
+            // or the node is shutting down. So it's OK to not to clean up
+            // registry.
+            if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
+                debug!(
+                    "failed to schedule peer tick";
+                    "region_id" => region_id,
+                    "peer_id" => peer_id,
+                    "tick" => ?tick,
+                    "err" => %e,
                 );
-                // This can happen only when the peer is about to be destroyed
-                // or the node is shutting down. So it's OK to not to clean up
-                // registry.
-                if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
-                    info!(
-                        "failed to schedule peer tick";
-                        "region_id" => region_id,
-                        "peer_id" => peer_id,
-                        "tick" => ?tick,
-                        "err" => %e,
-                    );
-                }
-            })
-            .map_err(move |e| {
-                panic!(
-                    "[region {}] {} tick {:?} is lost due to timeout error: {:?}",
-                    region_id, peer_id, tick, e
-                );
-            });
-        self.ctx.future_poller.spawn(f).unwrap();
+            }
+        });
+        self.ctx.tick_batch[idx].ticks.push(cb);
     }
 
     fn register_raft_base_tick(&mut self) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
-        self.schedule_tick(PeerTicks::RAFT, self.ctx.cfg.raft_base_tick_interval.0)
+        self.schedule_tick(PeerTicks::RAFT)
     }
 
     fn on_raft_base_tick(&mut self) {
@@ -1112,6 +1119,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if self.fsm.group_state == GroupState::Idle {
                     self.reset_raft_tick(GroupState::Ordered);
+                }
+                if msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+                    && self.fsm.peer.is_leader()
+                {
+                    self.fsm.peer.raft_group.raft.ping();
                 }
             }
             ExtraMessageType::MsgWantRollbackMerge => {
@@ -1857,23 +1869,23 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
             if !campaigned {
                 if let Some(msg) = meta
-                    .pending_votes
+                    .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
-                    let _ = self
+                    if let Err(e) = self
                         .ctx
                         .router
-                        .send(new_region_id, PeerMsg::RaftMessage(msg));
+                        .force_send(new_region_id, PeerMsg::RaftMessage(msg))
+                    {
+                        warn!("handle first requset failed"; "region_id" => region_id, "error" => ?e);
+                    }
                 }
             }
         }
     }
 
     fn register_merge_check_tick(&mut self) {
-        self.schedule_tick(
-            PeerTicks::CHECK_MERGE,
-            self.ctx.cfg.merge_check_tick_interval.0,
-        )
+        self.schedule_tick(PeerTicks::CHECK_MERGE)
     }
 
     /// Check if merge target region is staler than the local one in kv engine.
@@ -2699,10 +2711,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn register_raft_gc_log_tick(&mut self) {
-        self.schedule_tick(
-            PeerTicks::RAFT_LOG_GC,
-            self.ctx.cfg.raft_log_gc_tick_interval.0,
-        )
+        self.schedule_tick(PeerTicks::RAFT_LOG_GC)
     }
 
     #[allow(clippy::if_same_then_else)]
@@ -2710,8 +2719,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if !self.fsm.peer.get_store().is_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
-        debug_assert!(!self.fsm.stopped);
+        fail_point!("on_raft_log_gc_tick_1", self.fsm.peer_id() == 1, |_| {});
         fail_point!("on_raft_gc_log_tick", |_| {});
+        debug_assert!(!self.fsm.stopped);
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we
@@ -2811,10 +2821,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn register_split_region_check_tick(&mut self) {
-        self.schedule_tick(
-            PeerTicks::SPLIT_REGION_CHECK,
-            self.ctx.cfg.split_region_check_tick_interval.0,
-        )
+        self.schedule_tick(PeerTicks::SPLIT_REGION_CHECK)
     }
 
     fn on_split_region_check_tick(&mut self) {
@@ -3028,10 +3035,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn register_pd_heartbeat_tick(&mut self) {
-        self.schedule_tick(
-            PeerTicks::PD_HEARTBEAT,
-            self.ctx.cfg.pd_heartbeat_tick_interval.0,
-        )
+        self.schedule_tick(PeerTicks::PD_HEARTBEAT)
     }
 
     fn on_check_peer_stale_state_tick(&mut self) {
@@ -3129,10 +3133,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn register_check_peer_stale_state_tick(&mut self) {
-        self.schedule_tick(
-            PeerTicks::CHECK_PEER_STALE_STATE,
-            self.ctx.cfg.peer_stale_state_check_interval.0,
-        )
+        self.schedule_tick(PeerTicks::CHECK_PEER_STALE_STATE)
     }
 }
 

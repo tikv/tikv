@@ -52,7 +52,6 @@ use crate::store::{cmd_resp, util, Config, RegionSnapshot};
 use crate::{Error, Result};
 use sst_importer::SSTImporter;
 use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
@@ -158,11 +157,22 @@ pub struct ChangePeer {
     pub region: Region,
 }
 
-#[derive(Debug)]
 pub struct Range {
     pub cf: String,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
+}
+
+impl Debug for Range {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{{ cf: {:?}, start_key: {:?}, end_key: {:?} }}",
+            self.cf,
+            log_wrappers::Value::key(&self.start_key),
+            log_wrappers::Value::key(&self.end_key)
+        )
+    }
 }
 
 impl Range {
@@ -1165,7 +1175,7 @@ impl ApplyDelegate {
                 "peer_id" => self.id(),
                 "term" => ctx.exec_ctx.as_ref().unwrap().term,
                 "index" => ctx.exec_ctx.as_ref().unwrap().index,
-                "command" => ?request
+                "command" => ?request,
             );
         }
 
@@ -1232,7 +1242,7 @@ impl ApplyDelegate {
                         "skip readonly command";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "command" => ?req
+                        "command" => ?req,
                     );
                     continue;
                 }
@@ -1289,8 +1299,8 @@ impl ApplyDelegate {
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
-                    hex::encode_upper(&key),
-                    escape(value),
+                    log_wrappers::Value::key(&key),
+                    log_wrappers::Value::value(&value),
                     cf,
                     e
                 )
@@ -1300,8 +1310,8 @@ impl ApplyDelegate {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
-                    hex::encode_upper(&key),
-                    escape(value),
+                    log_wrappers::Value::key(&key),
+                    log_wrappers::Value::value(&value),
                     e
                 );
             });
@@ -1325,7 +1335,7 @@ impl ApplyDelegate {
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    hex::encode_upper(&key),
+                    log_wrappers::Value::key(&key),
                     e
                 )
             });
@@ -1341,7 +1351,7 @@ impl ApplyDelegate {
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    hex::encode_upper(&key),
+                    log_wrappers::Value::key(&key),
                     e
                 )
             });
@@ -1395,8 +1405,8 @@ impl ApplyDelegate {
                     panic!(
                         "{} failed to delete files in range [{}, {}): {:?}",
                         self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
+                        log_wrappers::Value::key(&start_key),
+                        log_wrappers::Value::key(&end_key),
                         e
                     )
                 });
@@ -1408,11 +1418,24 @@ impl ApplyDelegate {
                     panic!(
                         "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
                         self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
+                        log_wrappers::Value::key(&start_key),
+                        log_wrappers::Value::key(&end_key),
                         cf,
                         e
                     );
+                });
+            engine
+                .delete_blob_files_in_range_cf(
+                    cf, &start_key, &end_key, /* include_end */ false,
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete blob files in range [{}, {}): {:?}",
+                        self.tag,
+                        hex::encode_upper(&start_key),
+                        hex::encode_upper(&end_key),
+                        e
+                    )
                 });
         }
 
@@ -1579,7 +1602,7 @@ impl ApplyDelegate {
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
-                        "region" => ?&self.region,
+                        "region" => ?&self.region
                     );
                     return Err(box_err!(
                         "remove missing peer {:?} from region {:?}",
@@ -1628,7 +1651,7 @@ impl ApplyDelegate {
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => ?&self.region,
+                    "region" => ?&self.region
                 );
             }
         }

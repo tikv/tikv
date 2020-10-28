@@ -1,5 +1,6 @@
 log-level = "debug"
 log-file = "foo"
+log-format = "json"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
@@ -478,6 +479,7 @@ gc-merge-rewrite = true
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
+redact-info-log = true
 cert-allowed-cn = [
     "example.tikv.com",
 ]

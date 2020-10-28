@@ -7,11 +7,10 @@ use std::sync::mpsc;
 use std::sync::{atomic, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
 use engine_rocks::{Compat, RocksEngine};
+use engine_traits::CF_WRITE;
 use engine_traits::{MiscExt, TablePropertiesExt};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use kvproto::metapb;
@@ -424,22 +423,16 @@ impl<E: Engine> GcRunner<E> {
         let start_data_key = keys::data_key(start_key.as_encoded());
         let end_data_key = keys::data_end_key(end_key.as_encoded());
 
-        let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
-
         // First, call delete_files_in_range to free as much disk space as possible
         let delete_files_start_time = Instant::now();
-        for cf in cfs {
-            let cf_handle = get_cf_handle(local_storage, cf).unwrap();
-            local_storage
-                .delete_files_in_range_cf(cf_handle, &start_data_key, &end_data_key, false)
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!(
-                        "unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e
-                    );
-                    e
-                })?;
-        }
+        local_storage
+            .c()
+            .delete_all_files_in_range(&start_data_key, &end_data_key)
+            .map_err(|e| {
+                let e: Error = box_err!(e);
+                warn!("unsafe destroy range failed at delete_files_in_range"; "err" => ?e);
+                e
+            })?;
 
         info!(
             "unsafe destroy range finished deleting files in range";
@@ -448,21 +441,29 @@ impl<E: Engine> GcRunner<E> {
 
         // Then, delete all remaining keys in the range.
         let cleanup_all_start_time = Instant::now();
-        for cf in cfs {
-            // TODO: set use_delete_range with config here.
-            local_storage
-                .c()
-                .delete_all_in_range_cf(cf, &start_data_key, &end_data_key, false)
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!(
-                        "unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e
-                    );
-                    e
-                })?;
-        }
+        // TODO: set use_delete_range with config here.
+        local_storage
+            .c()
+            .delete_all_in_range(&start_data_key, &end_data_key, false)
+            .map_err(|e| {
+                let e: Error = box_err!(e);
+                warn!("unsafe destroy range failed at delete_all_in_range"; "err" => ?e);
+                e
+            })?;
 
-        let cleanup_all_time_cost = cleanup_all_start_time.elapsed();
+        info!(
+            "unsafe destroy range finished cleaning up all";
+            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.elapsed(),
+        );
+
+        local_storage
+            .c()
+            .delete_blob_files_in_range(&start_data_key, &end_data_key)
+            .map_err(|e| {
+                let e: Error = box_err!(e);
+                warn!("unsafe destroy range failed at delete_blob_files_in_range"; "err" => ?e);
+                e
+            })?;
 
         if let Some(router) = self.raft_store_router.as_ref() {
             router
@@ -481,10 +482,6 @@ impl<E: Engine> GcRunner<E> {
             warn!("unsafe destroy range: can't clear region size information: raft_store_router not set");
         }
 
-        info!(
-            "unsafe destroy range finished cleaning up all";
-            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_time_cost,
-        );
         Ok(())
     }
 

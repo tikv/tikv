@@ -36,7 +36,7 @@ fn test_observe_duplicate_cmd() {
         .send((req.clone(), WriteFlags::default()))
         .wait()
         .unwrap();
-    let mut events = receive_event(false);
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
@@ -61,7 +61,7 @@ fn test_observe_duplicate_cmd() {
         k.clone().into_bytes(),
         start_ts,
     );
-    let mut events = receive_event(false);
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(entries) => {
@@ -97,7 +97,7 @@ fn test_observe_duplicate_cmd() {
     fail::remove(fp);
     // Receive Commit response
     commit_resp.wait().unwrap();
-    let mut events = receive_event(false);
+    let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
@@ -116,14 +116,10 @@ fn test_observe_duplicate_cmd() {
     loop {
         // Even if there is no write,
         // resolved ts should be advanced regularly.
-        for e in receive_event(true) {
-            match e.event.unwrap() {
-                Event_oneof_event::ResolvedTs(ts) => {
-                    assert_ne!(0, ts);
-                    counter += 1;
-                }
-                _ => panic!("unknown event"),
-            }
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            assert_ne!(0, resolved_ts.ts);
+            counter += 1;
         }
         if counter > 5 {
             break;
@@ -193,12 +189,13 @@ fn test_delayed_change_cmd() {
 
     let mut counter = 0;
     loop {
-        for e in receive_event(true) {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            assert_ne!(0, resolved_ts.ts);
+            counter += 1;
+        }
+        for e in event.events.into_iter() {
             match e.event.unwrap() {
-                Event_oneof_event::ResolvedTs(ts) => {
-                    assert_ne!(0, ts);
-                    counter += 1;
-                }
                 Event_oneof_event::Entries(es) => {
                     assert!(es.entries.len() == 1, "{:?}", es);
                     let e = &es.entries[0];
