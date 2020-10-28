@@ -140,6 +140,10 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
+    fn get_store_async(&self, _store_id: u64) -> PdFuture<metapb::Store> {
+        unimplemented!();
+    }
+
     /// Gets all stores information.
     fn get_all_stores(&self, _exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
         unimplemented!();
