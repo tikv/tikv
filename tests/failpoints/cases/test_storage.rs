@@ -53,6 +53,7 @@ fn test_scheduler_leader_change_twice() {
                 TimeStamp::default(),
                 TimeStamp::default(),
                 None,
+                false,
                 ctx0,
             ),
             Box::new(move |res: storage::Result<_>| {
@@ -246,6 +247,7 @@ fn test_pipelined_pessimistic_lock() {
                 11.into(),
                 TimeStamp::default(),
                 None,
+                false,
                 Context::default(),
             ),
             expect_ok_callback(tx.clone(), 0),
@@ -377,6 +379,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
                     TimeStamp::default(),
                     TimeStamp::default(),
                     Some(vec![b"k2".to_vec()]),
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |res: storage::Result<_>| {
@@ -407,6 +410,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
                     TimeStamp::default(),
                     TimeStamp::default(),
                     Some(vec![b"k2".to_vec()]),
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |res: storage::Result<_>| {
@@ -510,6 +514,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     0.into(),
                     0.into(),
                     secondaries,
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -531,6 +536,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     0.into(),
                     0.into(),
                     secondaries,
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
