@@ -97,6 +97,7 @@ impl WriteData {
     }
 }
 
+/// Engine defines the common behaviour for a storage engine type.
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
     type Local: LocalEngine;
@@ -265,6 +266,7 @@ quick_error! {
     pub enum ErrorInner {
         Request(err: ErrorHeader) {
             from()
+            description(err.get_message())
             display("{:?}", err)
         }
         Timeout(d: Duration) {

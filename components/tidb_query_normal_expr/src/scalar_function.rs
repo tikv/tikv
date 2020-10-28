@@ -408,6 +408,7 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
 
             ScalarFuncSig::AddTimeDateTimeNull
+            | ScalarFuncSig::NullTimeDiff
             | ScalarFuncSig::AddTimeDurationNull
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::SubTimeDateTimeNull
@@ -988,6 +989,8 @@ dispatch_call! {
 
         CoalesceDuration => coalesce_duration,
         CaseWhenDuration => case_when_duration,
+
+        NullTimeDiff => null_time_diff,
 
         AddDurationAndDuration => add_duration_and_duration,
         AddDurationAndString => add_duration_and_string,
