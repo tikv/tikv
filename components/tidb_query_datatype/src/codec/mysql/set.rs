@@ -3,6 +3,7 @@ use tikv_util::buffer_vec::BufferVec;
 
 #[derive(Clone, Debug)]
 pub struct Set {
+    // TODO: Optimize me using Arc or others to prevent deep clone
     data: BufferVec,
 
     // TIDB makes sure there will be no more than 64 bits

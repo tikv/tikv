@@ -3,6 +3,7 @@ use tikv_util::buffer_vec::BufferVec;
 
 #[derive(Clone, Debug)]
 pub struct Enum {
+    // TODO: Optimize me using Arc or others to prevent deep clone
     data: BufferVec,
 
     // MySQL Enum is 1-based index, value == 0 means this enum is ''
