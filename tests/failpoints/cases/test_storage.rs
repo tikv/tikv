@@ -757,7 +757,7 @@ fn test_async_apply_prewrite_fallback() {
                 0.into(),
                 0.into(),
                 Some(vec![]),
-                ctx,
+                ctx.clone(),
             ),
             Box::new(move |r| tx.send(r).unwrap()),
         )
@@ -774,4 +774,14 @@ fn test_async_apply_prewrite_fallback() {
     assert!(res.min_commit_ts > 10.into());
 
     fail::remove(before_async_apply_prewrite_finish);
+
+    let (tx, rx) = channel();
+    storage
+        .sched_txn_command(
+            commands::Commit::new(vec![Key::from_raw(key)], 10.into(), res.min_commit_ts, ctx),
+            Box::new(move |r| tx.send(r).unwrap()),
+        )
+        .unwrap();
+
+    rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 }
