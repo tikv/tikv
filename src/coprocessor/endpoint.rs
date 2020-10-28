@@ -19,6 +19,7 @@ use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest,
 
 use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
+use crate::storage::kv::PerfStatisticsInstant;
 use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
@@ -510,13 +511,20 @@ impl<E: Engine> Endpoint<E> {
             tracker.on_begin_all_items();
 
             loop {
-                tracker.on_begin_item();
+                let result = {
+                    tracker.on_begin_item();
+                    let perf_statistics_instant = PerfStatisticsInstant::new();
 
-                let result = handler.handle_streaming_request();
-                let mut storage_stats = Statistics::default();
-                handler.collect_scan_statistics(&mut storage_stats);
+                    let result = handler.handle_streaming_request();
 
-                tracker.on_finish_item(Some(storage_stats));
+                    let mut storage_stats = Statistics::default();
+                    handler.collect_scan_statistics(&mut storage_stats);
+                    let perf_statistics = perf_statistics_instant.delta();
+                    tracker.on_finish_item(Some(storage_stats), perf_statistics);
+
+                    result
+                };
+
                 let exec_details = tracker.get_item_exec_details();
 
                 match result {
