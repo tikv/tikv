@@ -665,6 +665,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 // The committed callback is not guaranteed to be invoked. So store
                                 // the `pr` to the tctx instead of capturing it to the closure.
                                 let committed_cb = Box::new(move || {
+                                    fail_point!("before_async_apply_prewrite_finish", |_| {});
                                     let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
                                     Self::early_response(
                                         cid,

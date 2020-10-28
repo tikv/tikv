@@ -716,3 +716,79 @@ fn test_async_apply_prewrite() {
         false,
     );
 }
+
+#[test]
+fn test_async_apply_prewrite_fallback() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let engine = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine,
+        DummyLockManager {},
+    )
+    .set_async_apply_prewrite(true)
+    .build()
+    .unwrap();
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(1);
+    ctx.set_region_epoch(cluster.get_region_epoch(1));
+    ctx.set_peer(cluster.leader_of_region(1).unwrap());
+
+    let before_async_apply_prewrite_finish = "before_async_apply_prewrite_finish";
+    let on_handle_apply = "on_handle_apply";
+
+    fail::cfg(before_async_apply_prewrite_finish, "return()").unwrap();
+    fail::cfg(on_handle_apply, "pause").unwrap();
+
+    let (key, value) = (b"k1", b"v1");
+    let (tx, rx) = channel();
+    storage
+        .sched_txn_command(
+            commands::Prewrite::new(
+                vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                key.to_vec(),
+                10.into(),
+                0,
+                false,
+                1,
+                0.into(),
+                0.into(),
+                Some(vec![]),
+                false,
+                ctx.clone(),
+            ),
+            Box::new(move |r| tx.send(r).unwrap()),
+        )
+        .unwrap();
+
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(200)).unwrap_err(),
+        RecvTimeoutError::Timeout
+    );
+
+    fail::remove(on_handle_apply);
+
+    let res = rx.recv().unwrap().unwrap();
+    assert!(res.min_commit_ts > 10.into());
+
+    fail::remove(before_async_apply_prewrite_finish);
+
+    let (tx, rx) = channel();
+    storage
+        .sched_txn_command(
+            commands::Commit::new(vec![Key::from_raw(key)], 10.into(), res.min_commit_ts, ctx),
+            Box::new(move |r| tx.send(r).unwrap()),
+        )
+        .unwrap();
+
+    rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+}
