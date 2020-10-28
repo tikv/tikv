@@ -43,6 +43,7 @@ where
             0,
             TimeStamp::default(),
             TimeStamp::default(),
+            false,
         )
         .unwrap();
     }
@@ -84,6 +85,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
                     0,
                     TimeStamp::default(),
                     TimeStamp::default(),
+                    false,
                 )
                 .unwrap();
             }

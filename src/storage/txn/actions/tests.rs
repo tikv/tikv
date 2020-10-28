@@ -43,6 +43,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
             txn_size,
             min_commit_ts,
             max_commit_ts,
+            false,
         )
         .unwrap();
     } else {
@@ -57,6 +58,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
             txn_size,
             min_commit_ts,
             max_commit_ts,
+            false,
         )
         .unwrap();
     }
@@ -247,6 +249,7 @@ fn must_prewrite_put_err_impl<E: Engine>(
             0,
             TimeStamp::default(),
             TimeStamp::default(),
+            false,
         )
         .unwrap_err()
     } else {
@@ -261,6 +264,7 @@ fn must_prewrite_put_err_impl<E: Engine>(
             0,
             TimeStamp::default(),
             TimeStamp::default(),
+            false,
         )
         .unwrap_err()
     }
@@ -322,6 +326,7 @@ fn must_prewrite_delete_impl<E: Engine>(
             0,
             TimeStamp::default(),
             TimeStamp::default(),
+            false,
         )
         .unwrap();
     } else {
@@ -336,6 +341,7 @@ fn must_prewrite_delete_impl<E: Engine>(
             0,
             TimeStamp::default(),
             TimeStamp::default(),
+            false,
         )
         .unwrap();
     }
@@ -390,6 +396,7 @@ fn must_prewrite_lock_impl<E: Engine>(
             0,
             TimeStamp::default(),
             TimeStamp::default(),
+            false,
         )
         .unwrap();
     } else {
@@ -404,6 +411,7 @@ fn must_prewrite_lock_impl<E: Engine>(
             0,
             TimeStamp::default(),
             TimeStamp::default(),
+            false,
         )
         .unwrap();
     }
@@ -438,6 +446,7 @@ pub fn must_prewrite_lock_err<E: Engine>(
         0,
         TimeStamp::default(),
         TimeStamp::default(),
+        false,
     )
     .is_err());
 }
