@@ -14,7 +14,7 @@ use crate::server::Result as ServerResult;
 use crate::storage::{
     errors::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-        extract_region_error,
+        extract_kv_pairs_and_statistics, extract_region_error,
     },
     kv::Engine,
     lock_manager::LockManager,
@@ -1719,7 +1719,6 @@ pub mod batch_commands_request {
     }
 }
 
-use crate::storage::errors::extract_kv_pairs_and_statistics;
 #[cfg(feature = "prost-codec")]
 pub use kvproto::tikvpb::batch_commands_request;
 #[cfg(feature = "prost-codec")]
