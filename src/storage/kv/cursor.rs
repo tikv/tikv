@@ -17,6 +17,7 @@ use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapsh
 pub struct Cursor<I: Iterator> {
     iter: I,
     scan_mode: ScanMode,
+    // prefix_seek doesn't support seek_to_first and seek_to_last.
     prefix_seek: bool,
     // the data cursor can be seen will be
     min_key: Option<Vec<u8>>,
@@ -46,9 +47,9 @@ impl<I: Iterator> Cursor<I> {
         Self {
             iter,
             scan_mode: mode,
+            prefix_seek,
             min_key: None,
             max_key: None,
-            prefix_seek,
 
             cur_key_has_read: Cell::new(false),
             cur_value_has_read: Cell::new(false),
@@ -331,6 +332,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
+        assert!(!self.prefix_seek);
         statistics.seek += 1;
         self.mark_unread();
         let before = PerfContext::get().internal_delete_skipped_count() as usize;
@@ -342,6 +344,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
+        assert!(!self.prefix_seek);
         statistics.seek += 1;
         self.mark_unread();
         let before = PerfContext::get().internal_delete_skipped_count() as usize;
@@ -547,6 +550,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         if let Some(ts) = self.hint_max_ts {
             iter_opt.set_hint_max_ts(Bound::Included(ts.into_inner()));
         }
+        // prefix_seek is only used for single key, so set prefix_same_as_start for safety.
         if self.prefix_seek {
             iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
         }
