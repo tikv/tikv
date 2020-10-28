@@ -763,6 +763,7 @@ fn test_async_apply_prewrite_fallback() {
                 0.into(),
                 0.into(),
                 Some(vec![]),
+                false,
                 ctx.clone(),
             ),
             Box::new(move |r| tx.send(r).unwrap()),
