@@ -1028,8 +1028,8 @@ mod tests {
         .collect::<Result<Vec<_>>>()
         .unwrap();
         assert_eq!(resp_vec.len(), 6);
-        for (i, curr_resp_vec) in resp_vec.iter().enumerate().take(5) {
-            assert_eq!(curr_resp_vec.get_data(), [1, 2, i as u8]);
+        for (i, resp) in resp_vec.iter().enumerate().take(5) {
+            assert_eq!(resp.get_data(), [1, 2, i as u8]);
         }
         assert_eq!(resp_vec[5].get_data().len(), 0);
         assert!(!resp_vec[5].get_other_error().is_empty());
