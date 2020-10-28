@@ -50,11 +50,12 @@ impl LocalStorage {
         match cache.lock().unwrap().entry(base.to_path_buf()) {
             Entry::Occupied(entry) => {
                 info!("get local storage by cache"; "base" => base.display());
-                LOCAL_STORAGE_NUM_GAUGE.inc();
+                LOCAL_STORAGE_NUM_GAUGE.with_label_values(&["hit"]).inc();
                 Ok(entry.get().to_owned())
             }
             Entry::Vacant(entry) => {
                 info!("create local storage"; "base" => base.display());
+                LOCAL_STORAGE_NUM_GAUGE.with_label_values(&["miss"]).inc();
                 let tmp_dir = base.join(LOCAL_STORAGE_TMP_DIR);
                 maybe_create_dir(&tmp_dir)?;
                 let base_dir = Arc::new(File::open(base)?);
