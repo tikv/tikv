@@ -174,6 +174,8 @@ where
         let status = self.pd_client.put_store(self.store.clone())?;
         self.load_all_stores(status);
 
+        tikv_util::minitrace::set_id_prefix(store_id as _);
+
         self.start_store(
             store_id,
             engines,
