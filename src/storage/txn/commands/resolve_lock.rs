@@ -4,8 +4,8 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{MvccTxn, MAX_TXN_WRITE_SIZE};
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, ResolveLockReadPhase, TypedCommand, WriteCommand,
-    WriteContext, WriteResult,
+    Command, CommandExt, ReleasedLocks, ResolveLockReadPhase, ResponsePolicy, TypedCommand,
+    WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::{commit, Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot};
@@ -123,6 +123,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
             pr,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }

@@ -11,6 +11,9 @@ use raft::eraftpb::Entry;
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
+// FIXME: RaftEngine should probably be implemented generically
+// for all KvEngines, but is currently implemented separately for
+// every engine.
 impl RaftEngine for RocksEngine {
     type LogBatch = RocksWriteBatch;
 
@@ -131,7 +134,7 @@ impl RaftEngine for RocksEngine {
         &self,
         raft_group_id: u64,
         state: &RaftLocalState,
-        batch: &mut RocksWriteBatch,
+        batch: &mut Self::LogBatch,
     ) -> Result<()> {
         batch.delete(&keys::raft_state_key(raft_group_id))?;
         let seek_key = keys::raft_log_key(raft_group_id, 0);
@@ -210,6 +213,7 @@ impl RaftEngine for RocksEngine {
     fn flush_metrics(&self, instance: &str) {
         KvEngine::flush_metrics(self, instance)
     }
+
     fn reset_statistics(&self) {
         KvEngine::reset_statistics(self)
     }

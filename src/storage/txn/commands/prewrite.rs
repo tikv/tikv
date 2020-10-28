@@ -9,7 +9,7 @@ use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
 };
 use crate::storage::txn::actions::prewrite::prewrite;
-use crate::storage::txn::commands::{WriteCommand, WriteContext, WriteResult};
+use crate::storage::txn::commands::{ResponsePolicy, WriteCommand, WriteContext, WriteResult};
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{
     txn::commands::{Command, CommandExt, TypedCommand},
@@ -39,6 +39,7 @@ command! {
             /// How many keys this transaction involved.
             txn_size: u64,
             min_commit_ts: TimeStamp,
+            max_commit_ts: TimeStamp,
             /// All secondary keys in the whole transaction (i.e., as sent to all nodes, not only
             /// this node). Only present if using async commit.
             secondary_keys: Option<Vec<Vec<u8>>>,
@@ -85,6 +86,7 @@ impl Prewrite {
             false,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
             None,
             Context::default(),
         )
@@ -105,6 +107,7 @@ impl Prewrite {
             false,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
             None,
             Context::default(),
         )
@@ -123,6 +126,7 @@ impl Prewrite {
             0,
             false,
             0,
+            TimeStamp::default(),
             TimeStamp::default(),
             None,
             ctx,
@@ -199,6 +203,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 self.lock_ttl,
                 self.txn_size,
                 self.min_commit_ts,
+                self.max_commit_ts,
             ) {
                 Ok(ts) => {
                     if secondaries.is_some() && async_commit_ts < ts {
@@ -241,6 +246,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             };
             (pr, WriteData::default(), 0, self.ctx, None, vec![])
         };
+        let response_policy = if !async_commit_ts.is_zero() && context.async_apply_prewrite {
+            ResponsePolicy::OnCommitted
+        } else {
+            ResponsePolicy::OnApplied
+        };
         Ok(WriteResult {
             ctx,
             to_be_write,
@@ -248,6 +258,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             pr,
             lock_info,
             lock_guards,
+            response_policy,
         })
     }
 }
@@ -444,6 +455,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            async_apply_prewrite: false,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         if let ProcessResult::PrewriteResult {
@@ -485,6 +497,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            async_apply_prewrite: false,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -509,6 +522,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,
+            async_apply_prewrite: false,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;

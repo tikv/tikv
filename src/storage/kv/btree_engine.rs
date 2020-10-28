@@ -254,11 +254,11 @@ impl Snapshot for BTreeEngineSnapshot {
         mode: ScanMode,
     ) -> EngineResult<Cursor<Self::Iter>> {
         let tree = self.inner_engine.get_cf(cf);
-        let use_prefix_seek = !iter_opt.total_order_seek_used();
+        let prefix_seek = iter_opt.prefix_seek_used();
         Ok(Cursor::new(
             BTreeEngineIterator::new(tree, iter_opt),
             mode,
-            use_prefix_seek,
+            prefix_seek,
         ))
     }
 }
