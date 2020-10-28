@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io;
@@ -17,8 +18,8 @@ use futures_util::{
 };
 use rand::Rng;
 
-use crate::metrics::LOCAL_STORAGE_NUM_GAUGE;
 use super::{util::error_stream, ExternalStorage};
+use crate::metrics::LOCAL_STORAGE_NUM_GAUGE;
 
 const LOCAL_STORAGE_TMP_DIR: &str = "localtmp";
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
@@ -46,22 +47,25 @@ pub struct LocalStorage {
 impl LocalStorage {
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
-        if let Some(l) = cache.lock().unwrap().get(&base.to_path_buf()) {
-            info!("get local storage by cache"; "base" => base.display());
-            LOCAL_STORAGE_NUM_GAUGE.inc();
-            Ok(l.clone())
-        } else {
-            info!("create local storage"; "base" => base.display());
-            let tmp_dir = base.join(LOCAL_STORAGE_TMP_DIR);
-            maybe_create_dir(&tmp_dir)?;
-            let base_dir = Arc::new(File::open(base)?);
-            let local = LocalStorage {
-                base: base.to_path_buf(),
-                base_dir,
-                tmp: tmp_dir,
-            };
-            cache.lock().unwrap().insert(base.to_owned(), local.clone());
-            Ok(local)
+        match cache.lock().unwrap().entry(base.to_path_buf()) {
+            Entry::Occupied(entry) => {
+                info!("get local storage by cache"; "base" => base.display());
+                LOCAL_STORAGE_NUM_GAUGE.inc();
+                Ok(entry.get().to_owned())
+            }
+            Entry::Vacant(entry) => {
+                info!("create local storage"; "base" => base.display());
+                let tmp_dir = base.join(LOCAL_STORAGE_TMP_DIR);
+                maybe_create_dir(&tmp_dir)?;
+                let base_dir = Arc::new(File::open(base)?);
+                let local = LocalStorage {
+                    base: base.to_path_buf(),
+                    base_dir,
+                    tmp: tmp_dir,
+                };
+                entry.insert(local.clone());
+                Ok(local)
+            }
         }
     }
 
