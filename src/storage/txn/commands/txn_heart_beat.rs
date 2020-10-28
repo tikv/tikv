@@ -87,10 +87,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             }
         } else {
             debug!(
-            "txn_heart_beat invoked but lock is absent";
-            "primary_key" => %self.primary_key,
-            "start_ts" => self.start_ts,
-            "advise_ttl" => self.advise_ttl,
+                "txn_heart_beat invoked but lock is absent";
+                "primary_key" => %self.primary_key,
+                "start_ts" => self.start_ts,
+                "advise_ttl" => self.advise_ttl,
             );
             Err(MvccErrorInner::TxnLockNotFound {
                 start_ts: self.start_ts,
