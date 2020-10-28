@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicU64, atomic::Ordering, Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam::channel::{self, select, tick};
@@ -387,6 +388,7 @@ pub struct DataKeyManager {
     dicts: Arc<Dicts>,
     method: EncryptionMethod,
     rotate_terminal: channel::Sender<()>,
+    background_worker: Option<JoinHandle<()>>,
 }
 
 impl DataKeyManager {
@@ -488,7 +490,7 @@ impl DataKeyManager {
         let dicts = Arc::new(dicts);
         let dict_clone = dicts.clone();
         let (rotate_terminal, rx) = channel::bounded(1);
-        std::thread::Builder::new()
+        let background_worker = std::thread::Builder::new()
             .name(thd_name!("enc:key"))
             .spawn(move || {
                 run_background_rotate_work(dict_clone, method, master_key, rx);
@@ -500,6 +502,7 @@ impl DataKeyManager {
             dicts,
             method,
             rotate_terminal,
+            background_worker: Some(background_worker),
         }))
     }
 
@@ -565,6 +568,7 @@ impl DataKeyManager {
 impl Drop for DataKeyManager {
     fn drop(&mut self) {
         self.rotate_terminal.send(()).unwrap();
+        self.background_worker.take().unwrap().join().unwrap();
     }
 }
 
