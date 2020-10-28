@@ -61,9 +61,23 @@ impl Backup for Service {
             return;
         };
 
+<<<<<<< HEAD
         let send_resp = sink.send_all(Compat::new(rx.map(Ok)).then(
             |resp: Result<BackupResponse>| match resp {
                 Ok(resp) => Ok((resp, WriteFlags::default())),
+=======
+        let send_task = async move {
+            let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
+            sink.send_all(&mut s).await?;
+            sink.close().await?;
+            Ok(())
+        }
+        .map(|res: Result<()>| {
+            match res {
+                Ok(_) => {
+                    info!("backup closed");
+                }
+>>>>>>> f656fe030... backup: handle create external storage error (#8899)
                 Err(e) => {
                     error!("backup send failed"; "error" => ?e);
                     Err(grpcio::Error::RpcFailure(RpcStatus::new(
