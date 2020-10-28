@@ -107,7 +107,7 @@ fn unicode_ci_convert(c: char) -> u128 {
     u as u128
 }
 
-/* Created from allkeys.txt. Unicode version '4.0.0'. Do not EDIT */
+// Created from https://www.unicode.org/Public/UCA/4.0.0/allkeys-4.0.0.txt
 static LONG_RUNE: u64 = 0xFFFD;
 
 #[rustfmt::skip]

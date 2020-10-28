@@ -10,9 +10,6 @@ pub use utf8mb4_binary::*;
 pub use utf8mb4_general_ci::*;
 pub use utf8mb4_unicode_ci::*;
 
-use super::charset::*;
-use super::Collator;
-
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::str;
@@ -20,6 +17,8 @@ use std::str;
 use codec::prelude::*;
 
 use crate::codec::Result;
+use super::charset::*;
+use super::Collator;
 
 const TRIM_PADDING_SPACE: char = 0x20 as char;
 
