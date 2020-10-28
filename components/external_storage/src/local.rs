@@ -8,10 +8,13 @@ use std::sync::Arc;
 
 use futures_executor::block_on;
 use futures_io::AsyncRead;
-use futures_util::io::{copy, AllowStdIo};
+use futures_util::{
+    io::{copy, AllowStdIo},
+    stream::TryStreamExt,
+};
 use rand::Rng;
 
-use super::ExternalStorage;
+use super::{util::error_stream, ExternalStorage};
 
 const LOCAL_STORAGE_TMP_DIR: &str = "localtmp";
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
@@ -58,7 +61,7 @@ impl ExternalStorage for LocalStorage {
     fn write(
         &self,
         name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin + 'static>,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
         _content_length: u64,
     ) -> io::Result<()> {
         // Storage does not support dir,
@@ -82,9 +85,7 @@ impl ExternalStorage for LocalStorage {
         let tmp_path = self.tmp_path(Path::new(name));
         let mut tmp_f = AllowStdIo::new(File::create(&tmp_path)?);
         block_on(copy(reader, &mut tmp_f))?;
-        let tmp_f = tmp_f.into_inner();
-        tmp_f.metadata()?.permissions().set_readonly(true);
-        tmp_f.sync_all()?;
+        tmp_f.into_inner().sync_all()?;
         debug!("save file to local storage";
             "name" => %name, "base" => %self.base.display());
         fs::rename(tmp_path, self.base.join(name))?;
@@ -92,11 +93,13 @@ impl ExternalStorage for LocalStorage {
         self.base_dir.sync_all()
     }
 
-    fn read(&self, name: &str) -> io::Result<Box<dyn AsyncRead + Unpin>> {
+    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         debug!("read file from local storage";
             "name" => %name, "base" => %self.base.display());
-        let file = File::open(self.base.join(name))?;
-        Ok(Box::new(AllowStdIo::new(file)))
+        match File::open(self.base.join(name)) {
+            Ok(file) => Box::new(AllowStdIo::new(file)) as _,
+            Err(e) => Box::new(error_stream(e).into_async_read()) as _,
+        }
     }
 }
 

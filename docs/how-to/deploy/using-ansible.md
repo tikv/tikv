@@ -178,7 +178,7 @@ Make sure you have logged in to the Control Machine using the `tidb` user accoun
 
     This step creates the `tidb` user account on the target machines, and configures the sudo rules and the SSH mutual trust between the Control Machine and the target machines.
 
-> **Note:** To configure the SSH mutual trust and sudo without password manually, see [How to manually configure the SSH mutual trust and sudo without password](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/orchestrated/ansible.md#how-to-manually-configure-the-ssh-mutual-trust-and-sudo-without-password).
+> **Note:** To configure the SSH mutual trust and sudo without password manually, see [How to manually configure the SSH mutual trust and sudo without password](https://github.com/pingcap/docs/blob/master/how-to/deploy/orchestrated/ansible.md#how-to-manually-configure-the-ssh-mutual-trust-and-sudo-without-password).
 
 ## Step 6: Install the NTP service on the target machines
 

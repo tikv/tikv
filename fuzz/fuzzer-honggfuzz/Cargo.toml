@@ -10,4 +10,4 @@ prost-codec = ["fuzz-targets/prost-codec"]
 
 [dependencies]
 fuzz-targets = { path = "../targets", default-features = false }
-honggfuzz = "0.5.45"
+honggfuzz = "0.5.47"

@@ -6,19 +6,19 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use engine::rocks;
-use engine::rocks::util::compact_files_in_range;
-use engine::rocks::util::get_cf_handle;
-use engine::rocks::{IngestExternalFileOptions, Writable};
-use engine::util::{delete_all_files_in_range, delete_all_in_range};
-use engine::Engines;
+use engine_rocks::raw::{IngestExternalFileOptions, Writable};
+use engine_rocks::util::get_cf_handle;
+use engine_rocks::util::new_temp_engine;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
-use engine_traits::{SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT, CF_WRITE};
+use engine_traits::{
+    CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter, SstWriterBuilder,
+    ALL_CFS, CF_DEFAULT, CF_WRITE,
+};
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
+use raftstore::store::RegionSnapshot;
 use raftstore::store::{apply_sst_cf_file, build_sst_cf_file};
-use raftstore::store::{new_temp_engine, RegionSnapshot};
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv::config::TiKvConfig;
@@ -160,25 +160,28 @@ fn test_delete_files_in_range_for_titan() {
     cfg.rocksdb.defaultcf.titan.sample_ratio = 1.0;
     cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
     let kv_db_opts = cfg.rocksdb.build_opt();
-    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
+    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache, None);
 
     let raft_path = path.path().join(Path::new("titan"));
-    let shared_block_cache = false;
     let engines = Engines::new(
-        Arc::new(
-            rocks::util::new_engine(
+        RocksEngine::from_db(Arc::new(
+            engine_rocks::raw_util::new_engine(
                 path.path().to_str().unwrap(),
                 Some(kv_db_opts),
                 ALL_CFS,
                 Some(kv_cfs_opts),
             )
             .unwrap(),
-        ),
-        Arc::new(
-            rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                .unwrap(),
-        ),
-        shared_block_cache,
+        )),
+        RocksEngine::from_db(Arc::new(
+            engine_rocks::raw_util::new_engine(
+                raft_path.to_str().unwrap(),
+                None,
+                &[CF_DEFAULT],
+                None,
+            )
+            .unwrap(),
+        )),
     );
 
     // Write some mvcc keys and values into db
@@ -187,7 +190,7 @@ fn test_delete_files_in_range_for_titan() {
     let start_ts = 7.into();
     let commit_ts = 8.into();
     let write = Write::new(WriteType::Put, start_ts, None);
-    let db = &engines.kv;
+    let db = &engines.kv.as_inner();
     let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
     let write_cf = db.cf_handle(CF_WRITE).unwrap();
     db.put_cf(
@@ -217,7 +220,7 @@ fn test_delete_files_in_range_for_titan() {
 
     // Flush and compact the kvs into L6.
     db.flush(true).unwrap();
-    compact_files_in_range(&db, None, None, None).unwrap();
+    db.c().compact_files_in_range(None, None, None).unwrap();
     let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
     assert_eq!(value, 0);
     let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
@@ -255,12 +258,14 @@ fn test_delete_files_in_range_for_titan() {
     assert_eq!(value, 1);
 
     // Used to trigger titan gc
-    let db = &engines.kv;
+    let db = &engines.kv.as_inner();
     db.put(b"1", b"1").unwrap();
     db.flush(true).unwrap();
     db.put(b"2", b"2").unwrap();
     db.flush(true).unwrap();
-    compact_files_in_range(db, Some(b"0"), Some(b"3"), Some(1)).unwrap();
+    db.c()
+        .compact_files_in_range(Some(b"0"), Some(b"3"), Some(1))
+        .unwrap();
 
     // Now the LSM structure of default cf is:
     // memtable: [put(b_7, blob4)] (because of Titan GC)
@@ -300,19 +305,36 @@ fn test_delete_files_in_range_for_titan() {
     // `delete_files_in_range` may expose some old keys.
     // For Titan it may encounter `missing blob file` in `delete_all_in_range`,
     // so we set key_only for Titan.
-    delete_all_files_in_range(
-        &engines.kv,
-        &data_key(Key::from_raw(b"a").as_encoded()),
-        &data_key(Key::from_raw(b"b").as_encoded()),
-    )
-    .unwrap();
-    delete_all_in_range(
-        &engines.kv,
-        &data_key(Key::from_raw(b"a").as_encoded()),
-        &data_key(Key::from_raw(b"b").as_encoded()),
-        false,
-    )
-    .unwrap();
+    engines
+        .kv
+        .delete_all_in_range(
+            DeleteStrategy::DeleteFiles,
+            &[Range::new(
+                &data_key(Key::from_raw(b"a").as_encoded()),
+                &data_key(Key::from_raw(b"b").as_encoded()),
+            )],
+        )
+        .unwrap();
+    engines
+        .kv
+        .delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &[Range::new(
+                &data_key(Key::from_raw(b"a").as_encoded()),
+                &data_key(Key::from_raw(b"b").as_encoded()),
+            )],
+        )
+        .unwrap();
+    engines
+        .kv
+        .delete_all_in_range(
+            DeleteStrategy::DeleteBlobs,
+            &[Range::new(
+                &data_key(Key::from_raw(b"a").as_encoded()),
+                &data_key(Key::from_raw(b"b").as_encoded()),
+            )],
+        )
+        .unwrap();
 
     // Now the LSM structure of default cf is:
     // memtable: [put(b_7, blob4)] (because of Titan GC)
@@ -339,7 +361,8 @@ fn test_delete_files_in_range_for_titan() {
     let limiter = Limiter::new(INFINITY);
     build_sst_cf_file::<RocksEngine>(
         &default_sst_file_path.to_str().unwrap(),
-        &RocksSnapshot::new(Arc::clone(&engines.kv)),
+        &engines.kv,
+        &engines.kv.snapshot(),
         CF_DEFAULT,
         b"",
         b"{",
@@ -348,7 +371,8 @@ fn test_delete_files_in_range_for_titan() {
     .unwrap();
     build_sst_cf_file::<RocksEngine>(
         &write_sst_file_path.to_str().unwrap(),
-        &RocksSnapshot::new(Arc::clone(&engines.kv)),
+        &engines.kv,
+        &engines.kv.snapshot(),
         CF_WRITE,
         b"",
         b"{",
@@ -364,13 +388,13 @@ fn test_delete_files_in_range_for_titan() {
     let engines1 = new_temp_engine(&dir1);
     apply_sst_cf_file(
         &default_sst_file_path.to_str().unwrap(),
-        engines1.kv.c(),
+        &engines1.kv,
         CF_DEFAULT,
     )
     .unwrap();
     apply_sst_cf_file(
         &write_sst_file_path.to_str().unwrap(),
-        engines1.kv.c(),
+        &engines1.kv,
         CF_WRITE,
     )
     .unwrap();
@@ -380,7 +404,7 @@ fn test_delete_files_in_range_for_titan() {
     r.mut_peers().push(Peer::default());
     r.set_start_key(b"a".to_vec());
     r.set_end_key(b"z".to_vec());
-    let snapshot = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&engines1.kv), r);
+    let snapshot = RegionSnapshot::<RocksSnapshot>::from_raw(engines1.kv.clone(), r);
     let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
         .range(Some(Key::from_raw(b"a")), None)
         .build()

@@ -1,14 +1,12 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
-use std::sync::Arc;
 
-use engine::rocks::{SeekKey, DB};
-use engine::{IterOption, Iterable};
-use engine_traits::CF_WRITE;
+use engine_traits::{IterOptions, Iterator, KvEngine, SeekKey, CF_WRITE};
+use error_code::ErrorCodeExt;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use tidb_query::codec::table as table_codec;
+use tidb_query_datatype::codec::table as table_codec;
 use tikv_util::keybuilder::KeyBuilder;
 use txn_types::Key;
 
@@ -24,7 +22,10 @@ pub struct Checker {
     policy: CheckPolicy,
 }
 
-impl SplitChecker for Checker {
+impl<E> SplitChecker<E> for Checker
+where
+    E: KvEngine,
+{
     /// Feed keys in order to find the split key.
     /// If `current_data_key` does not belong to `status.first_encoded_table_prefix`.
     /// it returns the encoded table prefix of `current_data_key`.
@@ -72,12 +73,15 @@ pub struct TableCheckObserver;
 
 impl Coprocessor for TableCheckObserver {}
 
-impl SplitCheckObserver for TableCheckObserver {
+impl<E> SplitCheckObserver<E> for TableCheckObserver
+where
+    E: KvEngine,
+{
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host,
-        engine: &Arc<DB>,
+        host: &mut Host<'_, E>,
+        engine: &E,
         policy: CheckPolicy,
     ) {
         if !host.cfg.split_region_on_table {
@@ -97,6 +101,7 @@ impl SplitCheckObserver for TableCheckObserver {
                     "failed to get region last key";
                     "region_id" => region.get_id(),
                     "err" => %err,
+                    "error_code" => %err.error_code(),
                 );
                 return;
             }
@@ -157,8 +162,8 @@ impl SplitCheckObserver for TableCheckObserver {
             }
             _ => panic!(
                 "start_key {} and end_key {} out of order",
-                hex::encode_upper(encoded_start_key),
-                hex::encode_upper(encoded_end_key)
+                log_wrappers::Value::key(&encoded_start_key),
+                log_wrappers::Value::key(&encoded_end_key)
             ),
         }
         host.add_checker(Box::new(Checker {
@@ -169,17 +174,17 @@ impl SplitCheckObserver for TableCheckObserver {
     }
 }
 
-fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
+fn last_key_of_region(db: &impl KvEngine, region: &Region) -> Result<Option<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let mut last_key = None;
 
-    let iter_opt = IterOption::new(
+    let iter_opt = IterOptions::new(
         Some(KeyBuilder::from_vec(start_key, 0, 0)),
         Some(KeyBuilder::from_vec(end_key, 0, 0)),
         false,
     );
-    let mut iter = box_try!(db.new_iterator_cf(CF_WRITE, iter_opt));
+    let mut iter = box_try!(db.iterator_cf_opt(CF_WRITE, iter_opt));
 
     // the last key
     let found: Result<bool> = iter.seek(SeekKey::End).map_err(|e| box_err!(e));
@@ -223,17 +228,15 @@ fn is_same_table(left_key: &[u8], right_key: &[u8]) -> bool {
 mod tests {
     use std::io::Write;
     use std::sync::mpsc;
-    use std::sync::Arc;
 
     use kvproto::metapb::Peer;
     use kvproto::pdpb::CheckPolicy;
     use tempfile::Builder;
 
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use engine::rocks::util::new_engine;
-    use engine::rocks::Writable;
-    use engine_traits::ALL_CFS;
-    use tidb_query::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
+    use engine_test::kv::new_engine;
+    use engine_traits::{SyncMutable, ALL_CFS};
+    use tidb_query_datatype::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
@@ -257,9 +260,7 @@ mod tests {
             .prefix("test_last_key_of_region")
             .tempdir()
             .unwrap();
-        let engine =
-            Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
-        let write_cf = engine.cf_handle(CF_WRITE).unwrap();
+        let engine = new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -273,7 +274,7 @@ mod tests {
             let mut key = gen_table_prefix(i);
             key.extend_from_slice(padding);
             let k = keys::data_key(Key::from_raw(&key).as_encoded());
-            engine.put_cf(write_cf, &k, &k).unwrap();
+            engine.put_cf(CF_WRITE, &k, &k).unwrap();
             data_keys.push(k)
         }
 
@@ -312,9 +313,7 @@ mod tests {
             .prefix("test_table_check_observer")
             .tempdir()
             .unwrap();
-        let engine =
-            Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
-        let write_cf = engine.cf_handle(CF_WRITE).unwrap();
+        let engine = new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -337,7 +336,7 @@ mod tests {
         cfg.region_split_keys = 1000000000;
         // Try to ignore the ApproximateRegionSize
         let coprocessor = CoprocessorHost::new(stx);
-        let mut runnable = SplitCheckRunner::new(Arc::clone(&engine), tx, coprocessor, cfg);
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, coprocessor, cfg);
 
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let mut check_cases = |cases: Vec<Case>| {
@@ -397,7 +396,7 @@ mod tests {
             let mut key = gen_table_prefix(i);
             key.extend_from_slice(padding);
             let s = keys::data_key(Key::from_raw(&key).as_encoded());
-            engine.put_cf(write_cf, &s, &s).unwrap();
+            engine.put_cf(CF_WRITE, &s, &s).unwrap();
         }
 
         check_cases(vec![
@@ -424,7 +423,7 @@ mod tests {
             let mut key = gen_table_prefix(3);
             key.extend_from_slice(format!("{:?}{}", padding, i).as_bytes());
             let s = keys::data_key(Key::from_raw(&key).as_encoded());
-            engine.put_cf(write_cf, &s, &s).unwrap();
+            engine.put_cf(CF_WRITE, &s, &s).unwrap();
         }
 
         check_cases(vec![
@@ -445,10 +444,10 @@ mod tests {
             // m is less than t and is the prefix of meta keys.
             let key = format!("m{:?}{}", padding, i);
             let s = keys::data_key(Key::from_raw(key.as_bytes()).as_encoded());
-            engine.put_cf(write_cf, &s, &s).unwrap();
+            engine.put_cf(CF_WRITE, &s, &s).unwrap();
             let key = format!("u{:?}{}", padding, i);
             let s = keys::data_key(Key::from_raw(key.as_bytes()).as_encoded());
-            engine.put_cf(write_cf, &s, &s).unwrap();
+            engine.put_cf(CF_WRITE, &s, &s).unwrap();
         }
 
         check_cases(vec![

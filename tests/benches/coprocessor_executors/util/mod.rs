@@ -35,7 +35,6 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
     executors: &[PbExecutor],
     ranges: &[KeyRange],
     store: &Store<RocksEngine>,
-    enable_batch: bool,
 ) -> Box<dyn RequestHandler> {
     use tipb::DagRequest;
 
@@ -49,8 +48,8 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
         tikv_util::deadline::Deadline::from_now(std::time::Duration::from_secs(10)),
         64,
         false,
+        false,
     )
-    .enable_batch_if_possible(enable_batch)
     .build()
     .unwrap()
 }

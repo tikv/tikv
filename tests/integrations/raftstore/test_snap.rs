@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{Message, MessageType};
 
-use engine::Peekable;
+use engine_rocks::Compat;
+use engine_traits::Peekable;
 use raftstore::store::*;
 use raftstore::Result;
 use test_raftstore::*;
@@ -473,7 +474,7 @@ fn test_request_snapshot_apply_repeatedly() {
     sleep_ms(200);
     let engine = cluster.get_raft_engine(1);
     let raft_key = keys::raft_state_key(region_id);
-    let raft_state: RaftLocalState = engine.get_msg(&raft_key).unwrap().unwrap();
+    let raft_state: RaftLocalState = engine.c().get_msg(&raft_key).unwrap().unwrap();
     assert!(
         raft_state.get_last_index() > RAFT_INIT_LOG_INDEX,
         "{:?}",

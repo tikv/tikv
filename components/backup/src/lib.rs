@@ -4,11 +4,11 @@
 #![feature(box_patterns)]
 
 #[macro_use]
-extern crate slog_global;
-#[macro_use]
 extern crate failure;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[macro_use]
+extern crate tikv_util;
 
 mod endpoint;
 mod errors;

@@ -2,6 +2,7 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
+use engine_traits::DecodeProperties;
 use engine_traits::Range;
 use engine_traits::{Error, Result};
 use engine_traits::{
@@ -20,14 +21,15 @@ impl TablePropertiesExt for RocksEngine {
 
     fn get_properties_of_tables_in_range(
         &self,
-        cf: &Self::CFHandle,
+        cf: &str,
         ranges: &[Range],
     ) -> Result<Self::TablePropertiesCollection> {
+        let cf = util::get_cf_handle(self.as_inner(), cf)?;
         // FIXME: extra allocation
         let ranges: Vec<_> = ranges.iter().map(util::range_to_rocks_range).collect();
         let raw = self
             .as_inner()
-            .get_properties_of_tables_in_range_rc(cf.as_inner(), &ranges);
+            .get_properties_of_tables_in_range_rc(cf, &ranges);
         let raw = raw.map_err(Error::Engine)?;
         Ok(RocksTablePropertiesCollection::from_raw(raw))
     }
@@ -114,11 +116,6 @@ impl UserCollectedProperties for RocksUserCollectedProperties {
         self.0.len()
     }
 }
-
-// FIXME: DecodeProperties doesn't belong in this crate,
-// and it looks like the properties module has functional overlap
-// with this module.
-use crate::properties::DecodeProperties;
 
 impl DecodeProperties for RocksUserCollectedProperties {
     fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {

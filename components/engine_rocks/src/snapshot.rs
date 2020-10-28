@@ -1,17 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Debug, Formatter};
-use std::ops::Deref;
 use std::sync::Arc;
 
-use engine_traits::{
-    self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot, SyncSnapshot,
-};
+use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot};
 use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{DBIterator, DB};
 
 use crate::db_vector::RocksDBVector;
-use crate::engine::RocksEngine;
 use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
 use crate::RocksEngineIterator;
@@ -35,19 +31,9 @@ impl RocksSnapshot {
     }
 }
 
-impl Snapshot<RocksEngine> for RocksSnapshot {
-    type SyncSnapshot = RocksSyncSnapshot;
-
+impl Snapshot for RocksSnapshot {
     fn cf_names(&self) -> Vec<&str> {
         self.db.cf_names()
-    }
-
-    fn into_sync(self) -> RocksSyncSnapshot {
-        RocksSyncSnapshot(Arc::new(self))
-    }
-
-    fn get_db(&self) -> &RocksEngine {
-        RocksEngine::from_ref(&self.db)
     }
 }
 
@@ -124,23 +110,3 @@ impl Peekable for RocksSnapshot {
         Ok(v.map(RocksDBVector::from_raw))
     }
 }
-
-#[derive(Clone, Debug)]
-#[repr(transparent)] // Guarantee same representation as in engine/rocks
-pub struct RocksSyncSnapshot(Arc<RocksSnapshot>);
-
-impl Deref for RocksSyncSnapshot {
-    type Target = RocksSnapshot;
-
-    fn deref(&self) -> &RocksSnapshot {
-        &self.0
-    }
-}
-
-impl RocksSyncSnapshot {
-    pub fn new(db: Arc<DB>) -> RocksSyncSnapshot {
-        RocksSyncSnapshot(Arc::new(RocksSnapshot::new(db)))
-    }
-}
-
-impl SyncSnapshot<RocksSnapshot> for RocksSyncSnapshot {}

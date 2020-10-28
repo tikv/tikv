@@ -3,10 +3,11 @@
 mod backward;
 mod forward;
 
-use engine::IterOption;
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, TimeStamp, TsSet, Value};
+use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use keys::DATA_PREFIX_KEY;
+use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
+use tikv_util::keybuilder::KeyBuilder;
+use txn_types::{Key, TimeStamp, TsSet, Value, Write, WriteRef, WriteType};
 
 use self::backward::BackwardKvScanner;
 use self::forward::{
@@ -15,7 +16,7 @@ use self::forward::{
 use crate::storage::kv::{
     CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics,
 };
-use crate::storage::mvcc::{default_not_found_error, Result};
+use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
 use crate::storage::txn::{Result as TxnResult, Scanner as StoreScanner};
 
 pub use self::forward::{test_util, DeltaScanner, EntryScanner};
@@ -97,6 +98,16 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+    /// Check whether there is data with newer ts. The result of `met_newer_ts_data` is Unknown
+    /// if this option is not set.
+    ///
+    /// Default is false.
+    #[inline]
+    pub fn check_has_newer_ts_data(mut self, enabled: bool) -> Self {
+        self.0.check_has_newer_ts_data = enabled;
+        self
+    }
+
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
         let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
@@ -137,7 +148,11 @@ impl<S: Snapshot> ScannerBuilder<S> {
         ))
     }
 
-    pub fn build_delta_scanner(mut self, from_ts: TimeStamp) -> Result<DeltaScanner<S>> {
+    pub fn build_delta_scanner(
+        mut self,
+        from_ts: TimeStamp,
+        extra_op: ExtraOp,
+    ) -> Result<DeltaScanner<S>> {
         let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
         // Note: Create a default cf cursor will take key range, so we need to
@@ -150,7 +165,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
             lock_cursor,
             write_cursor,
             Some(default_cursor),
-            DeltaEntryPolicy::new(from_ts),
+            DeltaEntryPolicy::new(from_ts, extra_op),
         ))
     }
 }
@@ -167,11 +182,21 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
             Scanner::Backward(scanner) => Ok(scanner.read_next()?),
         }
     }
+
     /// Take out and reset the statistics collected so far.
     fn take_statistics(&mut self) -> Statistics {
         match self {
             Scanner::Forward(scanner) => scanner.take_statistics(),
             Scanner::Backward(scanner) => scanner.take_statistics(),
+        }
+    }
+
+    /// Returns whether data with newer ts is found. The result is meaningful only when
+    /// `check_has_newer_ts_data` is set to true.
+    fn met_newer_ts_data(&self) -> NewerTsCheckState {
+        match self {
+            Scanner::Forward(scanner) => scanner.met_newer_ts_data(),
+            Scanner::Backward(scanner) => scanner.met_newer_ts_data(),
         }
     }
 }
@@ -196,6 +221,8 @@ pub struct ScannerConfig<S: Snapshot> {
     desc: bool,
 
     bypass_locks: TsSet,
+
+    check_has_newer_ts_data: bool,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -212,13 +239,14 @@ impl<S: Snapshot> ScannerConfig<S> {
             ts,
             desc,
             bypass_locks: Default::default(),
+            check_has_newer_ts_data: false,
         }
     }
 
     #[inline]
     fn scan_mode(&self) -> ScanMode {
         if self.desc {
-            ScanMode::Backward
+            ScanMode::Mixed
         } else {
             ScanMode::Forward
         }
@@ -291,7 +319,7 @@ where
             "near_load_data_by_write",
         ));
     }
-    statistics.data.processed += 1;
+    statistics.data.processed_keys += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 
@@ -316,7 +344,7 @@ where
             "near_reverse_load_data_by_write",
         ));
     }
-    statistics.data.processed += 1;
+    statistics.data.processed_keys += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 
@@ -327,22 +355,110 @@ pub fn has_data_in_range<S: Snapshot>(
     right: &Key,
     statistic: &mut CfStatistics,
 ) -> Result<bool> {
-    let iter_opt = IterOption::new(None, None, true);
+    let iter_opt = IterOptions::new(
+        None,
+        Some(KeyBuilder::from_slice(
+            right.as_encoded(),
+            DATA_PREFIX_KEY.len(),
+            0,
+        )),
+        true,
+    )
+    .set_max_skippable_internal_keys(100);
     let mut iter = snapshot.iter_cf(cf, iter_opt, ScanMode::Forward)?;
-    if iter.seek(left, statistic)? {
-        if iter.key(statistic) < right.as_encoded().as_slice() {
+    match iter.seek(left, statistic) {
+        Ok(valid) => {
+            if valid {
+                if iter.key(statistic) < right.as_encoded().as_slice() {
+                    return Ok(true);
+                }
+            }
+        }
+        Err(e)
+            if e.to_string()
+                .contains("Result incomplete: Too many internal keys skipped") =>
+        {
             return Ok(true);
+        }
+        err @ Err(_) => {
+            err?;
         }
     }
     Ok(false)
 }
 
+/// Seek for the next valid (write type == Put or Delete) write record.
+/// The write cursor must indicate a data key of the user key of which ts >= after_ts.
+/// Return None if cannot find any valid write record.
+pub fn seek_for_valid_write<I>(
+    write_cursor: &mut Cursor<I>,
+    user_key: &Key,
+    after_ts: TimeStamp,
+    statistics: &mut Statistics,
+) -> Result<Option<Write>>
+where
+    I: Iterator,
+{
+    let mut ret = None;
+    while write_cursor.valid()?
+        && Key::is_user_key_eq(
+            write_cursor.key(&mut statistics.write),
+            user_key.as_encoded(),
+        )
+    {
+        assert_ge!(
+            after_ts,
+            Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
+        );
+        let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
+        match write_ref.write_type {
+            WriteType::Put | WriteType::Delete => {
+                ret = Some(write_ref.to_owned());
+                break;
+            }
+            WriteType::Lock | WriteType::Rollback => {
+                // Move to the next write record.
+                write_cursor.next(&mut statistics.write);
+            }
+        }
+    }
+    Ok(ret)
+}
+
+/// Seek for the last written value.
+/// The write cursor must indicate a data key of the user key of which ts >= after_ts.
+/// Return None if cannot find any valid write record or found a delete record.
+pub fn seek_for_valid_value<I>(
+    write_cursor: &mut Cursor<I>,
+    default_cursor: &mut Cursor<I>,
+    user_key: &Key,
+    after_ts: TimeStamp,
+    statistics: &mut Statistics,
+) -> Result<Option<Value>>
+where
+    I: Iterator,
+{
+    if let Some(write) = seek_for_valid_write(write_cursor, user_key, after_ts, statistics)? {
+        if write.write_type == WriteType::Put {
+            let value = if let Some(v) = write.short_value {
+                v
+            } else {
+                near_load_data_by_write(default_cursor, user_key, write.start_ts, statistics)?
+            };
+            return Ok(Some(value));
+        }
+    };
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::kv::SEEK_BOUND;
     use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+    use crate::storage::txn::tests::*;
     use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
     use kvproto::kvrpcpb::Context;
 
@@ -559,5 +675,84 @@ mod tests {
     fn test_scan_bypass_locks() {
         test_scan_bypass_locks_impl(false);
         test_scan_bypass_locks_impl(true);
+    }
+
+    fn must_met_newer_ts_data<E: Engine>(
+        engine: &E,
+        scanner_ts: impl Into<TimeStamp>,
+        key: &[u8],
+        value: Option<&[u8]>,
+        desc: bool,
+        expected_met_newer_ts_data: bool,
+    ) {
+        let mut scanner = ScannerBuilder::new(
+            engine.snapshot(&Context::default()).unwrap(),
+            scanner_ts.into(),
+            desc,
+        )
+        .range(Some(Key::from_raw(key)), None)
+        .check_has_newer_ts_data(true)
+        .build()
+        .unwrap();
+
+        let result = scanner.next().unwrap();
+        if let Some(value) = value {
+            let (k, v) = result.unwrap();
+            assert_eq!(k, Key::from_raw(key));
+            assert_eq!(v, value);
+        } else {
+            assert!(result.is_none());
+        }
+
+        let expected = if expected_met_newer_ts_data {
+            NewerTsCheckState::Met
+        } else {
+            NewerTsCheckState::NotMetYet
+        };
+        assert_eq!(expected, scanner.met_newer_ts_data());
+    }
+
+    fn test_met_newer_ts_data_impl(deep_write_seek: bool, desc: bool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (key, val1) = (b"foo", b"bar1");
+
+        if deep_write_seek {
+            for i in 0..SEEK_BOUND {
+                must_prewrite_put(&engine, key, val1, key, i);
+                must_commit(&engine, key, i, i);
+            }
+        }
+
+        must_prewrite_put(&engine, key, val1, key, 100);
+        must_commit(&engine, key, 100, 200);
+        let (key, val2) = (b"foo", b"bar2");
+        must_prewrite_put(&engine, key, val2, key, 300);
+        must_commit(&engine, key, 300, 400);
+
+        must_met_newer_ts_data(
+            &engine,
+            100,
+            key,
+            if deep_write_seek { Some(val1) } else { None },
+            desc,
+            true,
+        );
+        must_met_newer_ts_data(&engine, 200, key, Some(val1), desc, true);
+        must_met_newer_ts_data(&engine, 300, key, Some(val1), desc, true);
+        must_met_newer_ts_data(&engine, 400, key, Some(val2), desc, false);
+        must_met_newer_ts_data(&engine, 500, key, Some(val2), desc, false);
+
+        must_prewrite_lock(&engine, key, key, 600);
+
+        must_met_newer_ts_data(&engine, 500, key, Some(val2), desc, true);
+        must_met_newer_ts_data(&engine, 600, key, Some(val2), desc, true);
+    }
+
+    #[test]
+    fn test_met_newer_ts_data() {
+        test_met_newer_ts_data_impl(false, false);
+        test_met_newer_ts_data_impl(false, true);
+        test_met_newer_ts_data_impl(true, false);
+        test_met_newer_ts_data_impl(true, true);
     }
 }

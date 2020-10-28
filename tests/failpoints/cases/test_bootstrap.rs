@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use engine::*;
+use engine_traits::Peekable;
 use kvproto::{metapb, raft_serverpb};
 use test_raftstore::*;
 
@@ -23,7 +23,7 @@ fn test_bootstrap_half_way_failure(fp: &str) {
         .unwrap();
     let store_id = ident.get_store_id();
     debug!("store id {:?}", store_id);
-    assert!(cluster.engines.insert(store_id, engines.clone()).is_none());
+    cluster.set_bootstrapped(store_id, 0);
 
     // Check whether it can bootstrap cluster successfully.
     fail::remove(fp);
@@ -46,24 +46,18 @@ fn test_bootstrap_half_way_failure(fp: &str) {
 
 #[test]
 fn test_bootstrap_half_way_failure_after_bootstrap_store() {
-    let _guard = crate::setup();
-
     let fp = "node_after_bootstrap_store";
     test_bootstrap_half_way_failure(fp);
 }
 
 #[test]
 fn test_bootstrap_half_way_failure_after_prepare_bootstrap_cluster() {
-    let _guard = crate::setup();
-
     let fp = "node_after_prepare_bootstrap_cluster";
     test_bootstrap_half_way_failure(fp);
 }
 
 #[test]
 fn test_bootstrap_half_way_failure_after_bootstrap_cluster() {
-    let _guard = crate::setup();
-
     let fp = "node_after_bootstrap_cluster";
     test_bootstrap_half_way_failure(fp);
 }

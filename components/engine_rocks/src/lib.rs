@@ -14,17 +14,26 @@
 //!
 //! Please read the engine_trait crate docs before hacking.
 
+#![cfg_attr(test, feature(test))]
+
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 #[macro_use]
 extern crate tikv_util;
 #[macro_use]
-extern crate slog_global;
+extern crate serde_derive;
+#[macro_use(fail_point)]
+extern crate fail;
 
-mod cf_handle;
-pub use crate::cf_handle::*;
+#[cfg(test)]
+extern crate test;
+
+mod cf_names;
+pub use crate::cf_names::*;
 mod cf_options;
 pub use crate::cf_options::*;
+mod compact;
+pub use crate::compact::*;
 mod db_options;
 pub use crate::db_options::*;
 mod db_vector;
@@ -33,19 +42,30 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use crate::import::*;
+mod logger;
+pub use crate::logger::*;
+mod misc;
+pub use crate::misc::*;
+pub mod range_properties;
 mod snapshot;
+pub use crate::range_properties::*;
 pub use crate::snapshot::*;
 mod sst;
 pub use crate::sst::*;
+mod sst_partitioner;
+pub use crate::sst_partitioner::*;
 mod table_properties;
 pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
+pub mod mvcc_properties;
+pub use crate::mvcc_properties::*;
 
 mod engine_iterator;
 pub use crate::engine_iterator::*;
 
 mod options;
+pub mod raw_util;
 pub mod util;
 
 mod compat;
@@ -54,11 +74,8 @@ pub use compat::*;
 mod compact_listener;
 pub use compact_listener::*;
 
-mod properties;
+pub mod properties;
 pub use properties::*;
-
-pub mod metrics_flusher;
-pub use metrics_flusher::*;
 
 pub mod rocks_metrics;
 pub use rocks_metrics::*;
@@ -68,3 +85,14 @@ pub use rocks_metrics_defs::*;
 
 pub mod event_listener;
 pub use event_listener::*;
+
+pub mod config;
+pub use config::*;
+pub mod encryption;
+
+mod raft_engine;
+
+pub use rocksdb::set_perf_level;
+pub use rocksdb::PerfContext;
+
+pub mod raw;

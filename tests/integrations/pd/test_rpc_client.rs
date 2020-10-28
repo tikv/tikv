@@ -5,36 +5,20 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use futures::Future;
-use futures_cpupool::Builder;
+use futures::executor::block_on;
 use grpcio::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
+use tokio::runtime::Builder;
 
-use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
+use pd_client::{validate_endpoints, Error as PdError, PdClient, RegionStat, RpcClient};
 use raftstore::store;
-use test_util;
-use tikv_util::security::{SecurityConfig, SecurityManager};
+use security::{SecurityConfig, SecurityManager};
+use semver::Version;
+use tikv_util::config::ReadableDuration;
 use txn_types::TimeStamp;
 
-use super::mock::mocker::*;
-use super::mock::Server as MockServer;
-
-fn new_config(eps: Vec<(String, u16)>) -> Config {
-    let mut cfg = Config::default();
-    cfg.endpoints = eps
-        .into_iter()
-        .map(|addr| format!("{}:{}", addr.0, addr.1))
-        .collect();
-    cfg
-}
-
-fn new_client(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> RpcClient {
-    let cfg = new_config(eps);
-    let mgr =
-        mgr.unwrap_or_else(|| Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()));
-    RpcClient::new(&cfg, mgr).unwrap()
-}
+use test_pd::{mocker::*, util::*, Server as MockServer};
 
 #[test]
 fn test_retry_rpc_client() {
@@ -99,10 +83,12 @@ fn test_rpc_client() {
     assert_eq!(region_info.region, region);
     assert_eq!(region_info.leader, None);
 
-    let tmp_region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
+    let tmp_region = block_on(client.get_region_by_id(region_id))
+        .unwrap()
+        .unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
-    let ts = client.get_tso().wait().unwrap();
+    let ts = block_on(client.get_tso()).unwrap();
     assert_ne!(ts, TimeStamp::zero());
 
     let mut prev_id = 0;
@@ -114,39 +100,32 @@ fn test_rpc_client() {
     }
 
     let poller = Builder::new()
-        .pool_size(1)
-        .name_prefix(thd_name!("poller"))
-        .create();
+        .threaded_scheduler()
+        .thread_name(thd_name!("poller"))
+        .core_threads(1)
+        .build()
+        .unwrap();
     let (tx, rx) = mpsc::channel();
     let f = client.handle_region_heartbeat_response(1, move |resp| {
         let _ = tx.send(resp);
     });
-    poller.spawn(f).forget();
-    poller
-        .spawn(client.region_heartbeat(
-            store::RAFT_INIT_LOG_TERM,
-            region.clone(),
-            peer.clone(),
-            RegionStat::default(),
-        ))
-        .forget();
+    poller.spawn(f);
+    poller.spawn(client.region_heartbeat(
+        store::RAFT_INIT_LOG_TERM,
+        region.clone(),
+        peer.clone(),
+        RegionStat::default(),
+        None,
+    ));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     let region_info = client.get_region_info(region_key).unwrap();
     assert_eq!(region_info.region, region);
     assert_eq!(region_info.leader.unwrap(), peer);
 
-    client
-        .store_heartbeat(pdpb::StoreStats::default())
-        .wait()
-        .unwrap();
-    client
-        .ask_batch_split(metapb::Region::default(), 1)
-        .wait()
-        .unwrap();
-    client
-        .report_batch_split(vec![metapb::Region::default(), metapb::Region::default()])
-        .wait()
+    block_on(client.store_heartbeat(pdpb::StoreStats::default())).unwrap();
+    block_on(client.ask_batch_split(metapb::Region::default(), 1)).unwrap();
+    block_on(client.report_batch_split(vec![metapb::Region::default(), metapb::Region::default()]))
         .unwrap();
 
     let region_info = client.get_region_info(region_key).unwrap();
@@ -237,7 +216,7 @@ fn test_validate_endpoints() {
     let eps = server.bind_addrs();
 
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    assert!(validate_endpoints(env, &new_config(eps), &mgr).is_err());
+    assert!(validate_endpoints(env, &new_config(eps), mgr.clone()).is_err());
 }
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {
@@ -257,8 +236,7 @@ fn test_retry<F: Fn(&RpcClient)>(func: F) {
 #[test]
 fn test_retry_async() {
     let r#async = |client: &RpcClient| {
-        let region = client.get_region_by_id(1);
-        region.wait().unwrap();
+        block_on(client.get_region_by_id(1)).unwrap();
     };
     test_retry(r#async);
 }
@@ -286,8 +264,7 @@ fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
 #[test]
 fn test_not_retry_async() {
     let r#async = |client: &RpcClient| {
-        let region = client.get_region_by_id(1);
-        region.wait().unwrap_err();
+        block_on(client.get_region_by_id(1)).unwrap_err();
     };
     test_not_retry(r#async);
 }
@@ -308,9 +285,9 @@ fn test_incompatible_version() {
 
     let client = new_client(eps, None);
 
-    let resp = client.ask_batch_split(metapb::Region::default(), 2);
+    let resp = block_on(client.ask_batch_split(metapb::Region::default(), 2));
     assert_eq!(
-        resp.wait().unwrap_err().to_string(),
+        resp.unwrap_err().to_string(),
         PdError::Incompatible.to_string()
     );
 }
@@ -339,9 +316,7 @@ fn restart_leader(mgr: SecurityManager) {
     region.mut_peers().push(peer);
     client.bootstrap_cluster(store, region.clone()).unwrap();
 
-    let region = client
-        .get_region_by_id(region.get_id())
-        .wait()
+    let region = block_on(client.get_region_by_id(region.get_id()))
         .unwrap()
         .unwrap();
 
@@ -352,7 +327,7 @@ fn restart_leader(mgr: SecurityManager) {
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
 
-    let region = client.get_region_by_id(region.get_id()).wait().unwrap();
+    let region = block_on(client.get_region_by_id(region.get_id())).unwrap();
     assert_eq!(region.unwrap().get_id(), region_id);
 }
 
@@ -364,7 +339,7 @@ fn test_restart_leader_insecure() {
 
 #[test]
 fn test_restart_leader_secure() {
-    let security_cfg = test_util::new_security_cfg();
+    let security_cfg = test_util::new_security_cfg(None);
     let mgr = SecurityManager::new(&security_cfg).unwrap();
     restart_leader(mgr)
 }
@@ -384,8 +359,8 @@ fn test_change_leader_async() {
     let leader = client.get_leader();
 
     for _ in 0..5 {
-        let region = client.get_region_by_id(1);
-        region.wait().ok();
+        let region = block_on(client.get_region_by_id(1));
+        region.ok();
 
         let new = client.get_leader();
         if new != leader {
@@ -406,25 +381,26 @@ fn test_region_heartbeat_on_leader_change() {
 
     let client = new_client(eps, None);
     let poller = Builder::new()
-        .pool_size(1)
-        .name_prefix(thd_name!("poller"))
-        .create();
+        .threaded_scheduler()
+        .thread_name(thd_name!("poller"))
+        .core_threads(1)
+        .build()
+        .unwrap();
     let (tx, rx) = mpsc::channel();
     let f = client.handle_region_heartbeat_response(1, move |resp| {
         tx.send(resp).unwrap();
     });
-    poller.spawn(f).forget();
+    poller.spawn(f);
     let region = metapb::Region::default();
     let peer = metapb::Peer::default();
     let stat = RegionStat::default();
-    poller
-        .spawn(client.region_heartbeat(
-            store::RAFT_INIT_LOG_TERM,
-            region.clone(),
-            peer.clone(),
-            stat.clone(),
-        ))
-        .forget();
+    poller.spawn(client.region_heartbeat(
+        store::RAFT_INIT_LOG_TERM,
+        region.clone(),
+        peer.clone(),
+        stat.clone(),
+        None,
+    ));
     rx.recv_timeout(LeaderChange::get_leader_interval())
         .unwrap();
 
@@ -432,7 +408,7 @@ fn test_region_heartbeat_on_leader_change() {
         let mut leader = client.get_leader();
         for _ in 0..count {
             loop {
-                let _ = client.get_region_by_id(1).wait();
+                let _ = block_on(client.get_region_by_id(1));
                 let new = client.get_leader();
                 if leader != new {
                     leader = new;
@@ -442,14 +418,13 @@ fn test_region_heartbeat_on_leader_change() {
                 thread::sleep(LeaderChange::get_leader_interval());
             }
         }
-        poller
-            .spawn(client.region_heartbeat(
-                store::RAFT_INIT_LOG_TERM,
-                region.clone(),
-                peer.clone(),
-                stat.clone(),
-            ))
-            .forget();
+        poller.spawn(client.region_heartbeat(
+            store::RAFT_INIT_LOG_TERM,
+            region.clone(),
+            peer.clone(),
+            stat.clone(),
+            None,
+        ));
         rx.recv_timeout(LeaderChange::get_leader_interval())
             .unwrap();
     };
@@ -459,4 +434,81 @@ fn test_region_heartbeat_on_leader_change() {
 
     // Change PD leader twice without update the heartbeat sender, then heartbeat PD.
     heartbeat_on_leader_change(2);
+}
+
+#[test]
+fn test_periodical_update() {
+    let eps_count = 3;
+    let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
+    let eps = server.bind_addrs();
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let client = new_client_with_update_interval(eps, None, ReadableDuration::secs(3));
+    let counter1 = Arc::clone(&counter);
+    client.handle_reconnect(move || {
+        counter1.fetch_add(1, Ordering::SeqCst);
+    });
+    let leader = client.get_leader();
+
+    for _ in 0..5 {
+        let new = client.get_leader();
+        if new != leader {
+            assert!(counter.load(Ordering::SeqCst) >= 1);
+            return;
+        }
+        thread::sleep(LeaderChange::get_leader_interval());
+    }
+
+    panic!("failed, leader should changed");
+}
+
+#[test]
+fn test_cluster_version() {
+    let server = MockServer::<Service>::new(3);
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps, None);
+    let cluster_version = client.cluster_version();
+    assert!(cluster_version.get().is_none());
+
+    let emit_heartbeat = || {
+        let req = pdpb::StoreStats::default();
+        block_on(client.store_heartbeat(req)).unwrap();
+    };
+
+    let set_cluster_version = |version: &str| {
+        let h = server.default_handler();
+        h.set_cluster_version(version.to_owned());
+    };
+
+    // Empty version string will be treated as invalid.
+    emit_heartbeat();
+    assert!(cluster_version.get().is_none());
+
+    // Explicitly invalid version string.
+    set_cluster_version("invalid-version");
+    emit_heartbeat();
+    assert!(cluster_version.get().is_none());
+
+    let v_500 = Version::parse("5.0.0").unwrap();
+    let v_501 = Version::parse("5.0.1").unwrap();
+
+    // Correct version string.
+    set_cluster_version("5.0.0");
+    emit_heartbeat();
+    assert_eq!(cluster_version.get().unwrap(), v_500,);
+
+    // Version can't go backwards.
+    set_cluster_version("4.99");
+    emit_heartbeat();
+    assert_eq!(cluster_version.get().unwrap(), v_500,);
+
+    // After reconnect the version should be still accessable.
+    client.reconnect().unwrap();
+    assert_eq!(cluster_version.get().unwrap(), v_500,);
+
+    // Version can go forwards.
+    set_cluster_version("5.0.1");
+    emit_heartbeat();
+    assert_eq!(cluster_version.get().unwrap(), v_501);
 }

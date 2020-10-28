@@ -1,12 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use engine_rocks::RocksEngine;
 use kvproto::metapb;
-
+use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::GlobalReplicationState;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -41,12 +44,22 @@ struct StoreAddr {
 }
 
 /// A runner for resolving store addresses.
-struct Runner<T: PdClient> {
+struct Runner<T, RR>
+where
+    T: PdClient,
+    RR: RaftStoreRouter<RocksEngine>,
+{
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
+    state: Arc<Mutex<GlobalReplicationState>>,
+    router: RR,
 }
 
-impl<T: PdClient> Runner<T> {
+impl<T, RR> Runner<T, RR>
+where
+    T: PdClient,
+    RR: RaftStoreRouter<RocksEngine>,
+{
     fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
@@ -70,10 +83,22 @@ impl<T: PdClient> Runner<T> {
     fn get_address(&self, store_id: u64) -> Result<String> {
         let pd_client = Arc::clone(&self.pd_client);
         let mut s = box_try!(pd_client.get_store(store_id));
+        let mut group_id = None;
+        let mut state = self.state.lock().unwrap();
+        if state.status().get_mode() == ReplicationMode::DrAutoSync {
+            let state_id = state.status().get_dr_auto_sync().state_id;
+            if state.group.group_id(state_id, store_id).is_none() {
+                group_id = state.group.register_store(store_id, s.take_labels().into());
+            }
+        } else {
+            state.group.backup_store_labels(&mut s);
+        }
+        drop(state);
+        if let Some(group_id) = group_id {
+            self.router.report_resolved(store_id, group_id);
+        }
         if s.get_state() == metapb::StoreState::Tombstone {
-            RESOLVE_STORE_COUNTER
-                .with_label_values(&["tombstone"])
-                .inc();
+            RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
             return Err(box_err!("store {} has been removed", store_id));
         }
         let addr = take_peer_address(&mut s);
@@ -87,7 +112,12 @@ impl<T: PdClient> Runner<T> {
     }
 }
 
-impl<T: PdClient> Runnable<Task> for Runner<T> {
+impl<T, RR> Runnable for Runner<T, RR>
+where
+    T: PdClient,
+    RR: RaftStoreRouter<RocksEngine>,
+{
+    type Task = Task;
     fn run(&mut self, task: Task) {
         let store_id = task.store_id;
         let resp = self.resolve(store_id);
@@ -108,19 +138,29 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T>(pd_client: Arc<T>) -> Result<(Worker<Task>, PdStoreAddrResolver)>
+pub fn new_resolver<T, RR: 'static>(
+    pd_client: Arc<T>,
+    router: RR,
+) -> Result<(
+    Worker<Task>,
+    PdStoreAddrResolver,
+    Arc<Mutex<GlobalReplicationState>>,
+)>
 where
     T: PdClient + 'static,
+    RR: RaftStoreRouter<RocksEngine>,
 {
     let mut worker = Worker::new("addr-resolver");
-
+    let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
     let runner = Runner {
         pd_client,
         store_addrs: HashMap::default(),
+        state: state.clone(),
+        router,
     };
     box_try!(worker.start(runner));
     let resolver = PdStoreAddrResolver::new(worker.scheduler());
-    Ok((worker, resolver))
+    Ok((worker, resolver, state))
 }
 
 impl StoreAddrResolver for PdStoreAddrResolver {
@@ -143,6 +183,7 @@ mod tests {
 
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
+    use raftstore::router::RaftStoreBlackHole;
     use tikv_util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
@@ -171,7 +212,7 @@ mod tests {
         store
     }
 
-    fn new_runner(store: metapb::Store) -> Runner<MockPdClient> {
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RaftStoreBlackHole> {
         let client = MockPdClient {
             start: Instant::now(),
             store,
@@ -179,6 +220,8 @@ mod tests {
         Runner {
             pd_client: Arc::new(client),
             store_addrs: HashMap::default(),
+            state: Default::default(),
+            router: RaftStoreBlackHole,
         }
     }
 

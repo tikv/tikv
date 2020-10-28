@@ -1,9 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel;
-use engine::{Peekable, DB};
-use engine_traits::CF_RAFT;
-use fail;
+use engine_rocks::raw::DB;
+use engine_rocks::Compat;
+use engine_traits::{Peekable, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
 use std::mem;
@@ -16,7 +16,6 @@ use tikv_util::HandyRwLock;
 
 #[test]
 fn test_wait_for_apply_index() {
-    let _guard = crate::setup();
     let mut cluster = new_server_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
@@ -60,7 +59,7 @@ fn test_wait_for_apply_index() {
         .unwrap();
     // Must timeout here
     assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
-    fail::cfg("on_apply_write_cmd", "off").unwrap();
+    fail::remove("on_apply_write_cmd");
 
     // After write cmd applied, the follower read will be executed.
     match rx.recv_timeout(Duration::from_secs(3)) {
@@ -74,7 +73,6 @@ fn test_wait_for_apply_index() {
 
 #[test]
 fn test_duplicate_read_index_ctx() {
-    let _guard = crate::setup();
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
@@ -145,7 +143,7 @@ fn test_duplicate_read_index_ctx() {
     for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
         router.send_raft_message(raft_msg).unwrap();
     }
-    fail::cfg("pause_on_peer_collect_message", "off").unwrap();
+    fail::remove("pause_on_peer_collect_message");
 
     // read index response must not be dropped
     rx2.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -154,7 +152,6 @@ fn test_duplicate_read_index_ctx() {
 
 #[test]
 fn test_read_before_init() {
-    let _guard = crate::setup();
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
@@ -193,6 +190,7 @@ fn test_read_before_init() {
         .async_command_on_node(3, request, cb)
         .unwrap();
     let resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    fail::remove("before_apply_snap_update_region");
     assert!(
         resp.get_header()
             .get_error()
@@ -205,7 +203,6 @@ fn test_read_before_init() {
 
 #[test]
 fn test_read_applying_snapshot() {
-    let _guard = crate::setup();
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
@@ -230,6 +227,7 @@ fn test_read_applying_snapshot() {
     let region_key = keys::region_state_key(r1);
     let region_state: RegionLocalState = cluster
         .get_engine(3)
+        .c()
         .get_msg_cf(CF_RAFT, &region_key)
         .unwrap()
         .unwrap();
@@ -254,11 +252,11 @@ fn test_read_applying_snapshot() {
     let resp = match rx.recv_timeout(Duration::from_secs(5)) {
         Ok(r) => r,
         Err(_) => {
-            fail::cfg("region_apply_snap", "off").unwrap();
+            fail::remove("region_apply_snap");
             panic!("cannot receive response");
         }
     };
-    fail::cfg("region_apply_snap", "off").unwrap();
+    fail::remove("region_apply_snap");
     assert!(
         resp.get_header()
             .get_error()
@@ -271,10 +269,9 @@ fn test_read_applying_snapshot() {
 
 #[test]
 fn test_read_after_cleanup_range_for_snap() {
-    let _guard = crate::setup();
     let mut cluster = new_server_cluster(1, 3);
     configure_for_snapshot(&mut cluster);
-    configure_for_lease_read(&mut cluster, Some(100), Some(10_000));
+    configure_for_lease_read(&mut cluster, Some(100), Some(10));
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -290,10 +287,12 @@ fn test_read_after_cleanup_range_for_snap() {
     cluster.pd_client.must_none_pending_peer(p3.clone());
     let region = cluster.get_region(b"k0");
     assert_eq!(cluster.leader_of_region(region.get_id()).unwrap(), p1);
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
     cluster.stop_node(3);
+    let last_index = cluster.raft_local_state(r1, 1).last_index;
     (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
     // Ensure logs are compacted, then node 1 will send a snapshot to node 3 later
-    must_truncated_to(cluster.get_engine(1), r1, 8);
+    must_truncated_to(cluster.get_engine(1), r1, last_index + 1);
 
     fail::cfg("send_snapshot", "pause").unwrap();
     cluster.run_node(3).unwrap();
@@ -301,29 +300,25 @@ fn test_read_after_cleanup_range_for_snap() {
     thread::sleep(Duration::from_millis(500));
 
     // Add filter for delaying ReadIndexResp and MsgSnapshot
-    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
     let (read_index_sx, read_index_rx) = channel::unbounded::<RaftMessage>();
     let (snap_sx, snap_rx) = channel::unbounded::<RaftMessage>();
-    let (heartbeat_sx, heartbeat_rx) = channel::unbounded::<RaftMessage>();
     let recv_filter = Box::new(
         RegionPacketFilter::new(region.get_id(), 3)
             .direction(Direction::Recv)
-            .when(Arc::new(AtomicBool::new(true)))
-            .reserve_dropped(Arc::clone(&dropped_msgs))
+            .msg_type(MessageType::MsgSnapshot)
             .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-                if msg.get_message().get_msg_type() == MessageType::MsgReadIndexResp {
-                    read_index_sx.send(msg.clone()).unwrap();
-                } else if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
-                    snap_sx.send(msg.clone()).unwrap();
-                } else if msg.get_message().get_msg_type() == MessageType::MsgHeartbeat {
-                    heartbeat_sx.send(msg.clone()).unwrap();
-                }
+                snap_sx.send(msg.clone()).unwrap();
             })),
     );
+    let send_read_index_filter = RegionPacketFilter::new(region.get_id(), 3)
+        .direction(Direction::Recv)
+        .msg_type(MessageType::MsgReadIndexResp)
+        .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
+            read_index_sx.send(msg.clone()).unwrap();
+        }));
     cluster.sim.wl().add_recv_filter(3, recv_filter);
-    fail::cfg("send_snapshot", "off").unwrap();
-
-    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+    cluster.add_send_filter(CloneFilterFactory(send_read_index_filter));
+    fail::remove("send_snapshot");
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
@@ -341,27 +336,74 @@ fn test_read_after_cleanup_range_for_snap() {
         .unwrap();
     let read_index_msg = read_index_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     let snap_msg = snap_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    let heartbeat_msg = heartbeat_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     fail::cfg("apply_snap_cleanup_range", "pause").unwrap();
 
     let router = cluster.sim.wl().get_router(3).unwrap();
     fail::cfg("pause_on_peer_collect_message", "pause").unwrap();
     cluster.sim.wl().clear_recv_filters(3);
-    router.send_raft_message(heartbeat_msg).unwrap();
+    cluster.clear_send_filters();
     router.send_raft_message(snap_msg).unwrap();
     router.send_raft_message(read_index_msg).unwrap();
-    fail::cfg("pause_on_peer_collect_message", "off").unwrap();
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    fail::remove("pause_on_peer_collect_message");
     must_get_none(&cluster.get_engine(3), b"k0");
     // Should not receive resp
     rx1.recv_timeout(Duration::from_millis(500)).unwrap_err();
-    fail::cfg("apply_snap_cleanup_range", "off").unwrap();
+    fail::remove("apply_snap_cleanup_range");
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
+}
+
+/// Tests the learner of new split region will know its leader without waiting for the leader heartbeat timeout.
+/// The learner of a new split region may not know its leader if it applies log slowly and drops the no-op
+/// entry from the new leader, and it had to wait for a heartbeat timeout to know its leader before that it
+/// can't handle any read request.
+#[test]
+fn test_new_split_learner_can_not_find_leader() {
+    let mut cluster = new_node_cluster(0, 4);
+    configure_for_lease_read(&mut cluster, Some(5000), None);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k5", b"v5");
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_learner_peer(3, 3));
+    pd_client.must_add_peer(region_id, new_peer(4, 4));
+    for id in 1..=4 {
+        must_get_equal(&cluster.get_engine(id), b"k5", b"v5");
+    }
+
+    fail::cfg("apply_before_split_1_3", "pause").unwrap();
+
+    let region = cluster.get_region(b"k3");
+    cluster.must_split(&region, b"k3");
+
+    // This `put` will not inform learner leadership because the The learner is paused at apply split command,
+    // so the learner peer of the new split region is not create yet. Also, the leader will not send another
+    // append request before the previous one response as all peer is initiated with the `Probe` mod
+    cluster.must_put(b"k2", b"v2");
+    assert_eq!(cluster.get(b"k2"), Some(b"v2".to_vec()));
+
+    fail::remove("apply_before_split_1_3");
+
+    // Wait learner split
+    thread::sleep(Duration::from_millis(500));
+
+    let new_region = cluster.get_region(b"k2");
+    let learner_peer = find_peer(&new_region, 3).unwrap().clone();
+    let resp_ch = async_read_on_peer(&mut cluster, learner_peer, new_region, b"k2", true, true);
+    let resp = resp_ch.recv_timeout(Duration::from_secs(3)).unwrap();
+    let exp_value = resp.get_responses()[0].get_get().get_value();
+    assert_eq!(exp_value, b"v2");
 }
 
 fn must_truncated_to(engine: Arc<DB>, region_id: u64, index: u64) {
     for _ in 1..300 {
         let apply_state: RaftApplyState = engine
+            .c()
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
             .unwrap()
             .unwrap();

@@ -7,15 +7,17 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
-use engine::IterOption;
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_rocks::RocksEngine;
+use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
 use crate::storage::kv::{
     Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError,
     ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, ScanMode, Snapshot,
+    WriteData,
 };
+use tikv_util::time::ThreadReadId;
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
@@ -69,22 +71,41 @@ impl Default for BTreeEngine {
 
 impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
+    type Local = RocksEngine;
+
+    fn kv_engine(&self) -> RocksEngine {
+        unimplemented!();
+    }
+
+    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> EngineResult<Self::Snap> {
+        unimplemented!();
+    }
+
+    fn modify_on_kv_engine(&self, _: Vec<Modify>) -> EngineResult<()> {
+        unimplemented!();
+    }
 
     fn async_write(
         &self,
         _ctx: &Context,
-        modifies: Vec<Modify>,
+        batch: WriteData,
         cb: EngineCallback<()>,
     ) -> EngineResult<()> {
-        if modifies.is_empty() {
+        if batch.modifies.is_empty() {
             return Err(EngineError::from(EngineErrorInner::EmptyRequest));
         }
-        cb((CbContext::new(), write_modifies(&self, modifies)));
+        cb((CbContext::new(), write_modifies(&self, batch.modifies)));
 
         Ok(())
     }
+
     /// warning: It returns a fake snapshot whose content will be affected by the later modifies!
-    fn async_snapshot(&self, _ctx: &Context, cb: EngineCallback<Self::Snap>) -> EngineResult<()> {
+    fn async_snapshot(
+        &self,
+        _ctx: &Context,
+        _: Option<ThreadReadId>,
+        cb: EngineCallback<Self::Snap>,
+    ) -> EngineResult<()> {
         cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(&self))));
         Ok(())
     }
@@ -112,7 +133,7 @@ pub struct BTreeEngineIterator {
 }
 
 impl BTreeEngineIterator {
-    pub fn new(tree: Arc<RwLockTree>, iter_opt: IterOption) -> BTreeEngineIterator {
+    pub fn new(tree: Arc<RwLockTree>, iter_opt: IterOptions) -> BTreeEngineIterator {
         let lower_bound = match iter_opt.lower_bound() {
             None => Unbounded,
             Some(key) => Included(Key::from_raw(key)),
@@ -219,19 +240,26 @@ impl Snapshot for BTreeEngineSnapshot {
             Some(v) => Ok(Some(v.clone())),
         }
     }
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
+    fn get_cf_opt(&self, _: ReadOptions, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
+        self.get_cf(cf, key)
+    }
+    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
         self.iter_cf(CF_DEFAULT, iter_opt, mode)
     }
     #[inline]
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOptions,
         mode: ScanMode,
     ) -> EngineResult<Cursor<Self::Iter>> {
         let tree = self.inner_engine.get_cf(cf);
-
-        Ok(Cursor::new(BTreeEngineIterator::new(tree, iter_opt), mode))
+        let prefix_seek = iter_opt.prefix_seek_used();
+        Ok(Cursor::new(
+            BTreeEngineIterator::new(tree, iter_opt),
+            mode,
+            prefix_seek,
+        ))
     }
 }
 
@@ -306,13 +334,13 @@ pub mod tests {
         let mut statistics = CfStatistics::default();
 
         // lower bound > upper bound, seek() returns false.
-        let mut iter_op = IterOption::default();
+        let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a7", 0);
         iter_op.set_upper_bound(b"a3", 0);
         let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
         assert!(!cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
 
-        let mut iter_op = IterOption::default();
+        let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a3", 0);
         iter_op.set_upper_bound(b"a7", 0);
         let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
@@ -353,7 +381,7 @@ pub mod tests {
             must_put(&engine, k.as_slice(), v.as_slice());
         }
 
-        let iter_op = IterOption::default();
+        let iter_op = IterOptions::default();
         let tree = engine.get_cf(CF_DEFAULT);
         let mut iter = BTreeEngineIterator::new(tree, iter_op);
         assert!(!iter.valid().unwrap());

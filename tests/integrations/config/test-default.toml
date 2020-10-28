@@ -1,6 +1,8 @@
-[readpool.coprocessor]
+[readpool.unified]
 
 [readpool.storage]
+
+[readpool.coprocessor]
 
 [server]
 
@@ -31,6 +33,8 @@
 [raftdb]
 
 [raftdb.defaultcf]
+
+[raft-engine]
 
 [security]
 

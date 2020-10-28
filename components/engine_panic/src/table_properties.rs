@@ -2,8 +2,8 @@
 
 use crate::engine::PanicEngine;
 use engine_traits::{
-    Range, Result, TableProperties, TablePropertiesCollection, TablePropertiesCollectionIter,
-    TablePropertiesExt, TablePropertiesKey, UserCollectedProperties,
+    DecodeProperties, Range, Result, TableProperties, TablePropertiesCollection,
+    TablePropertiesCollectionIter, TablePropertiesExt, TablePropertiesKey, UserCollectedProperties,
 };
 use std::ops::Deref;
 
@@ -16,7 +16,7 @@ impl TablePropertiesExt for PanicEngine {
 
     fn get_properties_of_tables_in_range(
         &self,
-        cf: &Self::CFHandle,
+        cf: &str,
         ranges: &[Range],
     ) -> Result<Self::TablePropertiesCollection> {
         panic!()
@@ -93,6 +93,12 @@ impl UserCollectedProperties for PanicUserCollectedProperties {
     }
 
     fn len(&self) -> usize {
+        panic!()
+    }
+}
+
+impl DecodeProperties for PanicUserCollectedProperties {
+    fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
         panic!()
     }
 }

@@ -1,10 +1,47 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Mutable, Result, WriteBatch, WriteOptions};
+use crate::engine::PanicEngine;
+use engine_traits::{Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions};
+
+impl WriteBatchExt for PanicEngine {
+    type WriteBatch = PanicWriteBatch;
+    type WriteBatchVec = PanicWriteBatch;
+
+    const WRITE_BATCH_MAX_KEYS: usize = 1;
+
+    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
+        panic!()
+    }
+
+    fn support_write_batch_vec(&self) -> bool {
+        panic!()
+    }
+
+    fn write_vec_opt(&self, wb: &Self::WriteBatchVec, opts: &WriteOptions) -> Result<()> {
+        panic!()
+    }
+
+    fn write_batch(&self) -> Self::WriteBatch {
+        panic!()
+    }
+    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
+        panic!()
+    }
+}
 
 pub struct PanicWriteBatch;
 
-impl WriteBatch for PanicWriteBatch {
+impl WriteBatch<PanicEngine> for PanicWriteBatch {
+    fn with_capacity(_: &PanicEngine, _: usize) -> Self {
+        panic!()
+    }
+
+    fn write_to_engine(&self, _: &PanicEngine, _: &WriteOptions) -> Result<()> {
+        panic!()
+    }
+}
+
+impl Mutable for PanicWriteBatch {
     fn data_size(&self) -> usize {
         panic!()
     }
@@ -14,10 +51,13 @@ impl WriteBatch for PanicWriteBatch {
     fn is_empty(&self) -> bool {
         panic!()
     }
-    fn clear(&self) {
+    fn should_write_to_engine(&self) -> bool {
         panic!()
     }
 
+    fn clear(&mut self) {
+        panic!()
+    }
     fn set_save_point(&mut self) {
         panic!()
     }
@@ -27,20 +67,20 @@ impl WriteBatch for PanicWriteBatch {
     fn rollback_to_save_point(&mut self) -> Result<()> {
         panic!()
     }
-}
-
-impl Mutable for PanicWriteBatch {
-    fn put_opt(&self, opts: &WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         panic!()
     }
-    fn put_cf_opt(&self, opts: &WriteOptions, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         panic!()
     }
 
-    fn delete_opt(&self, opts: &WriteOptions, key: &[u8]) -> Result<()> {
+    fn delete(&mut self, key: &[u8]) -> Result<()> {
         panic!()
     }
-    fn delete_cf_opt(&self, opts: &WriteOptions, cf: &str, key: &[u8]) -> Result<()> {
+    fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
+        panic!()
+    }
+    fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         panic!()
     }
 }
