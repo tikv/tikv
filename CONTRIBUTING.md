@@ -135,6 +135,8 @@ Thanks for your contributions!
 
 ### Finding something to work on
 
+The [Rustdoc of TiKV](https://tikv.github.io) may be helpful.
+
 For beginners, we have prepared many suitable tasks for you. Checkout our [Help Wanted issues](https://github.com/tikv/tikv/issues?q=is%3Aopen+is%3Aissue+label%3Astatus%2Fhelp-wanted) for a list, in which we have also marked the difficulty level.
 
 If you are planning something big, for example, relates to multiple components or changes current behaviors, make sure to open an issue to discuss with us before going on.
@@ -146,6 +148,8 @@ The TiKV team actively develops and maintains a bunch of dependencies used in Ti
 - [raft-rs](https://github.com/tikv/raft-rs): The Raft distributed consensus algorithm implemented in Rust
 - [grpc-rs](https://github.com/tikv/grpc-rs): The gRPC library for Rust built on the gRPC C Core library and Rust Futures
 - [fail-rs](https://github.com/tikv/fail-rs): Fail points for Rust
+
+See more on [TiKV Community](https://github.com/tikv/community).
 
 ### Format of the commit message
 
