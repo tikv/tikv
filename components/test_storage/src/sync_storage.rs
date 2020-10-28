@@ -9,8 +9,8 @@ use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    txn::commands, Engine, PrewriteResult, Result, Statistics, Storage, TestEngineBuilder,
-    TestStorageBuilder, TxnStatus,
+    txn::commands, Engine, PrewriteResult, Result, Storage, TestEngineBuilder, TestStorageBuilder,
+    TxnStatus,
 };
 use tikv_util::collections::HashMap;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
@@ -105,7 +105,7 @@ impl<E: Engine> SyncTestStorage<E> {
         key: &Key,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Option<Value>> {
-        block_on(self.store.get(ctx, key.to_owned(), start_ts.into()))
+        block_on(self.store.get(ctx, key.to_owned(), start_ts.into())).0
     }
 
     #[allow(dead_code)]
@@ -115,7 +115,7 @@ impl<E: Engine> SyncTestStorage<E> {
         keys: &[Key],
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Vec<Result<KvPair>>> {
-        block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
+        block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into())).0
     }
 
     pub fn batch_get_command(

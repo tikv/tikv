@@ -555,6 +555,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
         // The memory lock is not released so reading will encounter the lock.
         thread::sleep(Duration::from_millis(300));
         let err = block_on(storage.get(ctx.clone(), Key::from_raw(key), min_commit_ts.next()))
+            .0
             .unwrap_err();
         expect_locked(err, key, start_ts);
 
@@ -580,8 +581,9 @@ fn test_async_apply_prewrite_impl<E: Engine>(
         fail::remove(on_handle_apply);
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
-        let got_value =
-            block_on(storage.get(ctx, Key::from_raw(key), min_commit_ts.next())).unwrap();
+        let got_value = block_on(storage.get(ctx, Key::from_raw(key), min_commit_ts.next()))
+            .0
+            .unwrap();
         assert_eq!(got_value.unwrap().as_slice(), value);
     } else {
         assert_eq!(
@@ -605,7 +607,9 @@ fn test_async_apply_prewrite_impl<E: Engine>(
             .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
-        let got_value = block_on(storage.get(ctx, Key::from_raw(key), commit_ts.next())).unwrap();
+        let got_value = block_on(storage.get(ctx, Key::from_raw(key), commit_ts.next()))
+            .0
+            .unwrap();
         assert_eq!(got_value.unwrap().as_slice(), value);
     }
 }

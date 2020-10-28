@@ -1741,11 +1741,7 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            100.into(),
-        )));
+        expect_none(block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into())).0);
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
@@ -1764,7 +1760,7 @@ mod tests {
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())).0,
         );
         storage
             .sched_txn_command(
@@ -1778,14 +1774,10 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            100.into(),
-        )));
+        expect_none(block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into())).0);
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())).0,
         );
     }
 
@@ -1829,7 +1821,7 @@ mod tests {
                 ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 1.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 1.into())).0,
         );
         expect_error(
             |e| match e {
@@ -1860,7 +1852,8 @@ mod tests {
                 Context::default(),
                 vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                 1.into(),
-            )),
+            ))
+            .0,
         );
         let x = block_on(storage.batch_get_command(vec![
             create_get_request(b"c", 1),
@@ -2438,7 +2431,8 @@ mod tests {
                 Context::default(),
                 vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                 2.into(),
-            )),
+            ))
+            .0,
         );
         storage
             .sched_txn_command(
@@ -2471,7 +2465,8 @@ mod tests {
                     Key::from_raw(b"b"),
                 ],
                 5.into(),
-            )),
+            ))
+            .0,
         );
     }
 
@@ -2609,11 +2604,11 @@ mod tests {
         rx.recv().unwrap();
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 120.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 120.into())).0,
         );
         expect_value(
             b"101".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 120.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 120.into())).0,
         );
         storage
             .sched_txn_command(
@@ -2642,11 +2637,7 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            100.into(),
-        )));
+        expect_none(block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into())).0);
         storage
             .sched_txn_command::<()>(
                 commands::Pause::new(vec![Key::from_raw(b"x")], 1000, Context::default()).into(),
@@ -2709,11 +2700,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         assert_eq!(cm.max_ts(), 100.into());
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            105.into(),
-        )));
+        expect_none(block_on(storage.get(Context::default(), Key::from_raw(b"x"), 105.into())).0);
     }
 
     #[test]
@@ -2767,11 +2754,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            ts(230, 0),
-        )));
+        expect_none(block_on(storage.get(Context::default(), Key::from_raw(b"x"), ts(230, 0))).0);
     }
 
     #[test]
@@ -2782,7 +2765,7 @@ mod tests {
         let (tx, rx) = channel();
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
-        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into())));
+        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into())).0);
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         storage
@@ -2808,12 +2791,12 @@ mod tests {
         rx.recv().unwrap();
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
-        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into())));
+        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into())).0);
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into())).0,
         );
     }
 
@@ -2826,11 +2809,7 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            100.into(),
-        )));
+        expect_none(block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into())).0);
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
@@ -2865,7 +2844,7 @@ mod tests {
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into())).0,
         );
         // Command Get with high priority not block by command Pause.
         assert_eq!(rx.recv().unwrap(), 3);
@@ -2911,15 +2890,15 @@ mod tests {
         rx.recv().unwrap();
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())).0,
         );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into())).0,
         );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into())).0,
         );
 
         // Delete range [x, z)
@@ -2933,19 +2912,11 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            101.into(),
-        )));
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"y"),
-            101.into(),
-        )));
+        expect_none(block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())).0);
+        expect_none(block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into())).0);
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into())).0,
         );
 
         storage
@@ -2958,11 +2929,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"z"),
-            101.into(),
-        )));
+        expect_none(block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into())).0);
     }
 
     #[test]
@@ -5447,13 +5414,16 @@ mod tests {
 
         // Test get
         let key_error = extract_key_error(
-            &block_on(storage.get(ctx.clone(), key.clone(), 100.into())).unwrap_err(),
+            &block_on(storage.get(ctx.clone(), key.clone(), 100.into()))
+                .0
+                .unwrap_err(),
         );
         assert_eq!(key_error.get_locked().get_key(), b"key");
 
         // Test batch_get
         let key_error = extract_key_error(
             &block_on(storage.batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into()))
+                .0
                 .unwrap_err(),
         );
         assert_eq!(key_error.get_locked().get_key(), b"key");
