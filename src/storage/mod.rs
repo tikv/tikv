@@ -256,7 +256,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         key: Key,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = (Result<Option<Value>>, Statistics, PerfStatisticsDelta)> {
+    ) -> impl Future<Output = Result<(Option<Value>, Statistics, PerfStatisticsDelta)>> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -320,21 +320,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
 
-                    Ok((result, statistics, perf_statistics.delta()))
+                    Ok((result?, statistics, perf_statistics.delta()))
                 }
             },
             priority,
             thread_rng().next_u64(),
         );
         async move {
-            match res.map_err(|_| Error::from(ErrorInner::SchedTooBusy)).await {
-                Err(e) | Ok(Err(e)) => (
-                    Err(e),
-                    Statistics::default(),
-                    PerfStatisticsDelta::default(),
-                ),
-                Ok(Ok((r, s, p))) => (r, s, p),
-            }
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
         }
     }
 
@@ -466,7 +460,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         keys: Vec<Key>,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = (Result<Vec<Result<KvPair>>>, Statistics, PerfStatisticsDelta)> {
+    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)>> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -545,7 +539,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
 
-                    Ok((result, statistics, perf_statistics.delta()))
+                    Ok((result?, statistics, perf_statistics.delta()))
                 }
             },
             priority,
@@ -553,14 +547,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         );
 
         async move {
-            match res.map_err(|_| Error::from(ErrorInner::SchedTooBusy)).await {
-                Err(e) | Ok(Err(e)) => (
-                    Err(e),
-                    Statistics::default(),
-                    PerfStatisticsDelta::default(),
-                ),
-                Ok(Ok((r, s, p))) => (r, s, p),
-            }
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
         }
     }
 

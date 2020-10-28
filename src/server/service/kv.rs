@@ -1160,18 +1160,22 @@ fn future_get<E: Engine, L: LockManager>(
     );
 
     async move {
-        let (v, statistics, perf_statistics_delta) = v.await;
+        let v = v.await;
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            let mut detail_v2 = ScanDetailV2::default();
-            statistics.write_scan_detail(&mut detail_v2);
-            perf_statistics_delta.write_scan_detail(&mut detail_v2);
-            resp.set_scan_detail_v2(detail_v2);
             match v {
-                Ok(Some(val)) => resp.set_value(val),
-                Ok(None) => resp.set_not_found(true),
+                Ok((val, statistics, perf_statistics_delta)) => {
+                    let mut detail_v2 = ScanDetailV2::default();
+                    statistics.write_scan_detail(&mut detail_v2);
+                    perf_statistics_delta.write_scan_detail(&mut detail_v2);
+                    resp.set_scan_detail_v2(detail_v2);
+                    match val {
+                        Some(val) => resp.set_value(val),
+                        None => resp.set_not_found(true),
+                    }
+                },
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -1212,20 +1216,24 @@ fn future_batch_get<E: Engine, L: LockManager>(
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-    let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
+    let v  = storage.batch_get(
+        req.take_context(),
+        keys,
+        req.get_version().into(),
+    );
 
     async move {
-        let (v, statistics, perf_statistics_delta) = v.await;
+        let v = v.await;
         let mut resp = BatchGetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            let v = extract_kv_pairs(v);
+            let (val, statistics, perf_statistics_delta) = extract_kv_pairs_and_statistics(v);
             let mut detail_v2 = ScanDetailV2::default();
             statistics.write_scan_detail(&mut detail_v2);
             perf_statistics_delta.write_scan_detail(&mut detail_v2);
             resp.set_scan_detail_v2(detail_v2);
-            resp.set_pairs(v.into());
+            resp.set_pairs(val.into());
         }
         Ok(resp)
     }
@@ -1723,6 +1731,7 @@ pub mod batch_commands_request {
 pub use kvproto::tikvpb::batch_commands_request;
 #[cfg(feature = "prost-codec")]
 pub use kvproto::tikvpb::batch_commands_response;
+use crate::storage::errors::extract_kv_pairs_and_statistics;
 
 struct BatchRespCollector;
 impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>
