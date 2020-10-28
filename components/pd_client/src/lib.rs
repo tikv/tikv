@@ -140,6 +140,7 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
+    /// Gets store information if it is not a tombstone store asynchronously
     fn get_store_async(&self, _store_id: u64) -> PdFuture<metapb::Store> {
         unimplemented!();
     }

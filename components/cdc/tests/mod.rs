@@ -114,6 +114,7 @@ impl TestSuite {
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
             let cm = ConcurrencyManager::new(1.into());
+            let env = Arc::new(Environment::new(1));
             let mut cdc_endpoint = cdc::Endpoint::new(
                 &CdcConfig::default(),
                 pd_cli.clone(),
@@ -122,6 +123,8 @@ impl TestSuite {
                 cdc_ob,
                 cluster.store_metas[id].clone(),
                 cm.clone(),
+                env,
+                sim.security_mgr.clone(),
             );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);

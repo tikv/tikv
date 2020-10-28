@@ -10,6 +10,7 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::compat::Future01CompatExt;
+use grpcio::{ChannelBuilder, Environment, Result as GrpcResult};
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::Event as Event_oneof_event;
 use kvproto::cdcpb::*;
@@ -21,6 +22,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ChangeCmd, ObserveID, StoreMeta};
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
+use security::SecurityManager;
 use tikv::config::CdcConfig;
 use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
@@ -261,6 +263,11 @@ pub struct Endpoint<T> {
     min_ts_region_id: u64,
     old_value_cache: OldValueCache,
     compatible_hibernate_region: bool,
+
+    // store_id -> client
+    cdc_clients: Arc<Mutex<HashMap<u64, ChangeDataClient>>>,
+    env: Arc<Environment>,
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
@@ -272,6 +279,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         observer: CdcObserver,
         store_meta: Arc<Mutex<StoreMeta>>,
         concurrency_manager: ConcurrencyManager,
+        env: Arc<Environment>,
+        security_mgr: Arc<SecurityManager>,
     ) -> Endpoint<T> {
         let workers = Builder::new()
             .threaded_scheduler()
@@ -286,6 +295,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .build()
             .unwrap();
         let ep = Endpoint {
+            env,
+            security_mgr,
             capture_regions: HashMap::default(),
             connections: HashMap::default(),
             scheduler,
@@ -303,6 +314,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             min_ts_region_id: 0,
             old_value_cache: OldValueCache::new(cfg.old_value_cache_size),
             compatible_hibernate_region: cfg.compatible_hibernate_region,
+            cdc_clients: Arc::new(Mutex::new(HashMap::default())),
         };
         ep.register_min_ts_event();
         ep
@@ -719,6 +731,12 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .map(|(region_id, delegate)| (*region_id, delegate.id))
             .collect();
         let cm: ConcurrencyManager = self.concurrency_manager.clone();
+        let env = self.env.clone();
+        let security_mgr = self.security_mgr.clone();
+        let store_meta = self.store_meta.clone();
+        let cdc_clients = self.cdc_clients.clone();
+        let compatible_hibernate_region = self.compatible_hibernate_region;
+
         let fut = async move {
             let _ = timeout.compat().await;
             // Ignore get tso errors since we will retry every `min_ts_interval`.
@@ -735,8 +753,20 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 }
             }
 
-            let regions =
-                Self::region_resolved_ts_raft(regions, &scheduler, raft_router, min_ts).await;
+            let regions = if compatible_hibernate_region {
+                Self::region_resolved_ts_store(
+                    regions,
+                    store_meta,
+                    pd_client,
+                    security_mgr,
+                    env,
+                    cdc_clients,
+                    min_ts,
+                )
+                .await
+            } else {
+                Self::region_resolved_ts_raft(regions, &scheduler, raft_router, min_ts).await
+            };
 
             if !regions.is_empty() {
                 match scheduler.schedule(Task::MinTS { regions, min_ts }) {
@@ -805,6 +835,84 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .into_iter()
             .filter_map(|resp| resp)
             .collect::<Vec<u64>>()
+    }
+
+    async fn region_resolved_ts_store(
+        regions: Vec<(u64, ObserveID)>,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        pd_client: Arc<dyn PdClient>,
+        security_mgr: Arc<SecurityManager>,
+        env: Arc<Environment>,
+        cdc_clients: Arc<Mutex<HashMap<u64, ChangeDataClient>>>,
+        min_ts: TimeStamp,
+    ) -> Vec<u64> {
+        let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
+        let mut region_map: HashMap<u64, Region> = HashMap::default();
+        {
+            let meta = store_meta.lock().unwrap();
+            for (region_id, _) in regions {
+                if let Some(region) = meta.regions.get(&region_id) {
+                    if let Some((term, leader)) = meta.leaders.get(&region_id) {
+                        for peer in region.get_peers() {
+                            let mut leader_info = LeaderInfo::default();
+                            leader_info.set_leader_id(leader.id);
+                            leader_info.set_term(*term);
+                            leader_info.set_region_id(region_id);
+                            store_map
+                                .entry(peer.store_id)
+                                .or_default()
+                                .push(leader_info);
+                        }
+                        region_map.insert(region_id, region.clone());
+                    }
+                }
+            }
+        }
+        let stores = store_map.into_iter().map(|(store_id, regions)| {
+            let cdc_clients = cdc_clients.clone();
+            let env = env.clone();
+            let pd_client = pd_client.clone();
+            let security_mgr = security_mgr.clone();
+            async move {
+                if cdc_clients.lock().unwrap().get(&store_id).is_none() {
+                    let store = box_try!(pd_client.get_store_async(store_id).await);
+                    let cb = ChannelBuilder::new(env.clone());
+                    let channel = security_mgr.connect(cb, &store.address);
+                    cdc_clients
+                        .lock()
+                        .unwrap()
+                        .insert(store_id, ChangeDataClient::new(channel));
+                }
+                let client = cdc_clients.lock().unwrap().get(&store_id).unwrap().clone();
+                let mut req = CheckLeaderRequest::default();
+                req.set_regions(regions.into());
+                req.set_ts(min_ts.into_inner());
+                let resp = box_try!(client.check_leader_async(&req)).await;
+                Result::Ok(resp)
+            }
+        });
+        let resps = futures::future::join_all(stores).await;
+        let mut resp_map: HashMap<u64, usize> = HashMap::default();
+        resps
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter_map(GrpcResult::ok)
+            .map(|resp| resp.regions.to_vec())
+            .flatten()
+            .for_each(|region_id| {
+                *resp_map.entry(region_id).or_default() += 1;
+            });
+        resp_map
+            .into_iter()
+            .filter_map(|(region_id, count)| {
+                let peer_count = region_map[&region_id].get_peers().len();
+                if peer_count > 0 && count >= peer_count / 2 + 1 {
+                    Some(region_id)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     fn on_open_conn(&mut self, conn: Conn) {
@@ -1183,6 +1291,33 @@ mod tests {
         (receiver_worker, pool, initializer, rx)
     }
 
+    fn mock_endpoint(
+        cfg: &CdcConfig,
+    ) -> (
+        Endpoint<MockRaftStoreRouter>,
+        MockRaftStoreRouter,
+        tikv_util::mpsc::Receiver<Option<Task>>,
+    ) {
+        let (task_sched, task_rx) = dummy_scheduler();
+        let raft_router = MockRaftStoreRouter::new();
+        let observer = CdcObserver::new(task_sched.clone());
+        let pd_client = Arc::new(TestPdClient::new(0, true));
+        let env = Arc::new(Environment::new(1));
+        let security_mgr = Arc::new(SecurityManager::default());
+        let ep = Endpoint::new(
+            cfg,
+            pd_client,
+            task_sched,
+            raft_router.clone(),
+            observer,
+            Arc::new(Mutex::new(StoreMeta::new(0))),
+            ConcurrencyManager::new(1.into()),
+            env,
+            security_mgr,
+        );
+        (ep, raft_router, task_rx)
+    }
+
     #[test]
     fn test_initializer_build_resolver() {
         let (mut worker, _pool, mut initializer, rx) = mock_initializer();
@@ -1270,21 +1405,8 @@ mod tests {
 
     #[test]
     fn test_raftstore_is_busy() {
-        let (task_sched, task_rx) = dummy_scheduler();
-        let raft_router = MockRaftStoreRouter::new();
-        let observer = CdcObserver::new(task_sched.clone());
-        let pd_client = Arc::new(TestPdClient::new(0, true));
-        let mut ep = Endpoint::new(
-            &CdcConfig::default(),
-            pd_client,
-            task_sched,
-            raft_router.clone(),
-            observer,
-            Arc::new(Mutex::new(StoreMeta::new(0))),
-            ConcurrencyManager::new(1.into()),
-        );
         let (tx, _rx) = batch::unbounded(1);
-
+        let (mut ep, raft_router, task_rx) = mock_endpoint(&CdcConfig::default());
         // Fill the channel.
         let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
         loop {
@@ -1329,23 +1451,11 @@ mod tests {
 
     #[test]
     fn test_register() {
-        let (task_sched, _task_rx) = dummy_scheduler();
-        let raft_router = MockRaftStoreRouter::new();
+        let (mut ep, raft_router, _task_rx) = mock_endpoint(&CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        });
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
-        let observer = CdcObserver::new(task_sched.clone());
-        let pd_client = Arc::new(TestPdClient::new(0, true));
-        let mut ep = Endpoint::new(
-            &CdcConfig {
-                min_ts_interval: ReadableDuration(Duration::from_secs(60)),
-                ..Default::default()
-            },
-            pd_client,
-            task_sched,
-            raft_router,
-            observer,
-            Arc::new(Mutex::new(StoreMeta::new(0))),
-            ConcurrencyManager::new(1.into()),
-        );
         let (tx, rx) = batch::unbounded(1);
 
         let conn = Conn::new(tx, String::new());
@@ -1416,23 +1526,11 @@ mod tests {
 
     #[test]
     fn test_feature_gate() {
-        let (task_sched, _task_rx) = dummy_scheduler();
-        let raft_router = MockRaftStoreRouter::new();
+        let (mut ep, raft_router, _task_rx) = mock_endpoint(&CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        });
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
-        let observer = CdcObserver::new(task_sched.clone());
-        let pd_client = Arc::new(TestPdClient::new(0, true));
-        let mut ep = Endpoint::new(
-            &CdcConfig {
-                min_ts_interval: ReadableDuration(Duration::from_secs(60)),
-                ..Default::default()
-            },
-            pd_client,
-            task_sched,
-            raft_router,
-            observer,
-            Arc::new(Mutex::new(StoreMeta::new(0))),
-            ConcurrencyManager::new(1.into()),
-        );
 
         let (tx, rx) = batch::unbounded(1);
         let mut region = Region::default();
@@ -1547,20 +1645,8 @@ mod tests {
 
     #[test]
     fn test_deregister() {
-        let (task_sched, _task_rx) = dummy_scheduler();
-        let raft_router = MockRaftStoreRouter::new();
+        let (mut ep, raft_router, _task_rx) = mock_endpoint(&CdcConfig::default());
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
-        let observer = CdcObserver::new(task_sched.clone());
-        let pd_client = Arc::new(TestPdClient::new(0, true));
-        let mut ep = Endpoint::new(
-            &CdcConfig::default(),
-            pd_client,
-            task_sched,
-            raft_router,
-            observer,
-            Arc::new(Mutex::new(StoreMeta::new(0))),
-            ConcurrencyManager::new(1.into()),
-        );
         let (tx, rx) = batch::unbounded(1);
 
         let conn = Conn::new(tx, String::new());

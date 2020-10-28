@@ -661,6 +661,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cdc_ob,
             engines.store_meta.clone(),
             self.concurrency_manager.clone(),
+            server.env(),
+            self.security_mgr.clone(),
         );
         let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker
