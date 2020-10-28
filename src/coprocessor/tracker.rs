@@ -3,7 +3,7 @@
 use kvproto::kvrpcpb;
 use kvproto::kvrpcpb::ScanDetailV2;
 
-use crate::storage::kv::{PerfStatisticsDelta, PerfStatisticsInstant};
+use crate::storage::kv::PerfStatisticsDelta;
 
 use tikv_util::time::{self, Duration, Instant};
 
@@ -46,7 +46,6 @@ enum TrackerState {
 pub struct Tracker {
     request_begin_at: Instant,
     item_begin_at: Instant,
-    perf_statistics_start: Option<PerfStatisticsInstant>, // The perf statistics when handle begins
 
     // Intermediate results
     current_stage: TrackerState,
@@ -73,8 +72,6 @@ impl Tracker {
         Tracker {
             request_begin_at: now,
             item_begin_at: now,
-            perf_statistics_start: None,
-
             current_stage: TrackerState::Initialized,
             wait_time: Duration::default(),
             schedule_wait_time: Duration::default(),
@@ -124,11 +121,14 @@ impl Tracker {
                 || self.current_stage == TrackerState::ItemFinished
         );
         self.item_begin_at = Instant::now_coarse();
-        self.perf_statistics_start = Some(PerfStatisticsInstant::new());
         self.current_stage = TrackerState::ItemBegan;
     }
 
-    pub fn on_finish_item(&mut self, some_storage_stats: Option<Statistics>) {
+    pub fn on_finish_item(
+        &mut self,
+        some_storage_stats: Option<Statistics>,
+        perf_statistics: PerfStatisticsDelta,
+    ) {
         assert_eq!(self.current_stage, TrackerState::ItemBegan);
         self.item_process_time = Instant::now_coarse() - self.item_begin_at;
         self.total_process_time += self.item_process_time;
@@ -136,10 +136,7 @@ impl Tracker {
             self.total_storage_stats.add(&storage_stats);
         }
         // Record delta perf statistics
-        if let Some(perf_stats) = self.perf_statistics_start.take() {
-            // TODO: We should never failed to `take()`?
-            self.total_perf_stats += perf_stats.delta();
-        }
+        self.total_perf_stats += perf_statistics;
         self.current_stage = TrackerState::ItemFinished;
         // TODO: Need to record time between Finish -> Begin Next?
     }
@@ -349,7 +346,7 @@ impl Drop for Tracker {
             self.on_begin_all_items();
         }
         if self.current_stage == TrackerState::ItemBegan {
-            self.on_finish_item(None);
+            self.on_finish_item(None, PerfStatisticsDelta::default());
         }
         if self.current_stage == TrackerState::AllItemsBegan
             || self.current_stage == TrackerState::ItemFinished
