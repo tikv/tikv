@@ -19,7 +19,11 @@ mimalloc = ["tikv_alloc/mimalloc"]
 portable = ["engine_rocks/portable"]
 sse = ["engine_rocks/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
-failpoints = ["fail/failpoints", "raftstore/failpoints"]
+failpoints = [
+  "fail/failpoints",
+  "raftstore/failpoints",
+  "engine_rocks/failpoints"
+]
 prost-codec = [
   "engine_rocks/prost-codec",
   "grpcio/prost-codec",
@@ -159,7 +163,7 @@ tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio = { version = "0.2", features = ["full"] }
 tokio-timer = "0.2"
 tokio-openssl = "0.4"
-toml = "0.4"
+toml = "0.5"
 txn_types = { path = "components/txn_types" }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }

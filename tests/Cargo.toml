@@ -111,7 +111,7 @@ tidb_query_vec_expr = { path = "../components/tidb_query_vec_expr" }
 tikv = { path = "../", default-features = false }
 tikv_util = { path = "../components/tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
-toml = "0.4"
+toml = "0.5"
 txn_types = { path = "../components/txn_types" }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 time = "0.1"
