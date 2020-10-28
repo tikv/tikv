@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use lazy_static::*;
-use metrics::*;
 
 use futures_executor::block_on;
 use futures_io::AsyncRead;
@@ -18,6 +17,7 @@ use futures_util::{
 };
 use rand::Rng;
 
+use crate::metrics::LOCAL_STORAGE_NUM_GAUGE;
 use super::{util::error_stream, ExternalStorage};
 
 const LOCAL_STORAGE_TMP_DIR: &str = "localtmp";
