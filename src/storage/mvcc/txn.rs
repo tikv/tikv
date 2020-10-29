@@ -4,7 +4,6 @@ use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::mvcc::{
     metrics::*, reader::MvccReader, reader::TxnCommitRecord, ErrorInner, Result,
 };
-use crate::storage::txn::cleanup;
 use crate::storage::types::TxnStatus;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -409,19 +408,6 @@ impl<S: Snapshot> MvccTxn<S> {
             .pipelined_acquire_pessimistic_lock_amend_success
             .inc();
         Ok(())
-    }
-
-    pub fn rollback(&mut self, key: Key) -> Result<Option<ReleasedLock>> {
-        fail_point!("rollback", |err| Err(make_txn_error(
-            err,
-            &key,
-            self.start_ts,
-        )
-        .into()));
-
-        // Rollback is called only if the transaction is known to fail. Under the circumstances,
-        // the rollback record needn't be protected.
-        cleanup(self, key, TimeStamp::zero(), false)
     }
 
     pub(crate) fn check_txn_status_missing_lock(
@@ -1252,7 +1238,7 @@ mod tests {
             0,
             TimeStamp::default(),
             TimeStamp::default(),
-            false
+            false,
         )
         .is_err());
 
@@ -1269,7 +1255,7 @@ mod tests {
             0,
             TimeStamp::default(),
             TimeStamp::default(),
-            false
+            false,
         )
         .is_ok());
     }

@@ -632,7 +632,7 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
             txn.collapse_rollback(false);
-            txn.rollback(Key::from_raw(pk)).unwrap();
+            cleanup(&mut txn, Key::from_raw(pk), TimeStamp::zero(), false).unwrap();
             self.write(txn.into_modifies());
         }
 
