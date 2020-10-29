@@ -266,7 +266,13 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
         config.server.tiflash_git_hash = tiflash_git_hash.to_owned();
     }
 
-    if let Some(engine_addr) = matches.value_of("engine-addr") {
+    if config.server.engine_addr.is_empty() {
+        if let Some(engine_addr) = matches.value_of("engine-addr") {
+            config.server.engine_addr = engine_addr.to_owned();
+        }
+    }
+
+    if let Some(engine_addr) = matches.value_of("advertise-engine-addr") {
         config.server.engine_addr = engine_addr.to_owned();
     }
 

@@ -183,6 +183,14 @@ pub unsafe fn run_proxy(argc: c_int, argv: *const *const c_char, tiflash_server_
                 .required(false)
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("advertise-engine-addr")
+                .long("advertise-engine-addr")
+                .help("Set advertise engine addr")
+                .value_name("IP:PORT")
+                .required(false)
+                .takes_value(true),
+        )
         .get_matches_from(args);
 
     if matches.is_present("print-sample-config") {
