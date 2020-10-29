@@ -5,11 +5,9 @@ use kvproto::kvrpcpb::TraceContext;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::time::Duration;
+use tikv_util::minitrace::{self, Collector, Span};
 use tokio::net::UdpSocket;
 use tokio::runtime::{Builder, Runtime};
-
-use tikv_util::minitrace::cycle_to_realtime;
-use tikv_util::minitrace::{self, Collector, Span};
 
 /// Tracing Reporter
 pub trait Reporter: Send + Sync {
@@ -65,7 +63,6 @@ impl JaegerReporter {
         agent: SocketAddr,
         mut spans: Vec<Span>,
         spans_max_length: usize,
-        reporter: minitrace::report::Reporter,
     ) -> Result<()> {
         let local_addr: SocketAddr = if agent.is_ipv4() {
             "0.0.0.0:0"
@@ -77,12 +74,13 @@ impl JaegerReporter {
 
         // Check if len of spans reaches `spans_max_length`
         if spans.len() > spans_max_length {
-            spans.sort_unstable_by_key(|s| s.begin_cycles);
+            spans.sort_unstable_by_key(|s| s.begin_cycle);
             spans.truncate(spans_max_length);
         }
 
         let external_trace = trace_context.get_is_trace_enabled();
-        let bytes = reporter.encode(
+        let bytes = minitrace::report::Reporter::encode(
+            "TiKV".to_owned(),
             if external_trace {
                 trace_context.get_trace_id() as _
             } else {
@@ -99,26 +97,17 @@ impl JaegerReporter {
 impl Reporter for JaegerReporter {
     fn report(&self, trace_context: TraceContext, collector: Option<Collector>) {
         if let Some(collector) = collector {
-            let mut spans = collector.collect();
+            let mut spans = collector.collect(false, Some(self.duration_threshold));
             if spans.is_empty() {
                 // Request is run too fast to collect spans
                 return;
             }
 
-            let mut root_index = 0;
-            for (i, span) in spans.iter().enumerate() {
+            for span in &mut spans {
                 if span.parent_id.0 == 0 {
-                    root_index = i;
+                    span.parent_id.0 = trace_context.get_parent_span_id();
+                    break;
                 }
-            }
-            spans.swap(0, root_index);
-
-            // Check if duration reaches `duration_threshold`
-            let duration_ns = cycle_to_realtime(spans[0].end_cycles).ns
-                - cycle_to_realtime(spans[0].begin_cycles).ns;
-            if Duration::from_nanos(duration_ns) < self.duration_threshold {
-                // keep root span
-                spans.truncate(1);
             }
 
             self.runtime.spawn(Self::report(
@@ -126,7 +115,6 @@ impl Reporter for JaegerReporter {
                 self.agent,
                 spans,
                 self.spans_max_length,
-                minitrace::report::Reporter::new(self.agent, "TiKV"),
             ));
         }
     }

@@ -266,7 +266,7 @@ dependencies = [
 [[package]]
 name = "batch-tracing"
 version = "0.0.0"
-source = "git+https://github.com/zhongzc/batch-tracing.git?branch=main#98a566ea1f3b553fa83c371bfa4635dd9833a492"
+source = "git+https://github.com/zhongzc/batch-tracing.git?branch=main#aed16937b619c50893cbd4730a84035a6fabb366"
 dependencies = [
  "batch-tracing-macro",
  "crossbeam-channel 0.5.0",
@@ -282,7 +282,7 @@ dependencies = [
 [[package]]
 name = "batch-tracing-macro"
 version = "0.0.0"
-source = "git+https://github.com/zhongzc/batch-tracing.git?branch=main#98a566ea1f3b553fa83c371bfa4635dd9833a492"
+source = "git+https://github.com/zhongzc/batch-tracing.git?branch=main#aed16937b619c50893cbd4730a84035a6fabb366"
 dependencies = [
  "proc-macro-error 1.0.2",
  "quote",
