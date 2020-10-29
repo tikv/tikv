@@ -587,6 +587,7 @@ fn test_serde_custom_tikv_config() {
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
+            file_rewrite_threshold: 1000000,
         },
     };
     value.backup = BackupConfig { num_threads: 456 };

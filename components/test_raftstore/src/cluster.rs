@@ -136,6 +136,11 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    // To destroy temp dir later.
+    pub fn take_path(&mut self) -> Vec<TempDir> {
+        std::mem::replace(&mut self.paths, vec![])
+    }
+
     pub fn id(&self) -> u64 {
         self.cfg.server.cluster_id
     }
