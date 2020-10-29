@@ -362,7 +362,7 @@ impl Delegate {
             self.region_id,
             change_data_event,
         );
-        for downstream in downstreams.iter() {
+        for downstream in downstreams {
             if normal_only && downstream.state.load() != DownstreamState::Normal {
                 continue;
             }
