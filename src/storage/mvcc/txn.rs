@@ -108,6 +108,10 @@ pub struct MvccTxn<S: Snapshot> {
     pub(crate) start_ts: TimeStamp,
     write_size: usize,
     writes: WriteData,
+    // When 1PC is enabled, locks will be collected here instead of marshalled and put into `writes`,
+    // so it can be further processed. The elements are tuples representing
+    // (key, lock, remove_pessimistic_lock)
+    pub(crate) locks_for_1pc: Vec<(Key, Lock, bool)>,
     // collapse continuous rollbacks.
     pub(crate) collapse_rollback: bool,
     pub extra_op: ExtraOp,
@@ -171,6 +175,7 @@ impl<S: Snapshot> MvccTxn<S> {
             start_ts,
             write_size: 0,
             writes: WriteData::default(),
+            locks_for_1pc: Vec::new(),
             collapse_rollback: true,
             extra_op: ExtraOp::Noop,
             concurrency_manager,
@@ -187,6 +192,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn into_modifies(self) -> Vec<Modify> {
+        assert!(self.locks_for_1pc.is_empty());
         self.writes.modifies
     }
 
@@ -212,6 +218,10 @@ impl<S: Snapshot> MvccTxn<S> {
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
         self.writes.modifies.push(write);
+    }
+
+    pub(crate) fn put_locks_for_1pc(&mut self, key: Key, lock: Lock, remove_pessimstic_lock: bool) {
+        self.locks_for_1pc.push((key, lock, remove_pessimstic_lock));
     }
 
     pub(crate) fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
@@ -346,11 +356,10 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
-    // Pessimistic transactions only acquire pessimistic locks on row keys.
-    // The corresponding index keys are not locked until pessimistic prewrite.
+    // Pessimistic transactions only acquire pessimistic locks on row keys and unique index keys.
+    // The corresponding secondary index keys are not locked until pessimistic prewrite.
     // It's possible that lock conflict occurs on them, but the isolation is
-    // guaranteed by pessimistic locks on row keys, so let TiDB resolves these
-    // locks immediately.
+    // guaranteed by pessimistic locks, so let TiDB resolves these locks immediately.
     pub(crate) fn handle_non_pessimistic_lock_conflict(&self, key: Key, lock: Lock) -> Result<()> {
         // The previous pessimistic transaction has been committed or aborted.
         // Resolve it immediately.
@@ -363,171 +372,9 @@ impl<S: Snapshot> MvccTxn<S> {
         Err(ErrorInner::KeyIsLocked(info).into())
     }
 
-    pub fn acquire_pessimistic_lock(
-        &mut self,
-        key: Key,
-        primary: &[u8],
-        should_not_exist: bool,
-        lock_ttl: u64,
-        for_update_ts: TimeStamp,
-        need_value: bool,
-        min_commit_ts: TimeStamp,
-    ) -> Result<Option<Value>> {
-        fail_point!("acquire_pessimistic_lock", |err| Err(make_txn_error(
-            err,
-            &key,
-            self.start_ts,
-        )
-        .into()));
-
-        fn pessimistic_lock(
-            primary: &[u8],
-            start_ts: TimeStamp,
-            lock_ttl: u64,
-            for_update_ts: TimeStamp,
-            min_commit_ts: TimeStamp,
-        ) -> Lock {
-            Lock::new(
-                LockType::Pessimistic,
-                primary.to_vec(),
-                start_ts,
-                lock_ttl,
-                None,
-                for_update_ts,
-                0,
-                min_commit_ts,
-            )
-        }
-
-        let mut val = None;
-        if let Some(lock) = self.reader.load_lock(&key)? {
-            if lock.ts != self.start_ts {
-                return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
-            }
-            if lock.lock_type != LockType::Pessimistic {
-                return Err(ErrorInner::LockTypeNotMatch {
-                    start_ts: self.start_ts,
-                    key: key.into_raw()?,
-                    pessimistic: false,
-                }
-                .into());
-            }
-            if need_value {
-                val = self.reader.get(&key, for_update_ts, true)?;
-            }
-            // Overwrite the lock with small for_update_ts
-            if for_update_ts > lock.for_update_ts {
-                let lock = pessimistic_lock(
-                    primary,
-                    self.start_ts,
-                    lock_ttl,
-                    for_update_ts,
-                    min_commit_ts,
-                );
-                self.put_lock(key, &lock);
-            } else {
-                MVCC_DUPLICATE_CMD_COUNTER_VEC
-                    .acquire_pessimistic_lock
-                    .inc();
-            }
-            return Ok(val);
-        }
-
-        if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
-            // The isolation level of pessimistic transactions is RC. `for_update_ts` is
-            // the commit_ts of the data this transaction read. If exists a commit version
-            // whose commit timestamp is larger than current `for_update_ts`, the
-            // transaction should retry to get the latest data.
-            if commit_ts > for_update_ts {
-                MVCC_CONFLICT_COUNTER
-                    .acquire_pessimistic_lock_conflict
-                    .inc();
-                return Err(ErrorInner::WriteConflict {
-                    start_ts: self.start_ts,
-                    conflict_start_ts: write.start_ts,
-                    conflict_commit_ts: commit_ts,
-                    key: key.into_raw()?,
-                    primary: primary.to_vec(),
-                }
-                .into());
-            }
-
-            // Handle rollback.
-            // The rollack informathin may come from either a Rollback record or a record with
-            // `has_overlapped_rollback` flag.
-            if commit_ts == self.start_ts
-                && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
-            {
-                assert!(write.has_overlapped_rollback || write.start_ts == commit_ts);
-                return Err(ErrorInner::PessimisticLockRolledBack {
-                    start_ts: self.start_ts,
-                    key: key.into_raw()?,
-                }
-                .into());
-            }
-            // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
-            if commit_ts > self.start_ts {
-                if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
-                    if write.start_ts == self.start_ts {
-                        assert!(
-                            commit_ts == self.start_ts && write.write_type == WriteType::Rollback
-                        );
-                        return Err(ErrorInner::PessimisticLockRolledBack {
-                            start_ts: self.start_ts,
-                            key: key.into_raw()?,
-                        }
-                        .into());
-                    }
-                }
-            }
-
-            // Check data constraint when acquiring pessimistic lock.
-            self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
-
-            if need_value {
-                val = match write.write_type {
-                    // If it's a valid Write, no need to read again.
-                    WriteType::Put => Some(self.reader.load_data(&key, write)?),
-                    WriteType::Delete => None,
-                    WriteType::Lock | WriteType::Rollback => {
-                        self.reader.get(&key, commit_ts.prev(), true)?
-                    }
-                };
-            }
-        }
-
-        let lock = pessimistic_lock(
-            primary,
-            self.start_ts,
-            lock_ttl,
-            for_update_ts,
-            min_commit_ts,
-        );
-        self.put_lock(key, &lock);
-
-        Ok(val)
-    }
-
     // TiKV may fails to write pessimistic locks due to pipelined process.
     // If the data is not changed after acquiring the lock, we can still prewrite the key.
-    pub(crate) fn amend_pessimistic_lock(
-        &mut self,
-        pipelined_pessimistic_lock: bool,
-        key: &Key,
-    ) -> Result<()> {
-        if !pipelined_pessimistic_lock {
-            // Pessimistic lock does not exist, the transaction should be aborted.
-            warn!(
-                "prewrite failed (pessimistic lock not found)";
-                "start_ts" => self.start_ts,
-                "key" => %key
-            );
-            return Err(ErrorInner::PessimisticLockNotFound {
-                start_ts: self.start_ts,
-                key: key.clone().into_raw()?,
-            }
-            .into());
-        }
+    pub(crate) fn amend_pessimistic_lock(&mut self, key: &Key) -> Result<()> {
         if let Some((commit_ts, _)) = self.reader.seek_write(key, TimeStamp::max())? {
             // The invariants of pessimistic locks are:
             //   1. lock's for_update_ts >= key's latest commit_ts
@@ -890,7 +737,7 @@ mod tests {
     use crate::storage::mvcc::{Error, ErrorInner, Mutation, MvccReader};
     use crate::storage::txn::commands::*;
     use crate::storage::txn::tests::*;
-    use crate::storage::txn::{commit, pessimistic_prewrite, prewrite};
+    use crate::storage::txn::{acquire_pessimistic_lock, commit, pessimistic_prewrite, prewrite};
     use crate::storage::SecondaryLocksStatus;
     use kvproto::kvrpcpb::Context;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
@@ -1455,6 +1302,8 @@ mod tests {
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
+            false,
         )
         .unwrap();
         assert!(txn.write_size() > 0);
@@ -1500,6 +1349,8 @@ mod tests {
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
+            false
         )
         .is_err());
 
@@ -1515,6 +1366,8 @@ mod tests {
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
+            false
         )
         .is_ok());
     }
@@ -1653,248 +1506,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pessimistic_lock() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-
-        let k = b"k1";
-        let v = b"v1";
-
-        // TODO: Some corner cases don't give proper results. Although they are not important, we
-        // should consider whether they are better to be fixed.
-
-        // Normal
-        must_acquire_pessimistic_lock(&engine, k, k, 1, 1);
-        must_pessimistic_locked(&engine, k, 1, 1);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 1, 1, true);
-        must_locked(&engine, k, 1);
-        must_commit(&engine, k, 1, 2);
-        must_unlocked(&engine, k);
-
-        // Lock conflict
-        must_prewrite_put(&engine, k, v, k, 3);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 4, 4);
-        must_cleanup(&engine, k, 3, 0);
-        must_unlocked(&engine, k);
-        must_acquire_pessimistic_lock(&engine, k, k, 5, 5);
-        must_prewrite_lock_err(&engine, k, k, 6);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 6, 6);
-        must_cleanup(&engine, k, 5, 0);
-        must_unlocked(&engine, k);
-
-        // Data conflict
-        must_prewrite_put(&engine, k, v, k, 7);
-        must_commit(&engine, k, 7, 9);
-        must_unlocked(&engine, k);
-        must_prewrite_lock_err(&engine, k, k, 8);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 8, 8);
-        must_acquire_pessimistic_lock(&engine, k, k, 8, 9);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 8, 8, true);
-        must_commit(&engine, k, 8, 10);
-        must_unlocked(&engine, k);
-
-        // Rollback
-        must_acquire_pessimistic_lock(&engine, k, k, 11, 11);
-        must_pessimistic_locked(&engine, k, 11, 11);
-        must_cleanup(&engine, k, 11, 0);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 11, 11);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 11, 11, true);
-        must_prewrite_lock_err(&engine, k, k, 11);
-        must_unlocked(&engine, k);
-
-        must_acquire_pessimistic_lock(&engine, k, k, 12, 12);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 12, 12, true);
-        must_locked(&engine, k, 12);
-        must_cleanup(&engine, k, 12, 0);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 12, 12);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 12, 12, true);
-        must_prewrite_lock_err(&engine, k, k, 12);
-        must_unlocked(&engine, k);
-
-        // Duplicated
-        must_acquire_pessimistic_lock(&engine, k, k, 13, 13);
-        must_pessimistic_locked(&engine, k, 13, 13);
-        must_acquire_pessimistic_lock(&engine, k, k, 13, 13);
-        must_pessimistic_locked(&engine, k, 13, 13);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 13, 13, true);
-        must_locked(&engine, k, 13);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 13, 13, true);
-        must_locked(&engine, k, 13);
-        must_commit(&engine, k, 13, 14);
-        must_unlocked(&engine, k);
-        must_commit(&engine, k, 13, 14);
-        must_unlocked(&engine, k);
-
-        // Pessimistic lock doesn't block reads.
-        must_acquire_pessimistic_lock(&engine, k, k, 15, 15);
-        must_pessimistic_locked(&engine, k, 15, 15);
-        must_get(&engine, k, 16, v);
-        must_pessimistic_prewrite_delete(&engine, k, k, 15, 15, true);
-        must_get_err(&engine, k, 16);
-        must_commit(&engine, k, 15, 17);
-
-        // Rollback
-        must_acquire_pessimistic_lock(&engine, k, k, 18, 18);
-        must_rollback(&engine, k, 18);
-        must_unlocked(&engine, k);
-        must_prewrite_put(&engine, k, v, k, 19);
-        must_commit(&engine, k, 19, 20);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 18, 21);
-        must_unlocked(&engine, k);
-
-        // Prewrite non-exist pessimistic lock
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 22, 22, true);
-
-        // LockTypeNotMatch
-        must_prewrite_put(&engine, k, v, k, 23);
-        must_locked(&engine, k, 23);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 23, 23);
-        must_cleanup(&engine, k, 23, 0);
-        must_acquire_pessimistic_lock(&engine, k, k, 24, 24);
-        must_pessimistic_locked(&engine, k, 24, 24);
-        must_prewrite_put_err(&engine, k, v, k, 24);
-        must_rollback(&engine, k, 24);
-
-        // Acquire lock on a prewritten key should fail.
-        must_acquire_pessimistic_lock(&engine, k, k, 26, 26);
-        must_pessimistic_locked(&engine, k, 26, 26);
-        must_pessimistic_prewrite_delete(&engine, k, k, 26, 26, true);
-        must_locked(&engine, k, 26);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 26, 26);
-        must_locked(&engine, k, 26);
-
-        // Acquire lock on a committed key should fail.
-        must_commit(&engine, k, 26, 27);
-        must_unlocked(&engine, k);
-        must_get_none(&engine, k, 28);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 26, 26);
-        must_unlocked(&engine, k);
-        must_get_none(&engine, k, 28);
-        // Pessimistic prewrite on a committed key should fail.
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 26, 26, true);
-        must_unlocked(&engine, k);
-        must_get_none(&engine, k, 28);
-        // Currently we cannot avoid this.
-        must_acquire_pessimistic_lock(&engine, k, k, 26, 29);
-        pessimistic_rollback::tests::must_success(&engine, k, 26, 29);
-        must_unlocked(&engine, k);
-
-        // Non pessimistic key in pessimistic transaction.
-        must_pessimistic_prewrite_put(&engine, k, v, k, 30, 30, false);
-        must_locked(&engine, k, 30);
-        must_commit(&engine, k, 30, 31);
-        must_unlocked(&engine, k);
-        must_get_commit_ts(&engine, k, 30, 31);
-
-        // Rollback collapsed.
-        must_rollback_collapsed(&engine, k, 32);
-        must_rollback_collapsed(&engine, k, 33);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 32, 32);
-        // Currently we cannot avoid this.
-        must_acquire_pessimistic_lock(&engine, k, k, 32, 34);
-        pessimistic_rollback::tests::must_success(&engine, k, 32, 34);
-        must_unlocked(&engine, k);
-
-        // Acquire lock when there is lock with different for_update_ts.
-        must_acquire_pessimistic_lock(&engine, k, k, 35, 36);
-        must_pessimistic_locked(&engine, k, 35, 36);
-        must_acquire_pessimistic_lock(&engine, k, k, 35, 35);
-        must_pessimistic_locked(&engine, k, 35, 36);
-        must_acquire_pessimistic_lock(&engine, k, k, 35, 37);
-        must_pessimistic_locked(&engine, k, 35, 37);
-
-        // Cannot prewrite when there is another transaction's pessimistic lock.
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 36, true);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 38, true);
-        must_pessimistic_locked(&engine, k, 35, 37);
-        // Cannot prewrite when there is another transaction's non-pessimistic lock.
-        must_pessimistic_prewrite_put(&engine, k, v, k, 35, 37, true);
-        must_locked(&engine, k, 35);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 38, true);
-        must_locked(&engine, k, 35);
-
-        // Commit pessimistic transaction's key but with smaller commit_ts than for_update_ts.
-        // Currently not checked, so in this case it will actually be successfully committed.
-        must_commit(&engine, k, 35, 36);
-        must_unlocked(&engine, k);
-        must_get_commit_ts(&engine, k, 35, 36);
-
-        // Prewrite meets pessimistic lock on a non-pessimistic key.
-        // Currently not checked, so prewrite will success.
-        must_acquire_pessimistic_lock(&engine, k, k, 40, 40);
-        must_pessimistic_locked(&engine, k, 40, 40);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 40, 40, false);
-        must_locked(&engine, k, 40);
-        must_commit(&engine, k, 40, 41);
-        must_unlocked(&engine, k);
-
-        // Prewrite with different for_update_ts.
-        // Currently not checked.
-        must_acquire_pessimistic_lock(&engine, k, k, 42, 45);
-        must_pessimistic_locked(&engine, k, 42, 45);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 42, 43, true);
-        must_locked(&engine, k, 42);
-        must_commit(&engine, k, 42, 45);
-        must_unlocked(&engine, k);
-
-        must_acquire_pessimistic_lock(&engine, k, k, 46, 47);
-        must_pessimistic_locked(&engine, k, 46, 47);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 46, 48, true);
-        must_locked(&engine, k, 46);
-        must_commit(&engine, k, 46, 50);
-        must_unlocked(&engine, k);
-
-        // Prewrite on non-pessimistic key meets write with larger commit_ts than current
-        // for_update_ts (non-pessimistic data conflict).
-        // Normally non-pessimistic keys in pessimistic transactions are used when we are sure that
-        // there won't be conflicts. So this case is also not checked, and prewrite will succeeed.
-        must_pessimistic_prewrite_put(&engine, k, v, k, 47, 48, false);
-        must_locked(&engine, k, 47);
-        must_cleanup(&engine, k, 47, 0);
-        must_unlocked(&engine, k);
-
-        // The rollback of the primary key in a pessimistic transaction should be protected from
-        // being collapsed.
-        must_acquire_pessimistic_lock(&engine, k, k, 49, 60);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 49, 60, true);
-        must_locked(&engine, k, 49);
-        must_cleanup(&engine, k, 49, 0);
-        must_get_rollback_protected(&engine, k, 49, true);
-        must_prewrite_put(&engine, k, v, k, 51);
-        must_rollback_collapsed(&engine, k, 51);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 49, 60);
-
-        // Overlapped rollback record will be written when the current start_ts equals to another write
-        // records' commit ts. Now there is a commit record with commit_ts = 50.
-        must_acquire_pessimistic_lock(&engine, k, k, 50, 61);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 50, 61, true);
-        must_locked(&engine, k, 50);
-        must_cleanup(&engine, k, 50, 0);
-        must_get_overlapped_rollback(&engine, k, 50, 46, WriteType::Put);
-
-        // start_ts and commit_ts interlacing
-        for start_ts in &[140, 150, 160] {
-            let for_update_ts = start_ts + 48;
-            let commit_ts = start_ts + 50;
-            must_acquire_pessimistic_lock(&engine, k, k, *start_ts, for_update_ts);
-            must_pessimistic_prewrite_put(&engine, k, v, k, *start_ts, for_update_ts, true);
-            must_commit(&engine, k, *start_ts, commit_ts);
-            must_get(&engine, k, commit_ts + 1, v);
-        }
-
-        must_rollback(&engine, k, 170);
-
-        // Now the data should be like: (start_ts -> commit_ts)
-        // 140 -> 190
-        // 150 -> 200
-        // 160 -> 210
-        // 170 -> rollback
-        must_get_commit_ts(&engine, k, 140, 190);
-        must_get_commit_ts(&engine, k, 150, 200);
-        must_get_commit_ts(&engine, k, 160, 210);
-        must_get_rollback_ts(&engine, k, 170);
-    }
-
-    #[test]
     fn test_pessimistic_txn_ttl() {
         let engine = TestEngineBuilder::new().build().unwrap();
 
@@ -1915,20 +1526,6 @@ mod tests {
         must_pessimistic_locked(&engine, k, 20, 20);
         must_pessimistic_prewrite_put_with_ttl(&engine, k, v, k, 20, 20, true, 90);
         must_locked_with_ttl(&engine, k, 20, 100);
-    }
-
-    #[test]
-    fn test_overwrite_pessimistic_lock() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-
-        let k = b"k1";
-
-        must_acquire_pessimistic_lock(&engine, k, k, 1, 2);
-        must_pessimistic_locked(&engine, k, 1, 2);
-        must_acquire_pessimistic_lock(&engine, k, k, 1, 1);
-        must_pessimistic_locked(&engine, k, 1, 2);
-        must_acquire_pessimistic_lock(&engine, k, k, 1, 3);
-        must_pessimistic_locked(&engine, k, 1, 3);
     }
 
     #[test]
@@ -1987,7 +1584,7 @@ mod tests {
                     TimeStamp::zero(),
                     expected_lock_info.get_txn_size(),
                     TimeStamp::zero(),
-                    false,
+                    TimeStamp::zero(),
                 );
             } else {
                 expected_lock_info.set_lock_type(Op::PessimisticLock);
@@ -2099,77 +1696,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pessimistic_lock_return_value() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let (k, v) = (b"k", b"v");
-
-        assert_eq!(
-            must_acquire_pessimistic_lock_return_value(&engine, k, k, 10, 10),
-            None
-        );
-        must_pessimistic_locked(&engine, k, 10, 10);
-        pessimistic_rollback::tests::must_success(&engine, k, 10, 10);
-
-        // Put
-        must_prewrite_put(&engine, k, v, k, 10);
-        // KeyIsLocked
-        match must_acquire_pessimistic_lock_return_value_err(&engine, k, k, 20, 20) {
-            Error(box ErrorInner::KeyIsLocked(_)) => (),
-            e => panic!("unexpected error: {}", e),
-        };
-        must_commit(&engine, k, 10, 20);
-        // WriteConflict
-        match must_acquire_pessimistic_lock_return_value_err(&engine, k, k, 15, 15) {
-            Error(box ErrorInner::WriteConflict { .. }) => (),
-            e => panic!("unexpected error: {}", e),
-        };
-        assert_eq!(
-            must_acquire_pessimistic_lock_return_value(&engine, k, k, 25, 25),
-            Some(v.to_vec())
-        );
-        must_pessimistic_locked(&engine, k, 25, 25);
-        pessimistic_rollback::tests::must_success(&engine, k, 25, 25);
-
-        // Skip Write::Lock
-        must_prewrite_lock(&engine, k, k, 30);
-        must_commit(&engine, k, 30, 40);
-        assert_eq!(
-            must_acquire_pessimistic_lock_return_value(&engine, k, k, 45, 45),
-            Some(v.to_vec())
-        );
-        must_pessimistic_locked(&engine, k, 45, 45);
-        pessimistic_rollback::tests::must_success(&engine, k, 45, 45);
-
-        // Skip Write::Rollback
-        must_rollback(&engine, k, 50);
-        assert_eq!(
-            must_acquire_pessimistic_lock_return_value(&engine, k, k, 55, 55),
-            Some(v.to_vec())
-        );
-        must_pessimistic_locked(&engine, k, 55, 55);
-        pessimistic_rollback::tests::must_success(&engine, k, 55, 55);
-
-        // Delete
-        must_prewrite_delete(&engine, k, k, 60);
-        must_commit(&engine, k, 60, 70);
-        assert_eq!(
-            must_acquire_pessimistic_lock_return_value(&engine, k, k, 75, 75),
-            None
-        );
-        // Duplicated command
-        assert_eq!(
-            must_acquire_pessimistic_lock_return_value(&engine, k, k, 75, 75),
-            None
-        );
-        assert_eq!(
-            must_acquire_pessimistic_lock_return_value(&engine, k, k, 75, 55),
-            Some(v.to_vec())
-        );
-        must_pessimistic_locked(&engine, k, 75, 75);
-        pessimistic_rollback::tests::must_success(&engine, k, 75, 75);
-    }
-
-    #[test]
     fn test_amend_pessimistic_lock() {
         fn fail_to_write_pessimistic_lock<E: Engine>(
             engine: &E,
@@ -2189,33 +1715,30 @@ mod tests {
 
         // Key not exist; should succeed.
         fail_to_write_pessimistic_lock(&engine, k, 10, 10);
-        must_pipelined_pessimistic_prewrite_put(&engine, k, &v, k, 10, 10, true);
+        must_pessimistic_prewrite_put(&engine, k, &v, k, 10, 10, true);
         must_commit(&engine, k, 10, 20);
         must_get(&engine, k, 20, &v);
 
         // for_update_ts(30) >= start_ts(30) > commit_ts(20); should succeed.
         v.push(0);
         fail_to_write_pessimistic_lock(&engine, k, 30, 30);
-        must_pipelined_pessimistic_prewrite_put(&engine, k, &v, k, 30, 30, true);
+        must_pessimistic_prewrite_put(&engine, k, &v, k, 30, 30, true);
         must_commit(&engine, k, 30, 40);
         must_get(&engine, k, 40, &v);
 
         // for_update_ts(40) >= commit_ts(40) > start_ts(35); should fail.
         fail_to_write_pessimistic_lock(&engine, k, 35, 40);
-        must_pipelined_pessimistic_prewrite_put_err(&engine, k, &v, k, 35, 40, true);
+        must_pessimistic_prewrite_put_err(&engine, k, &v, k, 35, 40, true);
 
         // KeyIsLocked; should fail.
         must_acquire_pessimistic_lock(&engine, k, k, 50, 50);
-        must_pipelined_pessimistic_prewrite_put_err(&engine, k, &v, k, 60, 60, true);
+        must_pessimistic_prewrite_put_err(&engine, k, &v, k, 60, 60, true);
         pessimistic_rollback::tests::must_success(&engine, k, 50, 50);
-
-        // Pessimistic lock not exist and not pipelined; should fail.
-        must_pessimistic_prewrite_put_err(&engine, k, &v, k, 70, 70, true);
 
         // The txn has been rolled back; should fail.
         must_acquire_pessimistic_lock(&engine, k, k, 80, 80);
         must_cleanup(&engine, k, 80, TimeStamp::max());
-        must_pipelined_pessimistic_prewrite_put_err(&engine, k, &v, k, 80, 80, true);
+        must_pessimistic_prewrite_put_err(&engine, k, &v, k, 80, 80, true);
     }
 
     #[test]
@@ -2298,7 +1821,8 @@ mod tests {
 
             txn.extra_op = ExtraOp::ReadOldValue;
             if is_pessimistic {
-                txn.acquire_pessimistic_lock(
+                acquire_pessimistic_lock(
+                    &mut txn,
                     key.clone(),
                     b"key",
                     false,
@@ -2321,6 +1845,7 @@ mod tests {
                     start_ts.into(),
                     0,
                     TimeStamp::zero(),
+                    TimeStamp::zero(),
                     false,
                 )
                 .unwrap();
@@ -2334,6 +1859,8 @@ mod tests {
                     0,
                     0,
                     TimeStamp::default(),
+                    TimeStamp::default(),
+                    false,
                 )
                 .unwrap();
             }
@@ -2378,6 +1905,8 @@ mod tests {
                 0,
                 4,
                 TimeStamp::zero(),
+                TimeStamp::zero(),
+                false,
             )
             .unwrap();
             let modifies = txn.into_modifies();
@@ -2429,6 +1958,7 @@ mod tests {
                 0,
                 4.into(),
                 4,
+                TimeStamp::zero(),
                 TimeStamp::zero(),
                 false,
             )
@@ -2482,6 +2012,7 @@ mod tests {
             0,
             4.into(),
             4,
+            TimeStamp::zero(),
             TimeStamp::zero(),
             false,
         )

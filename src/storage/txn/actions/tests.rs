@@ -24,7 +24,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
     for_update_ts: TimeStamp,
     txn_size: u64,
     min_commit_ts: TimeStamp,
-    pipelined_pessimistic_lock: bool,
+    max_commit_ts: TimeStamp,
 ) {
     let ctx = Context::default();
     let snapshot = engine.snapshot(&ctx).unwrap();
@@ -42,6 +42,8 @@ pub fn must_prewrite_put_impl<E: Engine>(
             lock_ttl,
             txn_size,
             min_commit_ts,
+            max_commit_ts,
+            false,
         )
         .unwrap();
     } else {
@@ -55,7 +57,8 @@ pub fn must_prewrite_put_impl<E: Engine>(
             for_update_ts,
             txn_size,
             min_commit_ts,
-            pipelined_pessimistic_lock,
+            max_commit_ts,
+            false,
         )
         .unwrap();
     }
@@ -81,7 +84,7 @@ pub fn must_prewrite_put<E: Engine>(
         TimeStamp::default(),
         0,
         TimeStamp::default(),
-        false,
+        TimeStamp::default(),
     );
 }
 
@@ -106,32 +109,7 @@ pub fn must_pessimistic_prewrite_put<E: Engine>(
         for_update_ts.into(),
         0,
         TimeStamp::default(),
-        false,
-    );
-}
-
-pub fn must_pipelined_pessimistic_prewrite_put<E: Engine>(
-    engine: &E,
-    key: &[u8],
-    value: &[u8],
-    pk: &[u8],
-    ts: impl Into<TimeStamp>,
-    for_update_ts: impl Into<TimeStamp>,
-    is_pessimistic_lock: bool,
-) {
-    must_prewrite_put_impl(
-        engine,
-        key,
-        value,
-        pk,
-        &None,
-        ts.into(),
-        is_pessimistic_lock,
-        0,
-        for_update_ts.into(),
-        0,
         TimeStamp::default(),
-        true,
     );
 }
 
@@ -157,7 +135,7 @@ pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
         for_update_ts.into(),
         0,
         TimeStamp::default(),
-        false,
+        TimeStamp::default(),
     );
 }
 
@@ -186,7 +164,7 @@ pub fn must_prewrite_put_for_large_txn<E: Engine>(
         for_update_ts,
         0,
         min_commit_ts,
-        false,
+        TimeStamp::default(),
     );
 }
 
@@ -212,7 +190,7 @@ pub fn must_prewrite_put_async_commit<E: Engine>(
         TimeStamp::default(),
         0,
         min_commit_ts.into(),
-        false,
+        TimeStamp::default(),
     );
 }
 
@@ -240,7 +218,7 @@ pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
         for_update_ts.into(),
         0,
         min_commit_ts.into(),
-        false,
+        TimeStamp::default(),
     );
 }
 
@@ -252,7 +230,6 @@ fn must_prewrite_put_err_impl<E: Engine>(
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
     is_pessimistic_lock: bool,
-    pipelined_pessimistic_lock: bool,
 ) -> Error {
     let ctx = Context::default();
     let snapshot = engine.snapshot(&ctx).unwrap();
@@ -271,6 +248,8 @@ fn must_prewrite_put_err_impl<E: Engine>(
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
+            false,
         )
         .unwrap_err()
     } else {
@@ -284,7 +263,8 @@ fn must_prewrite_put_err_impl<E: Engine>(
             for_update_ts,
             0,
             TimeStamp::default(),
-            pipelined_pessimistic_lock,
+            TimeStamp::default(),
+            false,
         )
         .unwrap_err()
     }
@@ -297,7 +277,7 @@ pub fn must_prewrite_put_err<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
 ) -> Error {
-    must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false, false)
+    must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false)
 }
 
 pub fn must_pessimistic_prewrite_put_err<E: Engine>(
@@ -317,28 +297,6 @@ pub fn must_pessimistic_prewrite_put_err<E: Engine>(
         ts,
         for_update_ts,
         is_pessimistic_lock,
-        false,
-    )
-}
-
-pub fn must_pipelined_pessimistic_prewrite_put_err<E: Engine>(
-    engine: &E,
-    key: &[u8],
-    value: &[u8],
-    pk: &[u8],
-    ts: impl Into<TimeStamp>,
-    for_update_ts: impl Into<TimeStamp>,
-    is_pessimistic_lock: bool,
-) -> Error {
-    must_prewrite_put_err_impl(
-        engine,
-        key,
-        value,
-        pk,
-        ts,
-        for_update_ts,
-        is_pessimistic_lock,
-        true,
     )
 }
 
@@ -367,6 +325,8 @@ fn must_prewrite_delete_impl<E: Engine>(
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
+            false,
         )
         .unwrap();
     } else {
@@ -379,6 +339,7 @@ fn must_prewrite_delete_impl<E: Engine>(
             0,
             for_update_ts,
             0,
+            TimeStamp::default(),
             TimeStamp::default(),
             false,
         )
@@ -434,6 +395,8 @@ fn must_prewrite_lock_impl<E: Engine>(
             0,
             0,
             TimeStamp::default(),
+            TimeStamp::default(),
+            false,
         )
         .unwrap();
     } else {
@@ -446,6 +409,7 @@ fn must_prewrite_lock_impl<E: Engine>(
             0,
             for_update_ts,
             0,
+            TimeStamp::default(),
             TimeStamp::default(),
             false,
         )
@@ -481,6 +445,8 @@ pub fn must_prewrite_lock_err<E: Engine>(
         0,
         0,
         TimeStamp::default(),
+        TimeStamp::default(),
+        false,
     )
     .is_err());
 }

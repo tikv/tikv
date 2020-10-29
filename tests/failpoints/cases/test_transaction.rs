@@ -3,9 +3,9 @@
 use futures::executor::block_on;
 use kvproto::kvrpcpb::Context;
 use std::{sync::mpsc::channel, thread, time::Duration};
-use storage::mvcc;
-use tikv::storage::txn::commands;
+use storage::mvcc::{self, Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::tests::{must_prewrite_put, must_prewrite_put_err};
+use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::TestEngineBuilder;
 use tikv::storage::{self, txn::tests::must_commit};
 use tikv::storage::{lock_manager::DummyLockManager, TestStorageBuilder};
@@ -47,7 +47,9 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
                 false,
                 1,
                 TimeStamp::default(),
+                TimeStamp::default(),
                 Some(vec![]),
+                false,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -98,7 +100,9 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
                 false,
                 1,
                 TimeStamp::default(),
+                TimeStamp::default(),
                 Some(vec![]),
+                false,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -138,7 +142,9 @@ fn test_update_max_ts_before_scan_memory_locks() {
                 false,
                 1,
                 TimeStamp::default(),
+                TimeStamp::default(),
                 Some(vec![]),
+                false,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -185,7 +191,9 @@ macro_rules! lock_release_test {
                         false,
                         1,
                         TimeStamp::default(),
+                        TimeStamp::default(),
                         Some(vec![]),
+                        false,
                         Context::default(),
                     ),
                     Box::new(move |res| {
@@ -233,3 +241,56 @@ lock_release_test!(
     assert!(!lock_exists()),
     true
 );
+
+#[test]
+fn test_no_memory_locks_after_max_commit_ts_error() {
+    let engine = TestEngineBuilder::new().build().unwrap();
+    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine,
+        DummyLockManager {},
+    )
+    .build()
+    .unwrap();
+    let cm = storage.get_concurrency_manager();
+
+    fail::cfg("after_prewrite_one_key", "sleep(500)").unwrap();
+    let (prewrite_tx, prewrite_rx) = channel();
+    storage
+        .sched_txn_command(
+            commands::Prewrite::new(
+                vec![
+                    Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())),
+                    Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())),
+                ],
+                b"k1".to_vec(),
+                10.into(),
+                20000,
+                false,
+                2,
+                TimeStamp::default(),
+                100.into(),
+                Some(vec![b"k2".to_vec()]),
+                false,
+                Context::default(),
+            ),
+            Box::new(move |res| {
+                prewrite_tx.send(res).unwrap();
+            }),
+        )
+        .unwrap();
+    thread::sleep(Duration::from_millis(200));
+    assert!(cm
+        .read_key_check(&Key::from_raw(b"k1"), |_| Err(()))
+        .is_err());
+    cm.update_max_ts(200.into());
+
+    let res = prewrite_rx.recv().unwrap();
+    assert!(matches!(
+        res.unwrap_err(),
+        storage::Error(box storage::ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::CommitTsTooLarge { .. },
+        )))))
+    ));
+
+    assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
+}

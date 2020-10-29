@@ -14,6 +14,7 @@ use std::io;
 use std::marker::Unpin;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures_io::AsyncRead;
 #[cfg(feature = "protobuf-codec")]
@@ -32,28 +33,35 @@ mod gcs;
 pub use gcs::GCSStorage;
 mod util;
 pub use util::block_on_external_io;
+mod metrics;
+use metrics::*;
 
 pub const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
 
 /// Create a new storage from the given storage backend description.
 pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalStorage>> {
-    match &backend.backend {
+    let start = Instant::now();
+    let (label, storage) = match &backend.backend {
         Some(Backend::Local(local)) => {
             let p = Path::new(&local.path);
-            LocalStorage::new(p).map(|s| Arc::new(s) as _)
+            ("local", LocalStorage::new(p).map(|s| Arc::new(s) as _))
         }
-        Some(Backend::Noop(_)) => Ok(Arc::new(NoopStorage::default()) as _),
-        Some(Backend::S3(config)) => S3Storage::new(config).map(|s| Arc::new(s) as _),
-        Some(Backend::Gcs(config)) => GCSStorage::new(config).map(|s| Arc::new(s) as _),
+        Some(Backend::Noop(_)) => ("noop", Ok(Arc::new(NoopStorage::default()) as _)),
+        Some(Backend::S3(config)) => ("s3", S3Storage::new(config).map(|s| Arc::new(s) as _)),
+        Some(Backend::Gcs(config)) => ("gcs", GCSStorage::new(config).map(|s| Arc::new(s) as _)),
         _ => {
             let u = url_of_backend(backend);
             error!("unknown storage"; "scheme" => u.scheme());
-            Err(io::Error::new(
+            return Err(io::Error::new(
                 io::ErrorKind::Other,
                 format!("unknown storage {}", u),
-            ))
+            ));
         }
-    }
+    };
+    EXT_STORAGE_CREATE_HISTOGRAM
+        .with_label_values(&[label])
+        .observe(start.elapsed().as_secs_f64());
+    storage
 }
 
 /// Formats the storage backend as a URL.

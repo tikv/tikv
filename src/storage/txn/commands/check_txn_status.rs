@@ -8,7 +8,8 @@ use crate::storage::mvcc::metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC;
 use crate::storage::mvcc::txn::MissingLockAction;
 use crate::storage::mvcc::MvccTxn;
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+    WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
@@ -170,6 +171,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             pr,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }
@@ -219,7 +221,7 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
+                    async_apply_prewrite: false,
                 },
             )
             .unwrap();
@@ -260,7 +262,7 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
+                    async_apply_prewrite: false,
                 },
             )
             .is_err());
@@ -740,7 +742,7 @@ pub mod tests {
             TimeStamp::zero(),
             1,
             /* min_commit_ts */ TimeStamp::zero(),
-            false,
+            /* max_commit_ts */ TimeStamp::zero(),
         );
         must_success(
             &engine,

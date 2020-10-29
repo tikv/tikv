@@ -188,8 +188,7 @@ impl ImportModeCFOptions {
     }
 
     fn new_options(db: &impl KvEngine, cf_name: &str) -> ImportModeCFOptions {
-        let cf = db.cf_handle(cf_name).unwrap();
-        let cf_opts = db.get_options_cf(cf);
+        let cf_opts = db.get_options_cf(cf_name).unwrap(); //FIXME unwrap
 
         ImportModeCFOptions {
             level0_stop_writes_trigger: cf_opts.get_level_zero_stop_writes_trigger(),
@@ -200,7 +199,6 @@ impl ImportModeCFOptions {
     }
 
     fn set_options(&self, db: &impl KvEngine, cf_name: &str, mf: RocksDBMetricsFn) -> Result<()> {
-        let cf = db.cf_handle(cf_name).unwrap();
         let opts = [
             (
                 "level0_stop_writes_trigger".to_owned(),
@@ -221,7 +219,7 @@ impl ImportModeCFOptions {
         ];
 
         let tmp_opts: Vec<_> = opts.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        db.set_options_cf(cf, tmp_opts.as_slice())?;
+        db.set_options_cf(cf_name, tmp_opts.as_slice())?;
         for (key, value) in &opts {
             if let Ok(v) = value.parse::<f64>() {
                 mf(cf_name, key, v);
@@ -256,8 +254,7 @@ mod tests {
         );
 
         for cf_name in db.cf_names() {
-            let cf = db.cf_handle(cf_name).unwrap();
-            let cf_opts = db.get_options_cf(cf);
+            let cf_opts = db.get_options_cf(cf_name).unwrap();
             assert_eq!(
                 cf_opts.get_level_zero_stop_writes_trigger(),
                 expected_cf_opts.level0_stop_writes_trigger

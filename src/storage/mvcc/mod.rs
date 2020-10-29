@@ -84,6 +84,9 @@ quick_error! {
         PessimisticLockNotFound { start_ts: TimeStamp, key: Vec<u8> } {
             display("pessimistic lock not found, start_ts:{}, key:{}", start_ts, hex::encode_upper(key))
         }
+        CommitTsTooLarge { start_ts: TimeStamp, min_commit_ts: TimeStamp, max_commit_ts: TimeStamp } {
+            display("min_commit_ts {} is larger than max_commit_ts {}, start_ts: {}", min_commit_ts, max_commit_ts, start_ts)
+        }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -176,6 +179,15 @@ impl ErrorInner {
                     key: key.to_owned(),
                 })
             }
+            ErrorInner::CommitTsTooLarge {
+                start_ts,
+                min_commit_ts,
+                max_commit_ts,
+            } => Some(ErrorInner::CommitTsTooLarge {
+                start_ts: *start_ts,
+                min_commit_ts: *min_commit_ts,
+                max_commit_ts: *max_commit_ts,
+            }),
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -276,6 +288,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::PessimisticLockNotFound { .. } => {
                 error_code::storage::PESSIMISTIC_LOCK_NOT_FOUND
             }
+            ErrorInner::CommitTsTooLarge { .. } => error_code::storage::COMMIT_TS_TOO_LARGE,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }
@@ -361,175 +374,6 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         assert!(reader.get(&Key::from_raw(key), ts.into(), false).is_err());
-    }
-
-    pub fn must_acquire_pessimistic_lock_impl<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        lock_ttl: u64,
-        for_update_ts: impl Into<TimeStamp>,
-        need_value: bool,
-        min_commit_ts: impl Into<TimeStamp>,
-    ) -> Option<Value> {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let min_commit_ts = min_commit_ts.into();
-        let cm = ConcurrencyManager::new(min_commit_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
-        let res = txn
-            .acquire_pessimistic_lock(
-                Key::from_raw(key),
-                pk,
-                false,
-                lock_ttl,
-                for_update_ts.into(),
-                need_value,
-                min_commit_ts,
-            )
-            .unwrap();
-        let modifies = txn.into_modifies();
-        if !modifies.is_empty() {
-            engine
-                .write(&ctx, WriteData::from_modifies(modifies))
-                .unwrap();
-        }
-        res
-    }
-
-    pub fn must_acquire_pessimistic_lock<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-    ) {
-        must_acquire_pessimistic_lock_with_ttl(engine, key, pk, start_ts, for_update_ts, 0);
-    }
-
-    pub fn must_acquire_pessimistic_lock_return_value<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-    ) -> Option<Value> {
-        must_acquire_pessimistic_lock_impl(
-            engine,
-            key,
-            pk,
-            start_ts,
-            0,
-            for_update_ts.into(),
-            true,
-            TimeStamp::zero(),
-        )
-    }
-
-    pub fn must_acquire_pessimistic_lock_with_ttl<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        ttl: u64,
-    ) {
-        assert!(must_acquire_pessimistic_lock_impl(
-            engine,
-            key,
-            pk,
-            start_ts,
-            ttl,
-            for_update_ts.into(),
-            false,
-            TimeStamp::zero(),
-        )
-        .is_none());
-    }
-
-    pub fn must_acquire_pessimistic_lock_for_large_txn<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        lock_ttl: u64,
-    ) {
-        let for_update_ts = for_update_ts.into();
-        let min_commit_ts = for_update_ts.next();
-        must_acquire_pessimistic_lock_impl(
-            engine,
-            key,
-            pk,
-            start_ts,
-            lock_ttl,
-            for_update_ts,
-            false,
-            min_commit_ts,
-        );
-    }
-
-    pub fn must_acquire_pessimistic_lock_err<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-    ) -> Error {
-        must_acquire_pessimistic_lock_err_impl(
-            engine,
-            key,
-            pk,
-            start_ts,
-            for_update_ts,
-            false,
-            TimeStamp::zero(),
-        )
-    }
-
-    pub fn must_acquire_pessimistic_lock_return_value_err<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-    ) -> Error {
-        must_acquire_pessimistic_lock_err_impl(
-            engine,
-            key,
-            pk,
-            start_ts,
-            for_update_ts,
-            true,
-            TimeStamp::zero(),
-        )
-    }
-
-    pub fn must_acquire_pessimistic_lock_err_impl<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        need_value: bool,
-        min_commit_ts: impl Into<TimeStamp>,
-    ) -> Error {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let min_commit_ts = min_commit_ts.into();
-        let cm = ConcurrencyManager::new(min_commit_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
-        txn.acquire_pessimistic_lock(
-            Key::from_raw(key),
-            pk,
-            false,
-            0,
-            for_update_ts.into(),
-            need_value,
-            min_commit_ts,
-        )
-        .unwrap_err()
     }
 
     pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
@@ -653,20 +497,6 @@ pub mod tests {
         } else {
             assert_ne!(lock.lock_type, LockType::Pessimistic);
         }
-    }
-
-    pub fn must_pessimistic_locked<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-    ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
-        let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
-        assert_eq!(lock.ts, start_ts.into());
-        assert_eq!(lock.for_update_ts, for_update_ts.into());
-        assert_eq!(lock.lock_type, LockType::Pessimistic);
     }
 
     pub fn must_unlocked<E: Engine>(engine: &E, key: &[u8]) {

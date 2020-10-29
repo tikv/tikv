@@ -310,6 +310,13 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             commit_ts_expired.set_min_commit_ts(min_commit_ts.into_inner());
             key_error.set_commit_ts_expired(commit_ts_expired);
         }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::CommitTsTooLarge { min_commit_ts, .. },
+        ))))) => {
+            let mut commit_ts_too_large = kvrpcpb::CommitTsTooLarge::default();
+            commit_ts_too_large.set_commit_ts(min_commit_ts.into_inner());
+            key_error.set_commit_ts_too_large(commit_ts_too_large);
+        }
         _ => {
             error!(?err; "txn aborts");
             key_error.set_abort(format!("{:?}", err));

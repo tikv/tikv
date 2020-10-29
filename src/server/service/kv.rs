@@ -1000,6 +1000,32 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     ) {
         unimplemented!()
     }
+
+    fn dispatch_mpp_task(
+        &mut self,
+        _: RpcContext<'_>,
+        _: kvproto::mpp::DispatchTaskRequest,
+        _: UnarySink<kvproto::mpp::DispatchTaskResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn cancel_mpp_task(
+        &mut self,
+        _: RpcContext<'_>,
+        _: kvproto::mpp::CancelTaskRequest,
+        _: UnarySink<kvproto::mpp::CancelTaskResponse>,
+    ) {
+        unimplemented!()
+    }
+    fn establish_mpp_connection(
+        &mut self,
+        _: RpcContext<'_>,
+        _: kvproto::mpp::EstablishMppConnectionRequest,
+        _: ServerStreamingSink<kvproto::mpp::MppDataPacket>,
+    ) {
+        unimplemented!()
+    }
 }
 
 fn response_batch_commands_request<F>(
@@ -1581,6 +1607,7 @@ macro_rules! txn_command_future {
 txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp) {{
     if let Ok(v) = &v {
         resp.set_min_commit_ts(v.min_commit_ts.into_inner());
+        resp.set_one_pc_commit_ts(v.one_pc_commit_ts.into_inner());
     }
     resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
 }});

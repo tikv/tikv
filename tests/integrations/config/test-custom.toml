@@ -73,6 +73,7 @@ max-key-size = 8192
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
+enable-async-apply-prewrite = true
 
 [storage.block-cache]
 shared = true
@@ -185,7 +186,7 @@ info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
 rate-limiter-refill-period = "10ms"
 rate-limiter-mode = 3
-auto-tuned = true
+auto-tuned = false
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"
 max-sub-compactions = 12

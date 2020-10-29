@@ -40,6 +40,8 @@ prost-codec = [
   "cdc/prost-codec",
   "raft_log_engine/prost-codec"
 ]
+test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
+test-engines-panic = ["tikv/test-engines-panic"]
 
 [lib]
 name = "cmd"
