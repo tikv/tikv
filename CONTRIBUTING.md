@@ -90,6 +90,8 @@ cargo fmt
 make clippy
 ```
 
+See [Rustdoc of TiKV](https://tikv.github.io) for TiKV code documentation.
+
 See the [style doc](https://github.com/rust-lang/rfcs/blob/master/style-guide/README.md) and the [API guidelines](https://rust-lang-nursery.github.io/api-guidelines/) for details on the conventions.
 
 Please follow this style to make TiKV easy to review, maintain, and develop.
@@ -146,6 +148,8 @@ The TiKV team actively develops and maintains a bunch of dependencies used in Ti
 - [raft-rs](https://github.com/tikv/raft-rs): The Raft distributed consensus algorithm implemented in Rust
 - [grpc-rs](https://github.com/tikv/grpc-rs): The gRPC library for Rust built on the gRPC C Core library and Rust Futures
 - [fail-rs](https://github.com/tikv/fail-rs): Fail points for Rust
+
+See more on [TiKV Community](https://github.com/tikv/community).
 
 ### Format of the commit message
 
