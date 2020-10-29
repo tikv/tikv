@@ -320,7 +320,6 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot, WriteData};
-    use crate::storage::txn::cleanup;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -375,40 +374,6 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         assert!(reader.get(&Key::from_raw(key), ts.into(), false).is_err());
-    }
-
-    pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let start_ts = start_ts.into();
-        let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
-        txn.collapse_rollback(false);
-        cleanup(&mut txn, Key::from_raw(key), TimeStamp::zero(), false).unwrap();
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    pub fn must_rollback_collapsed<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        start_ts: impl Into<TimeStamp>,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let start_ts = start_ts.into();
-        let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
-        cleanup(&mut txn, Key::from_raw(key), TimeStamp::zero(), false).unwrap();
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let start_ts = start_ts.into();
-        let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
-        assert!(cleanup(&mut txn, Key::from_raw(key), TimeStamp::zero(), false).is_err());
     }
 
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
