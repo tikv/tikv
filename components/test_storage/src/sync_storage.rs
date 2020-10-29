@@ -123,7 +123,7 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         keys: &[&[u8]],
         start_ts: u64,
-    ) -> Result<Vec<Option<Vec<u8>>>> {
+    ) -> Result<Vec<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>> {
         let requests: Vec<GetRequest> = keys
             .to_owned()
             .into_iter()

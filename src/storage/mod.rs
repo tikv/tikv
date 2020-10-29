@@ -338,7 +338,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn batch_get_command(
         &self,
         requests: Vec<GetRequest>,
-    ) -> impl Future<Output = Result<Vec<Result<Option<Vec<u8>>>>>> {
+    ) -> impl Future<Output = Result<Vec<Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>>>>
+    {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
@@ -422,12 +423,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     .build()
                                 {
                                     Ok(mut point_getter) => {
+                                        let perf_statistics = PerfStatisticsInstant::new();
                                         let v = point_getter.get(&key);
                                         let stat = point_getter.take_statistics();
                                         metrics::tls_collect_read_flow(region_id, &stat);
                                         statistics.add(&stat);
-                                        results
-                                            .push(v.map_err(|e| Error::from(txn::Error::from(e))));
+                                        results.push(
+                                            v.map_err(|e| Error::from(txn::Error::from(e)))
+                                                .map(|v| (v, stat, perf_statistics.delta())),
+                                        );
                                     }
                                     Err(e) => results.push(Err(Error::from(txn::Error::from(e)))),
                                 }
@@ -2539,7 +2543,7 @@ mod tests {
             },
             x.remove(0),
         );
-        assert_eq!(x.remove(0).unwrap(), None);
+        assert_eq!(x.remove(0).unwrap().0, None);
         storage
             .sched_txn_command(
                 commands::Commit::new(
@@ -2565,6 +2569,7 @@ mod tests {
         .unwrap()
         .into_iter()
         .map(|x| x.unwrap())
+        .map(|(x, _, _)| x)
         .collect();
         assert_eq!(
             x,
