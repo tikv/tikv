@@ -2032,6 +2032,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        fail_point!("apply_before_split");
         fail_point!(
             "apply_before_split_1_3",
             self.id == 3 && self.region_id() == 1,
@@ -2307,6 +2308,7 @@ where
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         {
+            fail_point!("apply_before_commit_merge");
             let apply_before_commit_merge = || {
                 fail_point!(
                     "apply_before_commit_merge_except_1_4",
@@ -2438,6 +2440,8 @@ where
         ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        fail_point!("apply_before_rollback_merge");
+
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
         let region_state_key = keys::region_state_key(self.region_id());
         let state: RegionLocalState = match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
