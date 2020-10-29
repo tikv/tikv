@@ -403,11 +403,11 @@ impl ChangeData for Service {
         sink: UnarySink<CheckLeaderResponse>,
     ) {
         let ts = request.get_ts();
-        let regions = request.take_regions().into();
+        let leaders = request.take_regions().into();
         let scheduler = self.scheduler.clone();
         let (cb, rx) = paired_future_callback();
         let task = async move {
-            box_try!(scheduler.schedule(Task::CheckLeader { regions, ts, cb }));
+            box_try!(scheduler.schedule(Task::CheckLeader { leaders, ts, cb }));
             let regions = box_try!(rx.await);
             let mut resp = CheckLeaderResponse::default();
             resp.set_ts(ts);

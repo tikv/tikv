@@ -183,7 +183,7 @@ prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "fd122
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 
 [patch."https://github.com/pingcap/kvproto.git"]
-kvproto = { git = "https://github.com/5kbpers/kvproto", rev = "af5585b3dc98e18567264c52785e5066e51e79ac" }
+kvproto = { git = "https://github.com/5kbpers/kvproto", rev = "17360035bcb05e26d304fe815c13105995a35658" }
 
 [workspace]
 members = [

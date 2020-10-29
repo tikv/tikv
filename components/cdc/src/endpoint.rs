@@ -21,6 +21,7 @@ use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ChangeCmd, ObserveID, StoreMeta};
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
+use raftstore::store::util::compare_region_epoch;
 use resolved_ts::Resolver;
 use security::SecurityManager;
 use tikv::config::CdcConfig;
@@ -157,7 +158,7 @@ pub enum Task {
     },
     TxnExtra(TxnExtra),
     CheckLeader {
-        regions: Vec<LeaderInfo>,
+        leaders: Vec<LeaderInfo>,
         ts: u64,
         cb: Box<dyn FnOnce(Vec<u64>) + Send>,
     },
@@ -906,9 +907,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                                 continue;
                             }
                             let mut leader_info = LeaderInfo::default();
-                            leader_info.set_leader_id(leader.id);
+                            leader_info.set_peer_id(leader.id);
                             leader_info.set_term(*term);
                             leader_info.set_region_id(region_id);
+                            leader_info.set_region_epoch(region.get_region_epoch().clone());
                             store_map
                                 .entry(peer.store_id)
                                 .or_default()
@@ -977,14 +979,26 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         self.connections.iter().for_each(|(_, conn)| conn.flush());
     }
 
-    fn check_region_leader(&self, regions: Vec<LeaderInfo>) -> Vec<u64> {
+    fn check_region_leader(&self, leaders: Vec<LeaderInfo>) -> Vec<u64> {
         let meta = self.store_meta.lock().unwrap();
-        regions
+        leaders
             .into_iter()
-            .map(|region| {
-                if let Some((term, leader)) = meta.leaders.get(&region.region_id) {
-                    if *term == region.term && leader.id == region.leader_id {
-                        return Some(region.region_id);
+            .map(|leader_info| {
+                if let Some((term, leader)) = meta.leaders.get(&leader_info.region_id) {
+                    if let Some(region) = meta.regions.get(&leader_info.region_id) {
+                        if *term == leader_info.term
+                            && leader.id == leader_info.peer_id
+                            && compare_region_epoch(
+                                leader_info.get_region_epoch(),
+                                region,
+                                true,
+                                false,
+                                false,
+                            )
+                            .is_ok()
+                        {
+                            return Some(leader_info.region_id);
+                        }
                     }
                 }
                 None
@@ -1215,9 +1229,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                     self.old_value_cache.cache.insert(k, v);
                 }
             }
-            Task::CheckLeader { regions, ts, cb } => {
+            Task::CheckLeader { leaders, ts, cb } => {
                 debug!("cdc try to check leader"; "ts" => ts);
-                cb(self.check_region_leader(regions));
+                cb(self.check_region_leader(leaders));
             }
             Task::Validate(region_id, validate) => {
                 validate(self.capture_regions.get(&region_id));
