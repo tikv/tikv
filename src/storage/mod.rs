@@ -199,6 +199,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
             pipelined_pessimistic_lock,
+            config.enable_async_apply_prewrite,
         );
 
         info!("Storage started.");
@@ -1525,6 +1526,11 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     pub fn set_pipelined_pessimistic_lock(self, enabled: bool) -> Self {
         self.pipelined_pessimistic_lock
             .store(enabled, atomic::Ordering::Relaxed);
+        self
+    }
+
+    pub fn set_async_apply_prewrite(mut self, enabled: bool) -> Self {
+        self.config.enable_async_apply_prewrite = enabled;
         self
     }
 
@@ -3923,6 +3929,7 @@ mod tests {
                     TimeStamp::default(),
                     TimeStamp::default(),
                     None,
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -4500,6 +4507,7 @@ mod tests {
                     ts(10, 1),
                     TimeStamp::default(),
                     Some(vec![b"k1".to_vec(), b"k2".to_vec()]),
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -4632,6 +4640,7 @@ mod tests {
                     TimeStamp::zero(),
                     TimeStamp::default(),
                     None,
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -4705,6 +4714,7 @@ mod tests {
                     TimeStamp::zero(),
                     TimeStamp::default(),
                     None,
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -4822,6 +4832,7 @@ mod tests {
                     TimeStamp::zero(),
                     TimeStamp::default(),
                     None,
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -5494,6 +5505,7 @@ mod tests {
                     TimeStamp::default(),
                     TimeStamp::default(),
                     Some(vec![b"a".to_vec(), b"b".to_vec()]),
+                    false,
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -5537,6 +5549,7 @@ mod tests {
                     401.into(),
                     TimeStamp::default(),
                     Some(vec![b"e".to_vec()]),
+                    false,
                     Context::default(),
                 ),
                 Box::new(move |res| {

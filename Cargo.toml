@@ -19,7 +19,11 @@ mimalloc = ["tikv_alloc/mimalloc"]
 portable = ["engine_rocks/portable"]
 sse = ["engine_rocks/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
-failpoints = ["fail/failpoints", "raftstore/failpoints"]
+failpoints = [
+  "fail/failpoints",
+  "raftstore/failpoints",
+  "engine_rocks/failpoints"
+]
 prost-codec = [
   "engine_rocks/prost-codec",
   "grpcio/prost-codec",

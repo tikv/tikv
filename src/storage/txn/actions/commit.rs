@@ -110,9 +110,10 @@ pub mod tests {
 
     #[cfg(test)]
     use crate::storage::txn::tests::{
-        must_prewrite_delete, must_prewrite_lock, must_prewrite_put,
-        must_prewrite_put_for_large_txn, must_prewrite_put_impl,
+        must_acquire_pessimistic_lock_for_large_txn, must_prewrite_delete, must_prewrite_lock,
+        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl,
     };
+
     #[cfg(test)]
     use crate::storage::{
         mvcc::SHORT_VALUE_MAX_LEN, txn::commands::check_txn_status, TestEngineBuilder, TxnStatus,
@@ -267,7 +268,6 @@ pub mod tests {
             1,
             ts(60, 1),
             TimeStamp::zero(),
-            false,
         );
         // The min_commit_ts is ts(70, 0) other than ts(60, 1) in prewrite request.
         must_large_txn_locked(&engine, k, ts(60, 0), 100, ts(70, 1), false);

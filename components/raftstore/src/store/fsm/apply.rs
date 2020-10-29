@@ -2931,6 +2931,7 @@ where
     pub cb: Callback<S>,
     /// `renew_lease_time` contains the last time when a peer starts to renew lease.
     pub renew_lease_time: Option<Timespec>,
+    pub must_pass_epoch_check: bool,
 }
 
 pub struct Destroy {
@@ -4136,6 +4137,7 @@ mod tests {
             term,
             cb,
             renew_lease_time: None,
+            must_pass_epoch_check: false,
         }
     }
 

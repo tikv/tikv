@@ -26,6 +26,7 @@ use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
+use tikv::storage::Statistics;
 use tikv_util::collections::HashMap;
 use tikv_util::lru::LruCache;
 use tikv_util::time::Instant;
@@ -98,7 +99,7 @@ impl fmt::Debug for Deregister {
 
 type InitCallback = Box<dyn FnOnce() + Send>;
 pub(crate) type OldValueCallback =
-    Box<dyn FnMut(Key, &mut OldValueCache) -> Option<Vec<u8>> + Send>;
+    Box<dyn FnMut(Key, &mut OldValueCache, &mut Statistics) -> Option<Vec<u8>> + Send>;
 
 pub struct OldValueCache {
     pub cache: LruCache<Key, (Option<OldValue>, MutationType)>,
@@ -316,6 +317,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
     fn on_deregister(&mut self, deregister: Deregister) {
         info!("cdc deregister"; "deregister" => ?deregister);
+        fail_point!("cdc_before_handle_deregister", |_| {});
         match deregister {
             Deregister::Downstream {
                 region_id,
@@ -558,6 +560,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     }
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
+        fail_point!("cdc_before_handle_multi_batch", |_| {});
         let old_value_cb = Rc::new(RefCell::new(old_value_cb));
         for batch in multi {
             let region_id = batch.region_id;
@@ -724,16 +727,18 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     min_ts = min_mem_lock_ts;
                 }
             }
-
             // TODO: send a message to raftstore would consume too much cpu time,
             // try to handle it outside raftstore.
-            let regions: Vec<_> = regions.iter().copied().map(|(region_id, observe_id)| {
-                let scheduler_clone = scheduler.clone();
-                let raft_router_clone = raft_router.clone();
-                async move {
-                    let (tx, rx) = futures::channel::oneshot::channel();
-                    if let Err(e) = raft_router_clone.significant_send(
-                        region_id,
+            let regions: Vec<_> = regions
+                .iter()
+                .copied()
+                .map(|(region_id, observe_id)| {
+                    let scheduler_clone = scheduler.clone();
+                    let raft_router_clone = raft_router.clone();
+                    async move {
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        if let Err(e) = raft_router_clone.significant_send(
+                            region_id,
                         SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
                             let resp = if resp.response.get_header().has_error() {
                                 None
@@ -741,7 +746,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                                 Some(region_id)
                             };
                             if tx.send(resp).is_err() {
-                                error!("cdc send tso response failed");
+                                error!("cdc send tso response failed"; "region_id" => region_id);
                             }
                         }))),
                     ) {
@@ -753,12 +758,19 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                         };
                         if let Err(e) = scheduler_clone.schedule(Task::Deregister(deregister)) {
                             error!("schedule cdc task failed"; "error" => ?e);
-                            return None;
                         }
+                        return None;
                     }
-                    rx.await.unwrap_or(None)
-                }
-            }).collect();
+                        rx.await.unwrap_or(None)
+                    }
+                })
+                .collect();
+            match scheduler.schedule(Task::RegisterMinTsEvent) {
+                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                // advance normally.
+                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
+            }
             let resps = futures::future::join_all(regions).await;
             let regions = resps
                 .into_iter()
@@ -771,12 +783,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     // advance normally.
                     Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
                 }
-            }
-            match scheduler.schedule(Task::RegisterMinTsEvent) {
-                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
-                // advance normally.
-                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
             }
         };
         self.tso_worker.spawn(fut);
@@ -1083,8 +1089,7 @@ mod tests {
     use test_raftstore::MockRaftStoreRouter;
     use test_raftstore::TestPdClient;
     use tikv::storage::kv::Engine;
-    use tikv::storage::mvcc::tests::*;
-    use tikv::storage::txn::tests::must_prewrite_put;
+    use tikv::storage::txn::tests::{must_acquire_pessimistic_lock, must_prewrite_put};
     use tikv::storage::TestEngineBuilder;
     use tikv_util::collections::HashSet;
     use tikv_util::config::ReadableDuration;

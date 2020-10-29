@@ -3,10 +3,9 @@
 use crate::errors::Result;
 use crate::properties::DecodeProperties;
 use crate::range::Range;
-use crate::CFHandleExt;
 use std::ops::Deref;
 
-pub trait TablePropertiesExt: CFHandleExt {
+pub trait TablePropertiesExt {
     type TablePropertiesCollection: TablePropertiesCollection<
         Self::TablePropertiesCollectionIter,
         Self::TablePropertiesKey,
@@ -24,7 +23,7 @@ pub trait TablePropertiesExt: CFHandleExt {
 
     fn get_properties_of_tables_in_range(
         &self,
-        cf: &Self::CFHandle,
+        cf: &str,
         ranges: &[Range],
     ) -> Result<Self::TablePropertiesCollection>;
 
@@ -34,9 +33,8 @@ pub trait TablePropertiesExt: CFHandleExt {
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<Self::TablePropertiesCollection> {
-        let cf = self.cf_handle(cfname)?;
         let range = Range::new(start_key, end_key);
-        Ok(self.get_properties_of_tables_in_range(cf, &[range])?)
+        Ok(self.get_properties_of_tables_in_range(cfname, &[range])?)
     }
 }
 
