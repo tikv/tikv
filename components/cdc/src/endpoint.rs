@@ -10,12 +10,12 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::compat::Future01CompatExt;
-use grpcio::{ChannelBuilder, Environment, Result as GrpcResult};
+use grpcio::{ChannelBuilder, Environment};
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::Event as Event_oneof_event;
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::Region;
+use kvproto::metapb::{PeerRole, Region};
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
@@ -846,6 +846,54 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         cdc_clients: Arc<Mutex<HashMap<u64, ChangeDataClient>>>,
         min_ts: TimeStamp,
     ) -> Vec<u64> {
+        let region_has_quorum = |region: &Region, stores: Vec<u64>| {
+            let mut voters = 0;
+            let mut incoming_voters = 0;
+            let mut demoting_voters = 0;
+
+            let mut resp_voters = 0;
+            let mut resp_incoming_voters = 0;
+            let mut resp_demoting_voters = 0;
+
+            region.get_peers().iter().for_each(|peer| {
+                let mut in_resp = false;
+                for store_id in &stores {
+                    if *store_id == peer.store_id {
+                        in_resp = true;
+                        break;
+                    }
+                }
+                match peer.role {
+                    PeerRole::Voter => {
+                        voters += 1;
+                        if in_resp {
+                            resp_voters += 1;
+                        }
+                    }
+                    PeerRole::IncomingVoter => {
+                        incoming_voters += 1;
+                        if in_resp {
+                            resp_incoming_voters += 1;
+                        }
+                    }
+                    PeerRole::DemotingVoter => {
+                        demoting_voters += 1;
+                        if in_resp {
+                            resp_demoting_voters += 1;
+                        }
+                    }
+                    PeerRole::Learner => (),
+                }
+            });
+
+            let has_incoming_majority =
+                (resp_voters + resp_incoming_voters) >= ((voters + incoming_voters) / 2 + 1);
+            let has_demoting_majority =
+                (resp_voters + resp_demoting_voters) >= ((voters + demoting_voters) / 2 + 1);
+
+            has_incoming_majority && has_demoting_majority
+        };
+
         let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
         let mut region_map: HashMap<u64, Region> = HashMap::default();
         {
@@ -854,6 +902,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 if let Some(region) = meta.regions.get(&region_id) {
                     if let Some((term, leader)) = meta.leaders.get(&region_id) {
                         for peer in region.get_peers() {
+                            if peer.role == PeerRole::Learner {
+                                continue;
+                            }
                             let mut leader_info = LeaderInfo::default();
                             leader_info.set_leader_id(leader.id);
                             leader_info.set_term(*term);
@@ -887,26 +938,29 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
-                let resp = box_try!(client.check_leader_async(&req)).await;
-                Result::Ok(resp)
+                let res = box_try!(client.check_leader_async(&req)).await;
+                let resp = box_try!(res);
+                Result::Ok((store_id, resp))
             }
         });
         let resps = futures::future::join_all(stores).await;
-        let mut resp_map: HashMap<u64, usize> = HashMap::default();
+        let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
         resps
             .into_iter()
             .filter_map(Result::ok)
-            .filter_map(GrpcResult::ok)
-            .map(|resp| resp.regions.to_vec())
+            .map(|(store_id, resp)| {
+                resp.regions
+                    .into_iter()
+                    .map(move |region_id| (store_id, region_id))
+            })
             .flatten()
-            .for_each(|region_id| {
-                *resp_map.entry(region_id).or_default() += 1;
+            .for_each(|(store_id, region_id)| {
+                resp_map.entry(region_id).or_default().push(store_id);
             });
         resp_map
             .into_iter()
-            .filter_map(|(region_id, count)| {
-                let peer_count = region_map[&region_id].get_peers().len();
-                if peer_count > 0 && count >= peer_count / 2 + 1 {
+            .filter_map(|(region_id, stores)| {
+                if region_has_quorum(&region_map[&region_id], stores) {
                     Some(region_id)
                 } else {
                     None
