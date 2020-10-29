@@ -170,7 +170,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
                 self.txn_size,
                 self.min_commit_ts,
                 self.max_commit_ts,
-                context.pipelined_pessimistic_lock,
                 self.try_one_pc,
             ) {
                 Ok(ts) => {
