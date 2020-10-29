@@ -1728,7 +1728,14 @@ where
                 }
                 let committed_index = self.raft_group.raft.raft_log.committed;
                 let term = self.raft_group.raft.raft_log.term(committed_index).unwrap();
-                let cbs = self.proposals.take(committed_index, term);
+                let mut cbs = self.proposals.take(committed_index, term);
+                cbs.iter_mut().for_each(|p| {
+                    if p.must_pass_epoch_check {
+                        // In this case the apply can be guaranteed to be successful. Invoke the
+                        // on_committed callback if necessary.
+                        p.cb.invoke_committed();
+                    }
+                });
                 let apply = Apply::new(
                     self.peer_id(),
                     self.region_id,
@@ -2067,7 +2074,8 @@ where
                 false
             }
             Ok(Either::Left(idx)) => {
-                if self.has_applied_to_current_term() {
+                let has_applied_to_current_term = self.has_applied_to_current_term();
+                if has_applied_to_current_term {
                     // After this peer has applied to current term and passed above checking including `cmd_epoch_checker`,
                     // we can safely guarantee that this proposal will be committed if there is no abnormal leader transfer
                     // in the near future. Thus proposed callback can be called.
@@ -2086,6 +2094,7 @@ where
                     term: self.term(),
                     cb,
                     renew_lease_time: None,
+                    must_pass_epoch_check: has_applied_to_current_term,
                 };
                 if let Some(cmd_type) = req_admin_cmd_type {
                     self.cmd_epoch_checker
@@ -2498,6 +2507,7 @@ where
                     term: self.term(),
                     cb: Callback::None,
                     renew_lease_time: Some(renew_lease_time),
+                    must_pass_epoch_check: false,
                 };
                 self.post_propose(poll_ctx, p);
             }
@@ -3708,6 +3718,7 @@ mod tests {
                 term: (index / 10) + 1,
                 cb: Callback::None,
                 renew_lease_time,
+                must_pass_epoch_check: false,
             });
         }
         for remove_i in &[0, 65, 98] {
