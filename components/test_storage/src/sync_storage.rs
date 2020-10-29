@@ -118,7 +118,7 @@ impl<E: Engine> SyncTestStorage<E> {
         block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
     }
 
-    #[warn(clippy::type_complexity)]
+    #[allow(clippy::type_complexity)]
     pub fn batch_get_command(
         &self,
         ctx: Context,
