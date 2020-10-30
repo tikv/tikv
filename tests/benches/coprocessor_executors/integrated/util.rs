@@ -10,7 +10,7 @@ use kvproto::coprocessor::KeyRange;
 use tipb::Executor as PbExecutor;
 
 use test_coprocessor::*;
-use tidb_query_common::execute_stats::ExecSummaryCollectorDisabled;
+
 use tidb_query_datatype::expr::EvalConfig;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::{RocksEngine, Store as TxnStore};
@@ -42,53 +42,6 @@ where
     #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
-    }
-}
-
-/// A bencher that will use normal executor to execute the given request.
-pub struct NormalBencher<T: TxnStore + 'static> {
-    _phantom: PhantomData<T>,
-}
-
-impl<T: TxnStore + 'static> NormalBencher<T> {
-    pub fn new() -> Self {
-        Self {
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<T, M> IntegratedBencher<M> for NormalBencher<T>
-where
-    T: TxnStore + 'static,
-    M: Measurement,
-{
-    fn name(&self) -> String {
-        format!("{}/normal", <T as StoreDescriber>::name())
-    }
-
-    fn bench(
-        &self,
-        b: &mut criterion::Bencher<M>,
-        executors: &[PbExecutor],
-        ranges: &[KeyRange],
-        store: &Store<RocksEngine>,
-    ) {
-        crate::util::bencher::NormalNextAllBencher::new(|| {
-            tidb_query_normal_executors::runner::build_executors::<_, ExecSummaryCollectorDisabled>(
-                black_box(executors.to_vec()),
-                black_box(TiKVStorage::new(ToTxnStore::<T>::to_store(store), false)),
-                black_box(ranges.to_vec()),
-                black_box(Arc::new(EvalConfig::default())),
-                black_box(false),
-            )
-            .unwrap()
-        })
-        .bench(b);
-    }
-
-    fn box_clone(&self) -> Box<dyn IntegratedBencher<M>> {
-        Box::new(Self::new())
     }
 }
 

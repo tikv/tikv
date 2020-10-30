@@ -31,6 +31,10 @@ impl RocksDBOptions {
     pub fn into_raw(self) -> RawDBOptions {
         self.0
     }
+
+    pub fn get_max_background_flushes(&self) -> i32 {
+        self.0.get_max_background_flushes()
+    }
 }
 
 impl DBOptions for RocksDBOptions {
