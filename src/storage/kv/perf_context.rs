@@ -16,7 +16,7 @@ pub struct PerfStatisticsFields {
 /// Store statistics we need. Data comes from RocksDB's `PerfContext`.
 /// This statistics store instant values.
 #[derive(Debug, Clone, Copy)]
-pub struct PerfStatisticsInstant(pub PerfStatisticsFields);
+pub struct PerfStatisticsInstant(PerfStatisticsFields);
 
 impl slog::KV for PerfStatisticsInstant {
     fn serialize(
@@ -27,6 +27,9 @@ impl slog::KV for PerfStatisticsInstant {
         slog::KV::serialize(&self.0, record, serializer)
     }
 }
+
+impl !Send for PerfStatisticsInstant {}
+impl !Sync for PerfStatisticsInstant {}
 
 impl PerfStatisticsInstant {
     /// Create an instance which stores instant statistics values, retrieved at creation.

@@ -1,7 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::db_options::PanicTitanDBOptions;
+use crate::engine::PanicEngine;
+use engine_traits::{CFOptionsExt, Result};
 use engine_traits::{ColumnFamilyOptions, SstPartitionerFactory};
+
+impl CFOptionsExt for PanicEngine {
+    type ColumnFamilyOptions = PanicColumnFamilyOptions;
+
+    fn get_options_cf(&self, cf: &str) -> Result<Self::ColumnFamilyOptions> {
+        panic!()
+    }
+    fn set_options_cf(&self, cf: &str, options: &[(&str, &str)]) -> Result<()> {
+        panic!()
+    }
+}
 
 pub struct PanicColumnFamilyOptions;
 
@@ -29,7 +42,7 @@ impl ColumnFamilyOptions for PanicColumnFamilyOptions {
     fn get_block_cache_capacity(&self) -> u64 {
         panic!()
     }
-    fn set_block_cache_capacity(&self, capacity: u64) -> Result<(), String> {
+    fn set_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
         panic!()
     }
     fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {

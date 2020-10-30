@@ -72,6 +72,9 @@ pub enum Callback<S: Snapshot> {
         /// It's used to notify the caller to move on early because it's very likely the request
         /// will be applied to the raftstore.
         proposed_cb: Option<ExtCallback>,
+        /// `committed_cb` is called after a request is committed and before it's being applied, and
+        /// it's guaranteed that the request will be successfully applied soon.
+        committed_cb: Option<ExtCallback>,
     },
 }
 
@@ -80,11 +83,19 @@ where
     S: Snapshot,
 {
     pub fn write(cb: WriteCallback) -> Self {
-        Self::write_ext(cb, None)
+        Self::write_ext(cb, None, None)
     }
 
-    pub fn write_ext(cb: WriteCallback, proposed_cb: Option<ExtCallback>) -> Self {
-        Callback::Write { cb, proposed_cb }
+    pub fn write_ext(
+        cb: WriteCallback,
+        proposed_cb: Option<ExtCallback>,
+        committed_cb: Option<ExtCallback>,
+    ) -> Self {
+        Callback::Write {
+            cb,
+            proposed_cb,
+            committed_cb,
+        }
     }
 
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
@@ -108,6 +119,14 @@ where
     pub fn invoke_proposed(&mut self) {
         if let Callback::Write { proposed_cb, .. } = self {
             if let Some(cb) = proposed_cb.take() {
+                cb()
+            }
+        }
+    }
+
+    pub fn invoke_committed(&mut self) {
+        if let Callback::Write { committed_cb, .. } = self {
+            if let Some(cb) = committed_cb.take() {
                 cb()
             }
         }
@@ -312,6 +331,12 @@ pub enum CasualMessage<EK: KvEngine> {
 
     /// A message to access peer's internal state.
     AccessPeer(Box<dyn FnOnce(&mut dyn AbstractPeer) + Send + 'static>),
+
+    /// Region info from PD
+    QueryRegionLeaderResp {
+        region: metapb::Region,
+        leader: metapb::Peer,
+    },
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -356,6 +381,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
             CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
+            CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
         }
     }
 }

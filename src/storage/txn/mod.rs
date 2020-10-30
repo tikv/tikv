@@ -8,7 +8,10 @@ pub mod scheduler;
 
 mod actions;
 
-pub use actions::{commit::commit, pessimistic_prewrite::pessimistic_prewrite, prewrite::prewrite};
+pub use actions::{
+    acquire_pessimistic_lock::acquire_pessimistic_lock, commit::commit,
+    pessimistic_prewrite::pessimistic_prewrite, prewrite::prewrite,
+};
 
 mod latch;
 mod store;
@@ -233,6 +236,15 @@ impl ErrorCodeExt for Error {
 
 pub mod tests {
     use super::*;
+    pub use actions::acquire_pessimistic_lock::tests::{
+        must_err as must_acquire_pessimistic_lock_err,
+        must_err_return_value as must_acquire_pessimistic_lock_return_value_err,
+        must_pessimistic_locked, must_succeed as must_acquire_pessimistic_lock,
+        must_succeed_for_large_txn as must_acquire_pessimistic_lock_for_large_txn,
+        must_succeed_impl as must_acquire_pessimistic_lock_impl,
+        must_succeed_return_value as must_acquire_pessimistic_lock_return_value,
+        must_succeed_with_ttl as must_acquire_pessimistic_lock_with_ttl,
+    };
     pub use actions::commit::tests::{must_err as must_commit_err, must_succeed as must_commit};
     pub use actions::pessimistic_prewrite::tests::try_pessimistic_prewrite_check_not_exists;
     pub use actions::prewrite::tests::{try_prewrite_check_not_exists, try_prewrite_insert};

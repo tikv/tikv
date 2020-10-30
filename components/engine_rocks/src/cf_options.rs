@@ -1,8 +1,29 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::engine::RocksEngine;
+use crate::util;
 use crate::{db_options::RocksTitanDBOptions, sst_partitioner::RocksSstPartitionerFactory};
+use engine_traits::{CFOptionsExt, Result};
 use engine_traits::{ColumnFamilyOptions, SstPartitionerFactory};
 use rocksdb::ColumnFamilyOptions as RawCFOptions;
+
+impl CFOptionsExt for RocksEngine {
+    type ColumnFamilyOptions = RocksColumnFamilyOptions;
+
+    fn get_options_cf(&self, cf: &str) -> Result<Self::ColumnFamilyOptions> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(RocksColumnFamilyOptions::from_raw(
+            self.as_inner().get_options_cf(handle),
+        ))
+    }
+
+    fn set_options_cf(&self, cf: &str, options: &[(&str, &str)]) -> Result<()> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        self.as_inner()
+            .set_options_cf(handle, options)
+            .map_err(|e| box_err!(e))
+    }
+}
 
 #[derive(Clone)]
 pub struct RocksColumnFamilyOptions(RawCFOptions);
@@ -52,7 +73,7 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
         self.0.get_block_cache_capacity()
     }
 
-    fn set_block_cache_capacity(&self, capacity: u64) -> Result<(), String> {
+    fn set_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
         self.0.set_block_cache_capacity(capacity)
     }
 
