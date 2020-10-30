@@ -648,6 +648,7 @@ mod tests {
                         0,
                         TimeStamp::default(),
                         TimeStamp::default(),
+                        false,
                     )
                     .unwrap();
                 }

@@ -87,10 +87,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             }
         } else {
             debug!(
-            "txn_heart_beat invoked but lock is absent";
-            "primary_key" => %self.primary_key,
-            "start_ts" => self.start_ts,
-            "advise_ttl" => self.advise_ttl,
+                "txn_heart_beat invoked but lock is absent";
+                "primary_key" => %self.primary_key,
+                "start_ts" => self.start_ts,
+                "advise_ttl" => self.advise_ttl,
             );
             Err(MvccErrorInner::TxnLockNotFound {
                 start_ts: self.start_ts,
@@ -154,7 +154,6 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
                     async_apply_prewrite: false,
                 },
             )
@@ -194,7 +193,6 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
                     async_apply_prewrite: false,
                 },
             )
