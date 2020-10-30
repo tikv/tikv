@@ -28,6 +28,10 @@ Each RocksDB instance and column family is configurable. Below explains the deta
 
 - The maximum number of concurrent background jobs (compactions and flushes)
 
+#### max-background-flushes
+
+- The maximum number of concurrent background memtable flush jobs
+
 #### max-sub-compactions
 
 - The maximum number of threads that will concurrently perform a compaction job by breaking the job into multiple smaller ones that run simultaneously
@@ -257,6 +261,7 @@ This template shows the default RocksDB configuration for TiKV:
 ```
 [rocksdb]
 max-background-jobs = 8
+max-background-flushes = 2
 max-sub-compactions = 1
 max-open-files = 40960
 max-manifest-file-size = "20MB"
