@@ -8,7 +8,6 @@ use criterion::measurement::Measurement;
 use tipb::Expr;
 
 use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_normal_executors::{Executor, StreamAggExecutor};
 use tidb_query_vec_executors::interface::BatchExecutor;
 use tidb_query_vec_executors::BatchStreamAggregationExecutor;
 use tikv::storage::Statistics;
@@ -41,45 +40,6 @@ where
     #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
-    }
-}
-
-/// A bencher that will use normal stream aggregation executor to bench the giving aggregate
-/// expression.
-pub struct NormalBencher;
-
-impl<M> StreamAggrBencher<M> for NormalBencher
-where
-    M: Measurement,
-{
-    fn name(&self) -> &'static str {
-        "normal"
-    }
-
-    fn bench(
-        &self,
-        b: &mut criterion::Bencher<M>,
-        fb: &FixtureBuilder,
-        group_by_expr: &[Expr],
-        aggr_expr: &[Expr],
-    ) {
-        crate::util::bencher::NormalNextAllBencher::new(|| {
-            let meta = stream_aggregate(aggr_expr, group_by_expr).take_aggregation();
-            let src = fb.clone().build_normal_fixture_executor();
-            Box::new(
-                StreamAggExecutor::new(
-                    black_box(Arc::new(EvalConfig::default())),
-                    black_box(Box::new(src)),
-                    black_box(meta),
-                )
-                .unwrap(),
-            ) as Box<dyn Executor<StorageStats = Statistics>>
-        })
-        .bench(b);
-    }
-
-    fn box_clone(&self) -> Box<dyn StreamAggrBencher<M>> {
-        Box::new(Self)
     }
 }
 

@@ -45,53 +45,6 @@ where
     }
 }
 
-/// A bencher that will use normal executor to execute the given request.
-pub struct NormalBencher<T: TxnStore + 'static> {
-    _phantom: PhantomData<T>,
-}
-
-impl<T: TxnStore + 'static> NormalBencher<T> {
-    pub fn new() -> Self {
-        Self {
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<T, M> IntegratedBencher<M> for NormalBencher<T>
-where
-    T: TxnStore + 'static,
-    M: Measurement,
-{
-    fn name(&self) -> String {
-        format!("{}/normal", <T as StoreDescriber>::name())
-    }
-
-    fn bench(
-        &self,
-        b: &mut criterion::Bencher<M>,
-        executors: &[PbExecutor],
-        ranges: &[KeyRange],
-        store: &Store<RocksEngine>,
-    ) {
-        crate::util::bencher::NormalNextAllBencher::new(|| {
-            tidb_query_normal_executors::runner::build_executors::<_, ExecSummaryCollectorDisabled>(
-                black_box(executors.to_vec()),
-                black_box(TiKVStorage::new(ToTxnStore::<T>::to_store(store), false)),
-                black_box(ranges.to_vec()),
-                black_box(Arc::new(EvalConfig::default())),
-                black_box(false),
-            )
-            .unwrap()
-        })
-        .bench(b);
-    }
-
-    fn box_clone(&self) -> Box<dyn IntegratedBencher<M>> {
-        Box::new(Self::new())
-    }
-}
-
 /// A bencher that will use batch executor to execute the given request.
 pub struct BatchBencher<T: TxnStore + 'static> {
     _phantom: PhantomData<T>,
