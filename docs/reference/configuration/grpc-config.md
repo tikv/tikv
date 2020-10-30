@@ -46,7 +46,7 @@ TiKV uses gRPC, a remote procedure call (RPC) framework, to build a distributed 
 ## grpc-raft-conn-num
 
 - The number of connections with each TiKV server to send Raft messages
-- Default: 10
+- Default: 1
 
 ## grpc-stream-initial-window-size
 
