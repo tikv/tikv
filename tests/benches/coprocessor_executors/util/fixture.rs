@@ -2,7 +2,6 @@
 
 use std::str::FromStr;
 
-
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_xorshift::XorShiftRng;
@@ -10,8 +9,7 @@ use rand_xorshift::XorShiftRng;
 use criterion::measurement::Measurement;
 
 use test_coprocessor::*;
-use tidb_query_datatype::{FieldTypeTp};
-
+use tidb_query_datatype::FieldTypeTp;
 
 use tipb::FieldType;
 

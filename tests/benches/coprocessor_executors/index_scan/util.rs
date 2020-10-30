@@ -8,9 +8,8 @@ use criterion::black_box;
 use kvproto::coprocessor::KeyRange;
 use tipb::ColumnInfo;
 
-
 use test_coprocessor::*;
-use tidb_query_datatype::expr::{EvalConfig};
+use tidb_query_datatype::expr::EvalConfig;
 use tidb_query_vec_executors::interface::*;
 use tidb_query_vec_executors::BatchIndexScanExecutor;
 use tikv::coprocessor::dag::TiKVStorage;
