@@ -9,10 +9,10 @@ use tipb::Expr;
 
 use tidb_query_datatype::expr::EvalConfig;
 use tidb_query_vec_executors::BatchTopNExecutor;
-use tikv::storage::Statistics;
+
 
 use crate::util::bencher::Bencher;
-use crate::util::executor_descriptor::top_n;
+
 use crate::util::FixtureBuilder;
 
 pub trait TopNBencher<M>

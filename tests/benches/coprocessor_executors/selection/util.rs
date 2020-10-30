@@ -13,7 +13,7 @@ use tidb_query_vec_executors::BatchSelectionExecutor;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;
-use crate::util::executor_descriptor::selection;
+
 use crate::util::FixtureBuilder;
 
 pub trait SelectionBencher<M>

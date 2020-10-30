@@ -7,10 +7,10 @@ use criterion::black_box;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::ColumnInfo;
-use tipb::TableScan;
+
 
 use test_coprocessor::*;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
+use tidb_query_datatype::expr::{EvalConfig};
 use tidb_query_vec_executors::interface::*;
 use tidb_query_vec_executors::BatchTableScanExecutor;
 use tikv::coprocessor::dag::TiKVStorage;

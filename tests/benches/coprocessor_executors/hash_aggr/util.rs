@@ -15,7 +15,7 @@ use tidb_query_vec_executors::BatchSlowHashAggregationExecutor;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;
-use crate::util::executor_descriptor::hash_aggregate;
+
 use crate::util::FixtureBuilder;
 
 pub trait HashAggrBencher<M>

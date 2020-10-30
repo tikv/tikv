@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::str::FromStr;
-use std::sync::Arc;
+
 
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -10,16 +10,16 @@ use rand_xorshift::XorShiftRng;
 use criterion::measurement::Measurement;
 
 use test_coprocessor::*;
-use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
-use tikv_util::collections::HashMap;
-use tipb::ColumnInfo;
+use tidb_query_datatype::{FieldTypeTp};
+
+
 use tipb::FieldType;
 
 use tidb_query_common::storage::IntervalRange;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::data_type::Decimal;
 use tidb_query_datatype::codec::datum::{Datum, DatumEncoder};
-use tidb_query_datatype::codec::table::RowColsDict;
+
 use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
 use tidb_query_vec_executors::interface::*;
 use tikv::storage::{RocksEngine, Statistics};
