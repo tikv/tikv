@@ -8,9 +8,20 @@ pub struct PerfStatisticsFields {
     pub internal_delete_skipped_count: usize,
     pub block_cache_hit_count: usize,
     pub block_read_count: usize,
+    pub block_read_time: usize,
     pub block_read_byte: usize,
     pub encrypt_data_nanos: usize,
     pub decrypt_data_nanos: usize,
+    pub block_checksum_time: usize,
+    pub block_decompress_time: usize,
+    pub get_snapshot_time: usize,
+    pub get_from_memtable_time: usize,
+    pub get_post_process_time: usize,
+    pub get_from_output_files_time: usize,
+    pub read_index_block_nanos: usize,
+    pub read_filter_block_nanos: usize,
+    pub new_table_block_iter_nanos: usize,
+    pub block_seek_nanos: usize,
 }
 
 /// Store statistics we need. Data comes from RocksDB's `PerfContext`.
@@ -40,6 +51,17 @@ impl PerfStatisticsInstant {
             block_read_byte: perf_context.block_read_byte() as usize,
             encrypt_data_nanos: perf_context.encrypt_data_nanos() as usize,
             decrypt_data_nanos: perf_context.decrypt_data_nanos() as usize,
+            block_read_time: perf_context.block_read_time() as usize,
+            block_checksum_time: perf_context.block_checksum_time() as usize,
+            block_decompress_time: perf_context.block_decompress_time() as usize,
+            get_snapshot_time: perf_context.get_snapshot_time() as usize,
+            get_from_memtable_time: perf_context.get_from_memtable_time() as usize,
+            get_post_process_time: perf_context.get_post_process_time() as usize,
+            get_from_output_files_time: perf_context.get_from_output_files_time() as usize,
+            read_index_block_nanos: perf_context.read_index_block_nanos() as usize,
+            read_filter_block_nanos: perf_context.read_filter_block_nanos() as usize,
+            new_table_block_iter_nanos: perf_context.new_table_block_iter_nanos() as usize,
+            block_seek_nanos: perf_context.block_seek_nanos() as usize,
         })
     }
 
@@ -47,6 +69,13 @@ impl PerfStatisticsInstant {
     pub fn delta(&self) -> PerfStatisticsDelta {
         let now = Self::new();
         PerfStatisticsDelta(now.0 - self.0)
+    }
+
+    pub fn delta_and_update(&mut self) -> PerfStatisticsDelta {
+        let now = Self::new();
+        let delta = PerfStatisticsDelta(now.0 - self.0);
+        self.0 = now.0;
+        delta
     }
 }
 
