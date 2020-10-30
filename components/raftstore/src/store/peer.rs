@@ -1728,7 +1728,14 @@ where
                 }
                 let committed_index = self.raft_group.raft.raft_log.committed;
                 let term = self.raft_group.raft.raft_log.term(committed_index).unwrap();
-                let cbs = self.proposals.take(committed_index, term);
+                let mut cbs = self.proposals.take(committed_index, term);
+                cbs.iter_mut().for_each(|p| {
+                    if p.must_pass_epoch_check {
+                        // In this case the apply can be guaranteed to be successful. Invoke the
+                        // on_committed callback if necessary.
+                        p.cb.invoke_committed();
+                    }
+                });
                 let apply = Apply::new(
                     self.peer_id(),
                     self.region_id,
@@ -2067,7 +2074,8 @@ where
                 false
             }
             Ok(Either::Left(idx)) => {
-                if self.has_applied_to_current_term() {
+                let has_applied_to_current_term = self.has_applied_to_current_term();
+                if has_applied_to_current_term {
                     // After this peer has applied to current term and passed above checking including `cmd_epoch_checker`,
                     // we can safely guarantee that this proposal will be committed if there is no abnormal leader transfer
                     // in the near future. Thus proposed callback can be called.
@@ -2086,6 +2094,7 @@ where
                     term: self.term(),
                     cb,
                     renew_lease_time: None,
+                    must_pass_epoch_check: has_applied_to_current_term,
                 };
                 if let Some(cmd_type) = req_admin_cmd_type {
                     self.cmd_epoch_checker
@@ -2426,21 +2435,29 @@ where
         // cause a long time waiting for a read response. Then we should return an error directly
         // in this situation.
         if !self.is_leader() && self.leader_id() == INVALID_ID {
-            cmd_resp::bind_error(
-                &mut err_resp,
-                box_err!("{} can not read index due to no leader", self.tag),
-            );
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             // The leader may be hibernated, send a message for trying to awaken the leader.
-            if poll_ctx.cfg.hibernate_regions
-                && (self.bcast_wake_up_time.is_none()
-                    || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
-                        >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL))
+            if self.bcast_wake_up_time.is_none()
+                || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
+                    >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL)
             {
                 self.bcast_wake_up_message(poll_ctx);
                 self.bcast_wake_up_time = Some(UtilInstant::now_coarse());
+
+                let task = PdTask::QueryRegionLeader {
+                    region_id: self.region_id,
+                };
+                if let Err(e) = poll_ctx.pd_scheduler.schedule(task) {
+                    error!(
+                        "failed to notify pd";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer_id(),
+                        "err" => %e,
+                    )
+                }
             }
             self.should_wake_up = true;
+            cmd_resp::bind_error(&mut err_resp, Error::NotLeader(self.region_id, None));
             cb.invoke_with_response(err_resp);
             return false;
         }
@@ -2490,6 +2507,7 @@ where
                     term: self.term(),
                     cb: Callback::None,
                     renew_lease_time: Some(renew_lease_time),
+                    must_pass_epoch_check: false,
                 };
                 self.post_propose(poll_ctx, p);
             }
@@ -3145,24 +3163,32 @@ where
             if peer.get_id() == self.peer_id() {
                 continue;
             }
-            let mut send_msg = RaftMessage::default();
-            send_msg.set_region_id(self.region_id);
-            send_msg.set_from_peer(self.peer.clone());
-            send_msg.set_region_epoch(self.region().get_region_epoch().clone());
-            send_msg.set_to_peer(peer.clone());
-            let extra_msg = send_msg.mut_extra_msg();
-            extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-            if let Err(e) = ctx.trans.send(send_msg) {
-                error!(?e;
-                    "failed to send wake up message";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                    "target_peer_id" => peer.get_id(),
-                    "target_store_id" => peer.get_store_id(),
-                );
-            } else {
-                ctx.need_flush_trans = true;
-            }
+            self.send_wake_up_message(ctx, peer);
+        }
+    }
+
+    pub fn send_wake_up_message<T: Transport, C>(
+        &self,
+        ctx: &mut PollContext<EK, ER, T, C>,
+        peer: &metapb::Peer,
+    ) {
+        let mut send_msg = RaftMessage::default();
+        send_msg.set_region_id(self.region_id);
+        send_msg.set_from_peer(self.peer.clone());
+        send_msg.set_region_epoch(self.region().get_region_epoch().clone());
+        send_msg.set_to_peer(peer.clone());
+        let extra_msg = send_msg.mut_extra_msg();
+        extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
+        if let Err(e) = ctx.trans.send(send_msg) {
+            error!(?e;
+                "failed to send wake up message";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "target_peer_id" => peer.get_id(),
+                "target_store_id" => peer.get_store_id(),
+            );
+        } else {
+            ctx.need_flush_trans = true;
         }
     }
 
@@ -3692,6 +3718,7 @@ mod tests {
                 term: (index / 10) + 1,
                 cb: Callback::None,
                 renew_lease_time,
+                must_pass_epoch_check: false,
             });
         }
         for remove_i in &[0, 65, 98] {

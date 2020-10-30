@@ -229,6 +229,7 @@ where
         reqs: Vec<Request>,
         write_cb: Callback<CmdRes>,
         proposed_cb: Option<ExtCallback>,
+        committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
         {
@@ -267,6 +268,7 @@ where
                         write_cb((cb_ctx, res.map_err(Error::into)));
                     }),
                     proposed_cb,
+                    committed_cb,
                 ),
             )
             .map_err(From::from)
@@ -349,7 +351,7 @@ where
         batch: WriteData,
         write_cb: Callback<()>,
     ) -> kv::Result<()> {
-        self.async_write_ext(ctx, batch, write_cb, None)
+        self.async_write_ext(ctx, batch, write_cb, None, None)
     }
 
     fn async_write_ext(
@@ -358,6 +360,7 @@ where
         batch: WriteData,
         write_cb: Callback<()>,
         proposed_cb: Option<ExtCallback>,
+        committed_cb: Option<ExtCallback>,
     ) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
         if batch.modifies.is_empty() {
@@ -432,6 +435,7 @@ where
                 }
             }),
             proposed_cb,
+            committed_cb,
         )
         .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
@@ -542,7 +546,12 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
             "injected error for iter"
         )));
-        Ok(Cursor::new(RegionSnapshot::iter(self, iter_opt), mode))
+        let prefix_seek = iter_opt.prefix_seek_used();
+        Ok(Cursor::new(
+            RegionSnapshot::iter(self, iter_opt),
+            mode,
+            prefix_seek,
+        ))
     }
 
     fn iter_cf(
@@ -554,9 +563,11 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
             "injected error for iter_cf"
         )));
+        let prefix_seek = iter_opt.prefix_seek_used();
         Ok(Cursor::new(
             RegionSnapshot::iter_cf(self, cf, iter_opt)?,
             mode,
+            prefix_seek,
         ))
     }
 
