@@ -103,8 +103,6 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tempfile = "3.0"
 tidb_query_datatype = { path = "../components/tidb_query_datatype" }
 tidb_query_common = { path = "../components/tidb_query_common" }
-tidb_query_normal_expr = { path = "../components/tidb_query_normal_expr" }
-tidb_query_normal_executors = { path = "../components/tidb_query_normal_executors" }
 tidb_query_vec_aggr = { path = "../components/tidb_query_vec_aggr" }
 tidb_query_vec_executors = { path = "../components/tidb_query_vec_executors" }
 tidb_query_vec_expr = { path = "../components/tidb_query_vec_expr" }
