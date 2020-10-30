@@ -221,7 +221,6 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
                     async_apply_prewrite: false,
                 },
             )
@@ -263,7 +262,6 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
                     async_apply_prewrite: false,
                 },
             )
@@ -745,7 +743,6 @@ pub mod tests {
             1,
             /* min_commit_ts */ TimeStamp::zero(),
             /* max_commit_ts */ TimeStamp::zero(),
-            false,
         );
         must_success(
             &engine,
