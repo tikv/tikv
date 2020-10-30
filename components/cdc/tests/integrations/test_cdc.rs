@@ -128,7 +128,7 @@ fn test_cdc_basic() {
     // request again.
     let req = suite.new_changedata_request(1);
     let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
-    event_feed_wrap.as_ref().replace(Some(resp_rx));
+    event_feed_wrap.replace(Some(resp_rx));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -153,7 +153,7 @@ fn test_cdc_basic() {
         .unwrap();
 
     // Drop stream and cancel its server streaming.
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     // Sleep a while to make sure the stream is deregistered.
     sleep_ms(200);
     scheduler
@@ -170,7 +170,7 @@ fn test_cdc_basic() {
     req.set_region_epoch(Default::default()); // Zero region epoch.
     let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
-    event_feed_wrap.as_ref().replace(Some(resp_rx));
+    event_feed_wrap.replace(Some(resp_rx));
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -288,7 +288,7 @@ fn test_cdc_not_leader() {
         .is_subscribed(1)
         .is_some());
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -317,7 +317,7 @@ fn test_cdc_stale_epoch_after_region_ready() {
     let mut req = suite.new_changedata_request(1);
     req.set_region_epoch(Default::default()); // zero epoch is always stale.
     let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
-    let _resp_rx = event_feed_wrap.as_ref().replace(Some(resp_rx));
+    let _resp_rx = event_feed_wrap.replace(Some(resp_rx));
     block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
     // Must receive epoch not match error.
     let mut events = receive_event(false).events.to_vec();
@@ -349,7 +349,7 @@ fn test_cdc_stale_epoch_after_region_ready() {
     }
 
     // Cancel event feed before finishing test.
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -431,7 +431,7 @@ fn test_cdc_scan() {
     let mut req = suite.new_changedata_request(1);
     req.checkpoint_ts = checkpoint_ts.into_inner();
     let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
-    event_feed_wrap.as_ref().replace(Some(resp_rx));
+    event_feed_wrap.replace(Some(resp_rx));
     let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     if events.len() == 1 {
@@ -470,7 +470,7 @@ fn test_cdc_scan() {
         other => panic!("unknown event {:?}", other),
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -516,7 +516,7 @@ fn test_cdc_tso_failure() {
         }
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -608,7 +608,7 @@ fn test_region_split() {
         }
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -645,7 +645,7 @@ fn test_duplicate_subscribe() {
         other => panic!("unknown event {:?}", other),
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -742,7 +742,7 @@ fn test_cdc_batch_size_limit() {
         other => panic!("unknown event {:?}", other),
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -827,7 +827,7 @@ fn test_old_value_basic() {
     }
 
     let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
-    event_feed_wrap.as_ref().replace(Some(resp_rx));
+    event_feed_wrap.replace(Some(resp_rx));
     let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut event_count = 0;
     loop {
@@ -862,7 +862,7 @@ fn test_old_value_basic() {
         }
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -959,6 +959,6 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
     }
     assert!(success, "resolved_ts not blocked by the memory lock");
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }

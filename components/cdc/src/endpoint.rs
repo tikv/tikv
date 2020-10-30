@@ -899,14 +899,23 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             has_incoming_majority && has_demoting_majority
         };
 
+        // store_id -> leaders info, record the request to each stores
         let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
+        // region_id -> region, cache the information of regions
         let mut region_map: HashMap<u64, Region> = HashMap::default();
+        // region_id -> peers id, record the responses
+        let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
         {
             let meta = store_meta.lock().unwrap();
+            let store_id = meta.store_id.unwrap();
             for (region_id, _) in regions {
                 if let Some(region) = meta.regions.get(&region_id) {
                     if let Some((term, leader)) = meta.leaders.get(&region_id) {
                         for peer in region.get_peers() {
+                            if peer.store_id == store_id {
+                                resp_map.entry(region_id).or_default().push(store_id);
+                                continue;
+                            }
                             if peer.get_role() == PeerRole::Learner {
                                 continue;
                             }
@@ -950,7 +959,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             }
         });
         let resps = futures::future::join_all(stores).await;
-        let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
         resps
             .into_iter()
             .filter_map(Result::ok)
@@ -1003,6 +1011,12 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                         {
                             return Some(leader_info.region_id);
                         }
+                        debug!(
+                            "cdc check leader reject region";
+                            "incoming_info" => ?leader_info,
+                            "current_term" => term,
+                            "current_region" => ?region,
+                        );
                     }
                 }
                 None

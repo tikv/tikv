@@ -1961,6 +1961,8 @@ where
 
         self.update_region(cp.region);
 
+        fail_point!("change_peer_after_update_region");
+
         let now = Instant::now();
         let (mut remove_self, mut need_ping) = (false, false);
         for mut change in cp.changes {

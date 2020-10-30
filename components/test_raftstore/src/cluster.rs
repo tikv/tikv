@@ -269,13 +269,21 @@ impl<T: Simulator> Cluster<T> {
         if let Some(labels) = self.labels.get(&node_id) {
             cfg.server.labels = labels.to_owned();
         }
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
-        self.store_metas.insert(node_id, store_meta.clone());
+        let store_meta = self
+            .store_metas
+            .entry(node_id)
+            .or_insert_with(|| Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP))));
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
-        self.sim
-            .wl()
-            .run_node(node_id, cfg, engines, store_meta, key_mgr, router, system)?;
+        self.sim.wl().run_node(
+            node_id,
+            cfg,
+            engines,
+            store_meta.clone(),
+            key_mgr,
+            router,
+            system,
+        )?;
         debug!("node {} started", node_id);
         Ok(())
     }
