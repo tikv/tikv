@@ -739,7 +739,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     row.start_ts = write.start_ts.into_inner();
     row.commit_ts = commit_ts;
     row.key = key.truncate_ts().unwrap().into_raw().unwrap();
-    row.op_type = op_type.into();
+    row.op_type = op_type;
     set_event_row_type(row, r_type);
     if let Some(value) = write.short_value {
         row.value = value;
@@ -765,7 +765,7 @@ fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     let key = Key::from_encoded(key);
     row.start_ts = lock.ts.into_inner();
     row.key = key.into_raw().unwrap();
-    row.op_type = op_type.into();
+    row.op_type = op_type;
     set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {
         row.value = value;
