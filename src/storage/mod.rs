@@ -1439,9 +1439,7 @@ mod tests {
                 ),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
-                            ..,
-                        ))),
+                        box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Other(..))),
                     ))))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
