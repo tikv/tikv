@@ -447,6 +447,8 @@ impl<S: Snapshot> MvccTxn<S> {
         };
 
         {
+            // Check write conflict first to make the transaction fail or retry fast.
+            let mut prev_write: Option<(u64, Write)> = None;
             if !options.skip_constraint_check {
                 if let Some((commit_ts, write)) = self.reader.seek_write(&key, u64::max_value())? {
                     // Abort on writes after our start timestamp ...
@@ -463,15 +465,11 @@ impl<S: Snapshot> MvccTxn<S> {
                             primary: primary.to_vec(),
                         });
                     }
-                    self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+                    prev_write = Some((commit_ts, write));
                 }
             }
 
-            if should_not_write {
-                return Ok(());
-            }
-
-            // ... or locks at any timestamp.
+            // Check whether the current key is locked at any timestamp.
             if let Some(lock) = self.reader.load_lock(&key)? {
                 if lock.ts != self.start_ts {
                     return Err(Error::KeyIsLocked(lock.into_lock_info(key.into_raw()?)));
@@ -486,6 +484,18 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
                 // Duplicated command. No need to overwrite the lock and data.
                 MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+                return Ok(());
+            }
+
+            if !options.skip_constraint_check {
+                // Should check it when no lock exists, otherwise it can report error when there is
+                // a lock belonging to a committed transaction which deletes the key.
+                if let Some((commit_ts, write)) = prev_write {
+                    self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+                }
+            }
+
+            if should_not_write {
                 return Ok(());
             }
         }
@@ -768,7 +778,7 @@ mod tests {
     use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::WriteType;
-    use crate::storage::mvcc::{Error, MvccReader, MvccTxn};
+    use crate::storage::mvcc::{Error, MvccReader, MvccTxn, Result};
     use crate::storage::{
         Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN,
     };
@@ -882,11 +892,37 @@ mod tests {
         must_prewrite_put(&engine, k1, v1, k1, 1);
         must_commit(&engine, k1, 1, 2);
 
+        fn expect_error<T, F>(x: Result<T>, err_matcher: F)
+        where
+            F: FnOnce(Error) + Send + 'static,
+        {
+            match x {
+                Err(e) => err_matcher(e),
+                _ => panic!("expect result to be an error"),
+            }
+        }
+
         // "k1" already exist, returns AlreadyExist error.
-        assert!(try_prewrite_insert(&engine, k1, v2, k1, 3).is_err());
+        expect_error(try_prewrite_insert(&engine, k1, v2, k1, 3), |e| match e {
+            Error::AlreadyExist { .. } => (),
+            _ => panic!("unexpected error: {:?}", e),
+        });
 
         // Delete "k1"
         must_prewrite_delete(&engine, k1, k1, 4);
+
+        // There is a lock, returns KeyIsLocked error.
+        expect_error(try_prewrite_insert(&engine, k1, v2, k1, 6), |e| match e {
+            Error::KeyIsLocked(_) => (),
+            _ => panic!("unexpected error: {:?}", e),
+        });
+
+        // Check write conflict before lock.
+        expect_error(try_prewrite_insert(&engine, k1, v2, k1, 1), |e| match e {
+            Error::WriteConflict { .. } => (),
+            _ => panic!("unexpected error: {:?}", e),
+        });
+
         must_commit(&engine, k1, 4, 5);
 
         // After delete "k1", insert returns ok.
@@ -897,7 +933,10 @@ mod tests {
         must_prewrite_put(&engine, k1, v3, k1, 8);
         must_rollback(&engine, k1, 8);
 
-        assert!(try_prewrite_insert(&engine, k1, v3, k1, 9).is_err());
+        expect_error(try_prewrite_insert(&engine, k1, v3, k1, 9), |e| match e {
+            Error::AlreadyExist { .. } => (),
+            _ => panic!("unexpected error: {:?}", e),
+        });
 
         // Delete "k1" again
         must_prewrite_delete(&engine, k1, k1, 10);
