@@ -1007,14 +1007,14 @@ mod tests {
         row1.start_ts = 1;
         row1.commit_ts = 0;
         row1.key = b"a".to_vec();
-        row1.op_type = EventRowOpType::Put.into();
+        row1.op_type = EventRowOpType::Put;
         set_event_row_type(&mut row1, EventLogType::Prewrite);
         row1.value = b"b".to_vec();
         let mut row2 = EventRow::default();
         row2.start_ts = 1;
         row2.commit_ts = 2;
         row2.key = b"a".to_vec();
-        row2.op_type = EventRowOpType::Put.into();
+        row2.op_type = EventRowOpType::Put;
         set_event_row_type(&mut row2, EventLogType::Committed);
         row2.value = b"b".to_vec();
         let mut row3 = EventRow::default();
