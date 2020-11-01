@@ -1,11 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::marker::PhantomData;
 
 use futures::future::{Future, TryFutureExt};
 use futures::sink::SinkExt;
@@ -224,8 +224,9 @@ impl RecvSnapContext {
     }
 
     fn finish<R, E>(self, raft_router: R) -> Result<()>
-    where R: RaftStoreRouter<E>,
-          E: KvEngine,
+    where
+        R: RaftStoreRouter<E>,
+        E: KvEngine,
     {
         let key = self.key;
         if let Some(mut file) = self.file {
@@ -249,8 +250,9 @@ fn recv_snap<R, E>(
     snap_mgr: SnapManager,
     raft_router: R,
 ) -> impl Future<Output = Result<()>>
-where R: RaftStoreRouter<E> + 'static,
-      E: KvEngine,
+where
+    R: RaftStoreRouter<E> + 'static,
+    E: KvEngine,
 {
     let recv_task = async move {
         let mut stream = stream.map_err(Error::from);
@@ -292,7 +294,11 @@ where R: RaftStoreRouter<E> + 'static,
     }
 }
 
-pub struct Runner<R, E> where R: RaftStoreRouter<E> + 'static, E: KvEngine {
+pub struct Runner<R, E>
+where
+    R: RaftStoreRouter<E> + 'static,
+    E: KvEngine,
+{
     env: Arc<Environment>,
     snap_mgr: SnapManager,
     pool: Runtime,
@@ -304,7 +310,11 @@ pub struct Runner<R, E> where R: RaftStoreRouter<E> + 'static, E: KvEngine {
     _engine: PhantomData<E>,
 }
 
-impl<R, E> Runner<R, E> where R: RaftStoreRouter<E> + 'static, E: KvEngine {
+impl<R, E> Runner<R, E>
+where
+    R: RaftStoreRouter<E> + 'static,
+    E: KvEngine,
+{
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: SnapManager,
@@ -333,7 +343,11 @@ impl<R, E> Runner<R, E> where R: RaftStoreRouter<E> + 'static, E: KvEngine {
     }
 }
 
-impl<R, E> Runnable for Runner<R, E> where R: RaftStoreRouter<E> + 'static, E: KvEngine {
+impl<R, E> Runnable for Runner<R, E>
+where
+    R: RaftStoreRouter<E> + 'static,
+    E: KvEngine,
+{
     type Task = Task;
 
     fn run(&mut self, task: Task) {

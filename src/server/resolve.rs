@@ -1,9 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use std::marker::PhantomData;
 
 use engine_traits::KvEngine;
 use kvproto::metapb;
@@ -184,11 +184,11 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use engine_test::kv::KvTestEngine;
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
     use raftstore::router::RaftStoreBlackHole;
     use tikv_util::collections::HashMap;
-    use engine_test::kv::KvTestEngine;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 

@@ -21,6 +21,7 @@ use raftstore::router::RaftStoreRouter;
 use security::SecurityManager;
 use std::collections::VecDeque;
 use std::ffi::CString;
+use std::marker::PhantomData;
 use std::marker::Unpin;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -33,7 +34,6 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
-use std::marker::PhantomData;
 
 // When merge raft messages into a batch message, leave a buffer.
 const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
@@ -297,7 +297,11 @@ struct SnapshotReporter<T, E> {
     _engine: PhantomData<E>,
 }
 
-impl<T, E> SnapshotReporter<T, E> where T: RaftStoreRouter<E> + 'static, E: KvEngine {
+impl<T, E> SnapshotReporter<T, E>
+where
+    T: RaftStoreRouter<E> + 'static,
+    E: KvEngine,
+{
     pub fn report(&self, status: SnapshotStatus) {
         debug!(
             "send snapshot";

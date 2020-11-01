@@ -918,10 +918,10 @@ impl Deadlock for Service {
 pub mod tests {
     use super::*;
     use crate::server::resolve::Callback;
+    use engine_test::kv::KvTestEngine;
     use futures::executor::block_on;
     use security::SecurityConfig;
     use tikv_util::worker::FutureWorker;
-    use engine_test::kv::KvTestEngine;
 
     #[test]
     fn test_detect_table() {

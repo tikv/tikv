@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use txn_types::Key;
 
-use engine_traits::{CfName, CF_LOCK, KvEngine};
+use engine_traits::{CfName, KvEngine, CF_LOCK};
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::CmdType;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
@@ -444,8 +444,8 @@ impl Drop for AppliedLockCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_traits::CF_DEFAULT;
     use engine_test::kv::KvTestEngine;
+    use engine_traits::CF_DEFAULT;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{
