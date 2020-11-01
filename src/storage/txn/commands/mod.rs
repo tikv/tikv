@@ -458,7 +458,6 @@ pub struct WriteContext<'a, L: LockManager> {
     pub concurrency_manager: ConcurrencyManager,
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
-    pub pipelined_pessimistic_lock: bool,
     pub async_apply_prewrite: bool,
 }
 
@@ -672,7 +671,6 @@ pub mod test_util {
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics,
-            pipelined_pessimistic_lock: false,
             async_apply_prewrite: false,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -747,7 +745,6 @@ pub mod test_util {
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics,
-            pipelined_pessimistic_lock: false,
             async_apply_prewrite: false,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -789,7 +786,6 @@ pub mod test_util {
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
-            pipelined_pessimistic_lock: false,
             async_apply_prewrite: false,
         };
 
@@ -814,7 +810,6 @@ pub mod test_util {
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
-            pipelined_pessimistic_lock: false,
             async_apply_prewrite: false,
         };
 

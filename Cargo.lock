@@ -1277,18 +1277,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37ab347416e802de484e4d03c7316c48f1ecb56574dfd4a46a80f173ce1de04d"
 
 [[package]]
-name = "flate2"
-version = "1.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2adaffba6388640136149e18ed080b77a78611c1e1d6de75aedcdf78df5d4682"
-dependencies = [
- "crc32fast",
- "libc",
- "libz-sys",
- "miniz_oxide",
-]
-
-[[package]]
 name = "fnv"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1782,9 +1770,6 @@ name = "indexmap"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a61202fbe46c4a951e9404a720a0180bcf3212c750d735cb5c4ba4dc551299f3"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "inferno"
@@ -1990,7 +1975,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#0ca70eadb9e0aaa654c23b1930cbfeaa3d0bad0e"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c6b58a4e99bb7fcc088cf856493d5f80907658ea"
 dependencies = [
  "cc",
  "cmake",
@@ -1999,7 +1984,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#0ca70eadb9e0aaa654c23b1930cbfeaa3d0bad0e"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c6b58a4e99bb7fcc088cf856493d5f80907658ea"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2019,7 +2004,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#0ca70eadb9e0aaa654c23b1930cbfeaa3d0bad0e"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c6b58a4e99bb7fcc088cf856493d5f80907658ea"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2217,15 +2202,6 @@ dependencies = [
  "proc-macro-error",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "miniz_oxide"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7108aff85b876d06f22503dcce091e29f76733b2bfdd91eebce81f5e68203a10"
-dependencies = [
- "adler32",
 ]
 
 [[package]]
@@ -3423,7 +3399,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#0ca70eadb9e0aaa654c23b1930cbfeaa3d0bad0e"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c6b58a4e99bb7fcc088cf856493d5f80907658ea"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4408,8 +4384,6 @@ dependencies = [
  "test_util",
  "tidb_query_common",
  "tidb_query_datatype",
- "tidb_query_normal_executors",
- "tidb_query_normal_expr",
  "tidb_query_vec_aggr",
  "tidb_query_vec_executors",
  "tidb_query_vec_expr",
@@ -4523,51 +4497,6 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tipb",
-]
-
-[[package]]
-name = "tidb_query_normal_executors"
-version = "0.0.1"
-dependencies = [
- "byteorder",
- "codec",
- "failure",
- "indexmap",
- "kvproto",
- "protobuf",
- "tidb_query_common",
- "tidb_query_datatype",
- "tidb_query_normal_expr",
- "tikv_util",
- "tipb",
-]
-
-[[package]]
-name = "tidb_query_normal_expr"
-version = "0.0.1"
-dependencies = [
- "base64 0.12.0",
- "bstr",
- "byteorder",
- "chrono",
- "codec",
- "failure",
- "flate2",
- "hex 0.4.2",
- "match_template",
- "num",
- "openssl",
- "protobuf",
- "regex",
- "slog",
- "slog-global",
- "tidb_query_common",
- "tidb_query_datatype",
- "tidb_query_shared_expr",
- "tikv_util",
- "tipb",
- "twoway",
- "uuid",
 ]
 
 [[package]]
@@ -4736,8 +4665,6 @@ dependencies = [
  "test_util",
  "tidb_query_common",
  "tidb_query_datatype",
- "tidb_query_normal_executors",
- "tidb_query_normal_expr",
  "tidb_query_shared_expr",
  "tidb_query_vec_aggr",
  "tidb_query_vec_executors",

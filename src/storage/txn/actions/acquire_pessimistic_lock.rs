@@ -433,9 +433,6 @@ pub mod tests {
         must_err(&engine, k, k, 18, 21);
         must_unlocked(&engine, k);
 
-        // Prewrite non-exist pessimistic lock
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 22, 22, true);
-
         // LockTypeNotMatch
         must_prewrite_put(&engine, k, v, k, 23);
         must_locked(&engine, k, 23);
