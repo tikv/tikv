@@ -18,7 +18,6 @@ ALLOWED_CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::blacklisted_name \
 	-A clippy::needless_range_loop \
 	-A clippy::new_ret_no_self \
-	-A clippy::useless_conversion \
 	-A clippy::unnecessary_sort_by)
 
 if [[ "${TIKV_ENABLE_FEATURES}" == *prost-codec* ]] ; then
