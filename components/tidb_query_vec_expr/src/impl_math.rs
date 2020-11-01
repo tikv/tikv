@@ -1445,9 +1445,9 @@ mod tests {
     #[test]
     fn test_round_int() {
         let test_cases = vec![
-            (Some(Int::from(1)), Some(Int::from(1))),
-            (Some(Int::from(i64::MAX)), Some(Int::from(i64::MAX))),
-            (Some(Int::from(i64::MIN)), Some(Int::from(i64::MIN))),
+            (Some(1), Some(1)),
+            (Some(i64::MAX), Some(i64::MAX)),
+            (Some(i64::MIN), Some(i64::MIN)),
             (None, None),
         ];
 
@@ -1504,12 +1504,12 @@ mod tests {
                 .build();
 
             let output = RpnFnScalarEvaluator::new()
-                .push_param(Some(Int::from(lhs)))
+                .push_param(Some(lhs))
                 .push_param_with_field_type(Some(rhs), rhs_field_type)
                 .evaluate::<Int>(ScalarFuncSig::TruncateInt)
                 .unwrap();
 
-            assert_eq!(output, Some(Int::from(expected)));
+            assert_eq!(output, Some(expected));
         }
     }
 
@@ -1556,29 +1556,13 @@ mod tests {
     #[test]
     fn test_round_frac() {
         let int_cases = vec![
-            (Some(Int::from(23)), Some(Int::from(2)), Some(Int::from(23))),
-            (
-                Some(Int::from(23)),
-                Some(Int::from(-1)),
-                Some(Int::from(20)),
-            ),
-            (
-                Some(Int::from(-27)),
-                Some(Int::from(-1)),
-                Some(Int::from(-30)),
-            ),
-            (
-                Some(Int::from(-27)),
-                Some(Int::from(-2)),
-                Some(Int::from(0)),
-            ),
-            (
-                Some(Int::from(-27)),
-                Some(Int::from(-2)),
-                Some(Int::from(0)),
-            ),
-            (None, Some(Int::from(-27)), None),
-            (Some(Int::from(-27)), None, None),
+            (Some(23), Some(2), Some(23)),
+            (Some(23), Some(-1), Some(20)),
+            (Some(-27), Some(-1), Some(-30)),
+            (Some(-27), Some(-2), Some(0)),
+            (Some(-27), Some(-2), Some(0)),
+            (None, Some(-27), None),
+            (Some(-27), None, None),
             (None, None, None),
         ];
 
@@ -1594,21 +1578,21 @@ mod tests {
         let dec_cases = vec![
             (
                 Some(Decimal::from_str("150.000").unwrap()),
-                Some(Int::from(2)),
+                Some(2),
                 Some(Decimal::from_str("150.000").unwrap()),
             ),
             (
                 Some(Decimal::from_str("150.257").unwrap()),
-                Some(Int::from(1)),
+                Some(1),
                 Some(Decimal::from_str("150.3").unwrap()),
             ),
             (
                 Some(Decimal::from_str("153.257").unwrap()),
-                Some(Int::from(-1)),
+                Some(-1),
                 Some(Decimal::from_str("150").unwrap()),
             ),
             (Some(Decimal::from_str("153.257").unwrap()), None, None),
-            (None, Some(Int::from(-27)), None),
+            (None, Some(-27), None),
             (None, None, None),
         ];
 
@@ -1624,26 +1608,26 @@ mod tests {
         let real_cases = vec![
             (
                 Some(Real::from(-1.298_f64)),
-                Some(Int::from(1)),
+                Some(1),
                 Some(Real::from(-1.3_f64)),
             ),
             (
                 Some(Real::from(-1.298_f64)),
-                Some(Int::from(0)),
+                Some(0),
                 Some(Real::from(-1.0_f64)),
             ),
             (
                 Some(Real::from(23.298_f64)),
-                Some(Int::from(2)),
+                Some(2),
                 Some(Real::from(23.30_f64)),
             ),
             (
                 Some(Real::from(23.298_f64)),
-                Some(Int::from(-1)),
+                Some(-1),
                 Some(Real::from(20.0_f64)),
             ),
             (Some(Real::from(23.298_f64)), None, None),
-            (None, Some(Int::from(2)), None),
+            (None, Some(2), None),
             (None, None, None),
         ];
 

@@ -858,7 +858,7 @@ pub mod test_util {
             }
         }
         pub fn build_rollback(&self) -> TxnEntry {
-            let write_key = Key::from_raw(&self.key).append_ts(self.start_ts.into());
+            let write_key = Key::from_raw(&self.key).append_ts(self.start_ts);
             let write_value = Write::new(WriteType::Rollback, self.start_ts, None);
             // For now, rollback is enclosed in Commit.
             TxnEntry::Commit {

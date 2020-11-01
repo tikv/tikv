@@ -187,7 +187,7 @@ fn test_sync_max_ts_after_leader_transfer() {
         let epoch = cluster.get_region_epoch(region_id);
         let mut ctx = Context::default();
         ctx.set_region_id(region_id);
-        ctx.set_peer(leader.clone());
+        ctx.set_peer(leader);
         ctx.set_region_epoch(epoch);
 
         let snapshot = storage.snapshot(&ctx).unwrap();
