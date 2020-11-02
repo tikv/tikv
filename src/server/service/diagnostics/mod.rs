@@ -91,7 +91,7 @@ impl Diagnostics for Service {
                 match stream.await.unwrap() {
                     Ok(s) => {
                         let res = async move {
-                            sink.send_all(&mut s.map(|item| Ok(item))).await?;
+                            sink.send_all(&mut s.map(Ok)).await?;
                             sink.close().await?;
                             GrpcResult::Ok(())
                         }
