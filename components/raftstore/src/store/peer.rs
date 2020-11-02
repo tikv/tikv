@@ -1,21 +1,21 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use std::{borrow::Cow, cell::RefCell};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteOptions};
 use error_code::ErrorCodeExt;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
+use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, LockInfo};
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, RaftCmdRequest,
-    RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
+    self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
+    RaftCmdRequest, RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -23,7 +23,7 @@ use kvproto::raft_serverpb::{
 use kvproto::replication_modepb::{
     DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
 };
-use protobuf::Message;
+use protobuf::{CodedInputStream, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
     self, Changer, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus, StateRole,
@@ -1035,27 +1035,63 @@ where
             // As another role know we're not missing.
             self.leader_missing_time.take();
         }
-        // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
-        // request directly, rather than send a heartbeat to check quorum.
+        // Here we hold up MsgReadIndex.
+        // 1. If it needs the leader to check memory locks, we may modify the message data
+        // to return the lock to the follower or learner.
+        // 2. If current peer has valid lease, then we could handle the request directly,
+        // rather than send a heartbeat to check quorum.
         let msg_type = m.get_msg_type();
-        let committed = self.raft_group.raft.raft_log.committed;
-        let expected_term = self.raft_group.raft.raft_log.term(committed).unwrap_or(0);
-        if msg_type == MessageType::MsgReadIndex && expected_term == self.raft_group.raft.term {
-            // If the leader hasn't committed any entries in its term, it can't response read only
-            // requests. Please also take a look at raft-rs.
-            let state = self.inspect_lease();
-            if let LeaseState::Valid = state {
-                let mut resp = eraftpb::Message::default();
-                resp.set_msg_type(MessageType::MsgReadIndexResp);
-                resp.term = self.term();
-                resp.to = m.from;
-                resp.index = self.get_store().committed_index();
-                resp.set_entries(m.take_entries());
-
-                self.pending_messages.push(resp);
-                return Ok(());
+        if msg_type == MessageType::MsgReadIndex {
+            assert_eq!(m.get_entries().len(), 1);
+            let mut rctx = ReadIndexContext::parse(m.get_entries()[0].get_data()).unwrap();
+            if let Some(request) = rctx.request.take() {
+                let start_ts = request.get_start_ts().into();
+                ctx.concurrency_manager.update_max_ts(start_ts);
+                for range in &request.key_ranges {
+                    let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start_key());
+                    let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end_key());
+                    let res = ctx.concurrency_manager.read_range_check(
+                        start_key.as_ref(),
+                        end_key.as_ref(),
+                        |key, lock| {
+                            txn_types::Lock::check_ts_conflict(
+                                Cow::Borrowed(lock),
+                                key,
+                                start_ts,
+                                &Default::default(),
+                            )
+                        },
+                    );
+                    if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) = res
+                    {
+                        rctx.locked = Some(lock);
+                        break;
+                    }
+                }
+                m.mut_entries()[0].set_data(rctx.to_bytes());
             }
-            self.should_wake_up = state == LeaseState::Expired;
+
+            if rctx.locked.is_none() {
+                let committed = self.raft_group.raft.raft_log.committed;
+                let expected_term = self.raft_group.raft.raft_log.term(committed).unwrap_or(0);
+                if expected_term == self.raft_group.raft.term {
+                    // If the leader hasn't committed any entries in its term, it can't response read only
+                    // requests. Please also take a look at raft-rs.
+                    let state = self.inspect_lease();
+                    if let LeaseState::Valid = state {
+                        let mut resp = eraftpb::Message::default();
+                        resp.set_msg_type(MessageType::MsgReadIndexResp);
+                        resp.term = self.term();
+                        resp.to = m.from;
+                        resp.index = self.get_store().committed_index();
+                        resp.set_entries(m.take_entries());
+
+                        self.pending_messages.push(resp);
+                        return Ok(());
+                    }
+                    self.should_wake_up = state == LeaseState::Expired;
+                }
+            }
         }
         if msg_type == MessageType::MsgTransferLeader {
             self.execute_transfer_leader(ctx, &m);
@@ -1808,8 +1844,21 @@ where
                 continue;
             }
             if req.get_header().get_replica_read() {
-                // We should check epoch since the range could be changed.
-                cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+                // leader reports key is locked
+                if let Some(locked) = read.locked.take() {
+                    let mut response = raft_cmdpb::Response::default();
+                    response.mut_read_index().set_locked(*locked);
+                    let mut cmd_resp = RaftCmdResponse::default();
+                    cmd_resp.mut_responses().push(response);
+                    cb.invoke_read(ReadResponse {
+                        response: cmd_resp,
+                        snapshot: None,
+                        txn_extra_op: TxnExtraOp::Noop,
+                    });
+                } else {
+                    // We should check epoch since the range could be changed.
+                    cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+                }
             } else {
                 // The request could be proposed when the peer was leader.
                 // TODO: figure out that it's necessary to notify stale or not.
@@ -1842,8 +1891,8 @@ where
     fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<EK, ER, T, C>, ready: &Ready) {
         let mut propose_time = None;
         let states = ready.read_states().iter().map(|state| {
-            let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
-            (uuid, state.index)
+            let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
+            (read_index_ctx.id, read_index_ctx.locked, state.index)
         });
         // The follower may lost `ReadIndexResp`, so the pending_reads does not
         // guarantee the orders are consistent with read_states. `advance` will
@@ -2388,7 +2437,7 @@ where
     fn read_index<T: Transport, C>(
         &mut self,
         poll_ctx: &mut PollContext<EK, ER, T, C>,
-        req: RaftCmdRequest,
+        mut req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
         cb: Callback<EK::Snapshot>,
     ) -> bool {
@@ -2469,8 +2518,20 @@ where
         poll_ctx.raft_metrics.propose.read_index += 1;
 
         self.bcast_wake_up_time = None;
+
         let id = Uuid::new_v4();
-        self.raft_group.read_index(id.as_bytes().to_vec());
+        assert_eq!(req.get_requests().len(), 1);
+        let rctx = if req.get_requests()[0].has_read_index() {
+            let read_index_ctx = ReadIndexContext {
+                id,
+                request: Some(req.mut_requests()[0].take_read_index()),
+                locked: None,
+            };
+            read_index_ctx.to_bytes()
+        } else {
+            id.as_bytes().to_vec()
+        };
+        self.raft_group.read_index(rctx);
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
@@ -3481,6 +3542,55 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut resp = RaftCmdResponse::default();
     resp.set_admin_response(response);
     resp
+}
+
+const REQUEST_FLAG: u8 = b'r';
+const LOCKED_FLAG: u8 = b'l';
+
+struct ReadIndexContext {
+    id: Uuid,
+    request: Option<raft_cmdpb::ReadIndexRequest>,
+    locked: Option<LockInfo>,
+}
+
+impl ReadIndexContext {
+    fn parse(bytes: &[u8]) -> Result<ReadIndexContext> {
+        if bytes.len() < 16 {
+            return Err(box_err!("read index context less than 16 bytes"));
+        }
+        let mut res = ReadIndexContext {
+            id: Uuid::from_slice(&bytes[..16]).unwrap(),
+            request: None,
+            locked: None,
+        };
+        let mut bytes = CodedInputStream::from_bytes(&bytes[16..]);
+        while !bytes.eof()? {
+            match bytes.read_raw_byte()? {
+                REQUEST_FLAG => {
+                    res.request = Some(bytes.read_message()?);
+                }
+                LOCKED_FLAG => {
+                    res.locked = Some(bytes.read_message()?);
+                }
+                // just break for forward compatibility
+                _ => break,
+            }
+        }
+        Ok(res)
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut b = self.id.as_bytes().to_vec();
+        if let Some(request) = &self.request {
+            b.push(REQUEST_FLAG);
+            request.write_to_vec(&mut b).unwrap();
+        }
+        if let Some(locked) = &self.locked {
+            b.push(LOCKED_FLAG);
+            locked.write_to_vec(&mut b).unwrap();
+        }
+        b
+    }
 }
 
 /// A poor version of `Peer` to avoid port generic variables everywhere.

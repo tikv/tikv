@@ -1,8 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::result;
+use std::{
+    fmt::{self, Debug, Display, Formatter},
+    mem,
+};
 use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
 
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
@@ -26,6 +29,7 @@ use crate::storage::kv::{
     ErrorInner as KvErrorInner, ExtCallback, Iterator as EngineIterator, Modify, ScanMode,
     SnapContext, Snapshot as EngineSnapshot, WriteData,
 };
+use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
@@ -81,7 +85,10 @@ fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
         KvError(box KvErrorInner::Request(ref header)) => {
             RequestStatusKind::from(storage::get_error_kind_from_header(header))
         }
-
+        KvError(box KvErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(_)))) => {
+            RequestStatusKind::err_leader_memory_lock_check
+        }
+        KvError(box KvErrorInner::Mvcc(_)) => RequestStatusKind::err_other,
         KvError(box KvErrorInner::Timeout(_)) => RequestStatusKind::err_timeout,
         KvError(box KvErrorInner::EmptyRequest) => RequestStatusKind::err_empty_request,
         KvError(box KvErrorInner::Other(_)) => RequestStatusKind::err_other,
@@ -442,19 +449,33 @@ where
         })
     }
 
-    fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> kv::Result<()> {
+    fn async_snapshot(&self, mut ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> kv::Result<()> {
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
+        if !ctx.start_ts.is_zero() {
+            req.mut_read_index().set_start_ts(ctx.start_ts.into_inner());
+            req.mut_read_index()
+                .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
+        }
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
         let begin_instant = Instant::now_coarse();
         self.exec_snapshot(
             ctx,
             req,
             Box::new(move |(cb_ctx, res)| match res {
-                Ok(CmdRes::Resp(r)) => cb((
-                    cb_ctx,
-                    Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()),
-                )),
+                Ok(CmdRes::Resp(mut r)) => {
+                    let e = if r
+                        .get(0)
+                        .map(|resp| resp.get_read_index().has_locked())
+                        .unwrap_or(false)
+                    {
+                        let locked = r[0].take_read_index().take_locked();
+                        MvccError::from(MvccErrorInner::KeyIsLocked(locked)).into()
+                    } else {
+                        invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()
+                    };
+                    cb((cb_ctx, Err(e)))
+                }
                 Ok(CmdRes::Snap(s)) => {
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot

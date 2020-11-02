@@ -5,6 +5,7 @@
 #![feature(shrink_to)]
 #![feature(div_duration)]
 #![feature(min_specialization)]
+#![feature(box_patterns)]
 
 #[macro_use]
 extern crate bitflags;

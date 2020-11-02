@@ -361,6 +361,7 @@ make_auto_flush_static_metric! {
         err_stale_command,
         err_store_not_match,
         err_raft_entry_too_large,
+        err_leader_memory_lock_check,
     }
 
     pub label_enum RequestTypeKind {

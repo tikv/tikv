@@ -1920,7 +1920,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/sticnarf/kvproto.git?branch=raft-check-memory-lock#46f88d9c4e7581507bc768fe15e587de8317371e"
+source = "git+https://github.com/sticnarf/kvproto.git?branch=raft-check-memory-lock#b4e4a5dd9cc15682dc83d21bf39d88aacdb4bee0"
 dependencies = [
  "futures 0.3.5",
  "grpcio",

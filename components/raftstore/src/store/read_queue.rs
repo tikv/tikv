@@ -8,6 +8,7 @@ use crate::store::metrics::*;
 use crate::store::{Callback, Config};
 
 use engine_traits::Snapshot;
+use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -25,6 +26,7 @@ where
     pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)>,
     pub renew_lease_time: Timespec,
     pub read_index: Option<u64>,
+    pub locked: Option<Box<LockInfo>>,
     // `true` means it's in `ReadIndexQueue::reads`.
     in_contexts: bool,
 }
@@ -52,6 +54,7 @@ where
             cmds,
             renew_lease_time,
             read_index: None,
+            locked: None,
             in_contexts: false,
         }
     }
@@ -186,9 +189,9 @@ where
 
     pub fn advance_leader_reads<T>(&mut self, states: T)
     where
-        T: IntoIterator<Item = (Uuid, u64)>,
+        T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64)>,
     {
-        for (uuid, index) in states {
+        for (uuid, _, index) in states {
             assert_eq!(uuid, self.reads[self.ready_cnt].id);
             self.reads[self.ready_cnt].read_index = Some(index);
             self.ready_cnt += 1;
@@ -198,10 +201,10 @@ where
     /// update the read index of the requests that before the specified id.
     pub fn advance_replica_reads<T>(&mut self, states: T)
     where
-        T: IntoIterator<Item = (Uuid, u64)>,
+        T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64)>,
     {
         let (mut min_changed_offset, mut max_changed_offset) = (usize::MAX, 0);
-        for (uuid, index) in states {
+        for (uuid, locked, index) in states {
             if let Some(raw_offset) = self.contexts.remove(&uuid) {
                 let offset = match raw_offset.checked_sub(self.handled_cnt) {
                     Some(offset) => offset,
@@ -222,6 +225,7 @@ where
                     }
                 }
                 self.reads[offset].read_index = Some(index);
+                self.reads[offset].locked = locked.map(Box::new);
                 min_changed_offset = cmp::min(min_changed_offset, offset);
                 max_changed_offset = cmp::max(max_changed_offset, offset);
                 continue;
@@ -316,30 +320,30 @@ mod tests {
             queue.contexts.insert(id, offset);
         }
 
-        queue.advance_replica_reads(Vec::<(Uuid, u64)>::default());
+        queue.advance_replica_reads(Vec::<(Uuid, Option<LockInfo>, u64)>::default());
         assert_eq!(queue.ready_cnt, 0);
 
-        queue.advance_replica_reads(vec![(queue.reads[0].id, 100)]);
+        queue.advance_replica_reads(vec![(queue.reads[0].id, None, 100)]);
         assert_eq!(queue.ready_cnt, 1);
 
-        queue.advance_replica_reads(vec![(queue.reads[1].id, 100)]);
+        queue.advance_replica_reads(vec![(queue.reads[1].id, None, 100)]);
         assert_eq!(queue.ready_cnt, 2);
 
         queue.advance_replica_reads(vec![
-            (queue.reads[80].id, 80),
-            (queue.reads[84].id, 100),
-            (queue.reads[82].id, 70),
-            (queue.reads[78].id, 120),
-            (queue.reads[77].id, 40),
+            (queue.reads[80].id, None, 80),
+            (queue.reads[84].id, None, 100),
+            (queue.reads[82].id, None, 70),
+            (queue.reads[78].id, None, 120),
+            (queue.reads[77].id, None, 40),
         ]);
         assert_eq!(queue.ready_cnt, 85);
 
         queue.advance_replica_reads(vec![
-            (queue.reads[20].id, 80),
-            (queue.reads[24].id, 100),
-            (queue.reads[22].id, 70),
-            (queue.reads[18].id, 120),
-            (queue.reads[17].id, 40),
+            (queue.reads[20].id, None, 80),
+            (queue.reads[24].id, None, 100),
+            (queue.reads[22].id, None, 70),
+            (queue.reads[18].id, None, 120),
+            (queue.reads[17].id, None, 40),
         ]);
         assert_eq!(queue.ready_cnt, 85);
 
@@ -373,7 +377,7 @@ mod tests {
 
         // After the peer becomes leader, `advance` could be called before
         // `clear_uncommitted_on_role_change`.
-        queue.advance_leader_reads(vec![(id, 10)]);
+        queue.advance_leader_reads(vec![(id, None, 10)]);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
@@ -388,14 +392,14 @@ mod tests {
         );
         queue.push_back(req, true);
         let last_id = queue.reads.back().map(|t| t.id).unwrap();
-        queue.advance_leader_reads(vec![(last_id, 10)]);
+        queue.advance_leader_reads(vec![(last_id, None, 10)]);
         assert_eq!(queue.ready_cnt, 1);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
 
         // Shouldn't panic when call `advance_replica_reads` with `id` again.
-        queue.advance_replica_reads(vec![(id, 10)]);
+        queue.advance_replica_reads(vec![(id, None, 10)]);
     }
 
     #[test]
@@ -414,7 +418,7 @@ mod tests {
         queue.push_back(req, true);
 
         // Advance on leader, but the peer is not ready to handle it (e.g. it's in merging).
-        queue.advance_leader_reads(vec![(id, 10)]);
+        queue.advance_leader_reads(vec![(id, None, 10)]);
 
         // The leader steps down to follower, clear uncommitted reads.
         queue.clear_uncommitted_on_role_change(10);
@@ -431,7 +435,7 @@ mod tests {
         queue.push_back(req, true);
 
         // Advance on leader again, shouldn't panic.
-        queue.advance_leader_reads(vec![(id_1, 10)]);
+        queue.advance_leader_reads(vec![(id_1, None, 10)]);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
@@ -454,12 +458,12 @@ mod tests {
             queue.push_back(req, false);
         }
 
-        queue.advance_replica_reads(vec![(ids[1], 100)]);
+        queue.advance_replica_reads(vec![(ids[1], None, 100)]);
         assert_eq!(queue.ready_cnt, 2);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
 
-        queue.advance_replica_reads(vec![(ids[0], 100)]);
+        queue.advance_replica_reads(vec![(ids[0], None, 100)]);
     }
 }
