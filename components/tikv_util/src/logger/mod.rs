@@ -34,9 +34,7 @@ const SLOG_CHANNEL_SIZE: usize = 10240;
 const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Block;
 const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S%.3f %:z";
 
-lazy_static! {
-    static ref LOG_LEVEL: AtomicUsize = AtomicUsize::new(usize::max_value());
-}
+static LOG_LEVEL: AtomicUsize = AtomicUsize::new(usize::max_value());
 
 pub fn init_log<D>(
     drain: D,
