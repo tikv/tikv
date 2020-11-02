@@ -188,7 +188,7 @@ where
         let os_path = tmp_dir.path().join("tikv_dump_profile").into_os_string();
         let path = os_path
             .into_string()
-            .map_err(|path| ProfError::PathEncodingError(path))?;
+            .map_err(ProfError::PathEncodingError)?;
         tikv_alloc::dump_prof(&path)?;
         drop(guard);
         let mut file = tokio::fs::File::open(path).await?;
@@ -693,13 +693,11 @@ where
                             _ => true,
                         };
 
-                        if should_check_cert {
-                            if !check_cert(security_config, x509) {
-                                return Ok(StatusServer::err_response(
-                                    StatusCode::FORBIDDEN,
-                                    "certificate role error",
-                                ));
-                            }
+                        if should_check_cert && !check_cert(security_config, x509) {
+                            return Ok(StatusServer::err_response(
+                                StatusCode::FORBIDDEN,
+                                "certificate role error",
+                            ));
                         }
 
                         match (method, path.as_ref()) {
