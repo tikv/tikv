@@ -289,17 +289,27 @@ impl Snapshot for RocksSnapshot {
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get"; "key" => %key);
-        let v = box_try!(self.get_value(key.as_encoded()));
+        let v = self.get_value(key.as_encoded())?;
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
-        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        let v = self.get_value_cf(cf, key.as_encoded())?;
         Ok(v.map(|v| v.to_vec()))
     }
 
+<<<<<<< HEAD
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
+=======
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>> {
+        trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
+        let v = self.get_value_cf_opt(&opts, cf, key.as_encoded())?;
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
+>>>>>>> eecd3906c... txn: check data constraint after lock (#8921)
         trace!("RocksSnapshot: create iterator");
         let iter = self.db_iterator(iter_opt);
         Ok(Cursor::new(iter, mode))
