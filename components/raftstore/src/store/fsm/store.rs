@@ -1652,16 +1652,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         msg: &RaftMessage,
         is_local_first: bool,
     ) -> Result<bool> {
-        if is_local_first {
-            if self
+        if is_local_first
+            && self
                 .ctx
                 .engines
                 .kv
                 .get_value_cf(CF_RAFT, &keys::region_state_key(region_id))?
                 .is_some()
-            {
-                return Ok(false);
-            }
+        {
+            return Ok(false);
         }
 
         let target = msg.get_to_peer();

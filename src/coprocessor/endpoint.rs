@@ -19,6 +19,7 @@ use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest,
 
 use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
+use crate::storage::kv::PerfStatisticsInstant;
 use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
@@ -463,7 +464,7 @@ impl<E: Engine> Endpoint<E> {
         async move {
             let mut resp = match result_of_future {
                 Err(e) => make_error_response(e),
-                Ok(handle_fut) => handle_fut.await.unwrap_or_else(|e| make_error_response(e)),
+                Ok(handle_fut) => handle_fut.await.unwrap_or_else(make_error_response),
             };
             if let Some(collector) = collector {
                 let span_sets = collector.collect();
@@ -510,13 +511,20 @@ impl<E: Engine> Endpoint<E> {
             tracker.on_begin_all_items();
 
             loop {
-                tracker.on_begin_item();
+                let result = {
+                    tracker.on_begin_item();
+                    let perf_statistics_instant = PerfStatisticsInstant::new();
 
-                let result = handler.handle_streaming_request();
-                let mut storage_stats = Statistics::default();
-                handler.collect_scan_statistics(&mut storage_stats);
+                    let result = handler.handle_streaming_request();
 
-                tracker.on_finish_item(Some(storage_stats));
+                    let mut storage_stats = Statistics::default();
+                    handler.collect_scan_statistics(&mut storage_stats);
+                    let perf_statistics = perf_statistics_instant.delta();
+                    tracker.on_finish_item(Some(storage_stats), perf_statistics);
+
+                    result
+                };
+
                 let exec_details = tracker.get_item_exec_details();
 
                 match result {
@@ -1020,8 +1028,8 @@ mod tests {
         .collect::<Result<Vec<_>>>()
         .unwrap();
         assert_eq!(resp_vec.len(), 6);
-        for i in 0..5 {
-            assert_eq!(resp_vec[i].get_data(), [1, 2, i as u8]);
+        for (i, resp) in resp_vec.iter().enumerate().take(5) {
+            assert_eq!(resp.get_data(), [1, 2, i as u8]);
         }
         assert_eq!(resp_vec[5].get_data().len(), 0);
         assert!(!resp_vec[5].get_other_error().is_empty());

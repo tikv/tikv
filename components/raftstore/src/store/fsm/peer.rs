@@ -375,6 +375,25 @@ where
                     }
                 }))
             };
+            let committed_cbs: Vec<_> = cbs
+                .iter_mut()
+                .filter_map(|cb| {
+                    if let Callback::Write { committed_cb, .. } = &mut cb.0 {
+                        committed_cb.take()
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let committed_cb: Option<ExtCallback> = if committed_cbs.is_empty() {
+                None
+            } else {
+                Some(Box::new(move || {
+                    for committed_cb in committed_cbs {
+                        committed_cb();
+                    }
+                }))
+            };
             let cb = Callback::write_ext(
                 Box::new(move |resp| {
                     let mut last_index = 0;
@@ -393,6 +412,7 @@ where
                     }
                 }),
                 proposed_cb,
+                committed_cb,
             );
             return Some(RaftCommand::new(req, cb));
         }
@@ -528,14 +548,9 @@ where
                 region_epoch,
                 split_keys,
                 callback,
+                source,
             } => {
-                info!(
-                    "on split";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "split_keys" => %KeysInfoFormatter(split_keys.iter()),
-                );
-                self.on_prepare_split_region(region_epoch, split_keys, callback);
+                self.on_prepare_split_region(region_epoch, split_keys, callback, &source);
             }
             CasualMessage::ComputeHashResult {
                 index,
@@ -556,8 +571,9 @@ where
             CasualMessage::HalfSplitRegion {
                 region_epoch,
                 policy,
+                source,
             } => {
-                self.on_schedule_half_split_region(&region_epoch, policy);
+                self.on_schedule_half_split_region(&region_epoch, policy, source);
             }
             CasualMessage::GcSnap { snaps } => {
                 self.on_gc_snap(snaps);
@@ -3388,7 +3404,15 @@ where
         region_epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
         cb: Callback<EK::Snapshot>,
+        source: &str,
     ) {
+        info!(
+            "on split";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "split_keys" => %KeysInfoFormatter(split_keys.iter()),
+            "source" => source,
+        );
         if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
             cb.invoke_with_response(new_error(e));
             return;
@@ -3507,7 +3531,15 @@ where
         &mut self,
         region_epoch: &metapb::RegionEpoch,
         policy: CheckPolicy,
+        source: &str,
     ) {
+        info!(
+            "on half split";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "policy" => ?policy,
+            "source" => source,
+        );
         if !self.fsm.peer.is_leader() {
             // region on this store is no longer leader, skipped.
             warn!(
@@ -4026,6 +4058,7 @@ mod tests {
         req.mut_requests().push(q);
         let mut cbs_flags = vec![];
         let mut proposed_cbs_flags = vec![];
+        let mut committed_cbs_flags = vec![];
         let mut response = RaftCmdResponse::default();
         for i in 0..10 {
             let flag = Arc::new(AtomicBool::new(false));
@@ -4040,11 +4073,21 @@ mod tests {
             } else {
                 None
             };
+            let committed_cb: Option<ExtCallback> = if i % 3 == 0 {
+                let committed_flag = Arc::new(AtomicBool::new(false));
+                committed_cbs_flags.push(committed_flag.clone());
+                Some(Box::new(move || {
+                    committed_flag.store(true, Ordering::Release);
+                }))
+            } else {
+                None
+            };
             let cb = Callback::write_ext(
                 Box::new(move |_resp| {
                     flag.store(true, Ordering::Release);
                 }),
                 proposed_cb,
+                committed_cb,
             );
             response.mut_responses().push(Response::default());
             let cmd = RaftCommand::new(req.clone(), cb);
@@ -4053,6 +4096,10 @@ mod tests {
         let mut cmd = builder.build(&mut metric).unwrap();
         cmd.callback.invoke_proposed();
         for flag in proposed_cbs_flags {
+            assert!(flag.load(Ordering::Acquire));
+        }
+        cmd.callback.invoke_committed();
+        for flag in committed_cbs_flags {
             assert!(flag.load(Ordering::Acquire));
         }
         assert_eq!(10, cmd.request.get_requests().len());

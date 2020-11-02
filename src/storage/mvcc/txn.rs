@@ -108,6 +108,10 @@ pub struct MvccTxn<S: Snapshot> {
     pub(crate) start_ts: TimeStamp,
     write_size: usize,
     writes: WriteData,
+    // When 1PC is enabled, locks will be collected here instead of marshalled and put into `writes`,
+    // so it can be further processed. The elements are tuples representing
+    // (key, lock, remove_pessimistic_lock)
+    pub(crate) locks_for_1pc: Vec<(Key, Lock, bool)>,
     // collapse continuous rollbacks.
     pub(crate) collapse_rollback: bool,
     pub extra_op: ExtraOp,
@@ -171,6 +175,7 @@ impl<S: Snapshot> MvccTxn<S> {
             start_ts,
             write_size: 0,
             writes: WriteData::default(),
+            locks_for_1pc: Vec::new(),
             collapse_rollback: true,
             extra_op: ExtraOp::Noop,
             concurrency_manager,
@@ -187,6 +192,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn into_modifies(self) -> Vec<Modify> {
+        assert!(self.locks_for_1pc.is_empty());
         self.writes.modifies
     }
 
@@ -212,6 +218,10 @@ impl<S: Snapshot> MvccTxn<S> {
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
         self.writes.modifies.push(write);
+    }
+
+    pub(crate) fn put_locks_for_1pc(&mut self, key: Key, lock: Lock, remove_pessimstic_lock: bool) {
+        self.locks_for_1pc.push((key, lock, remove_pessimstic_lock));
     }
 
     pub(crate) fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
@@ -346,11 +356,10 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
-    // Pessimistic transactions only acquire pessimistic locks on row keys.
-    // The corresponding index keys are not locked until pessimistic prewrite.
+    // Pessimistic transactions only acquire pessimistic locks on row keys and unique index keys.
+    // The corresponding secondary index keys are not locked until pessimistic prewrite.
     // It's possible that lock conflict occurs on them, but the isolation is
-    // guaranteed by pessimistic locks on row keys, so let TiDB resolves these
-    // locks immediately.
+    // guaranteed by pessimistic locks, so let TiDB resolves these locks immediately.
     pub(crate) fn handle_non_pessimistic_lock_conflict(&self, key: Key, lock: Lock) -> Result<()> {
         // The previous pessimistic transaction has been committed or aborted.
         // Resolve it immediately.
@@ -365,24 +374,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
     // TiKV may fails to write pessimistic locks due to pipelined process.
     // If the data is not changed after acquiring the lock, we can still prewrite the key.
-    pub(crate) fn amend_pessimistic_lock(
-        &mut self,
-        pipelined_pessimistic_lock: bool,
-        key: &Key,
-    ) -> Result<()> {
-        if !pipelined_pessimistic_lock {
-            // Pessimistic lock does not exist, the transaction should be aborted.
-            warn!(
-                "prewrite failed (pessimistic lock not found)";
-                "start_ts" => self.start_ts,
-                "key" => %key
-            );
-            return Err(ErrorInner::PessimisticLockNotFound {
-                start_ts: self.start_ts,
-                key: key.clone().into_raw()?,
-            }
-            .into());
-        }
+    pub(crate) fn amend_pessimistic_lock(&mut self, key: &Key) -> Result<()> {
         if let Some((commit_ts, _)) = self.reader.seek_write(key, TimeStamp::max())? {
             // The invariants of pessimistic locks are:
             //   1. lock's for_update_ts >= key's latest commit_ts
@@ -862,10 +854,20 @@ mod tests {
         must_commit(&engine, k1, 1, 2);
 
         // "k1" already exist, returns AlreadyExist error.
-        assert!(try_prewrite_insert(&engine, k1, v2, k1, 3).is_err());
+        assert!(matches!(
+            try_prewrite_insert(&engine, k1, v2, k1, 3),
+            Err(Error(box ErrorInner::AlreadyExist { .. }))
+        ));
 
         // Delete "k1"
         must_prewrite_delete(&engine, k1, k1, 4);
+
+        // There is a lock, returns KeyIsLocked error.
+        assert!(matches!(
+            try_prewrite_insert(&engine, k1, v2, k1, 6),
+            Err(Error(box ErrorInner::KeyIsLocked(_)))
+        ));
+
         must_commit(&engine, k1, 4, 5);
 
         // After delete "k1", insert returns ok.
@@ -876,7 +878,10 @@ mod tests {
         must_prewrite_put(&engine, k1, v3, k1, 8);
         must_rollback(&engine, k1, 8);
 
-        assert!(try_prewrite_insert(&engine, k1, v3, k1, 9).is_err());
+        assert!(matches!(
+            try_prewrite_insert(&engine, k1, v3, k1, 9),
+            Err(Error(box ErrorInner::AlreadyExist { .. }))
+        ));
 
         // Delete "k1" again
         must_prewrite_delete(&engine, k1, k1, 10);
@@ -1311,6 +1316,7 @@ mod tests {
             0,
             TimeStamp::default(),
             TimeStamp::default(),
+            false,
         )
         .unwrap();
         assert!(txn.write_size() > 0);
@@ -1357,6 +1363,7 @@ mod tests {
             0,
             TimeStamp::default(),
             TimeStamp::default(),
+            false
         )
         .is_err());
 
@@ -1373,6 +1380,7 @@ mod tests {
             0,
             TimeStamp::default(),
             TimeStamp::default(),
+            false
         )
         .is_ok());
     }
@@ -1590,7 +1598,6 @@ mod tests {
                     expected_lock_info.get_txn_size(),
                     TimeStamp::zero(),
                     TimeStamp::zero(),
-                    false,
                 );
             } else {
                 expected_lock_info.set_lock_type(Op::PessimisticLock);
@@ -1721,33 +1728,30 @@ mod tests {
 
         // Key not exist; should succeed.
         fail_to_write_pessimistic_lock(&engine, k, 10, 10);
-        must_pipelined_pessimistic_prewrite_put(&engine, k, &v, k, 10, 10, true);
+        must_pessimistic_prewrite_put(&engine, k, &v, k, 10, 10, true);
         must_commit(&engine, k, 10, 20);
         must_get(&engine, k, 20, &v);
 
         // for_update_ts(30) >= start_ts(30) > commit_ts(20); should succeed.
         v.push(0);
         fail_to_write_pessimistic_lock(&engine, k, 30, 30);
-        must_pipelined_pessimistic_prewrite_put(&engine, k, &v, k, 30, 30, true);
+        must_pessimistic_prewrite_put(&engine, k, &v, k, 30, 30, true);
         must_commit(&engine, k, 30, 40);
         must_get(&engine, k, 40, &v);
 
         // for_update_ts(40) >= commit_ts(40) > start_ts(35); should fail.
         fail_to_write_pessimistic_lock(&engine, k, 35, 40);
-        must_pipelined_pessimistic_prewrite_put_err(&engine, k, &v, k, 35, 40, true);
+        must_pessimistic_prewrite_put_err(&engine, k, &v, k, 35, 40, true);
 
         // KeyIsLocked; should fail.
         must_acquire_pessimistic_lock(&engine, k, k, 50, 50);
-        must_pipelined_pessimistic_prewrite_put_err(&engine, k, &v, k, 60, 60, true);
+        must_pessimistic_prewrite_put_err(&engine, k, &v, k, 60, 60, true);
         pessimistic_rollback::tests::must_success(&engine, k, 50, 50);
-
-        // Pessimistic lock not exist and not pipelined; should fail.
-        must_pessimistic_prewrite_put_err(&engine, k, &v, k, 70, 70, true);
 
         // The txn has been rolled back; should fail.
         must_acquire_pessimistic_lock(&engine, k, k, 80, 80);
         must_cleanup(&engine, k, 80, TimeStamp::max());
-        must_pipelined_pessimistic_prewrite_put_err(&engine, k, &v, k, 80, 80, true);
+        must_pessimistic_prewrite_put_err(&engine, k, &v, k, 80, 80, true);
     }
 
     #[test]
@@ -1869,6 +1873,7 @@ mod tests {
                     0,
                     TimeStamp::default(),
                     TimeStamp::default(),
+                    false,
                 )
                 .unwrap();
             }
@@ -1914,6 +1919,7 @@ mod tests {
                 4,
                 TimeStamp::zero(),
                 TimeStamp::zero(),
+                false,
             )
             .unwrap();
             let modifies = txn.into_modifies();

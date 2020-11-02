@@ -69,7 +69,7 @@ impl Backup for Service {
         .map(|res: Result<()>| {
             match res {
                 Ok(_) => {
-                    info!("backup send half closed");
+                    info!("backup closed");
                 }
                 Err(e) => {
                     if let Some(c) = cancel {
