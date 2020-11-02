@@ -432,7 +432,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ) = match req_snap {
                             Ok(req_snap) => req_snap,
                             Err(e) => {
-                                results.push(Err(e.into()));
+                                results.push(Err(e));
                                 continue;
                             }
                         };
@@ -2722,7 +2722,7 @@ mod tests {
         )));
         storage
             .sched_txn_command::<()>(
-                commands::Pause::new(vec![Key::from_raw(b"x")], 1000, Context::default()).into(),
+                commands::Pause::new(vec![Key::from_raw(b"x")], 1000, Context::default()),
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
