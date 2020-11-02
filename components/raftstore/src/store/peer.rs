@@ -2518,18 +2518,17 @@ where
         self.bcast_wake_up_time = None;
 
         let id = Uuid::new_v4();
-        assert_eq!(req.get_requests().len(), 1);
-        let rctx = if req.get_requests()[0].has_read_index() {
-            let read_index_ctx = ReadIndexContext {
-                id,
-                request: Some(req.mut_requests()[0].take_read_index()),
-                locked: None,
-            };
-            read_index_ctx.to_bytes()
-        } else {
-            id.as_bytes().to_vec()
+        let mut read_index_ctx = ReadIndexContext {
+            id,
+            request: None,
+            locked: None,
         };
-        self.raft_group.read_index(rctx);
+        if let Some(req) = req.mut_requests().get_mut(0) {
+            if req.has_read_index() {
+                read_index_ctx.request = Some(req.take_read_index());
+            }
+        }
+        self.raft_group.read_index(read_index_ctx.to_bytes());
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
