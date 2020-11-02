@@ -235,7 +235,6 @@ impl<E: Engine> Endpoint<E> {
 
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 builder = Box::new(move |snap, req_ctx| {
-                    // TODO: Remove explicit type once rust-lang#41078 is resolved
                     let data_version = snap.get_data_version();
                     let store = SnapshotStore::new(
                         snap,
@@ -285,7 +284,6 @@ impl<E: Engine> Endpoint<E> {
                 self.check_memory_locks(&req_ctx)?;
 
                 builder = Box::new(move |snap, req_ctx| {
-                    // TODO: Remove explicit type once rust-lang#41078 is resolved
                     statistics::analyze::AnalyzeContext::new(
                         analyze,
                         req_ctx.ranges.clone(),
@@ -323,7 +321,6 @@ impl<E: Engine> Endpoint<E> {
                 self.check_memory_locks(&req_ctx)?;
 
                 builder = Box::new(move |snap, req_ctx| {
-                    // TODO: Remove explicit type once rust-lang#41078 is resolved
                     checksum::ChecksumContext::new(
                         checksum,
                         req_ctx.ranges.clone(),
