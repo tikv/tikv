@@ -368,10 +368,8 @@ pub fn has_data_in_range<S: Snapshot>(
     let mut iter = snapshot.iter_cf(cf, iter_opt, ScanMode::Forward)?;
     match iter.seek(left, statistic) {
         Ok(valid) => {
-            if valid {
-                if iter.key(statistic) < right.as_encoded().as_slice() {
-                    return Ok(true);
-                }
+            if valid && iter.key(statistic) < right.as_encoded().as_slice() {
+                return Ok(true);
             }
         }
         Err(e)
