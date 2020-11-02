@@ -299,11 +299,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             };
             (pr, WriteData::default(), 0, self.ctx, None, vec![])
         };
-        let response_policy = if !async_commit_ts.is_zero() && context.async_apply_prewrite {
-            ResponsePolicy::OnCommitted
-        } else {
-            ResponsePolicy::OnApplied
-        };
+        // Currently if `try_one_pc` is set, it must have succeeded here.
+        let response_policy =
+            if (!async_commit_ts.is_zero() || self.try_one_pc) && context.async_apply_prewrite {
+                ResponsePolicy::OnCommitted
+            } else {
+                ResponsePolicy::OnApplied
+            };
         Ok(WriteResult {
             ctx,
             to_be_write,

@@ -311,8 +311,8 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
                 .threaded_scheduler()
                 .thread_name(thd_name!("snap-sender"))
                 .core_threads(DEFAULT_POOL_SIZE)
-                .on_thread_start(|| tikv_alloc::add_thread_memory_accessor())
-                .on_thread_stop(|| tikv_alloc::remove_thread_memory_accessor())
+                .on_thread_start(tikv_alloc::add_thread_memory_accessor)
+                .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
             raft_router: r,

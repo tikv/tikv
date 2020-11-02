@@ -51,7 +51,7 @@ impl<E: KvEngine> ConsistencyCheckObserver<E> for Raw<E> {
         }
         assert_eq!(context[0], ConsistencyCheckMethod::Raw as u8);
         *context = &context[1..];
-        compute_hash_on_raw(region, snap).map(|sum| Some(sum))
+        compute_hash_on_raw(region, snap).map(Some)
     }
 }
 

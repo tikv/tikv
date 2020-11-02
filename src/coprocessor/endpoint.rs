@@ -21,7 +21,7 @@ use crate::server::Config;
 use crate::storage::kv::PerfStatisticsInstant;
 use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::mvcc::Error as MvccError;
-use crate::storage::{self, Engine, Snapshot, SnapshotStore};
+use crate::storage::{self, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore};
 use crate::{read_pool::ReadPoolHandle, storage::kv::SnapContext};
 
 use crate::coprocessor::cache::CachedRequestHandler;
@@ -359,8 +359,7 @@ impl<E: Engine> Endpoint<E> {
             ..Default::default()
         };
         // need to pass start_ts and ranges to check memory locks for replica read
-        if ctx.context.get_replica_read() && ctx.context.get_isolation_level() == IsolationLevel::Si
-        {
+        if need_check_locks_in_replica_read(&ctx.context) {
             snap_ctx.start_ts = ctx.txn_start_ts;
             for r in &ctx.ranges {
                 let start_key = txn_types::Key::from_raw(r.get_start());
@@ -488,7 +487,7 @@ impl<E: Engine> Endpoint<E> {
         async move {
             let mut resp = match result_of_future {
                 Err(e) => make_error_response(e),
-                Ok(handle_fut) => handle_fut.await.unwrap_or_else(|e| make_error_response(e)),
+                Ok(handle_fut) => handle_fut.await.unwrap_or_else(make_error_response),
             };
             if let Some(collector) = collector {
                 let span_sets = collector.collect();
@@ -1052,8 +1051,8 @@ mod tests {
         .collect::<Result<Vec<_>>>()
         .unwrap();
         assert_eq!(resp_vec.len(), 6);
-        for i in 0..5 {
-            assert_eq!(resp_vec[i].get_data(), [1, 2, i as u8]);
+        for (i, resp) in resp_vec.iter().enumerate().take(5) {
+            assert_eq!(resp.get_data(), [1, 2, i as u8]);
         }
         assert_eq!(resp_vec[5].get_data().len(), 0);
         assert!(!resp_vec[5].get_other_error().is_empty());
