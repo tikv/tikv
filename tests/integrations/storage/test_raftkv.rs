@@ -274,14 +274,6 @@ fn test_read_on_replica_check_memory_locks() {
         }
         other => panic!("unexpected result: {:?}", other),
     }
-
-    // cluster.stop_node(follower_id);
-    // must_put(&leader_ctx, &leader_storage, k4, v4);
-    // cluster.run_node(follower_id).unwrap();
-    // let follower_storage = cluster.sim.rl().storages[&follower_id].clone();
-    // // sleep to ensure the follower has received a heartbeat from the leader
-    // thread::sleep(time::Duration::from_millis(300));
-    // assert_has(follower_snap_ctx, &follower_storage, k4, v4);
 }
 
 #[test]
