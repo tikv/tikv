@@ -23,7 +23,7 @@ use kvproto::raft_serverpb::{
 use kvproto::replication_modepb::{
     DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
 };
-use protobuf::{CodedInputStream, Message};
+use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
     self, Changer, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus, StateRole,
@@ -42,6 +42,7 @@ use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask}
 use crate::store::{Callback, Config, GlobalReplicationState, PdTask, ReadResponse};
 use crate::{Error, Result};
 use pd_client::INVALID_ID;
+use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
@@ -1042,12 +1043,19 @@ where
         if msg_type == MessageType::MsgReadIndex {
             assert_eq!(m.get_entries().len(), 1);
             let mut rctx = ReadIndexContext::parse(m.get_entries()[0].get_data()).unwrap();
-            if let Some(request) = rctx.request.take() {
+            if let Some(mut request) = rctx.request.take() {
                 let start_ts = request.get_start_ts().into();
                 ctx.concurrency_manager.update_max_ts(start_ts);
-                for range in &request.key_ranges {
-                    let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start_key());
-                    let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end_key());
+                for range in request.mut_key_ranges().iter_mut() {
+                    let key_bound = |key: Vec<u8>| {
+                        if key.is_empty() {
+                            None
+                        } else {
+                            Some(txn_types::Key::from_encoded(key))
+                        }
+                    };
+                    let start_key = key_bound(range.take_start_key());
+                    let end_key = key_bound(range.take_end_key());
                     let res = ctx.concurrency_manager.read_range_check(
                         start_key.as_ref(),
                         end_key.as_ref(),
@@ -3544,6 +3552,7 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
 const REQUEST_FLAG: u8 = b'r';
 const LOCKED_FLAG: u8 = b'l';
 
+#[derive(Debug, Clone, PartialEq)]
 struct ReadIndexContext {
     id: Uuid,
     request: Option<raft_cmdpb::ReadIndexRequest>,
@@ -3552,6 +3561,8 @@ struct ReadIndexContext {
 
 impl ReadIndexContext {
     fn parse(bytes: &[u8]) -> Result<ReadIndexContext> {
+        use tikv_util::codec::number::*;
+
         if bytes.len() < 16 {
             return Err(box_err!("read index context less than 16 bytes"));
         }
@@ -3560,14 +3571,22 @@ impl ReadIndexContext {
             request: None,
             locked: None,
         };
-        let mut bytes = CodedInputStream::from_bytes(&bytes[16..]);
-        while !bytes.eof()? {
-            match bytes.read_raw_byte()? {
+        let mut bytes = &bytes[16..];
+        while !bytes.is_empty() {
+            match read_u8(&mut bytes).unwrap() {
                 REQUEST_FLAG => {
-                    res.request = Some(bytes.read_message()?);
+                    let len = decode_var_u64(&mut bytes)? as usize;
+                    let mut request = raft_cmdpb::ReadIndexRequest::default();
+                    request.merge_from_bytes(&bytes[..len])?;
+                    bytes = &bytes[len..];
+                    res.request = Some(request);
                 }
                 LOCKED_FLAG => {
-                    res.locked = Some(bytes.read_message()?);
+                    let len = decode_var_u64(&mut bytes)? as usize;
+                    let mut locked = LockInfo::default();
+                    locked.merge_from_bytes(&bytes[..len])?;
+                    bytes = &bytes[len..];
+                    res.locked = Some(locked);
                 }
                 // just break for forward compatibility
                 _ => break,
@@ -3577,16 +3596,60 @@ impl ReadIndexContext {
     }
 
     fn to_bytes(&self) -> Vec<u8> {
-        let mut b = self.id.as_bytes().to_vec();
+        let request_size = self.request.as_ref().map(Message::compute_size);
+        let locked_size = self.locked.as_ref().map(Message::compute_size);
+        let field_size = |s: Option<u32>| s.map(|s| 1 + MAX_VAR_U64_LEN + s as usize).unwrap_or(0);
+        let cap = 16 + field_size(request_size) + field_size(locked_size);
+        let mut b = Vec::with_capacity(cap);
+        b.extend_from_slice(self.id.as_bytes());
         if let Some(request) = &self.request {
             b.push(REQUEST_FLAG);
+            b.encode_var_u64(request_size.unwrap() as u64).unwrap();
             request.write_to_vec(&mut b).unwrap();
         }
         if let Some(locked) = &self.locked {
             b.push(LOCKED_FLAG);
+            b.encode_var_u64(locked_size.unwrap() as u64).unwrap();
             locked.write_to_vec(&mut b).unwrap();
         }
         b
+    }
+}
+
+#[cfg(test)]
+mod read_index_ctx_tests {
+    use super::*;
+
+    // Test backward compatibility
+    #[test]
+    fn test_single_uuid() {
+        let id = Uuid::new_v4();
+        let ctx = ReadIndexContext::parse(id.as_bytes()).unwrap();
+        assert_eq!(
+            ctx,
+            ReadIndexContext {
+                id,
+                request: None,
+                locked: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_serde_request() {
+        let id = Uuid::new_v4();
+        let mut request = raft_cmdpb::ReadIndexRequest::default();
+        request.set_start_ts(10);
+        let mut locked = LockInfo::default();
+        locked.set_lock_version(5);
+        let ctx = ReadIndexContext {
+            id,
+            request: Some(request),
+            locked: Some(locked),
+        };
+        let bytes = ctx.to_bytes();
+        let parsed_ctx = ReadIndexContext::parse(&bytes).unwrap();
+        assert_eq!(ctx, parsed_ctx);
     }
 }
 

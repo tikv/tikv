@@ -169,8 +169,8 @@ fn on_read_result(
         return (cb_ctx, Err(e));
     }
     let resps = read_resp.response.take_responses();
-    if !resps.is_empty() || resps[0].get_cmd_type() == CmdType::Snap {
-        (cb_ctx, Ok(CmdRes::Snap(read_resp.snapshot.unwrap())))
+    if let Some(snapshot) = read_resp.snapshot {
+        (cb_ctx, Ok(CmdRes::Snap(snapshot)))
     } else {
         (cb_ctx, Ok(CmdRes::Resp(resps.into())))
     }
