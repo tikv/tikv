@@ -353,6 +353,7 @@ mod tests {
         for _ in 0..10 {
             invalid_cfg.validate().unwrap();
         }
+        assert!(invalid_cfg.advertise_status_addr.is_empty());
         invalid_cfg.advertise_status_addr = "0.0.0.0:1000".to_owned();
         assert!(invalid_cfg.validate().is_err());
 
