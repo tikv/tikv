@@ -123,7 +123,7 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
             ));
         }
         let key = String::from_utf8(key.unwrap().to_owned())
-            .map_err(|e| tidb_query_datatype::codec::Error::from(e))?;
+            .map_err(tidb_query_datatype::codec::Error::from)?;
 
         let value: Option<JsonRef> = chunk[1].as_json();
         let value = match value {
@@ -174,8 +174,8 @@ fn json_with_paths_validator(expr: &tipb::Expr) -> Result<()> {
 fn valid_paths(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
     super::function::validate_expr_return_type(&children[0], EvalType::Json)?;
-    for i in 1..children.len() {
-        super::function::validate_expr_return_type(&children[i], EvalType::Bytes)?;
+    for child in children.iter().skip(1) {
+        super::function::validate_expr_return_type(&child, EvalType::Bytes)?;
     }
     Ok(())
 }
@@ -340,7 +340,7 @@ mod tests {
 
         for (arg, expect_output) in cases {
             let arg = arg.map(|input| Json::from_str(input).unwrap());
-            let expect_output = expect_output.map(|s| Bytes::from(s));
+            let expect_output = expect_output.map(Bytes::from);
 
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg.clone())
@@ -723,22 +723,22 @@ mod tests {
             // Tests without path expression
             (
                 vec![Some(Json::from_str(r#"{}"#).unwrap()).into()],
-                Some(Json::from_str("[]").unwrap()).into(),
+                Some(Json::from_str("[]").unwrap()),
                 true,
             ),
             (
                 vec![Some(Json::from_str(r#"{"a": 1}"#).unwrap()).into()],
-                Some(Json::from_str(r#"["a"]"#).unwrap()).into(),
+                Some(Json::from_str(r#"["a"]"#).unwrap()),
                 true,
             ),
             (
                 vec![Some(Json::from_str(r#"{"a": 1, "b": 2}"#).unwrap()).into()],
-                Some(Json::from_str(r#"["a", "b"]"#).unwrap()).into(),
+                Some(Json::from_str(r#"["a", "b"]"#).unwrap()),
                 true,
             ),
             (
                 vec![Some(Json::from_str(r#"{"a": {"c": 3}, "b": 2}"#).unwrap()).into()],
-                Some(Json::from_str(r#"["a", "b"]"#).unwrap()).into(),
+                Some(Json::from_str(r#"["a", "b"]"#).unwrap()),
                 true,
             ),
             // Tests with path expression
@@ -755,7 +755,7 @@ mod tests {
                     Some(Json::from_str(r#"{"a": {"c": 3}, "b": 2}"#).unwrap()).into(),
                     Some(b"$.a".to_vec()).into(),
                 ],
-                Some(Json::from_str(r#"["c"]"#).unwrap()).into(),
+                Some(Json::from_str(r#"["c"]"#).unwrap()),
                 true,
             ),
             (

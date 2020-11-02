@@ -28,6 +28,10 @@ Each RocksDB instance and column family is configurable. Below explains the deta
 
 - The maximum number of concurrent background jobs (compactions and flushes)
 
+#### max-background-flushes
+
+- The maximum number of concurrent background memtable flush jobs
+
 #### max-sub-compactions
 
 - The maximum number of threads that will concurrently perform a compaction job by breaking the job into multiple smaller ones that run simultaneously

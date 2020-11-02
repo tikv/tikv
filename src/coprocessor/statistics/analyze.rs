@@ -232,7 +232,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
             ranges,
-            req.take_primary_column_ids().into(),
+            req.take_primary_column_ids(),
             false,
             false, // Streaming mode is not supported in Analyze request, always false here
         )?;
