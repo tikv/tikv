@@ -22,13 +22,8 @@ pub mod sys_quota {
         }
 
         pub fn cpu_cores_quota(&self) -> f64 {
-<<<<<<< HEAD
             let cpu_num = sysinfo::get_logical_cores() as f64;
-            match self.cgroup.cpu_cores_quota() {
-=======
-            let cpu_num = num_cpus::get() as f64;
             let quota = match self.cgroup.cpu_cores_quota() {
->>>>>>> fced8bc46... *: update yatp to reduce allocations in the multilevel mode and enable it for storage by default (#8008)
                 Some(cgroup_quota) if cgroup_quota > 0.0 && cgroup_quota < cpu_num => cgroup_quota,
                 _ => cpu_num,
             };
@@ -61,10 +56,7 @@ pub mod sys_quota {
 #[cfg(not(target_os = "linux"))]
 pub mod sys_quota {
     use super::super::config::KB;
-<<<<<<< HEAD
-=======
-    use super::{env_var_cpu_cores_quota, SystemExt, SYS_INFO};
->>>>>>> fced8bc46... *: update yatp to reduce allocations in the multilevel mode and enable it for storage by default (#8008)
+    use super::{SystemExt, SYS_INFO};
 
     pub struct SysQuota {}
 
@@ -74,12 +66,8 @@ pub mod sys_quota {
         }
 
         pub fn cpu_cores_quota(&self) -> f64 {
-<<<<<<< HEAD
-            sysinfo::get_logical_cores() as f64
-=======
-            let cpu_num = num_cpus::get() as f64;
+            let cpu_num = sysinfo::get_logical_cores() as f64;
             super::limit_cpu_cores_quota_by_env_var(cpu_num)
->>>>>>> fced8bc46... *: update yatp to reduce allocations in the multilevel mode and enable it for storage by default (#8008)
         }
 
         pub fn memory_limit_in_bytes(&self) -> u64 {
