@@ -464,7 +464,7 @@ impl<E: Engine> Endpoint<E> {
         async move {
             let mut resp = match result_of_future {
                 Err(e) => make_error_response(e),
-                Ok(handle_fut) => handle_fut.await.unwrap_or_else(|e| make_error_response(e)),
+                Ok(handle_fut) => handle_fut.await.unwrap_or_else(make_error_response),
             };
             if let Some(collector) = collector {
                 let span_sets = collector.collect();
@@ -1028,8 +1028,8 @@ mod tests {
         .collect::<Result<Vec<_>>>()
         .unwrap();
         assert_eq!(resp_vec.len(), 6);
-        for i in 0..5 {
-            assert_eq!(resp_vec[i].get_data(), [1, 2, i as u8]);
+        for (i, resp) in resp_vec.iter().enumerate().take(5) {
+            assert_eq!(resp.get_data(), [1, 2, i as u8]);
         }
         assert_eq!(resp_vec[5].get_data().len(), 0);
         assert!(!resp_vec[5].get_other_error().is_empty());

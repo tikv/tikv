@@ -577,7 +577,6 @@ mod tests {
                 TimeStamp::default(),
                 TimeStamp::default(),
                 false,
-                false,
             )
             .unwrap();
             self.write(txn.into_modifies());

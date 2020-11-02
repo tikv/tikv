@@ -18,7 +18,6 @@ pub fn pessimistic_prewrite<S: Snapshot>(
     txn_size: u64,
     mut min_commit_ts: TimeStamp,
     max_commit_ts: TimeStamp,
-    pipelined_pessimistic_lock: bool,
     try_one_pc: bool,
 ) -> MvccResult<TimeStamp> {
     if mutation.should_not_write() {
@@ -67,7 +66,7 @@ pub fn pessimistic_prewrite<S: Snapshot>(
             true
         }
     } else if is_pessimistic_lock {
-        txn.amend_pessimistic_lock(pipelined_pessimistic_lock, &key)?;
+        txn.amend_pessimistic_lock(&key)?;
         false
     } else {
         false
@@ -125,7 +124,6 @@ pub mod tests {
             TimeStamp::default(),
             TimeStamp::default(),
             false,
-            false,
         )?;
         Ok(())
     }
@@ -155,7 +153,6 @@ pub mod tests {
             10.into(),
             50.into(),
             false,
-            false,
         )
         .unwrap();
 
@@ -172,7 +169,6 @@ pub mod tests {
             2,
             10.into(),
             50.into(),
-            false,
             false,
         )
         .unwrap_err();
@@ -202,7 +198,6 @@ pub mod tests {
             2,
             10.into(),
             50.into(),
-            false,
             true,
         )
         .unwrap();
@@ -220,7 +215,6 @@ pub mod tests {
             2,
             10.into(),
             50.into(),
-            false,
             true,
         )
         .unwrap_err();

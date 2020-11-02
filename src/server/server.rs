@@ -258,7 +258,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             server.shutdown();
         }
         if let Some(pool) = self.stats_pool.take() {
-            let _ = pool.shutdown_timeout(Duration::from_secs(60));
+            let _ = pool.shutdown_background();
         }
         let _ = self.yatp_read_pool.take();
         Ok(())

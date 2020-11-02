@@ -668,7 +668,7 @@ pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) 
 
 pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String) {
     let (mut cluster, mut store) =
-        AssertionStorage::new_raft_storage_with_store_count(3, prefix.clone().as_str());
+        AssertionStorage::new_raft_storage_with_store_count(3, prefix.as_str());
     let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
     for k in &keys {
         store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v1", 5, 10);
