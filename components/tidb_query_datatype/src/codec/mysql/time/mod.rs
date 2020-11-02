@@ -115,7 +115,7 @@ fn chrono_datetime<T: TimeZone>(
         .and_then(|date| date.and_hms_opt(hour, minute, second))
         .and_then(|t| t.checked_add_signed(chrono::Duration::microseconds(i64::from(micro))))
         .and_then(|datetime| time_zone.from_local_datetime(&datetime).earliest())
-        .ok_or_else(|| Error::truncated())
+        .ok_or_else(Error::truncated)
 }
 
 #[inline]
@@ -131,7 +131,7 @@ fn chrono_naive_datetime(
     NaiveDate::from_ymd_opt(year as i32, month, day)
         .and_then(|date| date.and_hms_opt(hour, minute, second))
         .and_then(|t| t.checked_add_signed(chrono::Duration::microseconds(i64::from(micro))))
-        .ok_or_else(|| Error::truncated())
+        .ok_or_else(Error::truncated)
 }
 
 /// Round `frac` with `fsp`, return if there is a carry and the result.

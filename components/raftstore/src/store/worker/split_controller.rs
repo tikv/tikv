@@ -224,8 +224,7 @@ impl Recorder {
     ) -> Vec<u8> {
         let mut best_index: i32 = -1;
         let mut best_score = 2.0;
-        for index in 0..samples.len() {
-            let sample = &samples[index];
+        for (index, sample) in samples.iter().enumerate() {
             let sampled = sample.contained + sample.left + sample.right;
             if (sample.left + sample.right) == 0 || sampled < sample_threshold {
                 continue;

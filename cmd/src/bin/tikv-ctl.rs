@@ -73,7 +73,7 @@ fn new_debug_executor(
             let key_manager =
                 DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .unwrap()
-                    .map(|key_manager| Arc::new(key_manager));
+                    .map(Arc::new);
             let cache = cfg.storage.block_cache.build_shared_cache();
             let shared_block_cache = cache.is_some();
             let env = get_env(key_manager, None).unwrap();
@@ -2027,7 +2027,7 @@ fn main() {
         let from = unescape(matches.value_of("from").unwrap());
         let to = matches
             .value_of("to")
-            .map_or_else(|| vec![], |to| unescape(to));
+            .map_or_else(Vec::new, |to| unescape(to));
         let limit = matches
             .value_of("limit")
             .map_or(0, |s| s.parse().expect("parse u64"));
@@ -2415,7 +2415,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     args.insert(0, "ldb".to_owned());
     let key_manager = DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
-        .map(|key_manager| Arc::new(key_manager));
+        .map(Arc::new);
     let env = get_env(key_manager, None).unwrap();
     let mut opts = cfg.rocksdb.build_opt();
     opts.set_env(env);
