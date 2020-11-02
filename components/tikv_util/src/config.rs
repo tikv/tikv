@@ -118,7 +118,7 @@ impl From<OptionReadableSize> for ConfigValue {
 impl Into<OptionReadableSize> for ConfigValue {
     fn into(self) -> OptionReadableSize {
         if let ConfigValue::OptionSize(s) = self {
-            OptionReadableSize(s.map(|v| ReadableSize(v)))
+            OptionReadableSize(s.map(ReadableSize))
         } else {
             panic!("expect: ConfigValue::OptionSize, got: {:?}", self);
         }

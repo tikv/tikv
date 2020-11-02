@@ -240,7 +240,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
-        let concurrency_manager = ConcurrencyManager::new(latest_ts.into());
+        let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
         TiKVServer {
             config,
@@ -405,7 +405,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             &self.config.storage.data_dir,
         )
         .unwrap()
-        .map(|key_manager| Arc::new(key_manager));
+        .map(Arc::new);
     }
 
     fn create_raftstore_compaction_listener(&self) -> engine_rocks::CompactionListener {
@@ -515,8 +515,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 .threaded_scheduler()
                 .thread_name(thd_name!("debugger"))
                 .core_threads(1)
-                .on_thread_start(|| tikv_alloc::add_thread_memory_accessor())
-                .on_thread_stop(|| tikv_alloc::remove_thread_memory_accessor())
+                .on_thread_start(tikv_alloc::add_thread_memory_accessor)
+                .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
         );

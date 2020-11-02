@@ -109,7 +109,7 @@ fn test_ingest_sst() {
         "FileExists"
     );
 
-    ingest.set_sst(meta.clone());
+    ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
 }
@@ -135,7 +135,7 @@ fn test_ingest_sst_without_crc32() {
 
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx.clone());
-    ingest.set_sst(meta.clone());
+    ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
 

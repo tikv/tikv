@@ -174,7 +174,7 @@ fn test_update_internal_apply_index() {
     let resp = read_on_peer(
         &mut cluster,
         new_peer(3, 3),
-        region.clone(),
+        region,
         b"k1",
         true,
         Duration::from_secs(3),
