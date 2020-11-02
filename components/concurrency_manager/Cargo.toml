@@ -5,7 +5,7 @@ publish = false
 version = "0.0.1"
 
 [dependencies]
-parking_lot = "0.10"
+parking_lot = "0.11"
 tokio = { version = "0.2", features = ["sync"] }
 txn_types = { path = "../txn_types" }
 fail = "0.4"
