@@ -20,13 +20,13 @@ use kvproto::metapb::*;
 use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
-use tikv::storage::kv::{Engine, ScanMode, Snapshot};
+use tikv::config::BackupConfig;
+use tikv::storage::kv::{Engine, ScanMode, SnapContext, Snapshot};
 use tikv::storage::mvcc::Error as MvccError;
 use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
-use tikv::{config::BackupConfig, storage::kv::SnapContext};
 use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
