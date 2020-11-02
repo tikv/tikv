@@ -465,14 +465,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 region_epoch,
                 split_keys,
                 callback,
+                source,
             } => {
-                info!(
-                    "on split";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "split_keys" => %KeysInfoFormatter(split_keys.iter()),
-                );
-                self.on_prepare_split_region(region_epoch, split_keys, callback);
+                self.on_prepare_split_region(region_epoch, split_keys, callback, &source);
             }
             CasualMessage::ComputeHashResult { index, hash } => {
                 self.on_hash_computed(index, hash);
@@ -489,8 +484,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             CasualMessage::HalfSplitRegion {
                 region_epoch,
                 policy,
+                source,
             } => {
-                self.on_schedule_half_split_region(&region_epoch, policy);
+                self.on_schedule_half_split_region(&region_epoch, policy, source);
             }
             CasualMessage::GcSnap { snaps } => {
                 self.on_gc_snap(snaps);
@@ -2870,8 +2866,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         region_epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
+<<<<<<< HEAD
         cb: Callback<RocksEngine>,
+=======
+        cb: Callback<EK::Snapshot>,
+        source: &str,
+>>>>>>> 618b347a2... raftstore: trace split command source (#8896)
     ) {
+        info!(
+            "on split";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "split_keys" => %KeysInfoFormatter(split_keys.iter()),
+            "source" => source,
+        );
         if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
             cb.invoke_with_response(new_error(e));
             return;
@@ -2990,7 +2998,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         region_epoch: &metapb::RegionEpoch,
         policy: CheckPolicy,
+        source: &str,
     ) {
+        info!(
+            "on half split";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "policy" => ?policy,
+            "source" => source,
+        );
         if !self.fsm.peer.is_leader() {
             // region on this store is no longer leader, skipped.
             warn!(
