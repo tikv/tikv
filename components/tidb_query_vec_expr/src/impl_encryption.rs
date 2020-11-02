@@ -297,7 +297,7 @@ mod tests {
 
         for len in cases {
             let got = RpnFnScalarEvaluator::new()
-                .push_param(Some(Int::from(len as i64)))
+                .push_param(Some(len as i64))
                 .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
                 .unwrap();
             assert_eq!(got.unwrap().len(), len);

@@ -80,7 +80,7 @@ impl std::fmt::Debug for Write {
                 &self
                     .short_value
                     .as_ref()
-                    .map(|v| hex::encode_upper(v))
+                    .map(hex::encode_upper)
                     .unwrap_or_else(|| "None".to_owned()),
             )
             .field("has_overlapped_rollback", &self.has_overlapped_rollback)
