@@ -21,7 +21,7 @@ use crate::server::Config;
 use crate::storage::kv::PerfStatisticsInstant;
 use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::mvcc::Error as MvccError;
-use crate::storage::{self, Engine, Snapshot, SnapshotStore};
+use crate::storage::{self, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore};
 use crate::{read_pool::ReadPoolHandle, storage::kv::SnapContext};
 
 use crate::coprocessor::cache::CachedRequestHandler;
@@ -359,8 +359,7 @@ impl<E: Engine> Endpoint<E> {
             ..Default::default()
         };
         // need to pass start_ts and ranges to check memory locks for replica read
-        if ctx.context.get_replica_read() && ctx.context.get_isolation_level() == IsolationLevel::Si
-        {
+        if need_check_locks_in_replica_read(&ctx.context) {
             snap_ctx.start_ts = ctx.txn_start_ts;
             for r in &ctx.ranges {
                 let start_key = txn_types::Key::from_raw(r.get_start());

@@ -1554,7 +1554,7 @@ fn async_commit_check_keys<'a>(
     Ok(())
 }
 
-fn need_check_locks_in_replica_read(ctx: &Context) -> bool {
+pub fn need_check_locks_in_replica_read(ctx: &Context) -> bool {
     ctx.get_replica_read() && ctx.get_isolation_level() == IsolationLevel::Si
 }
 
