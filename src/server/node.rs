@@ -296,12 +296,10 @@ where
     ) -> Result<Option<metapb::Region>> {
         if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
             Ok(Some(first_region))
+        } else if self.check_cluster_bootstrapped()? {
+            Ok(None)
         } else {
-            if self.check_cluster_bootstrapped()? {
-                Ok(None)
-            } else {
-                self.prepare_bootstrap_cluster(engines, store_id).map(Some)
-            }
+            self.prepare_bootstrap_cluster(engines, store_id).map(Some)
         }
     }
 
