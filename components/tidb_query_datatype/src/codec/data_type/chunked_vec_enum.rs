@@ -5,6 +5,14 @@ use crate::impl_chunked_vec_common;
 use std::sync::Arc;
 use tikv_util::buffer_vec::BufferVec;
 
+/// `ChunkedVecEnum` stores enum in a compact way.
+///
+/// Inside `ChunkedVecEnum`:
+/// - `data` stores the real enum data.
+/// - `bitmap` indicates if an element at given index is null.
+/// - `value` is an 1-based index enum data offset, 0 means this enum is ''
+///
+/// TODO: add way to set enum column data
 #[derive(Debug, Clone)]
 pub struct ChunkedVecEnum {
     data: Arc<BufferVec>,
@@ -138,5 +146,89 @@ impl Into<ChunkedVecEnum> for Vec<Option<Enum>> {
 impl<'a> UnsafeRefInto<&'static ChunkedVecEnum> for &'a ChunkedVecEnum {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecEnum {
         std::mem::transmute(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup() -> ChunkedVecEnum {
+        let mut x: ChunkedVecEnum = ChunkedVecEnum::with_capacity(0);
+
+        // FIXME: we need a set_data here, but for now, we set directly
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我强爆啊");
+        buf.push("我成功了");
+        x.data = Arc::new(buf);
+
+        x
+    }
+
+    #[test]
+    fn test_basics() {
+        let mut x = setup();
+        x.push(None);
+        x.push(Some(Enum::new(x.data.clone(), 2)));
+        x.push(None);
+        x.push(Some(Enum::new(x.data.clone(), 1)));
+        x.push(Some(Enum::new(x.data.clone(), 3)));
+
+        assert_eq!(x.get(0), None);
+        assert_eq!(x.get(1), Some(EnumRef::new(&x.data, 2)));
+        assert_eq!(x.get(2), None);
+        assert_eq!(x.get(3), Some(EnumRef::new(&x.data, 1)));
+        assert_eq!(x.get(4), Some(EnumRef::new(&x.data, 3)));
+        assert_eq!(x.len(), 5);
+        assert!(!x.is_empty());
+    }
+
+    #[test]
+    fn test_truncate() {
+        let mut x = setup();
+        x.push(None);
+        x.push(Some(Enum::new(x.data.clone(), 2)));
+        x.push(None);
+        x.push(Some(Enum::new(x.data.clone(), 1)));
+        x.push(Some(Enum::new(x.data.clone(), 3)));
+
+        x.truncate(100);
+        assert_eq!(x.len(), 5);
+
+        x.truncate(3);
+        assert_eq!(x.len(), 3);
+        assert_eq!(x.get(0), None);
+        assert_eq!(x.get(1), Some(EnumRef::new(&x.data, 2)));
+        assert_eq!(x.get(2), None);
+
+        x.truncate(1);
+        assert_eq!(x.len(), 1);
+        assert_eq!(x.get(0), None);
+
+        x.truncate(0);
+        assert_eq!(x.len(), 0);
+    }
+
+    #[test]
+    fn test_append() {
+        let mut x = setup();
+        x.push(None);
+        x.push(Some(Enum::new(x.data.clone(), 2)));
+
+        let mut y = setup();
+        y.push(None);
+        y.push(Some(Enum::new(x.data.clone(), 1)));
+        y.push(Some(Enum::new(x.data.clone(), 3)));
+
+        x.append(&mut y);
+        assert_eq!(x.len(), 5);
+        assert!(y.is_empty());
+
+        assert_eq!(x.get(0), None);
+        assert_eq!(x.get(1), Some(EnumRef::new(&x.data, 2)));
+        assert_eq!(x.get(2), None);
+        assert_eq!(x.get(3), Some(EnumRef::new(&x.data, 1)));
+        assert_eq!(x.get(4), Some(EnumRef::new(&x.data, 3)));
     }
 }
