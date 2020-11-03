@@ -1988,7 +1988,7 @@ mod tests {
         let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
-            s.engines.clone(),
+            s.engines.kv.clone(),
             mgr,
             0,
             true,
@@ -2304,7 +2304,7 @@ mod tests {
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
-            s1.engines.clone(),
+            s1.engines.kv.clone(),
             mgr,
             0,
             true,
