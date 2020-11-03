@@ -103,13 +103,15 @@ mod tests {
         let cases = vec![(vec!["a", "b", "c"], 1, "a"), (vec!["a", "b", "c"], 3, "c")];
 
         for (data, value, expect) in cases {
-            let mut e = Enum {
-                data: Arc::new(BufferVec::new()),
+            let mut buf = BufferVec::new();
+            for v in data {
+                buf.push(v)
+            }
+
+            let e = Enum {
+                data: Arc::new(buf),
                 value,
             };
-            for v in data {
-                e.data.push(v);
-            }
 
             assert_eq!(e.to_string(), expect.to_string())
         }
