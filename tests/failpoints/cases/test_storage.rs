@@ -890,7 +890,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
         let res = block_on(storage.get(ctx.clone(), Key::from_raw(key), commit_ts.next()));
         match res {
             Ok(v) => {
-                assert_eq!(v.unwrap().as_slice(), value);
+                assert_eq!(v.unwrap().0.as_slice(), value);
                 break;
             }
             Err(e) => expect_locked(e, key, start_ts),
