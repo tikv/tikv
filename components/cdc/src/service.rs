@@ -287,7 +287,6 @@ impl ChangeData for Service {
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        // TODO: make it a bounded channel.
         let (tx, rx) = batch::bounded(CDC_MSG_QUEUE_BOUND, CDC_MSG_NOTIFY_COUNT);
         let peer = ctx.peer();
         let conn = Conn::new(tx, peer);
