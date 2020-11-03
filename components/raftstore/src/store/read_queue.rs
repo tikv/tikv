@@ -9,7 +9,7 @@ use crate::store::{Callback, Config};
 
 use engine_traits::Snapshot;
 use kvproto::kvrpcpb::LockInfo;
-use kvproto::raft_cmdpb::RaftCmdRequest;
+use kvproto::raft_cmdpb::{self, RaftCmdRequest};
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::MustConsumeVec;
@@ -26,6 +26,7 @@ where
     pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)>,
     pub renew_lease_time: Timespec,
     pub read_index: Option<u64>,
+    pub addition_request: Option<Box<raft_cmdpb::ReadIndexRequest>>,
     pub locked: Option<Box<LockInfo>>,
     // `true` means it's in `ReadIndexQueue::reads`.
     in_contexts: bool,
@@ -54,6 +55,7 @@ where
             cmds,
             renew_lease_time,
             read_index: None,
+            addition_request: None,
             locked: None,
             in_contexts: false,
         }

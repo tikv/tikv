@@ -1840,6 +1840,19 @@ where
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
         for (req, cb, mut read_index) in read.cmds.drain(..) {
+            // leader reports key is locked
+            if let Some(locked) = read.locked.take() {
+                let mut response = raft_cmdpb::Response::default();
+                response.mut_read_index().set_locked(*locked);
+                let mut cmd_resp = RaftCmdResponse::default();
+                cmd_resp.mut_responses().push(response);
+                cb.invoke_read(ReadResponse {
+                    response: cmd_resp,
+                    snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                });
+                continue;
+            }
             if !replica_read {
                 if read_index.is_none() {
                     // Actually, the read_index is none if and only if it's the first one in read.cmds.
@@ -1850,21 +1863,8 @@ where
                 continue;
             }
             if req.get_header().get_replica_read() {
-                // leader reports key is locked
-                if let Some(locked) = read.locked.take() {
-                    let mut response = raft_cmdpb::Response::default();
-                    response.mut_read_index().set_locked(*locked);
-                    let mut cmd_resp = RaftCmdResponse::default();
-                    cmd_resp.mut_responses().push(response);
-                    cb.invoke_read(ReadResponse {
-                        response: cmd_resp,
-                        snapshot: None,
-                        txn_extra_op: TxnExtraOp::Noop,
-                    });
-                } else {
-                    // We should check epoch since the range could be changed.
-                    cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
-                }
+                // We should check epoch since the range could be changed.
+                cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
             } else {
                 // The request could be proposed when the peer was leader.
                 // TODO: figure out that it's necessary to notify stale or not.
@@ -2426,7 +2426,12 @@ where
 
         let read = self.pending_reads.back_mut().unwrap();
         debug_assert!(read.read_index.is_none());
-        self.raft_group.read_index(read.id.as_bytes().to_vec());
+        self.raft_group
+            .read_index(ReadIndexContext::fields_to_bytes(
+                read.id,
+                read.addition_request.as_deref(),
+                None,
+            ));
         debug!(
             "request to get a read index";
             "request_id" => ?read.id,
@@ -2526,17 +2531,17 @@ where
         self.bcast_wake_up_time = None;
 
         let id = Uuid::new_v4();
-        let mut read_index_ctx = ReadIndexContext {
-            id,
-            request: None,
-            locked: None,
-        };
-        if let Some(req) = req.mut_requests().get_mut(0) {
-            if req.has_read_index() {
-                read_index_ctx.request = Some(req.take_read_index());
-            }
-        }
-        self.raft_group.read_index(read_index_ctx.to_bytes());
+        let request = req
+            .mut_requests()
+            .get_mut(0)
+            .filter(|req| req.has_read_index())
+            .map(|req| req.take_read_index());
+        self.raft_group
+            .read_index(ReadIndexContext::fields_to_bytes(
+                id,
+                request.as_ref(),
+                None,
+            ));
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
@@ -2550,7 +2555,8 @@ where
             return false;
         }
 
-        let read = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        let mut read = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        read.addition_request = request.map(Box::new);
         self.pending_reads.push_back(read, self.is_leader());
         self.should_wake_up = true;
 
@@ -3596,18 +3602,26 @@ impl ReadIndexContext {
     }
 
     fn to_bytes(&self) -> Vec<u8> {
-        let request_size = self.request.as_ref().map(Message::compute_size);
-        let locked_size = self.locked.as_ref().map(Message::compute_size);
+        Self::fields_to_bytes(self.id, self.request.as_ref(), self.locked.as_ref())
+    }
+
+    fn fields_to_bytes(
+        id: Uuid,
+        request: Option<&raft_cmdpb::ReadIndexRequest>,
+        locked: Option<&LockInfo>,
+    ) -> Vec<u8> {
+        let request_size = request.map(Message::compute_size);
+        let locked_size = locked.map(Message::compute_size);
         let field_size = |s: Option<u32>| s.map(|s| 1 + MAX_VAR_U64_LEN + s as usize).unwrap_or(0);
         let cap = 16 + field_size(request_size) + field_size(locked_size);
         let mut b = Vec::with_capacity(cap);
-        b.extend_from_slice(self.id.as_bytes());
-        if let Some(request) = &self.request {
+        b.extend_from_slice(id.as_bytes());
+        if let Some(request) = request {
             b.push(REQUEST_FLAG);
             b.encode_var_u64(request_size.unwrap() as u64).unwrap();
             request.write_to_vec(&mut b).unwrap();
         }
-        if let Some(locked) = &self.locked {
+        if let Some(locked) = locked {
             b.push(LOCKED_FLAG);
             b.encode_var_u64(locked_size.unwrap() as u64).unwrap();
             locked.write_to_vec(&mut b).unwrap();
