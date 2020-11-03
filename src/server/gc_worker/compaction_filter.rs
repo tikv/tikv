@@ -182,18 +182,10 @@ impl WriteCompactionFilter {
 
         while valid {
             let (key, value) = (write_iter.key(), write_iter.value());
-            if key.len() < prefix.len() {
-                valid = write_iter.next().unwrap();
-                continue;
-            }
-            if &key[..prefix.len()] > prefix {
+            if truncate_ts(key) > prefix {
                 break;
             }
-            let write = WriteRef::parse(value).unwrap();
-            if write.short_value.is_none() && write.write_type == WriteType::Put {
-                let def_key = Key::from_encoded_slice(prefix).append_ts(write.start_ts);
-                self.delete_default_key(def_key.as_encoded());
-            }
+            self.handle_filtered_write(parse_write(value));
             self.delete_write_key(key);
             valid = write_iter.next().unwrap();
         }
@@ -201,9 +193,13 @@ impl WriteCompactionFilter {
         self.write_iter = Some(write_iter);
     }
 
-    fn delete_default_key(&mut self, key: &[u8]) {
-        self.write_batch.delete(key).unwrap();
-        self.flush_pending_writes_if_need();
+    fn handle_filtered_write(&mut self, write: WriteRef) {
+        if write.short_value.is_none() && write.write_type == WriteType::Put {
+            let prefix = Key::from_encoded_slice(&self.key_prefix);
+            let def_key = prefix.append_ts(write.start_ts).into_encoded();
+            self.write_batch.delete(&def_key).unwrap();
+            self.flush_pending_writes_if_need();
+        }
     }
 
     fn delete_write_key(&mut self, key: &[u8]) {
@@ -264,13 +260,12 @@ impl CompactionFilter for WriteCompactionFilter {
         _: &mut bool,
     ) -> bool {
         self.near_seek_distance += 1;
+        let (key_prefix, commit_ts) = split_ts(key);
+        if commit_ts > self.safe_point {
+            return false;
+        }
 
-        let (key_prefix, commit_ts) = match Key::split_on_ts_for(key) {
-            Ok((key, ts)) => (key, ts.into_inner()),
-            // Invalid MVCC keys, don't touch them.
-            Err(_) => return false,
-        };
-
+        self.versions += 1;
         if self.key_prefix != key_prefix {
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
@@ -278,20 +273,9 @@ impl CompactionFilter for WriteCompactionFilter {
             self.switch_key_metrics();
         }
 
-        if commit_ts > self.safe_point {
-            return false;
-        }
-
-        self.versions += 1;
         let mut filtered = self.remove_older;
-        let write = match WriteRef::parse(value) {
-            Ok(write) => write,
-            // Invalid MVCC keys, don't touch them.
-            Err(_) => return false,
-        };
-
+        let write = parse_write(value);
         if !self.remove_older {
-            // here `filtered` must be false.
             match write.write_type {
                 WriteType::Rollback | WriteType::Lock => filtered = true,
                 WriteType::Put => self.remove_older = true,
@@ -304,14 +288,32 @@ impl CompactionFilter for WriteCompactionFilter {
         }
 
         if filtered {
-            if write.short_value.is_none() && write.write_type == WriteType::Put {
-                let key = Key::from_encoded_slice(key_prefix).append_ts(write.start_ts);
-                self.delete_default_key(key.as_encoded());
-            }
+            self.handle_filtered_write(write);
             self.deleted += 1;
         }
 
         filtered
+    }
+}
+
+fn split_ts(key: &[u8]) -> (&[u8], u64) {
+    match Key::split_on_ts_for(key) {
+        Ok((key, ts)) => (key, ts.into_inner()),
+        Err(_) => panic!("invalid write cf key: {}", hex::encode_upper(key)),
+    }
+}
+
+fn truncate_ts(key: &[u8]) -> &[u8] {
+    match Key::truncate_ts_for(key) {
+        Ok(prefix) => prefix,
+        Err(_) => panic!("invalid write cf key: {}", hex::encode_upper(key)),
+    }
+}
+
+fn parse_write(value: &[u8]) -> WriteRef {
+    match WriteRef::parse(value) {
+        Ok(write) => write,
+        Err(_) => panic!("invalid write cf value: {}", hex::encode_upper(value)),
     }
 }
 
