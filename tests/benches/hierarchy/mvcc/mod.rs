@@ -6,7 +6,7 @@ use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, WriteData};
 use tikv::storage::mvcc::{self, MvccReader, MvccTxn};
-use tikv::storage::txn::{commit, prewrite};
+use tikv::storage::txn::{cleanup, commit, prewrite};
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
@@ -120,7 +120,7 @@ fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
         |(snapshot, keys)| {
             for key in keys {
                 let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
-                black_box(txn.rollback(key)).unwrap();
+                black_box(cleanup(&mut txn, key, TimeStamp::zero(), false)).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -138,7 +138,7 @@ fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
         |(snapshot, keys)| {
             for key in keys {
                 let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
-                black_box(txn.rollback(key)).unwrap();
+                black_box(cleanup(&mut txn, key, TimeStamp::zero(), false)).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -167,7 +167,7 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
         |(snapshot, keys)| {
             for key in keys {
                 let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
-                black_box(txn.rollback(key)).unwrap();
+                black_box(cleanup(&mut txn, key, TimeStamp::zero(), false)).unwrap();
             }
         },
         BatchSize::SmallInput,
