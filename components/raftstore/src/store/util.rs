@@ -926,8 +926,12 @@ mod tests {
             // In linux, lease uses CLOCK_MONOTONIC_RAW.
             let monotonic_raw_start = monotonic_raw_now();
             thread::sleep(duration.to_std().unwrap());
-            let monotonic_end = monotonic_now();
+            let mut monotonic_end = monotonic_now();
             let monotonic_raw_end = monotonic_raw_now();
+            while monotonic_end - monotonic_start < duration {
+                thread::yield_now();
+                monotonic_end = monotonic_now();
+            }
             assert_eq!(
                 lease.inspect(Some(monotonic_raw_end)),
                 state,
