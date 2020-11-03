@@ -33,7 +33,8 @@ pub use self::msg::{
     ReadCallback, ReadResponse, SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{
-    AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy,
+    AbstractPeer, Peer, PeerStat, ProposalContext, ReadIndexContext, RequestInspector,
+    RequestPolicy,
 };
 pub use self::peer_storage::{
     clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state, write_peer_state,

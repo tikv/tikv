@@ -1,16 +1,17 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Error as IoError;
 use std::result;
+use std::{borrow::Cow, io::Error as IoError};
 use std::{
     fmt::{self, Debug, Display, Formatter},
     mem,
 };
 use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
 
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
-use engine_traits::CfName;
 use engine_traits::CF_DEFAULT;
+use engine_traits::{CfName, KvEngine};
 use engine_traits::{
     IterOptions, MvccProperties, MvccPropertiesExt, Peekable, ReadOptions, Snapshot,
     TablePropertiesExt,
@@ -21,6 +22,7 @@ use kvproto::raft_cmdpb::{
     RaftRequestHeader, Request, Response,
 };
 use kvproto::{errorpb, metapb};
+use raft::eraftpb::{self, MessageType};
 use txn_types::{Key, TimeStamp, TxnExtraScheduler, Value};
 
 use super::metrics::*;
@@ -31,10 +33,19 @@ use crate::storage::kv::{
 };
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::{self, kv};
-use raftstore::errors::Error as RaftServerError;
-use raftstore::router::{LocalReadRouter, RaftStoreRouter};
-use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
-use raftstore::store::{RegionIterator, RegionSnapshot};
+use raftstore::{
+    coprocessor::dispatcher::BoxReadIndexObserver,
+    store::{RegionIterator, RegionSnapshot},
+};
+use raftstore::{
+    coprocessor::Coprocessor,
+    router::{LocalReadRouter, RaftStoreRouter},
+};
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{Callback as StoreCallback, ReadIndexContext, ReadResponse, WriteResponse},
+};
+use raftstore::{coprocessor::ReadIndexObserver, errors::Error as RaftServerError};
 use tikv_util::time::Instant;
 
 quick_error! {
@@ -652,5 +663,67 @@ impl<S: Snapshot> EngineIterator for RegionIterator<S> {
 
     fn value(&self) -> &[u8] {
         RegionIterator::value(self)
+    }
+}
+
+#[derive(Clone)]
+pub struct ReplicaReadLockChecker {
+    concurrency_manager: ConcurrencyManager,
+}
+
+impl ReplicaReadLockChecker {
+    pub fn new(concurrency_manager: ConcurrencyManager) -> Self {
+        ReplicaReadLockChecker {
+            concurrency_manager,
+        }
+    }
+
+    pub fn register<E: KvEngine + 'static>(self, host: &mut CoprocessorHost<E>) {
+        host.registry
+            .register_read_index_observer(1, BoxReadIndexObserver::new(self));
+    }
+}
+
+impl Coprocessor for ReplicaReadLockChecker {}
+
+impl ReadIndexObserver for ReplicaReadLockChecker {
+    fn on_step(&self, msg: &mut eraftpb::Message) -> bool {
+        if msg.get_msg_type() != MessageType::MsgReadIndex {
+            return false;
+        }
+        assert_eq!(msg.get_entries().len(), 1);
+        let mut rctx = ReadIndexContext::parse(msg.get_entries()[0].get_data()).unwrap();
+        if let Some(mut request) = rctx.request.take() {
+            let start_ts = request.get_start_ts().into();
+            self.concurrency_manager.update_max_ts(start_ts);
+            for range in request.mut_key_ranges().iter_mut() {
+                let key_bound = |key: Vec<u8>| {
+                    if key.is_empty() {
+                        None
+                    } else {
+                        Some(txn_types::Key::from_encoded(key))
+                    }
+                };
+                let start_key = key_bound(range.take_start_key());
+                let end_key = key_bound(range.take_end_key());
+                let res = self.concurrency_manager.read_range_check(
+                    start_key.as_ref(),
+                    end_key.as_ref(),
+                    |key, lock| {
+                        txn_types::Lock::check_ts_conflict(
+                            Cow::Borrowed(lock),
+                            key,
+                            start_ts,
+                            &Default::default(),
+                        )
+                    },
+                );
+                if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) = res {
+                    rctx.locked = Some(lock);
+                }
+            }
+            msg.mut_entries()[0].set_data(rctx.to_bytes());
+        }
+        rctx.locked.is_some()
     }
 }

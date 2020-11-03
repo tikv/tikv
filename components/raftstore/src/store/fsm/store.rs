@@ -335,7 +335,6 @@ where
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
-    pub concurrency_manager: ConcurrencyManager,
 }
 
 impl<EK, ER, T, C> HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>
@@ -894,7 +893,6 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T, C> {
     pub engines: Engines<EK, ER>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
-    concurrency_manager: ConcurrencyManager,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T, C> RaftPollerBuilder<EK, ER, T, C> {
@@ -1107,7 +1105,6 @@ where
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
-            concurrency_manager: self.concurrency_manager.clone(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1209,7 +1206,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
-            concurrency_manager: concurrency_manager.clone(),
         };
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();

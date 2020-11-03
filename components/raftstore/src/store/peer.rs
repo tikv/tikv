@@ -1,10 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::{borrow::Cow, cell::RefCell};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
@@ -1034,71 +1034,34 @@ where
             // As another role know we're not missing.
             self.leader_missing_time.take();
         }
-        // Here we hold up MsgReadIndex.
-        // 1. If it needs the leader to check memory locks, we may modify the message data
-        // to return the lock to the follower or learner.
-        // 2. If current peer has valid lease, then we could handle the request directly,
-        // rather than send a heartbeat to check quorum.
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
-            assert_eq!(m.get_entries().len(), 1);
-            let mut rctx = ReadIndexContext::parse(m.get_entries()[0].get_data()).unwrap();
-            if let Some(mut request) = rctx.request.take() {
-                let start_ts = request.get_start_ts().into();
-                ctx.concurrency_manager.update_max_ts(start_ts);
-                for range in request.mut_key_ranges().iter_mut() {
-                    let key_bound = |key: Vec<u8>| {
-                        if key.is_empty() {
-                            None
-                        } else {
-                            Some(txn_types::Key::from_encoded(key))
-                        }
-                    };
-                    let start_key = key_bound(range.take_start_key());
-                    let end_key = key_bound(range.take_end_key());
-                    let res = ctx.concurrency_manager.read_range_check(
-                        start_key.as_ref(),
-                        end_key.as_ref(),
-                        |key, lock| {
-                            txn_types::Lock::check_ts_conflict(
-                                Cow::Borrowed(lock),
-                                key,
-                                start_ts,
-                                &Default::default(),
-                            )
-                        },
-                    );
-                    if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) = res
-                    {
-                        rctx.locked = Some(lock);
-                        break;
-                    }
-                }
-                m.mut_entries()[0].set_data(rctx.to_bytes());
+            if ctx.coprocessor_host.on_step_read_index(&mut m) {
+                return Ok(self.raft_group.step(m)?);
             }
+            // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
+            // request directly, rather than send a heartbeat to check quorum.
+            let committed = self.raft_group.raft.raft_log.committed;
+            let expected_term = self.raft_group.raft.raft_log.term(committed).unwrap_or(0);
+            if expected_term == self.raft_group.raft.term {
+                // If the leader hasn't committed any entries in its term, it can't response read only
+                // requests. Please also take a look at raft-rs.
+                let state = self.inspect_lease();
+                if let LeaseState::Valid = state {
+                    let mut resp = eraftpb::Message::default();
+                    resp.set_msg_type(MessageType::MsgReadIndexResp);
+                    resp.term = self.term();
+                    resp.to = m.from;
+                    resp.index = self.get_store().committed_index();
+                    resp.set_entries(m.take_entries());
 
-            if rctx.locked.is_none() {
-                let committed = self.raft_group.raft.raft_log.committed;
-                let expected_term = self.raft_group.raft.raft_log.term(committed).unwrap_or(0);
-                if expected_term == self.raft_group.raft.term {
-                    // If the leader hasn't committed any entries in its term, it can't response read only
-                    // requests. Please also take a look at raft-rs.
-                    let state = self.inspect_lease();
-                    if let LeaseState::Valid = state {
-                        let mut resp = eraftpb::Message::default();
-                        resp.set_msg_type(MessageType::MsgReadIndexResp);
-                        resp.term = self.term();
-                        resp.to = m.from;
-                        resp.index = self.get_store().committed_index();
-                        resp.set_entries(m.take_entries());
-
-                        self.pending_messages.push(resp);
-                        return Ok(());
-                    }
-                    self.should_wake_up = state == LeaseState::Expired;
+                    self.pending_messages.push(resp);
+                    return Ok(());
                 }
+                self.should_wake_up = state == LeaseState::Expired;
             }
         }
+
         if msg_type == MessageType::MsgTransferLeader {
             self.execute_transfer_leader(ctx, &m);
             return Ok(());
@@ -3559,14 +3522,14 @@ const REQUEST_FLAG: u8 = b'r';
 const LOCKED_FLAG: u8 = b'l';
 
 #[derive(Debug, Clone, PartialEq)]
-struct ReadIndexContext {
-    id: Uuid,
-    request: Option<raft_cmdpb::ReadIndexRequest>,
-    locked: Option<LockInfo>,
+pub struct ReadIndexContext {
+    pub id: Uuid,
+    pub request: Option<raft_cmdpb::ReadIndexRequest>,
+    pub locked: Option<LockInfo>,
 }
 
 impl ReadIndexContext {
-    fn parse(bytes: &[u8]) -> Result<ReadIndexContext> {
+    pub fn parse(bytes: &[u8]) -> Result<ReadIndexContext> {
         use tikv_util::codec::number::*;
 
         if bytes.len() < 16 {
@@ -3601,11 +3564,11 @@ impl ReadIndexContext {
         Ok(res)
     }
 
-    fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         Self::fields_to_bytes(self.id, self.request.as_ref(), self.locked.as_ref())
     }
 
-    fn fields_to_bytes(
+    pub fn fields_to_bytes(
         id: Uuid,
         request: Option<&raft_cmdpb::ReadIndexRequest>,
         locked: Option<&LockInfo>,
