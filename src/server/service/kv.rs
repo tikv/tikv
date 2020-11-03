@@ -277,6 +277,33 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         unimplemented!();
     }
 
+    fn dispatch_mpp_task(
+        &mut self,
+        _: grpcio::RpcContext<'_>,
+        _: kvproto::mpp::DispatchTaskRequest,
+        _: grpcio::UnarySink<kvproto::mpp::DispatchTaskResponse>,
+    ) {
+        todo!();
+    }
+
+    fn cancel_mpp_task(
+        &mut self,
+        _: grpcio::RpcContext<'_>,
+        _: kvproto::mpp::CancelTaskRequest,
+        _: grpcio::UnarySink<kvproto::mpp::CancelTaskResponse>,
+    ) {
+        todo!()
+    }
+
+    fn establish_mpp_connection(
+        &mut self,
+        _: grpcio::RpcContext<'_>,
+        _: kvproto::mpp::EstablishMppConnectionRequest,
+        _: grpcio::ServerStreamingSink<kvproto::mpp::MppDataPacket>,
+    ) {
+        todo!()
+    }
+
     fn kv_gc(&mut self, ctx: RpcContext<'_>, _: GcRequest, sink: UnarySink<GcResponse>) {
         let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
         ctx.spawn(

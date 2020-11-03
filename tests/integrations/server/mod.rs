@@ -15,6 +15,7 @@ use grpcio::RpcStatusCode;
 use grpcio::*;
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
+use kvproto::mpp::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
 use kvproto::tikvpb::{
     create_tikv, BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage, Tikv,
@@ -226,6 +227,14 @@ trait MockKvService {
     unary_call!(split_region, SplitRegionRequest, SplitRegionResponse);
     unary_call!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
+
+    unary_call!(dispatch_mpp_task, DispatchTaskRequest, DispatchTaskResponse);
+    unary_call!(cancel_mpp_task, CancelTaskRequest, CancelTaskResponse);
+    sstream_call!(
+        establish_mpp_connection,
+        EstablishMppConnectionRequest,
+        MppDataPacket
+    );
 }
 
 impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
@@ -333,6 +342,14 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     unary_call_dispatch!(split_region, SplitRegionRequest, SplitRegionResponse);
     unary_call_dispatch!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call_dispatch!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
+
+    unary_call!(dispatch_mpp_task, DispatchTaskRequest, DispatchTaskResponse);
+    unary_call!(cancel_mpp_task, CancelTaskRequest, CancelTaskResponse);
+    sstream_call_dispatch!(
+        establish_mpp_connection,
+        EstablishMppConnectionRequest,
+        MppDataPacket
+    );
 }
 
 fn mock_kv_service<T>(kv: MockKv<T>, ip: &str, port: u16) -> Result<Server>
