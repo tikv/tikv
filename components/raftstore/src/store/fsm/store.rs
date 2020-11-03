@@ -1232,7 +1232,7 @@ impl RaftBatchSystem {
             .spawn("apply".to_owned(), apply_poller_builder);
 
         let region_runner = RegionRunner::new(
-            engines.clone(),
+            engines.kv.c().clone(),
             snap_mgr,
             cfg.snap_apply_batch_size.0 as usize,
             cfg.use_delete_range,

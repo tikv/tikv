@@ -9,15 +9,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-<<<<<<< HEAD
-use engine::Engines;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::CF_RAFT;
-use engine_traits::{MiscExt, Mutable, Peekable, WriteBatchExt};
-=======
-use engine_traits::{DeleteStrategy, Range, CF_LOCK, CF_RAFT};
-use engine_traits::{Engines, KvEngine, Mutable, RaftEngine};
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{
+    CFNamesExt, DeleteStrategy, MiscExt, Mutable, Peekable, Range, WriteBatchExt, CF_LOCK, CF_RAFT,
+};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -34,7 +29,6 @@ use crate::store::{
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
 
-use tikv_util::time;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
@@ -110,7 +104,10 @@ struct StalePeerInfo {
     // below are stored as a value in PendingDeleteRanges
     pub region_id: u64,
     pub end_key: Vec<u8>,
-    pub timeout: time::Instant,
+    // Once the oldest snapshot sequence exceeds this, it ensures that no one is
+    // reading on this peer anymore. So we can safely call `delete_files_in_range`
+    // , which may break the consistency of snapshot, of this peer range.
+    pub stale_sequence: u64,
 }
 
 /// A structure records all ranges to be deleted with some delay.
@@ -126,7 +123,7 @@ impl PendingDeleteRanges {
         &self,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
+    ) -> Vec<(u64, Vec<u8>, Vec<u8>, u64)> {
         let mut ranges = Vec::new();
         // find the first range that may overlap with [start_key, end_key)
         let sub_range = self.ranges.range((Unbounded, Excluded(start_key.to_vec())));
@@ -136,6 +133,7 @@ impl PendingDeleteRanges {
                     peer_info.region_id,
                     s_key.clone(),
                     peer_info.end_key.clone(),
+                    peer_info.stale_sequence,
                 ));
             }
         }
@@ -149,6 +147,7 @@ impl PendingDeleteRanges {
                 peer_info.region_id,
                 s_key.clone(),
                 peer_info.end_key.clone(),
+                peer_info.stale_sequence,
             ));
         }
         ranges
@@ -159,10 +158,10 @@ impl PendingDeleteRanges {
         &mut self,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
+    ) -> Vec<(u64, Vec<u8>, Vec<u8>, u64)> {
         let ranges = self.find_overlap_ranges(start_key, end_key);
 
-        for &(_, ref s_key, _) in &ranges {
+        for &(_, ref s_key, _, _) in &ranges {
             self.ranges.remove(s_key).unwrap();
         }
         ranges
@@ -178,7 +177,7 @@ impl PendingDeleteRanges {
     /// Inserts a new range waiting to be deleted.
     ///
     /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapping range.
-    fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], timeout: time::Instant) {
+    fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], stale_sequence: u64) {
         if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
             panic!(
                 "[region {}] register deleting data in [{}, {}) failed due to overlap",
@@ -190,20 +189,23 @@ impl PendingDeleteRanges {
         let info = StalePeerInfo {
             region_id,
             end_key: end_key.to_owned(),
-            timeout,
+            stale_sequence,
         };
         self.ranges.insert(start_key.to_owned(), info);
     }
 
     /// Gets all timeout ranges info.
-    pub fn timeout_ranges<'a>(
-        &'a self,
-        now: time::Instant,
-    ) -> impl Iterator<Item = (u64, Vec<u8>, Vec<u8>)> + 'a {
+    pub fn stale_ranges(&self, oldest_sequence: u64) -> impl Iterator<Item = (u64, &[u8], &[u8])> {
         self.ranges
             .iter()
-            .filter(move |&(_, info)| info.timeout <= now)
-            .map(|(start_key, info)| (info.region_id, start_key.clone(), info.end_key.clone()))
+            .filter(move |&(_, info)| info.stale_sequence < oldest_sequence)
+            .map(|(start_key, info)| {
+                (
+                    info.region_id,
+                    start_key.as_slice(),
+                    info.end_key.as_slice(),
+                )
+            })
     }
 
     pub fn len(&self) -> usize {
@@ -213,7 +215,7 @@ impl PendingDeleteRanges {
 
 #[derive(Clone)]
 struct SnapContext<R> {
-    engines: Engines,
+    engine: RocksEngine,
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
@@ -297,7 +299,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
-            match box_try!(self.engines.kv.c().get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engine.get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -312,23 +314,14 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-<<<<<<< HEAD
-        self.cleanup_overlap_ranges(&start_key, &end_key);
-        box_try!(self.engines.kv.c().delete_all_in_range(
-            &start_key,
-            &end_key,
-            self.use_delete_range
-        ));
-=======
         self.cleanup_overlap_ranges(&start_key, &end_key)?;
         self.delete_all_in_range(&[Range::new(&start_key, &end_key)])?;
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
-            match box_try!(self.engines.kv.c().get_msg_cf(CF_RAFT, &state_key)) {
+            match box_try!(self.engine.get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -351,7 +344,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: self.engines.kv.c().clone(),
+            db: self.engine.clone(),
             region,
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
@@ -359,11 +352,11 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         };
         s.apply(options)?;
 
-        let mut wb = self.engines.kv.c().write_batch();
+        let mut wb = self.engine.write_batch();
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.c().write(&wb).unwrap_or_else(|e| {
+        self.engine.write(&wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -408,83 +401,19 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         timer.observe_duration();
     }
 
-    /// Cleans up the data within the range.
-<<<<<<< HEAD
-    fn cleanup_range(
-        &self,
-        region_id: u64,
-        start_key: &[u8],
-        end_key: &[u8],
-        use_delete_files: bool,
-    ) {
-        if use_delete_files {
-            if let Err(e) = self
-                .engines
-                .kv
-                .c()
-                .delete_all_files_in_range(start_key, end_key)
-            {
-                error!(%e;
-                    "failed to delete files in range";
-                    "region_id" => region_id,
-                    "start_key" => log_wrappers::Value::key(start_key),
-                    "end_key" => log_wrappers::Value::key(end_key),
-                );
-                return;
-            }
-        }
-        if let Err(e) =
-            self.engines
-                .kv
-                .c()
-                .delete_all_in_range(start_key, end_key, self.use_delete_range)
-        {
-            error!(%e;
-                "failed to delete data in range";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Value::key(start_key),
-                "end_key" => log_wrappers::Value::key(end_key),
-            );
-        }
-        if use_delete_files {
-            if let Err(e) = self
-                .engines
-                .kv
-                .c()
-                .delete_blob_files_in_range(start_key, end_key)
-            {
-                error!(%e;
-                    "failed to delete blob files in range";
-                    "region_id" => region_id,
-                    "start_key" => log_wrappers::Value::key(start_key),
-                    "end_key" => log_wrappers::Value::key(end_key),
-                );
-                return;
-            }
-        }
-        info!(
-            "succeed in deleting data in range";
-            "region_id" => region_id,
-            "start_key" => log_wrappers::Value::key(start_key),
-            "end_key" => log_wrappers::Value::key(end_key),
-        );
-=======
     fn cleanup_range(&self, ranges: &[Range]) -> Result<()> {
-        self.engines
-            .kv
+        self.engine
             .delete_all_in_range(DeleteStrategy::DeleteFiles, &ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
             });
         self.delete_all_in_range(ranges)?;
-        self.engines
-            .kv
+        self.engine
             .delete_all_in_range(DeleteStrategy::DeleteBlobs, &ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
             });
         Ok(())
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
     }
 
     /// Gets the overlapping ranges and cleans them up.
@@ -492,17 +421,11 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         let overlap_ranges = self
             .pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
-<<<<<<< HEAD
-        let use_delete_files = false;
-        for (region_id, s_key, e_key) in overlap_ranges {
-            self.cleanup_range(region_id, &s_key, &e_key, use_delete_files);
-=======
         if overlap_ranges.is_empty() {
             return Ok(());
         }
         let oldest_sequence = self
-            .engines
-            .kv
+            .engine
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
         let mut ranges = Vec::with_capacity(overlap_ranges.len());
@@ -521,10 +444,8 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                   "start_key" => log_wrappers::Value::key(start_key),
                   "end_key" => log_wrappers::Value::key(end_key));
             ranges.push(Range::new(start_key, end_key));
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
         }
-        self.engines
-            .kv
+        self.engine
             .delete_all_in_range(DeleteStrategy::DeleteFiles, &df_ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
@@ -534,30 +455,6 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
     }
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
-<<<<<<< HEAD
-    fn insert_pending_delete_range(
-        &mut self,
-        region_id: u64,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) -> bool {
-        if self.clean_stale_peer_delay.as_secs() == 0 {
-            return false;
-        }
-
-        self.cleanup_overlap_ranges(start_key, end_key);
-
-        info!(
-            "register deleting data in range";
-            "region_id" => region_id,
-            "start_key" => log_wrappers::Value::key(start_key),
-            "end_key" => log_wrappers::Value::key(end_key),
-        );
-        let timeout = time::Instant::now() + self.clean_stale_peer_delay;
-        self.pending_delete_ranges
-            .insert(region_id, start_key, end_key, timeout);
-        true
-=======
     fn insert_pending_delete_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
         if let Err(e) = self.cleanup_overlap_ranges(start_key, end_key) {
             warn!("cleanup_overlap_ranges failed";
@@ -574,41 +471,17 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             );
         }
 
-        let seq = self.engines.kv.get_latest_sequence_number();
+        let seq = self.engine.get_latest_sequence_number();
         self.pending_delete_ranges
             .insert(region_id, start_key, end_key, seq);
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
     }
 
     /// Cleans up timeouted ranges.
     fn clean_timeout_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
-<<<<<<< HEAD
-        let now = time::Instant::now();
-        let mut cleaned_range_keys = vec![];
-        {
-            let use_delete_files = true;
-            for (region_id, start_key, end_key) in self.pending_delete_ranges.timeout_ranges(now) {
-                self.cleanup_range(
-                    region_id,
-                    start_key.as_slice(),
-                    end_key.as_slice(),
-                    use_delete_files,
-                );
-                cleaned_range_keys.push(start_key);
-                let elapsed = now.elapsed();
-                if elapsed >= CLEANUP_MAX_DURATION {
-                    let len = cleaned_range_keys.len();
-                    let elapsed = elapsed.as_millis() as f64 / 1000f64;
-                    info!("clean timeout ranges, now backoff"; "key_count" => len, "time_takes" => elapsed);
-                    break;
-                }
-            }
-=======
         let oldest_sequence = self
-            .engines
-            .kv
+            .engine
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
         let mut cleanup_ranges: Vec<(u64, Vec<u8>, Vec<u8>)> = self
@@ -619,7 +492,6 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         cleanup_ranges.sort_by(|a, b| a.1.cmp(&b.1));
         while cleanup_ranges.len() > CLEANUP_MAX_REGION_COUNT {
             cleanup_ranges.pop();
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
         }
         let ranges: Vec<Range> = cleanup_ranges
             .iter()
@@ -651,7 +523,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             if plain_file_used(cf) {
                 continue;
             }
-            if engine_rocks::util::ingest_maybe_slowdown_writes(&self.engines.kv, cf) {
+            if engine_rocks::util::ingest_maybe_slowdown_writes(self.engine.as_inner(), cf) {
                 return true;
             }
         }
@@ -659,7 +531,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
     }
 
     fn delete_all_in_range(&self, ranges: &[Range]) -> Result<()> {
-        for cf in self.engines.kv.cf_names() {
+        for cf in self.engine.cf_names() {
             let strategy = if cf == CF_LOCK {
                 DeleteStrategy::DeleteByKey
             } else if self.use_delete_range {
@@ -669,7 +541,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                     sst_path: self.mgr.get_temp_path_for_ingest(),
                 }
             };
-            box_try!(self.engines.kv.delete_ranges_cf(cf, strategy, ranges));
+            box_try!(self.engine.delete_ranges_cf(cf, strategy, ranges));
         }
 
         Ok(())
@@ -686,7 +558,7 @@ pub struct Runner<R> {
 
 impl<R: CasualRouter<RocksEngine>> Runner<R> {
     pub fn new(
-        engines: Engines,
+        engine: RocksEngine,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
@@ -699,7 +571,7 @@ impl<R: CasualRouter<RocksEngine>> Runner<R> {
                 .max_thread_count(GENERATE_POOL_SIZE)
                 .build_future_pool(),
             ctx: SnapContext {
-                engines,
+                engine,
                 mgr,
                 batch_size,
                 use_delete_range,
@@ -786,22 +658,12 @@ where
             } => {
                 // try to delay the range deletion because
                 // there might be a coprocessor request related to this range
-<<<<<<< HEAD
-                if !self
-                    .ctx
-                    .insert_pending_delete_range(region_id, &start_key, &end_key)
-                {
-                    self.ctx.cleanup_range(
-                        region_id, &start_key, &end_key, false, /* use_delete_files */
-                    );
-=======
                 self.ctx
                     .insert_pending_delete_range(region_id, &start_key, &end_key);
 
                 // try to delete stale ranges if there are any
                 if !self.ctx.ingest_maybe_stall() {
-                    self.ctx.clean_stale_ranges();
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
+                    self.ctx.clean_timeout_ranges();
                 }
             }
         }
@@ -943,9 +805,6 @@ mod tests {
         for (_, start_key, _) in ranges {
             pending_delete_ranges.remove(&start_key);
         }
-<<<<<<< HEAD
-        assert_eq!(pending_delete_ranges.len(), 0);
-=======
     }
 
     #[test]
@@ -1005,7 +864,6 @@ mod tests {
         for i in 0..9 {
             assert!(engine.kv.get_value(&ranges[i]).unwrap().is_none());
         }
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
     }
 
     #[test]

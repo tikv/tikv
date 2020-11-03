@@ -1534,19 +1534,12 @@ pub mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock};
 
-<<<<<<< HEAD
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, DBOptions, Env, DB};
     use engine::Engines;
-    use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-    use engine_traits::{Iterable, Peekable, SyncMutable};
-=======
-    use engine_rocks::raw::{DBOptions, Env, DB};
-    use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksSstWriterBuilder};
-    use engine_traits::{Engines, ExternalSstFileInfo, SstWriter};
     use engine_traits::{Iterable, Peekable, SstWriterBuilder, SyncMutable};
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
+
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{

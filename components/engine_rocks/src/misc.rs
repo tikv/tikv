@@ -5,29 +5,17 @@ use crate::import::RocksIngestExternalFileOptions;
 use crate::sst::RocksSstWriterBuilder;
 use crate::{util, RocksSstWriter};
 use engine_traits::{
-<<<<<<< HEAD
-    IterOptions, Iterable, Iterator, MiscExt, Mutable, Range, Result, WriteBatch, WriteBatchExt,
-    CF_LOCK, MAX_DELETE_BATCH_COUNT,
-=======
-    CFHandleExt, CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions,
-    Iterable, Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder,
-    WriteBatchExt, ALL_CFS,
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
+    CFHandleExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions, Iterable,
+    Iterator, KvEngine, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder, WriteBatch,
+    WriteBatchExt,
 };
 use tikv_util::keybuilder::KeyBuilder;
 
-<<<<<<< HEAD
-impl MiscExt for RocksEngine {
-    fn flush_cf(&self, cf: &str, sync: bool) -> Result<()> {
-        let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        Ok(self.as_inner().flush_cf(handle, sync)?)
-=======
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
 
 impl RocksEngine {
     fn is_titan(&self) -> bool {
         self.as_inner().is_titan()
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
     }
 
     // We store all data which would be deleted in memory at first because the data of region will never be larger than
@@ -135,16 +123,12 @@ impl RocksEngine {
         if wb.count() > 0 {
             self.write(&wb)?;
         }
-        self.sync_wal()?;
+        self.sync()?;
         Ok(())
     }
 }
 
 impl MiscExt for RocksEngine {
-    fn flush(&self, sync: bool) -> Result<()> {
-        Ok(self.as_inner().flush(sync)?)
-    }
-
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         Ok(self.as_inner().flush_cf(handle, sync)?)
@@ -210,6 +194,21 @@ impl MiscExt for RocksEngine {
         Ok(self
             .as_inner()
             .get_approximate_memtable_stats_cf(handle, &range))
+    }
+
+    fn get_latest_sequence_number(&self) -> u64 {
+        self.as_inner().get_latest_sequence_number()
+    }
+
+    fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
+        match self
+            .as_inner()
+            .get_property_int(crate::ROCKSDB_OLDEST_SNAPSHOT_SEQUENCE)
+        {
+            // Some(0) indicates that no snapshot is in use
+            Some(0) => None,
+            s => s,
+        }
     }
 }
 

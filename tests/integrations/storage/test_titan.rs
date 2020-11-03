@@ -13,14 +13,9 @@ use engine::rocks::{IngestExternalFileOptions, Writable};
 use engine::Engines;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
-<<<<<<< HEAD
-use engine_traits::{MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT, CF_WRITE};
-=======
 use engine_traits::{
-    CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter, SstWriterBuilder,
-    ALL_CFS, CF_DEFAULT, CF_WRITE,
+    DeleteStrategy, MiscExt, Range, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT, CF_WRITE,
 };
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
 use raftstore::store::{apply_sst_cf_file, build_sst_cf_file};
@@ -308,19 +303,13 @@ fn test_delete_files_in_range_for_titan() {
     // so we set key_only for Titan.
     engines
         .kv
-<<<<<<< HEAD
         .c()
-        .delete_all_files_in_range(
-            &data_key(Key::from_raw(b"a").as_encoded()),
-            &data_key(Key::from_raw(b"b").as_encoded()),
-=======
         .delete_all_in_range(
             DeleteStrategy::DeleteFiles,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),
                 &data_key(Key::from_raw(b"b").as_encoded()),
             )],
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
         )
         .unwrap();
     engines
@@ -336,19 +325,13 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
     engines
         .kv
-<<<<<<< HEAD
         .c()
-        .delete_blob_files_in_range(
-            &data_key(Key::from_raw(b"a").as_encoded()),
-            &data_key(Key::from_raw(b"b").as_encoded()),
-=======
         .delete_all_in_range(
             DeleteStrategy::DeleteBlobs,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),
                 &data_key(Key::from_raw(b"b").as_encoded()),
             )],
->>>>>>> fae016ec4... Ingest SST instead of writing memtable directly when delete a large range of keys. (#7794)
         )
         .unwrap();
 

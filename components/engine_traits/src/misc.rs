@@ -32,4 +32,12 @@ pub trait MiscExt: CFNamesExt {
 
     /// Return the approximate number of records and size in the range of memtables of the cf.
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)>;
+
+    fn get_latest_sequence_number(&self) -> u64 {
+        0
+    }
+
+    fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
+        None
+    }
 }
