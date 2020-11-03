@@ -1538,7 +1538,9 @@ pub mod tests {
     use engine::rocks::{self, DBOptions, Env, DB};
     use engine::Engines;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksSstWriterBuilder};
-    use engine_traits::{Iterable, Peekable, SstWriterBuilder, SyncMutable};
+    use engine_traits::{
+        ExternalSstFileInfo, Iterable, Peekable, SstWriter, SstWriterBuilder, SyncMutable,
+    };
 
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
@@ -2422,7 +2424,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let mgr_path = src_temp_dir.path().to_str().unwrap();
-        let src_mgr = SnapManager::new(mgr_path.to_owned());
+        let src_mgr = SnapManager::new(mgr_path.to_owned(), None);
         src_mgr.init().unwrap();
         let kv_temp_dir = Builder::new()
             .prefix("test_snap_temp_file_delete_kv")
@@ -2440,7 +2442,7 @@ pub mod tests {
         assert!(file_util::file_exists(&sst_path));
         assert_eq!(r.file_path().to_str().unwrap(), sst_path.as_str());
         drop(src_mgr);
-        let src_mgr = SnapManager::new(mgr_path.to_owned());
+        let src_mgr = SnapManager::new(mgr_path.to_owned(), None);
         src_mgr.init().unwrap();
         // The sst_path will be deleted by SnapManager because it is a temp filet.
         assert!(!file_util::file_exists(&sst_path));

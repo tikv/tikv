@@ -219,7 +219,6 @@ struct SnapContext<R> {
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
-    clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
     coprocessor_host: CoprocessorHost,
     router: R,
@@ -562,7 +561,6 @@ impl<R: CasualRouter<RocksEngine>> Runner<R> {
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
-        clean_stale_peer_delay: Duration,
         coprocessor_host: CoprocessorHost,
         router: R,
     ) -> Runner<R> {
@@ -575,7 +573,6 @@ impl<R: CasualRouter<RocksEngine>> Runner<R> {
                 mgr,
                 batch_size,
                 use_delete_range,
-                clean_stale_peer_delay,
                 pending_delete_ranges: PendingDeleteRanges::default(),
                 coprocessor_host,
                 router,
@@ -719,14 +716,12 @@ mod tests {
     use crate::store::{CasualMessage, SnapKey, SnapManager};
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Writable};
-    use engine::Engines;
     use engine_rocks::{Compat, RocksSnapshot};
     use engine_traits::{Mutable, Peekable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
     use tempfile::Builder;
-    use tikv_util::time;
     use tikv_util::timer::Timer;
     use tikv_util::worker::Worker;
 
@@ -739,71 +734,78 @@ mod tests {
         id: u64,
         s: &str,
         e: &str,
-        timeout: time::Instant,
+        stale_sequence: u64,
     ) {
-        pending_delete_ranges.insert(id, s.as_bytes(), e.as_bytes(), timeout);
+        pending_delete_ranges.insert(id, s.as_bytes(), e.as_bytes(), stale_sequence);
     }
 
     #[test]
+    #[allow(clippy::string_lit_as_bytes)]
     fn test_pending_delete_ranges() {
         let mut pending_delete_ranges = PendingDeleteRanges::default();
-        let delay = Duration::from_millis(100);
         let id = 0;
 
-        let timeout = time::Instant::now() + delay;
-        insert_range(&mut pending_delete_ranges, id, "a", "c", timeout);
-        insert_range(&mut pending_delete_ranges, id, "m", "n", timeout);
-        insert_range(&mut pending_delete_ranges, id, "x", "z", timeout);
-        insert_range(&mut pending_delete_ranges, id + 1, "f", "i", timeout);
-        insert_range(&mut pending_delete_ranges, id + 1, "p", "t", timeout);
+        let timeout1 = 10;
+        insert_range(&mut pending_delete_ranges, id, "a", "c", timeout1);
+        insert_range(&mut pending_delete_ranges, id, "m", "n", timeout1);
+        insert_range(&mut pending_delete_ranges, id, "x", "z", timeout1);
+        insert_range(&mut pending_delete_ranges, id + 1, "f", "i", timeout1);
+        insert_range(&mut pending_delete_ranges, id + 1, "p", "t", timeout1);
         assert_eq!(pending_delete_ranges.len(), 5);
-
-        thread::sleep(delay / 2);
 
         //  a____c    f____i    m____n    p____t    x____z
         //              g___________________q
         // when we want to insert [g, q), we first extract overlap ranges,
         // which are [f, i), [m, n), [p, t)
-        let timeout = time::Instant::now() + delay;
+        let timeout2 = 12;
         let overlap_ranges =
             pending_delete_ranges.drain_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
         assert_eq!(
             overlap_ranges,
             [
-                (id + 1, b"f".to_vec(), b"i".to_vec()),
-                (id, b"m".to_vec(), b"n".to_vec()),
-                (id + 1, b"p".to_vec(), b"t".to_vec()),
+                (id + 1, b"f".to_vec(), b"i".to_vec(), timeout1),
+                (id, b"m".to_vec(), b"n".to_vec(), timeout1),
+                (id + 1, b"p".to_vec(), b"t".to_vec(), timeout1),
             ]
         );
         assert_eq!(pending_delete_ranges.len(), 2);
-        insert_range(&mut pending_delete_ranges, id + 2, "g", "q", timeout);
+        insert_range(&mut pending_delete_ranges, id + 2, "g", "q", timeout2);
         assert_eq!(pending_delete_ranges.len(), 3);
 
-        thread::sleep(delay / 2);
-
         // at t1, [a, c) and [x, z) will timeout
-        let now = time::Instant::now();
-        let ranges: Vec<_> = pending_delete_ranges.timeout_ranges(now).collect();
-        assert_eq!(
-            ranges,
-            [
-                (id, b"a".to_vec(), b"c".to_vec()),
-                (id, b"x".to_vec(), b"z".to_vec()),
-            ]
-        );
-        for (_, start_key, _) in ranges {
-            pending_delete_ranges.remove(&start_key);
+        {
+            let now = 11;
+            let ranges: Vec<_> = pending_delete_ranges.stale_ranges(now).collect();
+            assert_eq!(
+                ranges,
+                [
+                    (id, "a".as_bytes(), "c".as_bytes()),
+                    (id, "x".as_bytes(), "z".as_bytes()),
+                ]
+            );
+            for start_key in ranges
+                .into_iter()
+                .map(|(_, start, _)| start.to_vec())
+                .collect::<Vec<Vec<u8>>>()
+            {
+                pending_delete_ranges.remove(&start_key);
+            }
+            assert_eq!(pending_delete_ranges.len(), 1);
         }
-        assert_eq!(pending_delete_ranges.len(), 1);
-
-        thread::sleep(delay / 2);
 
         // at t2, [g, q) will timeout
-        let now = time::Instant::now();
-        let ranges: Vec<_> = pending_delete_ranges.timeout_ranges(now).collect();
-        assert_eq!(ranges, [(id + 2, b"g".to_vec(), b"q".to_vec())]);
-        for (_, start_key, _) in ranges {
-            pending_delete_ranges.remove(&start_key);
+        {
+            let now = 14;
+            let ranges: Vec<_> = pending_delete_ranges.stale_ranges(now).collect();
+            assert_eq!(ranges, [(id + 2, "g".as_bytes(), "q".as_bytes())]);
+            for start_key in ranges
+                .into_iter()
+                .map(|(_, start, _)| start.to_vec())
+                .collect::<Vec<Vec<u8>>>()
+            {
+                pending_delete_ranges.remove(&start_key);
+            }
+            assert_eq!(pending_delete_ranges.len(), 0);
         }
     }
 
@@ -813,17 +815,16 @@ mod tests {
         let engine = get_test_db_for_regions(&temp_dir, None, None, None, None, &[1]).unwrap();
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
-        let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let (router, _) = mpsc::sync_channel(11);
         let runner = RegionRunner::new(
-            engines,
+            engine.kv.c().clone(),
             mgr,
             0,
             false,
-            CoprocessorHost::<RocksEngine>::default(),
+            CoprocessorHost::default(),
             router,
         );
         let mut ranges = vec![];
@@ -859,10 +860,10 @@ mod tests {
         thread::sleep(Duration::from_millis(20));
         drop(snap);
         thread::sleep(Duration::from_millis(200));
-        assert!(engine.kv.get_value(b"k1").unwrap().is_none());
-        assert_eq!(engine.kv.get_value(b"k2").unwrap().unwrap(), b"v2");
+        assert!(engine.kv.c().get_value(b"k1").unwrap().is_none());
+        assert_eq!(engine.kv.c().get_value(b"k2").unwrap().unwrap(), b"v2");
         for i in 0..9 {
-            assert!(engine.kv.get_value(&ranges[i]).unwrap().is_none());
+            assert!(engine.kv.c().get_value(&ranges[i]).unwrap().is_none());
         }
     }
 
@@ -907,23 +908,16 @@ mod tests {
             }
         }
 
-        let shared_block_cache = false;
-        let engines = Engines::new(
-            Arc::clone(&engine.kv),
-            Arc::clone(&engine.raft),
-            shared_block_cache,
-        );
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
-            engines.clone(),
+            engine.kv.c().clone(),
             mgr,
             0,
             true,
-            Duration::from_secs(0),
             CoprocessorHost::default(),
             router,
         );
@@ -934,14 +928,14 @@ mod tests {
         let gen_and_apply_snap = |id: u64| {
             // construct snapshot
             let (tx, rx) = mpsc::sync_channel(1);
-            let apply_state: RaftApplyState = engines
+            let apply_state: RaftApplyState = engine
                 .kv
                 .c()
                 .get_msg_cf(CF_RAFT, &keys::apply_state_key(id))
                 .unwrap()
                 .unwrap();
             let idx = apply_state.get_applied_index();
-            let entry = engines
+            let entry = engine
                 .raft
                 .c()
                 .get_msg::<Entry>(&keys::raft_log_key(id, idx))
@@ -950,7 +944,7 @@ mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    kv_snap: RocksSnapshot::new(engines.kv.clone()),
+                    kv_snap: RocksSnapshot::new(engine.kv.clone()),
                     last_applied_index_term: entry.get_term(),
                     last_applied_state: apply_state,
                     notifier: tx,

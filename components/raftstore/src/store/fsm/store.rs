@@ -1236,7 +1236,6 @@ impl RaftBatchSystem {
             snap_mgr,
             cfg.snap_apply_batch_size.0 as usize,
             cfg.use_delete_range,
-            cfg.clean_stale_peer_delay.0,
             workers.coprocessor_host.clone(),
             self.router(),
         );
