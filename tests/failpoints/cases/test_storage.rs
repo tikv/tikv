@@ -590,8 +590,9 @@ fn test_async_apply_prewrite_impl<E: Engine>(
         fail::remove(on_handle_apply);
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
-        let got_value =
-            block_on(storage.get(ctx, Key::from_raw(key), min_commit_ts.next())).unwrap();
+        let got_value = block_on(storage.get(ctx, Key::from_raw(key), min_commit_ts.next()))
+            .unwrap()
+            .0;
         assert_eq!(got_value.unwrap().as_slice(), value);
     } else {
         assert_eq!(
@@ -615,7 +616,9 @@ fn test_async_apply_prewrite_impl<E: Engine>(
             .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
-        let got_value = block_on(storage.get(ctx, Key::from_raw(key), commit_ts.next())).unwrap();
+        let got_value = block_on(storage.get(ctx, Key::from_raw(key), commit_ts.next()))
+            .unwrap()
+            .0;
         assert_eq!(got_value.unwrap().as_slice(), value);
     }
 }
@@ -891,7 +894,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
         let res = block_on(storage.get(ctx.clone(), Key::from_raw(key), commit_ts.next()));
         match res {
             Ok(v) => {
-                assert_eq!(v.unwrap().as_slice(), value);
+                assert_eq!(v.0.unwrap().as_slice(), value);
                 break;
             }
             Err(e) => expect_locked(e, key, start_ts),

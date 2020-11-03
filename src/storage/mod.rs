@@ -50,7 +50,8 @@ pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CbContext, CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
+        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot, Statistics,
+        TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
@@ -253,7 +254,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         key: Key,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<Option<Value>>> {
+    ) -> impl Future<Output = Result<(Option<Value>, Statistics, PerfStatisticsDelta)>> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -303,6 +304,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
+                    let perf_statistics = PerfStatisticsInstant::new();
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -329,7 +331,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
 
-                    result
+                    Ok((result?, statistics, perf_statistics.delta()))
                 }
             },
             priority,
@@ -347,7 +349,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn batch_get_command(
         &self,
         requests: Vec<GetRequest>,
-    ) -> impl Future<Output = Result<Vec<Result<Option<Vec<u8>>>>>> {
+    ) -> impl Future<Output = Result<Vec<Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>>>>
+    {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
@@ -444,12 +447,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     .build()
                                 {
                                     Ok(mut point_getter) => {
+                                        let perf_statistics = PerfStatisticsInstant::new();
                                         let v = point_getter.get(&key);
                                         let stat = point_getter.take_statistics();
                                         metrics::tls_collect_read_flow(region_id, &stat);
                                         statistics.add(&stat);
-                                        results
-                                            .push(v.map_err(|e| Error::from(txn::Error::from(e))));
+                                        results.push(
+                                            v.map_err(|e| Error::from(txn::Error::from(e)))
+                                                .map(|v| (v, stat, perf_statistics.delta())),
+                                        );
                                     }
                                     Err(e) => results.push(Err(Error::from(txn::Error::from(e)))),
                                 }
@@ -482,7 +488,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         keys: Vec<Key>,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
+    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)>> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -533,8 +539,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
-
                     let mut statistics = Statistics::default();
+                    let perf_statistics = PerfStatisticsInstant::new();
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -573,7 +579,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
-                    result
+
+                    Ok((result?, statistics, perf_statistics.delta()))
                 }
             },
             priority,
@@ -1603,16 +1610,16 @@ pub mod test_util {
         sync::mpsc::{channel, Sender},
     };
 
-    pub fn expect_none(x: Result<Option<Value>>) {
-        assert_eq!(x.unwrap(), None);
+    pub fn expect_none(x: Option<Value>) {
+        assert_eq!(x, None);
     }
 
-    pub fn expect_value(v: Vec<u8>, x: Result<Option<Value>>) {
-        assert_eq!(x.unwrap().unwrap(), v);
+    pub fn expect_value(v: Vec<u8>, x: Option<Value>) {
+        assert_eq!(x.unwrap(), v);
     }
 
-    pub fn expect_multi_values(v: Vec<Option<KvPair>>, x: Result<Vec<Result<KvPair>>>) {
-        let x: Vec<Option<KvPair>> = x.unwrap().into_iter().map(Result::ok).collect();
+    pub fn expect_multi_values(v: Vec<Option<KvPair>>, x: Vec<Result<KvPair>>) {
+        let x: Vec<Option<KvPair>> = x.into_iter().map(Result::ok).collect();
         assert_eq!(x, v);
     }
 
@@ -1769,11 +1776,11 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            100.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()))
+                .unwrap()
+                .0,
+        );
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
@@ -1806,14 +1813,16 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            100.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()))
+                .unwrap()
+                .0,
+        );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into()))
+                .unwrap()
+                .0,
         );
     }
 
@@ -1943,7 +1952,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward
         expect_multi_values(
@@ -1957,7 +1967,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with bound
         expect_multi_values(
@@ -1971,7 +1982,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with bound
         expect_multi_values(
@@ -1985,7 +1997,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with limit
         expect_multi_values(
@@ -1999,7 +2012,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with limit
         expect_multi_values(
@@ -2013,7 +2027,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         storage
@@ -2048,7 +2063,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward
         expect_multi_values(
@@ -2066,7 +2082,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with sample step
         expect_multi_values(
@@ -2083,7 +2100,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with sample step
         expect_multi_values(
@@ -2100,7 +2118,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with sample step and limit
         expect_multi_values(
@@ -2114,7 +2133,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with sample step and limit
         expect_multi_values(
@@ -2128,7 +2148,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with bound
         expect_multi_values(
@@ -2145,7 +2166,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with bound
         expect_multi_values(
@@ -2162,7 +2184,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         // Forward with limit
@@ -2180,7 +2203,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with limit
         expect_multi_values(
@@ -2197,7 +2221,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
     }
 
@@ -2255,7 +2280,8 @@ mod tests {
                 5.into(),
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward
         expect_multi_values(
@@ -2269,7 +2295,8 @@ mod tests {
                 5.into(),
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with bound
         expect_multi_values(
@@ -2283,7 +2310,8 @@ mod tests {
                 5.into(),
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with bound
         expect_multi_values(
@@ -2297,7 +2325,8 @@ mod tests {
                 5.into(),
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with limit
         expect_multi_values(
@@ -2311,7 +2340,8 @@ mod tests {
                 5.into(),
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with limit
         expect_multi_values(
@@ -2325,7 +2355,8 @@ mod tests {
                 5.into(),
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         storage
@@ -2360,7 +2391,8 @@ mod tests {
                 5.into(),
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward
         expect_multi_values(
@@ -2378,7 +2410,8 @@ mod tests {
                 5.into(),
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with bound
         expect_multi_values(
@@ -2392,7 +2425,8 @@ mod tests {
                 5.into(),
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with bound
         expect_multi_values(
@@ -2406,7 +2440,8 @@ mod tests {
                 5.into(),
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         // Forward with limit
@@ -2421,7 +2456,8 @@ mod tests {
                 5.into(),
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with limit
         expect_multi_values(
@@ -2435,7 +2471,8 @@ mod tests {
                 5.into(),
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
     }
 
@@ -2466,7 +2503,9 @@ mod tests {
                 Context::default(),
                 vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                 2.into(),
-            )),
+            ))
+            .unwrap()
+            .0,
         );
         storage
             .sched_txn_command(
@@ -2499,7 +2538,9 @@ mod tests {
                     Key::from_raw(b"b"),
                 ],
                 5.into(),
-            )),
+            ))
+            .unwrap()
+            .0,
         );
     }
 
@@ -2545,7 +2586,7 @@ mod tests {
             },
             x.remove(0),
         );
-        assert_eq!(x.remove(0).unwrap(), None);
+        assert_eq!(x.remove(0).unwrap().0, None);
         storage
             .sched_txn_command(
                 commands::Commit::new(
@@ -2571,6 +2612,7 @@ mod tests {
         .unwrap()
         .into_iter()
         .map(|x| x.unwrap())
+        .map(|(x, _, _)| x)
         .collect();
         assert_eq!(
             x,
@@ -2637,11 +2679,15 @@ mod tests {
         rx.recv().unwrap();
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 120.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 120.into()))
+                .unwrap()
+                .0,
         );
         expect_value(
             b"101".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 120.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 120.into()))
+                .unwrap()
+                .0,
         );
         storage
             .sched_txn_command(
@@ -2670,11 +2716,11 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            100.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()))
+                .unwrap()
+                .0,
+        );
         storage
             .sched_txn_command::<()>(
                 commands::Pause::new(vec![Key::from_raw(b"x")], 1000, Context::default()),
@@ -2737,11 +2783,11 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         assert_eq!(cm.max_ts(), 100.into());
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            105.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 105.into()))
+                .unwrap()
+                .0,
+        );
     }
 
     #[test]
@@ -2795,11 +2841,11 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            ts(230, 0),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), ts(230, 0)))
+                .unwrap()
+                .0,
+        );
     }
 
     #[test]
@@ -2810,7 +2856,11 @@ mod tests {
         let (tx, rx) = channel();
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
-        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into())));
+        expect_none(
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into()))
+                .unwrap()
+                .0,
+        );
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         storage
@@ -2836,12 +2886,18 @@ mod tests {
         rx.recv().unwrap();
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
-        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into())));
+        expect_none(
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into()))
+                .unwrap()
+                .0,
+        );
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into()))
+                .unwrap()
+                .0,
         );
     }
 
@@ -2854,11 +2910,11 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            100.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()))
+                .unwrap()
+                .0,
+        );
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
@@ -2893,7 +2949,9 @@ mod tests {
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into()))
+                .unwrap()
+                .0,
         );
         // Command Get with high priority not block by command Pause.
         assert_eq!(rx.recv().unwrap(), 3);
@@ -2939,15 +2997,21 @@ mod tests {
         rx.recv().unwrap();
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into()))
+                .unwrap()
+                .0,
         );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into()))
+                .unwrap()
+                .0,
         );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into()))
+                .unwrap()
+                .0,
         );
 
         // Delete range [x, z)
@@ -2961,19 +3025,21 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            101.into(),
-        )));
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"y"),
-            101.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into()))
+                .unwrap()
+                .0,
+        );
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into()))
+                .unwrap()
+                .0,
+        );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into()))
+                .unwrap()
+                .0,
         );
 
         storage
@@ -2986,11 +3052,11 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"z"),
-            101.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into()))
+                .unwrap()
+                .0,
+        );
     }
 
     #[test]
@@ -3023,7 +3089,7 @@ mod tests {
 
         expect_value(
             b"004".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())).unwrap(),
         );
 
         // Delete ["d", "e")
@@ -3041,16 +3107,14 @@ mod tests {
         // Assert key "d" has gone
         expect_value(
             b"003".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())).unwrap(),
         );
-        expect_none(block_on(storage.raw_get(
-            Context::default(),
-            "".to_string(),
-            b"d".to_vec(),
-        )));
+        expect_none(
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())).unwrap(),
+        );
         expect_value(
             b"005".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())).unwrap(),
         );
 
         // Delete ["aa", "ab")
@@ -3068,11 +3132,11 @@ mod tests {
         // Assert nothing happened
         expect_value(
             b"001".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())).unwrap(),
         );
         expect_value(
             b"002".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"b".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"b".to_vec())).unwrap(),
         );
 
         // Delete all
@@ -3089,11 +3153,10 @@ mod tests {
 
         // Assert now no key remains
         for kv in &test_data {
-            expect_none(block_on(storage.raw_get(
-                Context::default(),
-                "".to_string(),
-                kv.0.to_vec(),
-            )));
+            expect_none(
+                block_on(storage.raw_get(Context::default(), "".to_string(), kv.0.to_vec()))
+                    .unwrap(),
+            );
         }
 
         rx.recv().unwrap();
@@ -3129,7 +3192,7 @@ mod tests {
         for (key, val) in test_data {
             expect_value(
                 val,
-                block_on(storage.raw_get(Context::default(), "".to_string(), key)),
+                block_on(storage.raw_get(Context::default(), "".to_string(), key)).unwrap(),
             );
         }
     }
@@ -3168,7 +3231,7 @@ mod tests {
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
-            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)),
+            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
         );
     }
 
@@ -3253,7 +3316,7 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)),
+            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
         );
 
         // Delete ["b", "d"]
@@ -3270,25 +3333,21 @@ mod tests {
         // Assert "b" and "d" are gone
         expect_value(
             b"aa".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())).unwrap(),
         );
-        expect_none(block_on(storage.raw_get(
-            Context::default(),
-            "".to_string(),
-            b"b".to_vec(),
-        )));
+        expect_none(
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"b".to_vec())).unwrap(),
+        );
         expect_value(
             b"cc".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())).unwrap(),
         );
-        expect_none(block_on(storage.raw_get(
-            Context::default(),
-            "".to_string(),
-            b"d".to_vec(),
-        )));
+        expect_none(
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())).unwrap(),
+        );
         expect_value(
             b"ee".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())).unwrap(),
         );
 
         // Delete ["a", "c", "e"]
@@ -3304,11 +3363,7 @@ mod tests {
 
         // Assert no key remains
         for (k, _) in test_data {
-            expect_none(block_on(storage.raw_get(
-                Context::default(),
-                "".to_string(),
-                k,
-            )));
+            expect_none(block_on(storage.raw_get(Context::default(), "".to_string(), k)).unwrap());
         }
     }
 
@@ -3368,7 +3423,8 @@ mod tests {
                 20,
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         results = results.split_off(10);
         expect_multi_values(
@@ -3381,7 +3437,8 @@ mod tests {
                 20,
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         let mut results: Vec<Option<KvPair>> = test_data
             .clone()
@@ -3398,7 +3455,8 @@ mod tests {
                 20,
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         results = results.split_off(10);
         expect_multi_values(
@@ -3411,7 +3469,8 @@ mod tests {
                 20,
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         let results: Vec<Option<KvPair>> = test_data
             .clone()
@@ -3429,7 +3488,8 @@ mod tests {
                 20,
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         let results: Vec<Option<KvPair>> = test_data
             .clone()
@@ -3448,7 +3508,8 @@ mod tests {
                 5,
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         // Scan with end_key
@@ -3469,7 +3530,8 @@ mod tests {
                 20,
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         let results: Vec<Option<KvPair>> = test_data
             .clone()
@@ -3488,7 +3550,8 @@ mod tests {
                 20,
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
 
         // Reverse scan with end_key
@@ -3510,7 +3573,8 @@ mod tests {
                 20,
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         let results: Vec<Option<KvPair>> = test_data
             .into_iter()
@@ -3528,7 +3592,8 @@ mod tests {
                 20,
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         // End key tests. Confirm that lower/upper bound works correctly.
@@ -3560,7 +3625,8 @@ mod tests {
                     &mut Statistics::default(),
                     false,
                 )
-            }),
+            })
+            .unwrap(),
         );
         expect_multi_values(
             results.rev().collect(),
@@ -3579,7 +3645,8 @@ mod tests {
                     &mut Statistics::default(),
                     false,
                 )
-            }),
+            })
+            .unwrap(),
         );
     }
 
@@ -3727,7 +3794,7 @@ mod tests {
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
-            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)),
+            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
         );
 
         let results = vec![
@@ -3762,7 +3829,8 @@ mod tests {
                 5,
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
 
         let results = vec![
@@ -3789,7 +3857,8 @@ mod tests {
                 5,
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
 
         let results = vec![
@@ -3812,7 +3881,8 @@ mod tests {
                 3,
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
 
         let results = vec![
@@ -3835,7 +3905,8 @@ mod tests {
                 3,
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
 
         let results = vec![
@@ -3871,7 +3942,8 @@ mod tests {
                 5,
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         let results = vec![
@@ -3899,7 +3971,8 @@ mod tests {
                 2,
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         let results = vec![
@@ -3935,7 +4008,8 @@ mod tests {
                 5,
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
     }
 

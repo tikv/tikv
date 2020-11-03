@@ -14,7 +14,7 @@ use crate::server::Result as ServerResult;
 use crate::storage::{
     errors::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-        extract_region_error,
+        extract_kv_pairs_and_statistics, extract_region_error,
     },
     kv::Engine,
     lock_manager::LockManager,
@@ -1184,8 +1184,14 @@ fn future_get<E: Engine, L: LockManager>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok(Some(val)) => resp.set_value(val),
-                Ok(None) => resp.set_not_found(true),
+                Ok((val, statistics, perf_statistics_delta)) => {
+                    statistics.write_scan_detail(resp.mut_scan_detail_v2());
+                    perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
+                    match val {
+                        Some(val) => resp.set_value(val),
+                        None => resp.set_not_found(true),
+                    }
+                }
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -1234,7 +1240,10 @@ fn future_batch_get<E: Engine, L: LockManager>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_pairs(extract_kv_pairs(v).into());
+            let (val, statistics, perf_statistics_delta) = extract_kv_pairs_and_statistics(v);
+            statistics.write_scan_detail(resp.mut_scan_detail_v2());
+            perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
+            resp.set_pairs(val.into());
         }
         Ok(resp)
     }
