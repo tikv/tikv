@@ -700,6 +700,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             region_epoch: req.take_context().take_region_epoch(),
             split_keys,
             callback: Callback::write(cb),
+            source: ctx.peer().into(),
         };
 
         if let Err(e) = self.ch.send_casual_msg(region_id, req) {

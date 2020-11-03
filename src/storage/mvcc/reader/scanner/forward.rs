@@ -875,7 +875,6 @@ mod latest_kv_tests {
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::kv::{Engine, TestEngineBuilder};
-    use crate::storage::mvcc::tests::*;
     use crate::storage::Scanner;
 
     use crate::storage::txn::tests::*;
@@ -1162,8 +1161,9 @@ mod latest_kv_tests {
 mod latest_entry_tests {
     use super::super::ScannerBuilder;
     use super::*;
-    use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
+    use crate::storage::txn::tests::{
+        must_commit, must_prewrite_delete, must_prewrite_put, must_rollback,
+    };
     use crate::storage::{Engine, TestEngineBuilder};
 
     use super::test_util::EntryBuilder;
@@ -1516,7 +1516,6 @@ mod latest_entry_tests {
 mod delta_entry_tests {
     use super::super::ScannerBuilder;
     use super::*;
-    use crate::storage::mvcc::tests::*;
     use crate::storage::txn::tests::*;
     use crate::storage::{Engine, TestEngineBuilder};
 

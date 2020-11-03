@@ -111,7 +111,7 @@ pub mod tests {
     #[cfg(test)]
     use crate::storage::txn::tests::{
         must_acquire_pessimistic_lock_for_large_txn, must_prewrite_delete, must_prewrite_lock,
-        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl,
+        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl, must_rollback,
     };
 
     #[cfg(test)]
