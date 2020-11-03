@@ -60,7 +60,7 @@ impl ChunkedVecEnum {
     pub fn get(&self, idx: usize) -> Option<EnumRef> {
         assert!(idx < self.len());
         if self.bitmap.get(idx) {
-            Some(EnumRef::new(&self.data, *self.value.get(idx).unwrap()))
+            Some(EnumRef::new(&self.data, self.value[idx]))
         } else {
             None
         }
@@ -70,7 +70,7 @@ impl ChunkedVecEnum {
         let mut x = Vec::with_capacity(self.len());
         for i in 0..self.len() {
             x.push(if self.bitmap.get(i) {
-                Some(Enum::new(self.data.clone(), *self.value.get(i).unwrap()))
+                Some(Enum::new(self.data.clone(), self.value[i]))
             } else {
                 None
             });
