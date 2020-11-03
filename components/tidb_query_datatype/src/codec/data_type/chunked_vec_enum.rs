@@ -12,6 +12,12 @@ use tikv_util::buffer_vec::BufferVec;
 /// - `bitmap` indicates if an element at given index is null.
 /// - `value` is an 1-based index enum data offset, 0 means this enum is ''
 ///
+/// # Note
+///
+/// Make sure operating `bitmap` and `value` together to prevent different
+/// stored representation issue discussed at
+/// https://github.com/tikv/tikv/pull/8948#discussion_r516463693
+///
 /// TODO: add way to set enum column data
 #[derive(Debug, Clone)]
 pub struct ChunkedVecEnum {
