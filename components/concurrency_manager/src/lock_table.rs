@@ -83,12 +83,8 @@ impl LockTable {
         end_key: Option<&Key>,
         mut pred: impl FnMut(Arc<KeyHandle>) -> Option<T>,
     ) -> Option<T> {
-        let lower_bound = start_key
-            .map(|k| Bound::Included(k))
-            .unwrap_or(Bound::Unbounded);
-        let upper_bound = end_key
-            .map(|k| Bound::Excluded(k))
-            .unwrap_or(Bound::Unbounded);
+        let lower_bound = start_key.map(Bound::Included).unwrap_or(Bound::Unbounded);
+        let upper_bound = end_key.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
 
         for e in self.0.range((lower_bound, upper_bound)) {
             let res = e.value().upgrade().and_then(&mut pred);
