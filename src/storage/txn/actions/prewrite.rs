@@ -129,7 +129,7 @@ pub mod tests {
         ts: impl Into<TimeStamp>,
     ) -> MvccResult<()> {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = ts.into();
         let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
@@ -156,8 +156,7 @@ pub mod tests {
         pk: &[u8],
         ts: impl Into<TimeStamp>,
     ) -> MvccResult<()> {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = ts.into();
         let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
@@ -182,8 +181,7 @@ pub mod tests {
         let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(42.into());
 
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok
@@ -223,8 +221,7 @@ pub mod tests {
         let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(42.into());
 
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok

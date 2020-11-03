@@ -418,7 +418,7 @@ impl MvccInfoObserver for MvccChecksum {
 mod tests {
     use super::*;
     use crate::storage::kv::TestEngineBuilder;
-    use crate::storage::mvcc::tests::must_rollback;
+    use crate::storage::txn::tests::must_rollback;
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_rocks::RocksEngine;
 
