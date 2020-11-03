@@ -164,10 +164,20 @@ impl WriteCompactionFilter {
         if self.near_seek_distance >= NEAR_SEEK_LIMIT {
             valid = write_iter.seek(SeekKey::Key(delete)).unwrap();
         } else {
-            while valid && write_iter.key() < delete {
+            let (mut next_count, mut found) = (0, false);
+            while valid && next_count <= NEAR_SEEK_LIMIT {
+                if write_iter.key() >= delete {
+                    found = true;
+                    break;
+                }
                 valid = write_iter.next().unwrap();
+                next_count += 1;
             }
-        };
+            if valid && !found {
+                // Fallback to `seek` after some `next`s.
+                valid = write_iter.seek(SeekKey::Key(delete)).unwrap();
+            }
+        }
         self.near_seek_distance = 0;
 
         while valid {
