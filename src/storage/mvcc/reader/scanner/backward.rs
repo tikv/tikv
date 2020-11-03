@@ -434,7 +434,9 @@ mod tests {
     use super::*;
     use crate::storage::kv::{Engine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
+    use crate::storage::txn::tests::{
+        must_commit, must_prewrite_delete, must_prewrite_put, must_rollback,
+    };
     use crate::storage::Scanner;
 
     #[test]
