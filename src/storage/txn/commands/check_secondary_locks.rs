@@ -175,7 +175,7 @@ pub mod tests {
         expect_status: SecondaryLocksStatus,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let lock_ts = lock_ts.into();
         let cm = ConcurrencyManager::new(lock_ts);
         let command = crate::storage::txn::commands::CheckSecondaryLocks {
@@ -210,7 +210,7 @@ pub mod tests {
         let cm = ConcurrencyManager::new(1.into());
 
         let check_secondary = |key, ts| {
-            let snapshot = engine.snapshot(&ctx).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             let key = Key::from_raw(key);
             let ts = TimeStamp::new(ts);
             let command = crate::storage::txn::commands::CheckSecondaryLocks {

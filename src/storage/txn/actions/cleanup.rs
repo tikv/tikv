@@ -82,7 +82,7 @@ pub mod tests {
         current_ts: impl Into<TimeStamp>,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
@@ -96,8 +96,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
     ) -> MvccError {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);

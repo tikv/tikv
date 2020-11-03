@@ -17,11 +17,14 @@ use raftstore::store::{
 };
 use raftstore::Result;
 use tempfile::{Builder, TempDir};
-use tikv::server::raftkv::{CmdRes, RaftKv};
 use tikv::storage::kv::{
     Callback as EngineCallback, CbContext, Modify, Result as EngineResult, WriteData,
 };
 use tikv::storage::Engine;
+use tikv::{
+    server::raftkv::{CmdRes, RaftKv},
+    storage::kv::SnapContext,
+};
 use tikv_util::time::ThreadReadId;
 use txn_types::Key;
 
@@ -183,7 +186,11 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
         let on_finished: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(move |results| {
             let _ = test::black_box(results);
         });
-        kv.async_snapshot(&ctx, None, on_finished).unwrap();
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        kv.async_snapshot(snap_ctx, on_finished).unwrap();
     });
 }
 
