@@ -12,7 +12,7 @@ use tikv_util::buffer_vec::BufferVec;
 /// - `bitmap` indicates if an element at given index is null.
 /// - `value` is an 1-based index enum data offset, 0 means this enum is ''
 ///
-/// # Note
+/// # Notes
 ///
 /// Make sure operating `bitmap` and `value` together to prevent different
 /// stored representation issue discussed at
