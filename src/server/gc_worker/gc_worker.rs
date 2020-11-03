@@ -482,17 +482,22 @@ impl<E: Engine> GcRunner<E> {
             "unsafe destroy range finished cleaning up all";
             "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.elapsed(),
         );
-        self.raft_store_router
-            .as_ref()
-            .unwrap()
-            .send_store(StoreMsg::ClearRegionSizeInRange {
-                start_key: start_key.as_encoded().to_vec(),
-                end_key: end_key.as_encoded().to_vec(),
-            })
-            .unwrap_or_else(|e| {
-                // Warn and ignore it.
-                warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
-            });
+        if let Some(router) = self.raft_store_router.as_ref() {
+            router
+                .send_store(StoreMsg::ClearRegionSizeInRange {
+                    start_key: start_key.as_encoded().to_vec(),
+                    end_key: end_key.as_encoded().to_vec(),
+                })
+                .unwrap_or_else(|e| {
+                    // Warn and ignore it.
+                    warn!(
+                        "unsafe destroy range: failed sending ClearRegionSizeInRange";
+                        "err" => ?e
+                    );
+                });
+        } else {
+            warn!("unsafe destroy range: can't clear region size information: raft_store_router not set");
+        }
 
         Ok(())
     }
