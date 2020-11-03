@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::Cell;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -230,6 +231,10 @@ impl WriteCompactionFilter {
     }
 }
 
+thread_local! {
+    static VERSIONS_AND_DELETES: Cell<(usize, usize)> = Cell::new((0, 0));
+}
+
 impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
         if !self.write_batch.is_empty() {
@@ -242,11 +247,17 @@ impl Drop for WriteCompactionFilter {
         }
 
         self.switch_key_metrics();
-        info!(
-            "WriteCompactionFilter has filtered all key/value pairs";
-            "versions" => self.total_versions,
-            "deleted" => self.total_deleted,
-        );
+        VERSIONS_AND_DELETES.with(|x| {
+            x.update(|(mut versions, mut deletes)| {
+                versions += self.total_versions;
+                deletes += self.total_deleted;
+                if versions >= 1024 * 128 {
+                    info!("Compaction filter reports"; "stale" => versions, "gc" => deletes);
+                    return (0, 0);
+                }
+                (versions, deletes)
+            })
+        });
     }
 }
 
