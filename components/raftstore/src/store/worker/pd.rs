@@ -882,11 +882,13 @@ where
                             region_epoch: epoch,
                             split_keys: split_region.take_keys().into(),
                             callback: Callback::None,
+                            source: "pd".into(),
                         }
                     } else {
                         CasualMessage::HalfSplitRegion {
                             region_epoch: epoch,
                             policy: split_region.get_policy(),
+                            source: "pd",
                         }
                     };
                     if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {

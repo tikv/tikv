@@ -788,10 +788,20 @@ mod tests {
         must_commit(&engine, k1, 1, 2);
 
         // "k1" already exist, returns AlreadyExist error.
-        assert!(try_prewrite_insert(&engine, k1, v2, k1, 3).is_err());
+        assert!(matches!(
+            try_prewrite_insert(&engine, k1, v2, k1, 3),
+            Err(Error(box ErrorInner::AlreadyExist { .. }))
+        ));
 
         // Delete "k1"
         must_prewrite_delete(&engine, k1, k1, 4);
+
+        // There is a lock, returns KeyIsLocked error.
+        assert!(matches!(
+            try_prewrite_insert(&engine, k1, v2, k1, 6),
+            Err(Error(box ErrorInner::KeyIsLocked(_)))
+        ));
+
         must_commit(&engine, k1, 4, 5);
 
         // After delete "k1", insert returns ok.
@@ -802,7 +812,10 @@ mod tests {
         must_prewrite_put(&engine, k1, v3, k1, 8);
         must_rollback(&engine, k1, 8);
 
-        assert!(try_prewrite_insert(&engine, k1, v3, k1, 9).is_err());
+        assert!(matches!(
+            try_prewrite_insert(&engine, k1, v3, k1, 9),
+            Err(Error(box ErrorInner::AlreadyExist { .. }))
+        ));
 
         // Delete "k1" again
         must_prewrite_delete(&engine, k1, k1, 10);
