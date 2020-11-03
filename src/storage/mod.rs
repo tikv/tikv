@@ -72,9 +72,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::prelude::*;
-use kvproto::kvrpcpb::{
-    CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest,
-};
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::{
