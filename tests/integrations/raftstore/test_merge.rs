@@ -17,6 +17,7 @@ use engine_traits::{CF_RAFT, CF_WRITE};
 use pd_client::PdClient;
 use raftstore::store::*;
 use test_raftstore::*;
+use tikv::storage::kv::SnapContext;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
@@ -1223,8 +1224,11 @@ fn test_sync_max_ts_after_region_merge() {
         ctx.set_region_id(region_id);
         ctx.set_peer(leader.clone());
         ctx.set_region_epoch(epoch);
-
-        let snapshot = storage.snapshot(&ctx).unwrap();
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = storage.snapshot(snap_ctx).unwrap();
         let max_ts_sync_status = snapshot.max_ts_sync_status.clone().unwrap();
         for retry in 0..10 {
             if max_ts_sync_status.load(Ordering::SeqCst) & 1 == 1 {

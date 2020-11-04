@@ -9,8 +9,8 @@ use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    txn::commands, Engine, PrewriteResult, Result, Storage, TestEngineBuilder, TestStorageBuilder,
-    TxnStatus,
+    txn::commands, Engine, PerfStatisticsDelta, PrewriteResult, Result, Statistics, Storage,
+    TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
 use tikv_util::collections::HashMap;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
@@ -104,7 +104,7 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         key: &Key,
         start_ts: impl Into<TimeStamp>,
-    ) -> Result<Option<Value>> {
+    ) -> Result<(Option<Value>, Statistics, PerfStatisticsDelta)> {
         block_on(self.store.get(ctx, key.to_owned(), start_ts.into()))
     }
 
@@ -114,16 +114,17 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         keys: &[Key],
         start_ts: impl Into<TimeStamp>,
-    ) -> Result<Vec<Result<KvPair>>> {
+    ) -> Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)> {
         block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn batch_get_command(
         &self,
         ctx: Context,
         keys: &[&[u8]],
         start_ts: u64,
-    ) -> Result<Vec<Option<Vec<u8>>>> {
+    ) -> Result<Vec<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>> {
         let requests: Vec<GetRequest> = keys
             .to_owned()
             .into_iter()

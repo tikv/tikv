@@ -28,11 +28,11 @@ use tempfile::Builder;
 use test_raftstore::*;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::{IntervalRange, Range};
-use tikv::config::BackupConfig;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
+use tikv::{config::BackupConfig, storage::kv::SnapContext};
 use tikv_util::collections::HashMap;
 use tikv_util::file::calc_crc32_bytes;
 use tikv_util::worker::{LazyWorker, Worker};
@@ -257,7 +257,11 @@ impl TestSuite {
         let mut total_bytes = 0;
         let sim = self.cluster.sim.rl();
         let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
-        let snapshot = engine.snapshot(&self.context.clone()).unwrap();
+        let snap_ctx = SnapContext {
+            pb_ctx: &self.context,
+            ..Default::default()
+        };
+        let snapshot = engine.snapshot(snap_ctx).unwrap();
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
@@ -295,7 +299,11 @@ impl TestSuite {
 
         let sim = self.cluster.sim.rl();
         let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
-        let snapshot = engine.snapshot(&self.context.clone()).unwrap();
+        let snap_ctx = SnapContext {
+            pb_ctx: &self.context,
+            ..Default::default()
+        };
+        let snapshot = engine.snapshot(snap_ctx).unwrap();
         let mut iter_opt = IterOptions::default();
         if !end.is_empty() {
             iter_opt.set_upper_bound(&end, DATA_KEY_PREFIX_LEN);

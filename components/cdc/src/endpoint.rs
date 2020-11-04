@@ -1072,7 +1072,6 @@ mod tests {
     #[cfg(feature = "prost-codec")]
     use kvproto::cdcpb::event::Event as Event_oneof_event;
     use kvproto::errorpb::Error as ErrorHeader;
-    use kvproto::kvrpcpb::Context;
     use raftstore::errors::Error as RaftStoreError;
     use raftstore::store::msg::CasualMessage;
     use std::collections::BTreeMap;
@@ -1164,7 +1163,7 @@ mod tests {
         }
 
         let region = Region::default();
-        let snap = engine.snapshot(&Context::default()).unwrap();
+        let snap = engine.snapshot(Default::default()).unwrap();
 
         let check_result = || loop {
             let task = rx.recv().unwrap();

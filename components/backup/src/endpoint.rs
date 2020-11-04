@@ -21,7 +21,7 @@ use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
 use tikv::config::BackupConfig;
-use tikv::storage::kv::{Engine, ScanMode, Snapshot};
+use tikv::storage::kv::{Engine, ScanMode, SnapContext, Snapshot};
 use tikv::storage::mvcc::Error as MvccError;
 use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
@@ -176,7 +176,14 @@ impl BackupRange {
             .map_err(MvccError::from)
             .map_err(TxnError::from)?;
 
-        let snapshot = match engine.snapshot(&ctx) {
+        // Currently backup always happens on the leader, so we don't need
+        // to set key ranges and start ts to check.
+        assert!(!ctx.get_replica_read());
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = match engine.snapshot(snap_ctx) {
             Ok(s) => s,
             Err(e) => {
                 error!(?e; "backup snapshot failed");
@@ -234,7 +241,11 @@ impl BackupRange {
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
         ctx.set_peer(self.leader.clone());
-        let snapshot = match engine.snapshot(&ctx) {
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = match engine.snapshot(snap_ctx) {
             Ok(s) => s,
             Err(e) => {
                 error!(?e; "backup raw kv snapshot failed");
