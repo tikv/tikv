@@ -1061,7 +1061,7 @@ mod tests {
             (Collation::Utf8Mb4Bin, 2),
             (Collation::Utf8Mb4GeneralCi, 3),
             (Collation::Utf8Mb4UnicodeCi, 4),
-            (Collation::CollatorUtf8Mb4PinyinAsCs, 5),
+            (Collation::Utf8Mb4ZhPinyinAsCs, 5),
         ];
 
         for (str_a, str_b, ordering_in_collations) in cases {
