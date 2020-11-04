@@ -4,9 +4,10 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::MvccTxn;
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+    WriteResult,
 };
-use crate::storage::txn::{commit, Result};
+use crate::storage::txn::{cleanup, commit, Result};
 use crate::storage::{ProcessResult, Snapshot};
 use txn_types::{Key, TimeStamp};
 
@@ -51,7 +52,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
             released_locks.push(if !self.commit_ts.is_zero() {
                 commit(&mut txn, key, self.commit_ts)?
             } else {
-                txn.rollback(key)?
+                cleanup(&mut txn, key, TimeStamp::zero(), false)?
             });
         }
         released_locks.wake_up(context.lock_mgr);
@@ -65,6 +66,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
             pr: ProcessResult::Res,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }

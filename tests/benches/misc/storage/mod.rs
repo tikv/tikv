@@ -2,4 +2,5 @@
 
 mod incremental_get;
 mod key;
+mod mvcc_reader;
 mod scan;

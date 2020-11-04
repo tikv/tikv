@@ -20,15 +20,14 @@
 extern crate tikv_alloc;
 #[macro_use]
 extern crate tikv_util;
-
 #[macro_use]
 extern crate serde_derive;
+#[macro_use(fail_point)]
+extern crate fail;
 
 #[cfg(test)]
 extern crate test;
 
-mod cf_handle;
-pub use crate::cf_handle::*;
 mod cf_names;
 pub use crate::cf_names::*;
 mod cf_options;
@@ -59,6 +58,8 @@ mod table_properties;
 pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
+pub mod mvcc_properties;
+pub use crate::mvcc_properties::*;
 
 mod engine_iterator;
 pub use crate::engine_iterator::*;

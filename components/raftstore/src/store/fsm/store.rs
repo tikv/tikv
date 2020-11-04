@@ -79,7 +79,7 @@ type Key = Vec<u8>;
 
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
-pub const PENDING_VOTES_CAP: usize = 20;
+pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
 pub struct StoreInfo<E> {
@@ -96,9 +96,10 @@ pub struct StoreMeta {
     pub regions: HashMap<u64, Region>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
-    /// `MsgRequestPreVote` or `MsgRequestVote` messages from newly split Regions shouldn't be dropped if there is no
-    /// such Region in this store now. So the messages are recorded temporarily and will be handled later.
-    pub pending_votes: RingQueue<RaftMessage>,
+    /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly split Regions shouldn't be
+    /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
+    /// will be handled later.
+    pub pending_msgs: RingQueue<RaftMessage>,
     /// The regions with pending snapshots.
     pub pending_snapshot_regions: Vec<Region>,
     /// A marker used to indicate the peer of a Region has received a merge target message and waits to be destroyed.
@@ -124,7 +125,7 @@ impl StoreMeta {
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
             readers: HashMap::default(),
-            pending_votes: RingQueue::with_capacity(vote_capacity),
+            pending_msgs: RingQueue::with_capacity(vote_capacity),
             pending_snapshot_regions: Vec::default(),
             pending_merge_targets: HashMap::default(),
             targets_map: HashMap::default(),
@@ -642,22 +643,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
             self.poll_ctx.need_flush_trans = false;
         }
         let ready_cnt = self.poll_ctx.ready_res.len();
-        if ready_cnt != 0 && self.poll_ctx.cfg.early_apply {
-            let mut batch_pos = 0;
-            let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, vec![]);
-            for (ready, invoke_ctx) in &mut ready_res {
-                let region_id = invoke_ctx.region_id;
-                if peers[batch_pos].region_id() == region_id {
-                } else {
-                    while peers[batch_pos].region_id() != region_id {
-                        batch_pos += 1;
-                    }
-                }
-                PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
-                    .handle_raft_ready_apply(ready, invoke_ctx);
-            }
-            self.poll_ctx.ready_res = ready_res;
-        }
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
         fail_point!("raft_before_save");
         if !self.poll_ctx.kv_wb.is_empty() {
@@ -843,12 +828,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                     fail_point!(
                         "pause_on_peer_destroy_res",
                         peer.peer_id() == 1
-                            && match msg {
-                                PeerMsg::ApplyRes {
-                                    res: ApplyTaskRes::Destroy { .. },
-                                } => true,
-                                _ => false,
-                            },
+                            && matches!(msg, PeerMsg::ApplyRes {
+                                res: ApplyTaskRes::Destroy { .. },
+                            }),
                         |_| unreachable!()
                     );
                     self.peer_msg_buf.push(msg);
@@ -1418,8 +1400,8 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
 
 #[derive(Debug, PartialEq)]
 enum CheckMsgStatus {
-    // The message is the first request vote message to an existing peer.
-    FirstRequestVote,
+    // The message is the first message to an existing peer.
+    FirstRequest,
     // The message can be dropped silently
     DropMsg,
     // Try to create the peer
@@ -1449,7 +1431,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
 
         if local_state.get_state() != PeerState::Tombstone {
             // Maybe split, but not registered yet.
-            if !util::is_first_vote_msg(msg.get_message()) {
+            if !util::is_first_message(msg.get_message()) {
                 self.ctx.raft_metrics.message_dropped.region_nonexistent += 1;
                 return Err(box_err!(
                     "[region {}] region not exist but not tombstone: {:?}",
@@ -1461,7 +1443,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                 "region doesn't exist yet, wait for it to be split";
                 "region_id" => region_id
             );
-            return Ok(CheckMsgStatus::FirstRequestVote);
+            return Ok(CheckMsgStatus::FirstRequest);
         }
         debug!(
             "region is in tombstone state";
@@ -1603,45 +1585,45 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
             return Ok(());
         }
         let check_msg_status = self.check_msg(&msg)?;
-        let is_first_request_vote = match check_msg_status {
+        let is_first_request = match check_msg_status {
             CheckMsgStatus::DropMsg => return Ok(()),
-            CheckMsgStatus::FirstRequestVote => true,
+            CheckMsgStatus::FirstRequest => true,
             CheckMsgStatus::NewPeer | CheckMsgStatus::NewPeerFirst => {
-                if !self.maybe_create_peer(
+                if self.maybe_create_peer(
                     region_id,
                     &msg,
                     check_msg_status == CheckMsgStatus::NewPeerFirst,
                 )? {
-                    if !util::is_first_vote_msg(msg.get_message()) {
-                        // Can not create peer from the message and it's not the
-                        // first request vote message.
-                        return Ok(());
-                    }
-                    true
-                } else {
-                    false
+                    // Peer created, send the message again
+                    let _ = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
+                    return Ok(());
                 }
+                // Can't create peer, see if we should keep this message
+                util::is_first_message(msg.get_message())
             }
         };
-        if is_first_request_vote {
-            // To void losing request vote messages, either put it to
-            // pending_votes or force send.
+        if is_first_request {
+            // To void losing messages, either put it to pending_msg or force send.
             let mut store_meta = self.ctx.store_meta.lock().unwrap();
             if !store_meta.regions.contains_key(&region_id) {
-                store_meta.pending_votes.push(msg);
-                return Ok(());
-            }
-            if let Err(e) = self
-                .ctx
-                .router
-                .force_send(region_id, PeerMsg::RaftMessage(msg))
-            {
-                warn!("handle first request vote failed"; "region_id" => region_id, "error" => ?e);
-            }
-            return Ok(());
-        }
+                // Save one pending message for a peer is enough, remove
+                // the previous pending message of this peer
+                store_meta
+                    .pending_msgs
+                    .swap_remove_front(|m| m.get_to_peer() == msg.get_to_peer());
 
-        let _ = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
+                store_meta.pending_msgs.push(msg);
+            } else {
+                drop(store_meta);
+                if let Err(e) = self
+                    .ctx
+                    .router
+                    .force_send(region_id, PeerMsg::RaftMessage(msg))
+                {
+                    warn!("handle first request failed"; "region_id" => region_id, "error" => ?e);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1694,16 +1676,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
         msg: &RaftMessage,
         is_local_first: bool,
     ) -> Result<bool> {
-        if is_local_first {
-            if self
+        if is_local_first
+            && self
                 .ctx
                 .engines
                 .kv
                 .get_value_cf(CF_RAFT, &keys::region_state_key(region_id))?
                 .is_some()
-            {
-                return Ok(false);
-            }
+        {
+            return Ok(false);
         }
 
         let target = msg.get_to_peer();

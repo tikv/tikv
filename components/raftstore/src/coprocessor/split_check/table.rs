@@ -234,7 +234,7 @@ mod tests {
     use tempfile::Builder;
 
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use engine_rocks::util::new_engine;
+    use engine_test::kv::new_engine;
     use engine_traits::{SyncMutable, ALL_CFS};
     use tidb_query_datatype::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;

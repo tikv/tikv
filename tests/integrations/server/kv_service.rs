@@ -10,23 +10,34 @@ use pd_client::PdClient;
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
-use test_raftstore::new_server_cluster;
+use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use tikv::server::service::batch_commands_request;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
+
+fn build_client(cluster: &Cluster<ServerCluster>) -> (TikvClient, Context) {
+    let region = cluster.get_region(b"");
+    let leader = region.get_peers()[0].clone();
+    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
+
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(leader.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+
+    (client, ctx)
+}
 
 #[test]
 fn test_batch_commands() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
 
-    let leader = cluster.get_region(b"").get_peers()[0].clone();
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
-
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&addr);
-    let client = TikvClient::new(channel);
-
+    let (client, _) = build_client(&cluster);
     let (mut sender, receiver) = client.batch_commands().unwrap();
     for _ in 0..1000 {
         let mut batch_req = BatchCommandsRequest::default();
@@ -62,13 +73,7 @@ fn test_empty_commands() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
 
-    let leader = cluster.get_region(b"").get_peers()[0].clone();
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
-
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&addr);
-    let client = TikvClient::new(channel);
-
+    let (client, _) = build_client(&cluster);
     let (mut sender, receiver) = client.batch_commands().unwrap();
     for _ in 0..1000 {
         let mut batch_req = BatchCommandsRequest::default();
@@ -108,18 +113,7 @@ fn test_async_commit_check_txn_status() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
 
-    let region = cluster.get_region(b"");
-    let leader = region.get_peers()[0].clone();
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
-
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&addr);
-    let client = TikvClient::new(channel);
-
-    let mut ctx = Context::default();
-    ctx.set_region_id(leader.get_id());
-    ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(leader);
+    let (client, ctx) = build_client(&cluster);
 
     let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
     let mut req = PrewriteRequest::default();
@@ -136,7 +130,7 @@ fn test_async_commit_check_txn_status() {
     client.kv_prewrite(&req).unwrap();
 
     let mut req = CheckTxnStatusRequest::default();
-    req.set_context(ctx.clone());
+    req.set_context(ctx);
     req.set_primary_key(b"key".to_vec());
     req.set_lock_ts(start_ts.into_inner());
     req.set_rollback_if_not_exist(true);
@@ -167,18 +161,7 @@ fn test_read_index_check_memory_locks() {
     );
     guards[0].with_lock(|l| *l = Some(lock.clone()));
 
-    let region = cluster.get_region(b"");
-    let leader = region.get_peers()[0].clone();
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
-
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&addr);
-    let client = TikvClient::new(channel);
-
-    let mut ctx = Context::default();
-    ctx.set_region_id(leader.get_id());
-    ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(leader);
+    let (client, ctx) = build_client(&cluster);
 
     let read_index = |ranges: &[(&[u8], &[u8])]| {
         let mut req = ReadIndexRequest::default();
@@ -211,4 +194,52 @@ fn test_read_index_check_memory_locks() {
     let (resp, start_ts) = read_index(&[(b"a", b"z")]);
     assert!(!resp.has_locked());
     assert_eq!(cm.max_ts(), start_ts);
+}
+
+#[test]
+fn test_prewrite_check_max_commit_ts() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
+    cm.update_max_ts(100.into());
+
+    let (client, ctx) = build_client(&cluster);
+
+    let mut req = PrewriteRequest::default();
+    req.set_context(ctx.clone());
+    req.set_primary_lock(b"k1".to_vec());
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"k1".to_vec());
+    mutation.set_value(b"v1".to_vec());
+    req.mut_mutations().push(mutation);
+    req.set_start_version(10);
+    req.set_max_commit_ts(200);
+    req.set_lock_ttl(20000);
+    req.set_use_async_commit(true);
+    let resp = client.kv_prewrite(&req).unwrap();
+    assert_eq!(resp.get_min_commit_ts(), 101);
+
+    let mut req = PrewriteRequest::default();
+    req.set_context(ctx);
+    req.set_primary_lock(b"k2".to_vec());
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"k2".to_vec());
+    mutation.set_value(b"v2".to_vec());
+    req.mut_mutations().push(mutation);
+    req.set_start_version(20);
+    req.set_max_commit_ts(50);
+    req.set_lock_ttl(20000);
+    req.set_use_async_commit(true);
+    let resp = client.kv_prewrite(&req).unwrap();
+    assert_eq!(
+        resp.get_errors()[0]
+            .get_commit_ts_too_large()
+            .get_commit_ts(),
+        101
+    );
+    // There shouldn't be locks remaining in the lock table.
+    assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
 }

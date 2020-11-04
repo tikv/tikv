@@ -41,7 +41,7 @@ use raftstore::{
     store::{
         config::RaftstoreConfigManager,
         fsm,
-        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
+        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
         AutoSplitController, GlobalReplicationState, LocalReader, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
@@ -85,7 +85,8 @@ pub fn run_tikv(config: TiKvConfig) {
     initial_logger(&config);
 
     // Print version information.
-    tikv::log_tikv_info();
+    let build_timestamp = option_env!("TIKV_BUILD_TIME");
+    tikv::log_tikv_info(build_timestamp);
 
     // Print resource quota.
     SysQuota::new().log_quota();
@@ -191,7 +192,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
-        let concurrency_manager = ConcurrencyManager::new(latest_ts.into());
+        let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
         TiKVServer {
             config,
@@ -356,7 +357,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             &self.config.storage.data_dir,
         )
         .unwrap()
-        .map(|key_manager| Arc::new(key_manager));
+        .map(Arc::new);
     }
 
     fn create_raftstore_compaction_listener(&self) -> engine_rocks::CompactionListener {
@@ -388,7 +389,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
                 self.router.clone(),
@@ -457,7 +458,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .engine
             .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
-        let lock_mgr = LockManager::new();
+        let lock_mgr = LockManager::new(self.config.pessimistic_txn.pipelined);
         cfg_controller.register(
             tikv::config::Module::PessimisticTxn,
             Box::new(lock_mgr.config_manager()),
@@ -485,8 +486,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 .threaded_scheduler()
                 .thread_name(thd_name!("debugger"))
                 .core_threads(1)
-                .on_thread_start(|| tikv_alloc::add_thread_memory_accessor())
-                .on_thread_stop(|| tikv_alloc::remove_thread_memory_accessor())
+                .on_thread_start(tikv_alloc::add_thread_memory_accessor)
+                .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
         );
@@ -508,7 +509,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             storage_read_pool_handle,
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
-            self.config.pessimistic_txn.pipelined,
+            lock_mgr.get_pipelined(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -629,7 +630,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
-        initial_metric(&self.config.metric, Some(node.id()));
+        initial_metric(&self.config.metric);
 
         // Start auto gc
         let auto_gc_config = AutoGcConfig::new(
@@ -825,8 +826,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn run_status_server(&mut self) {
         // Create a status server.
-        let status_enabled =
-            self.config.metric.address.is_empty() && !self.config.server.status_addr.is_empty();
+        let status_enabled = !self.config.server.status_addr.is_empty();
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,

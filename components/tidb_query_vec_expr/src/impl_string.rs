@@ -68,14 +68,14 @@ pub fn ord(arg: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(Some(result))
 }
 
-#[rpn_fn(varg, min_args = 1)]
+#[rpn_fn(varg, writer, min_args = 1)]
 #[inline]
-pub fn concat(args: &[BytesRef]) -> Result<Option<Bytes>> {
-    let mut output = Bytes::new();
+pub fn concat(args: &[BytesRef], writer: BytesWriter) -> Result<BytesGuard> {
+    let mut writer = writer.begin();
     for arg in args {
-        output.extend_from_slice(arg);
+        writer.partial_write(arg);
     }
-    Ok(Some(output))
+    Ok(writer.finish())
 }
 
 #[rpn_fn(nullable, varg, min_args = 2)]
@@ -436,9 +436,9 @@ pub fn make_set(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
             return Ok(None);
         }
         Some(mask2) => {
-            for i in 1..raw_args.len() {
+            for raw_arg in raw_args.iter().skip(1) {
                 if pow2 & mask2 != 0 {
-                    let input = raw_args[i].as_bytes();
+                    let input = raw_arg.as_bytes();
                     match input {
                         None => {}
                         Some(s2) => {
@@ -479,8 +479,8 @@ fn elt_validator(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
     assert!(children.len() >= 2);
     super::function::validate_expr_return_type(&children[0], EvalType::Int)?;
-    for i in 1..children.len() {
-        super::function::validate_expr_return_type(&children[i], EvalType::Bytes)?;
+    for child in children.iter().skip(1) {
+        super::function::validate_expr_return_type(&child, EvalType::Bytes)?;
     }
     Ok(())
 }

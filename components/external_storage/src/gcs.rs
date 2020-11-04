@@ -215,10 +215,8 @@ impl GCSStorage {
         if !endpoint.is_empty() {
             let url = req.uri().to_string();
             for hardcoded in HARDCODED_ENDPOINTS {
-                if url.starts_with(hardcoded) {
-                    *req.uri_mut() = [endpoint.trim_end_matches('/'), &url[hardcoded.len()..]]
-                        .concat()
-                        .parse()?;
+                if let Some(res) = url.strip_prefix(hardcoded) {
+                    *req.uri_mut() = [endpoint.trim_end_matches('/'), res].concat().parse()?;
                     break;
                 }
             }
@@ -237,19 +235,6 @@ impl GCSStorage {
         E: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
         Box::new(error_stream(io::Error::new(kind, e)).into_async_read())
-    }
-}
-
-// FIXME: `impl Copy for PredefinedAcl` and get rid of this silly function (EmbarkStudios/tame-gcs#30).
-fn copy_predefined_acl(acl: &Option<PredefinedAcl>) -> Option<PredefinedAcl> {
-    match acl {
-        None => None,
-        Some(PredefinedAcl::AuthenticatedRead) => Some(PredefinedAcl::AuthenticatedRead),
-        Some(PredefinedAcl::BucketOwnerFullControl) => Some(PredefinedAcl::BucketOwnerFullControl),
-        Some(PredefinedAcl::BucketOwnerRead) => Some(PredefinedAcl::BucketOwnerRead),
-        Some(PredefinedAcl::Private) => Some(PredefinedAcl::Private),
-        Some(PredefinedAcl::ProjectPrivate) => Some(PredefinedAcl::ProjectPrivate),
-        Some(PredefinedAcl::PublicRead) => Some(PredefinedAcl::PublicRead),
     }
 }
 
@@ -318,7 +303,7 @@ impl ExternalStorage for GCSStorage {
                     content_length,
                     &metadata,
                     Some(InsertObjectOptional {
-                        predefined_acl: copy_predefined_acl(&predefined_acl),
+                        predefined_acl,
                         ..Default::default()
                     }),
                 )?

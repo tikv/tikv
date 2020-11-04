@@ -17,6 +17,8 @@ use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapsh
 pub struct Cursor<I: Iterator> {
     iter: I,
     scan_mode: ScanMode,
+    // prefix_seek doesn't support seek_to_first and seek_to_last.
+    prefix_seek: bool,
     // the data cursor can be seen will be
     min_key: Option<Vec<u8>>,
     max_key: Option<Vec<u8>>,
@@ -41,10 +43,11 @@ macro_rules! near_loop {
 }
 
 impl<I: Iterator> Cursor<I> {
-    pub fn new(iter: I, mode: ScanMode) -> Self {
+    pub fn new(iter: I, mode: ScanMode, prefix_seek: bool) -> Self {
         Self {
             iter,
             scan_mode: mode,
+            prefix_seek,
             min_key: None,
             max_key: None,
 
@@ -95,7 +98,16 @@ impl<I: Iterator> Cursor<I> {
         }
 
         if !self.internal_seek(key, statistics)? {
-            self.max_key = Some(key.as_encoded().to_owned());
+            // Do not set `max_key` when prefix seek enabled.
+            // `max_key` is used to record the last key before the iter reaches
+            // the end, so later seek whose key is larger than `max_key` can be
+            // return not found directly instead of calling underlying iterator
+            // to seek the key.
+            // But when prefix seek enabled, !valid() doesn't mean reaching the
+            // end of iterator range. So the `max_key` shouldn't be updated.
+            if !self.prefix_seek {
+                self.max_key = Some(key.as_encoded().to_owned());
+            }
             return Ok(false);
         }
         Ok(true)
@@ -134,6 +146,10 @@ impl<I: Iterator> Cursor<I> {
                 if self.key(statistics) < key.as_encoded().as_slice() {
                     self.next(statistics);
                 }
+            } else if self.prefix_seek {
+                // When prefixed seek and prefix_same_as_start enabled
+                // seek_to_first may return false due to no key's prefix is same as iter lower bound's
+                return self.seek(key, statistics);
             } else {
                 assert!(self.seek_to_first(statistics));
                 return Ok(true);
@@ -147,7 +163,16 @@ impl<I: Iterator> Cursor<I> {
             );
         }
         if !self.valid()? {
-            self.max_key = Some(key.as_encoded().to_owned());
+            // Do not set `max_key` when prefix seek enabled.
+            // `max_key` is used to record the last key before the iter reaches
+            // the end, so later seek whose key is larger than `max_key` can be
+            // return not found directly instead of calling underlying iterator
+            // to seek the key.
+            // But when prefix seek enabled, !valid() doesn't mean reaching the
+            // end of iterator range. So the `max_key` shouldn't be updated.
+            if !self.prefix_seek {
+                self.max_key = Some(key.as_encoded().to_owned());
+            }
             return Ok(false);
         }
         Ok(true)
@@ -190,7 +215,9 @@ impl<I: Iterator> Cursor<I> {
         }
 
         if !self.internal_seek_for_prev(key, statistics)? {
-            self.min_key = Some(key.as_encoded().to_owned());
+            if !self.prefix_seek {
+                self.min_key = Some(key.as_encoded().to_owned());
+            }
             return Ok(false);
         }
         Ok(true)
@@ -227,6 +254,8 @@ impl<I: Iterator> Cursor<I> {
                 if self.key(statistics) > key.as_encoded().as_slice() {
                     self.prev(statistics);
                 }
+            } else if self.prefix_seek {
+                return self.seek_for_prev(key, statistics);
             } else {
                 assert!(self.seek_to_last(statistics));
                 return Ok(true);
@@ -240,7 +269,9 @@ impl<I: Iterator> Cursor<I> {
         }
 
         if !self.valid()? {
-            self.min_key = Some(key.as_encoded().to_owned());
+            if !self.prefix_seek {
+                self.min_key = Some(key.as_encoded().to_owned());
+            }
             return Ok(false);
         }
         Ok(true)
@@ -297,6 +328,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
+        assert!(!self.prefix_seek);
         statistics.seek += 1;
         self.mark_unread();
         let before = PerfContext::get().internal_delete_skipped_count() as usize;
@@ -308,6 +340,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
+        assert!(!self.prefix_seek);
         statistics.seek += 1;
         self.mark_unread();
         let before = PerfContext::get().internal_delete_skipped_count() as usize;
@@ -389,14 +422,14 @@ impl<I: Iterator> Cursor<I> {
             panic!(
                 "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
                 e,
-                self.min_key.as_ref().map(|v| hex::encode_upper(v)),
-                self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+                self.min_key.as_ref().map(hex::encode_upper),
+                self.max_key.as_ref().map(hex::encode_upper),
             );
         } else {
             error!(?e;
                 "failed to iterate";
-                "min_key" => ?self.min_key.as_ref().map(|v| hex::encode_upper(v)),
-                "max_key" => ?self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+                "min_key" => ?self.min_key.as_ref().map(hex::encode_upper),
+                "max_key" => ?self.max_key.as_ref().map(hex::encode_upper),
             );
             Err(e)
         }
@@ -513,6 +546,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         if let Some(ts) = self.hint_max_ts {
             iter_opt.set_hint_max_ts(Bound::Included(ts.into_inner()));
         }
+        // prefix_seek is only used for single key, so set prefix_same_as_start for safety.
         if self.prefix_seek {
             iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
         }
@@ -522,10 +556,14 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 
 #[cfg(test)]
 mod tests {
+    use engine_rocks::raw::ColumnFamilyOptions;
+    use engine_rocks::raw_util::{new_engine, CFOptions};
+    use engine_rocks::util::FixedPrefixSliceTransform;
     use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_traits::{Engines, IterOptions, SyncMutable};
+    use engine_traits::{IterOptions, SyncMutable, CF_DEFAULT};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
+    use std::sync::Arc;
     use tempfile::Builder;
     use txn_types::Key;
 
@@ -535,7 +573,7 @@ mod tests {
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn load_default_dataset(engines: Engines<RocksEngine, RocksEngine>) -> (Region, DataSet) {
+    fn load_default_dataset(engine: RocksEngine) -> (Region, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -551,21 +589,71 @@ mod tests {
         ];
 
         for &(ref k, ref v) in &base_data {
-            engines.kv.put(&data_key(k), v).unwrap();
+            engine.put(&data_key(k), v).unwrap();
         }
         (r, base_data)
     }
 
     #[test]
+    fn test_seek_and_prev_with_prefix_seek() {
+        let path = Builder::new().prefix("test-cursor").tempdir().unwrap();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        let e = Box::new(FixedPrefixSliceTransform::new(3));
+        cf_opts
+            .set_prefix_extractor("FixedPrefixSliceTransform", e)
+            .unwrap();
+        let engine = new_engine(
+            path.path().to_str().unwrap(),
+            None,
+            &[CF_DEFAULT],
+            Some(vec![CFOptions::new(CF_DEFAULT, cf_opts)]),
+        )
+        .unwrap();
+        let engine = Arc::new(engine);
+        let engine = RocksEngine::from_db(engine);
+
+        let (region, _) = load_default_dataset(engine.clone());
+
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engine, region);
+        let mut statistics = CfStatistics::default();
+        let it = snap.iter(
+            IterOptions::default()
+                .use_prefix_seek()
+                .set_prefix_same_as_start(true),
+        );
+        let mut iter = Cursor::new(it, ScanMode::Mixed, true);
+
+        assert!(!iter
+            .seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
+            .unwrap());
+        assert!(iter
+            .seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
+            .unwrap());
+        assert!(iter
+            .seek(&Key::from_encoded_slice(b"a9"), &mut statistics)
+            .is_err());
+
+        assert!(!iter
+            .seek_for_prev(&Key::from_encoded_slice(b"a6"), &mut statistics)
+            .unwrap());
+        assert!(iter
+            .seek_for_prev(&Key::from_encoded_slice(b"a3"), &mut statistics)
+            .unwrap());
+        assert!(iter
+            .seek_for_prev(&Key::from_encoded_slice(b"a1"), &mut statistics)
+            .is_err());
+    }
+
+    #[test]
     fn test_reverse_iterate() {
-        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let path = Builder::new().prefix("test-cursor").tempdir().unwrap();
         let engines = new_temp_engine(&path);
-        let (region, test_data) = load_default_dataset(engines.clone());
+        let (region, test_data) = load_default_dataset(engines.kv.clone());
 
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv.clone(), region);
         let mut statistics = CfStatistics::default();
         let it = snap.iter(IterOptions::default());
-        let mut iter = Cursor::new(it, ScanMode::Mixed);
+        let mut iter = Cursor::new(it, ScanMode::Mixed, false);
         assert!(!iter
             .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
             .unwrap());
@@ -615,7 +703,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv, region);
         let it = snap.iter(IterOptions::default());
-        let mut iter = Cursor::new(it, ScanMode::Mixed);
+        let mut iter = Cursor::new(it, ScanMode::Mixed, false);
         assert!(!iter
             .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
             .unwrap());

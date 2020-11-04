@@ -73,7 +73,7 @@ fn new_debug_executor(
             let key_manager =
                 DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .unwrap()
-                    .map(|key_manager| Arc::new(key_manager));
+                    .map(Arc::new);
             let cache = cfg.storage.block_cache.build_shared_cache();
             let shared_block_cache = cache.is_some();
             let env = get_env(key_manager, None).unwrap();
@@ -1033,7 +1033,8 @@ fn main() {
     vlog::set_verbosity_level(1);
 
     let raw_key_hint: &'static str = "Raw key (generally starts with \"z\") in escaped form";
-    let version_info = tikv::tikv_version_info();
+    let build_timestamp = option_env!("TIKV_BUILD_TIME");
+    let version_info = tikv::tikv_version_info(build_timestamp);
 
     let mut app = App::new("TiKV Control (tikv-ctl)")
         .about("A tool for interacting with TiKV deployments.")
@@ -2026,7 +2027,7 @@ fn main() {
         let from = unescape(matches.value_of("from").unwrap());
         let to = matches
             .value_of("to")
-            .map_or_else(|| vec![], |to| unescape(to));
+            .map_or_else(Vec::new, |to| unescape(to));
         let limit = matches
             .value_of("limit")
             .map_or(0, |s| s.parse().expect("parse u64"));
@@ -2262,17 +2263,16 @@ fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
     let key_path = matches.value_of("key_path");
 
     let mut cfg = SecurityConfig::default();
-    if ca_path.is_none() && cert_path.is_none() && key_path.is_none() {
-        return Arc::new(SecurityManager::new(&cfg).unwrap());
-    }
-
     if ca_path.is_some() || cert_path.is_some() || key_path.is_some() {
-        if ca_path.is_none() || cert_path.is_none() || key_path.is_none() {
-            panic!("CA certificate and private key should all be set.");
-        }
-        cfg.ca_path = ca_path.unwrap().to_owned();
-        cfg.cert_path = cert_path.unwrap().to_owned();
-        cfg.key_path = key_path.unwrap().to_owned();
+        cfg.ca_path = ca_path
+            .expect("CA path should be set when cert path or key path is set.")
+            .to_owned();
+        cfg.cert_path = cert_path
+            .expect("cert path should be set when CA path or key path is set.")
+            .to_owned();
+        cfg.key_path = key_path
+            .expect("key path should be set when cert path or CA path is set.")
+            .to_owned();
     }
 
     Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
@@ -2415,7 +2415,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     args.insert(0, "ldb".to_owned());
     let key_manager = DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
-        .map(|key_manager| Arc::new(key_manager));
+        .map(Arc::new);
     let env = get_env(key_manager, None).unwrap();
     let mut opts = cfg.rocksdb.build_opt();
     opts.set_env(env);

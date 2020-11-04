@@ -101,7 +101,7 @@ pub trait RowEncoder: NumberEncoder {
             }
         }
         non_null_cols.sort_by_key(|c| c.id);
-        null_ids.sort();
+        null_ids.sort_unstable();
 
         let mut offset_wtr = vec![];
         let mut value_wtr = vec![];

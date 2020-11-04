@@ -251,14 +251,14 @@ impl Simulator for ServerCluster {
         let latest_ts =
             block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
-        let mut lock_mgr = LockManager::new();
+        let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
         let store = create_raft_storage(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
             lock_mgr.clone(),
             concurrency_manager.clone(),
-            false,
+            lock_mgr.get_pipelined(),
         )?;
         self.storages.insert(node_id, raft_engine);
 

@@ -222,7 +222,8 @@ use std::fmt::{Display, Formatter};
 
 impl Display for Json {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
+        let s = serde_json::to_string(&self.as_ref()).unwrap();
+        write!(f, "{}", s)
     }
 }
 
@@ -230,7 +231,7 @@ impl Json {
     /// Creates a new JSON from the type and encoded bytes
     pub fn new(tp: JsonType, value: Vec<u8>) -> Self {
         Self {
-            type_code: tp.into(),
+            type_code: tp,
             value,
         }
     }
@@ -301,7 +302,7 @@ impl Json {
     }
 
     /// Creates a `object` JSON from key-value pairs
-    pub fn from_kv_pairs<'a>(entries: Vec<(&[u8], JsonRef<'a>)>) -> Result<Self> {
+    pub fn from_kv_pairs(entries: Vec<(&[u8], JsonRef)>) -> Result<Self> {
         let mut value = vec![];
         value.write_json_obj_from_keys_values(entries)?;
         Ok(Self::new(JsonType::Object, value))
