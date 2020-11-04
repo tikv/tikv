@@ -256,7 +256,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
         // The return columns consist of aggregate result columns and group by columns.
         let columns: Vec<_> = all_result_columns
             .into_iter()
-            .map(|c| LazyBatchColumn::Decoded(c))
+            .map(LazyBatchColumn::Decoded)
             .chain(group_by_columns)
             .collect();
         let ret = LazyBatchColumnVec::from(columns);

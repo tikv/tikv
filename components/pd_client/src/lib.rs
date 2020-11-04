@@ -166,6 +166,14 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
+    /// Gets Region and its leader by Region id.
+    fn get_region_leader_by_id(
+        &self,
+        _region_id: u64,
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
+        unimplemented!();
+    }
+
     /// Region's Leader uses this to heartbeat PD.
     fn region_heartbeat(
         &self,

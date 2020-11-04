@@ -13,7 +13,8 @@
 #![feature(const_fn)]
 #![feature(test)]
 #![feature(int_error_matching)]
-#![feature(ptr_offset_from)]
+#![feature(const_fn_fn_ptr_basics)]
+#![feature(const_mut_refs)]
 
 #[macro_use(box_err, box_try, try_opt)]
 extern crate tikv_util;
@@ -585,6 +586,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::FromDays => from_days_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
         ScalarFuncSig::Month => month_fn_meta(),
+        ScalarFuncSig::MonthName => month_name_fn_meta(),
         ScalarFuncSig::MakeDate => make_date_fn_meta(),
         ScalarFuncSig::Hour => hour_fn_meta(),
         ScalarFuncSig::Minute => minute_fn_meta(),

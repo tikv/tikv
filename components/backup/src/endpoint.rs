@@ -21,7 +21,7 @@ use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
 use tikv::config::BackupConfig;
-use tikv::storage::kv::{Engine, ScanMode, Snapshot};
+use tikv::storage::kv::{Engine, ScanMode, SnapContext, Snapshot};
 use tikv::storage::mvcc::Error as MvccError;
 use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
@@ -69,6 +69,7 @@ impl fmt::Display for Task {
         write!(f, "{:?}", self)
     }
 }
+
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BackupTask")
@@ -105,9 +106,6 @@ impl Task {
         let cf = name_to_cf(req.get_cf()).ok_or_else(|| crate::Error::InvalidCf {
             cf: req.get_cf().to_owned(),
         })?;
-
-        // Check storage backend eagerly.
-        create_storage(req.get_storage_backend())?;
 
         let task = Task {
             request: Request {
@@ -179,7 +177,14 @@ impl BackupRange {
             .map_err(MvccError::from)
             .map_err(TxnError::from)?;
 
-        let snapshot = match engine.snapshot(&ctx) {
+        // Currently backup always happens on the leader, so we don't need
+        // to set key ranges and start ts to check.
+        assert!(!ctx.get_replica_read());
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = match engine.snapshot(snap_ctx) {
             Ok(s) => s,
             Err(e) => {
                 error!(?e; "backup snapshot failed");
@@ -237,7 +242,11 @@ impl BackupRange {
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
         ctx.set_peer(self.leader.clone());
-        let snapshot = match engine.snapshot(&ctx) {
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = match engine.snapshot(snap_ctx) {
             Ok(s) => s,
             Err(e) => {
                 error!(?e; "backup raw kv snapshot failed");
@@ -256,10 +265,8 @@ impl BackupRange {
             if !cursor.seek(&begin, cfstatistics)? {
                 return Ok(statistics);
             }
-        } else {
-            if !cursor.seek_to_first(cfstatistics) {
-                return Ok(statistics);
-            }
+        } else if !cursor.seek_to_first(cfstatistics) {
+            return Ok(statistics);
         }
         let mut batch = vec![];
         loop {
@@ -668,8 +675,19 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
 
             tikv_alloc::add_thread_memory_accessor();
 
-            // Storage backend has been checked in `Task::new()`.
-            let backend = create_storage(&request.backend).unwrap();
+            // Check if we can open external storage.
+            let backend = match create_storage(&request.backend) {
+                Ok(backend) => backend,
+                Err(err) => {
+                    error!(?err; "backup create storage failed");
+                    let mut response = BackupResponse::default();
+                    response.set_error(crate::Error::Io(err).into());
+                    if let Err(err) = tx.unbounded_send(response) {
+                        error!(?err; "backup failed to send response");
+                    }
+                    return;
+                }
+            };
             let storage = LimitedStorage {
                 limiter: request.limiter.clone(),
                 storage: backend,
@@ -687,7 +705,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     } else {
                         k.into_raw().unwrap()
                     };
-                    tikv_util::file::sha256(&input).ok().map(|b| hex::encode(b))
+                    tikv_util::file::sha256(&input).ok().map(hex::encode)
                 });
                 let name = backup_file_name(store_id, &brange.region, key);
                 let ct = to_sst_compression_type(request.compression_type);
@@ -703,10 +721,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             ct,
                             request.compression_level,
                         ),
-                        brange
-                            .start_key
-                            .map_or_else(|| vec![], |k| k.into_encoded()),
-                        brange.end_key.map_or_else(|| vec![], |k| k.into_encoded()),
+                        brange.start_key.map_or_else(Vec::new, |k| k.into_encoded()),
+                        brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
                     )
                 } else {
                     (
@@ -723,10 +739,10 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                         ),
                         brange
                             .start_key
-                            .map_or_else(|| vec![], |k| k.into_raw().unwrap()),
+                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                         brange
                             .end_key
-                            .map_or_else(|| vec![], |k| k.into_raw().unwrap()),
+                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                     )
                 };
 
@@ -784,12 +800,10 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         };
         let end_key = if request.end_key.is_empty() {
             None
+        } else if is_raw_kv {
+            Some(Key::from_encoded(request.end_key.clone()))
         } else {
-            if is_raw_kv {
-                Some(Key::from_encoded(request.end_key.clone()))
-            } else {
-                Some(Key::from_raw(&request.end_key))
-            }
+            Some(Key::from_raw(&request.end_key))
         };
 
         let prs = Arc::new(Mutex::new(Progress::new(
@@ -922,8 +936,7 @@ pub mod tests {
     use raftstore::store::util::new_peer;
     use std::thread;
     use tempfile::TempDir;
-    use tikv::storage::mvcc::tests::*;
-    use tikv::storage::txn::tests::must_commit;
+    use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::time::Instant;
     use txn_types::SHORT_VALUE_MAX_LEN;
@@ -933,6 +946,7 @@ pub mod tests {
         regions: Arc<Mutex<RegionCollector>>,
         cancel: Option<Arc<AtomicBool>>,
     }
+
     impl MockRegionInfoProvider {
         pub fn new() -> Self {
             MockRegionInfoProvider {
@@ -961,6 +975,7 @@ pub mod tests {
             self.cancel = Some(cancel);
         }
     }
+
     impl RegionInfoProvider for MockRegionInfoProvider {
         fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> CopResult<()> {
             let from = from.to_vec();
@@ -1009,6 +1024,7 @@ pub mod tests {
         let (none, _rx) = block_on(rx.into_future());
         assert!(none.is_none(), "{:?}", none);
     }
+
     #[test]
     fn test_seek_range() {
         let (_tmp, endpoint) = new_endpoint();
@@ -1188,8 +1204,6 @@ pub mod tests {
             req.set_start_version(0);
             req.set_end_version(ts.into_inner());
             let (tx, rx) = unbounded();
-            // Empty path should return an error.
-            Task::new(req.clone(), tx.clone()).unwrap_err();
 
             // Set an unique path to avoid AlreadyExists error.
             req.set_storage_backend(make_local_backend(&tmp.path().join(ts.to_string())));

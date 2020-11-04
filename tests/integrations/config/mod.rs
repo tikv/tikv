@@ -86,7 +86,6 @@ fn test_serde_custom_tikv_config() {
         end_point_stream_batch_row_limit: 4096,
         end_point_enable_batch_if_possible: true,
         end_point_request_max_handle_duration: ReadableDuration::secs(12),
-        end_point_check_memory_locks: false,
         end_point_max_concurrency: 10,
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
@@ -125,8 +124,8 @@ fn test_serde_custom_tikv_config() {
         },
     };
     value.metric = MetricConfig {
-        interval: ReadableDuration::secs(12),
-        address: "example.com:443".to_owned(),
+        interval: ReadableDuration::secs(15),
+        address: "".to_string(),
         job: "tikv_1".to_owned(),
     };
     let mut apply_batch_system = BatchSystemConfig::default();
@@ -230,6 +229,7 @@ fn test_serde_custom_tikv_config() {
         wal_size_limit: ReadableSize::kb(1),
         max_total_wal_size: ReadableSize::gb(1),
         max_background_jobs: 12,
+        max_background_flushes: 4,
         max_manifest_file_size: ReadableSize::mb(12),
         create_if_missing: false,
         max_open_files: 12_345,
@@ -244,7 +244,7 @@ fn test_serde_custom_tikv_config() {
         rate_bytes_per_sec: ReadableSize::kb(1),
         rate_limiter_refill_period: ReadableDuration::millis(10),
         rate_limiter_mode: DBRateLimiterMode::AllIo,
-        auto_tuned: true,
+        auto_tuned: false,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
         max_sub_compactions: 12,
@@ -291,11 +291,14 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: titan_cf_config.clone(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: false,
+            enable_compaction_guard: true,
+            compaction_guard_min_output_file_size: ReadableSize::mb(12),
+            compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -335,7 +338,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -354,6 +357,9 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: true,
+            compaction_guard_min_output_file_size: ReadableSize::mb(12),
+            compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -393,7 +399,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -412,6 +418,9 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: true,
+            compaction_guard_min_output_file_size: ReadableSize::mb(12),
+            compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -451,7 +460,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -470,6 +479,9 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: true,
+            compaction_guard_min_output_file_size: ReadableSize::mb(12),
+            compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
         ver_defaultcf: VersionCfConfig {
             block_size: ReadableSize::kb(12),
@@ -509,11 +521,14 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: titan_cf_config.clone(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: false,
+            enable_compaction_guard: true,
+            compaction_guard_min_output_file_size: ReadableSize::mb(12),
+            compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
         titan: titan_db_config.clone(),
     };
@@ -525,6 +540,7 @@ fn test_serde_custom_tikv_config() {
         wal_size_limit: ReadableSize::kb(12),
         max_total_wal_size: ReadableSize::gb(1),
         max_background_jobs: 12,
+        max_background_flushes: 4,
         max_manifest_file_size: ReadableSize::mb(12),
         create_if_missing: false,
         max_open_files: 12_345,
@@ -581,11 +597,14 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: titan_cf_config,
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_compaction_guard: true,
+            compaction_guard_min_output_file_size: ReadableSize::mb(12),
+            compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
         titan: titan_db_config,
     };
@@ -599,7 +618,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(2),
-        enable_async_commit: false,
+        enable_async_apply_prewrite: true,
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
@@ -616,7 +635,7 @@ fn test_serde_custom_tikv_config() {
         region_split_size: ReadableSize::mb(12),
         region_max_keys: 100000,
         region_split_keys: 100000,
-        consistency_check_method: ConsistencyCheckMethod::Mvcc,
+        consistency_check_method: ConsistencyCheckMethod::Raw,
     };
     let mut cert_allowed_cn = HashSet::default();
     cert_allowed_cn.insert("example.tikv.com".to_owned());
@@ -626,6 +645,7 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn,
+        redact_info_log: Some(true),
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),
@@ -635,6 +655,7 @@ fn test_serde_custom_tikv_config() {
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
+            file_rewrite_threshold: 1000000,
         },
     };
     value.backup = BackupConfig { num_threads: 456 };
@@ -654,7 +675,7 @@ fn test_serde_custom_tikv_config() {
     value.pessimistic_txn = PessimisticTxnConfig {
         wait_for_lock_timeout: ReadableDuration::millis(10),
         wake_up_delay_duration: ReadableDuration::millis(100),
-        pipelined: true,
+        pipelined: false,
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
