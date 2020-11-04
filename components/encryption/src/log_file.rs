@@ -373,7 +373,10 @@ mod tests {
     fn test_log_file_not_existed() {
         let tempdir = tempfile::tempdir().unwrap();
         let ret = LogFile::open(tempdir.path(), "test_log_file", 2, false);
-        assert!(matches!(ret, Err(Error::Io(_))));
+        match ret {
+            Err(Error::Io(_)) => {}
+            _ => unreachable!(),
+        }
     }
 
     #[test]
