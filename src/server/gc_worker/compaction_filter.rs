@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::Cell;
+use std::cmp::Ordering as CmpOrdering;
+use std::collections::VecDeque;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -116,8 +118,10 @@ struct WriteCompactionFilter {
 
     key_prefix: Vec<u8>,
     remove_older: bool,
+    // Layout: (prefix, all_versions).
+    deleting: (Vec<u8>, VecDeque<Vec<u8>>),
 
-    // To handle delete marks at the bottommost level.
+    // To handle delete marks.
     write_iter: Option<RocksEngineIterator>,
     near_seek_distance: usize,
 
@@ -148,6 +152,7 @@ impl WriteCompactionFilter {
             write_batch,
             key_prefix: vec![],
             remove_older: false,
+            deleting: (vec![], VecDeque::with_capacity(16)),
             write_iter,
             near_seek_distance: NEAR_SEEK_LIMIT,
             versions: 0,
@@ -158,40 +163,66 @@ impl WriteCompactionFilter {
     }
 
     // Do gc before a delete mark.
-    fn gc_before_delete_mark(&mut self, delete: &[u8], prefix: &[u8]) {
-        let mut write_iter = self.write_iter.take().unwrap();
-
-        let mut valid = write_iter.valid().unwrap();
-        if self.near_seek_distance >= NEAR_SEEK_LIMIT {
-            valid = write_iter.seek(SeekKey::Key(delete)).unwrap();
-        } else {
-            let (mut next_count, mut found) = (0, false);
-            while valid && next_count <= NEAR_SEEK_LIMIT {
-                if write_iter.key() >= delete {
-                    found = true;
-                    break;
-                }
-                valid = write_iter.next().unwrap();
-                next_count += 1;
-            }
-            if valid && !found {
-                // Fallback to `seek` after some `next`s.
-                valid = write_iter.seek(SeekKey::Key(delete)).unwrap();
-            }
+    fn handle_deleting(&mut self) {
+        if self.deleting.0.is_empty() {
+            return;
         }
-        self.near_seek_distance = 0;
 
+        let mut valid = self.seek_to_deleting_position();
+        let mut write_iter = self.write_iter.take().unwrap();
         while valid {
             let (key, value) = (write_iter.key(), write_iter.value());
-            if truncate_ts(key) > prefix {
+            if truncate_ts(key) > self.deleting.0.as_slice() {
+                self.deleting.0.clear();
+                self.deleting.1.clear();
                 break;
             }
-            self.handle_filtered_write(parse_write(value));
-            self.delete_write_key(key);
+
+            let (mut drain_pos, mut found) = (0, false);
+            while drain_pos < self.deleting.1.len() {
+                match write_iter.key().cmp(self.deleting.1[drain_pos].as_slice()) {
+                    CmpOrdering::Equal => found = true,
+                    CmpOrdering::Less => break,
+                    _ => {}
+                }
+                drain_pos += 1;
+            }
+            self.deleting.1.drain(0..drain_pos);
+            if !found {
+                self.handle_filtered_write(parse_write(value));
+                self.delete_write_key(key);
+            }
+
             valid = write_iter.next().unwrap();
         }
-
         self.write_iter = Some(write_iter);
+    }
+
+    fn seek_to_deleting_position(&mut self) -> bool {
+        let mark = self.deleting.1[0].as_slice();
+        let write_iter = self.write_iter.as_mut().unwrap();
+        if self.near_seek_distance >= NEAR_SEEK_LIMIT {
+            self.near_seek_distance = 0;
+            return write_iter.seek(SeekKey::Key(mark)).unwrap();
+        }
+
+        let mut valid = write_iter.valid().unwrap();
+        let (mut next_count, mut found) = (0, false);
+        while valid && next_count <= NEAR_SEEK_LIMIT {
+            if write_iter.key() >= mark {
+                found = true;
+                break;
+            }
+            valid = write_iter.next().unwrap();
+            next_count += 1;
+        }
+
+        if valid && !found {
+            // Fallback to `seek` after some `next`s.
+            valid = write_iter.seek(SeekKey::Key(mark)).unwrap();
+        }
+        self.near_seek_distance = 0;
+        valid
     }
 
     fn handle_filtered_write(&mut self, write: WriteRef) {
@@ -237,6 +268,8 @@ thread_local! {
 
 impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
+        self.handle_deleting();
+
         if !self.write_batch.is_empty() {
             let mut opts = WriteOptions::new();
             opts.set_sync(true);
@@ -281,6 +314,7 @@ impl CompactionFilter for WriteCompactionFilter {
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
             self.remove_older = false;
+            self.handle_deleting();
             self.switch_key_metrics();
         }
 
@@ -293,13 +327,16 @@ impl CompactionFilter for WriteCompactionFilter {
                 WriteType::Delete => {
                     self.remove_older = true;
                     filtered = true;
-                    self.gc_before_delete_mark(key, key_prefix);
+                    self.deleting.0 = key_prefix.to_vec();
                 }
             }
         }
 
         if filtered {
             self.handle_filtered_write(write);
+            if !self.deleting.0.is_empty() {
+                self.deleting.1.push_back(key.to_vec());
+            }
             self.deleted += 1;
         }
 
@@ -446,6 +483,30 @@ pub mod tests {
         let default_key = Key::from_encoded_slice(b"key").append_ts(100.into());
         let default_key = default_key.into_encoded();
         assert!(raw_engine.get_value(&default_key).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_compaction_filter_handle_deleting() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let raw_engine = engine.get_rocksdb();
+        let value = vec![b'v'; 512];
+
+        // Delete mark and masked versions can be handled in `drop`.
+        must_prewrite_put(&engine, b"key", &value, b"key", 100);
+        must_commit(&engine, b"key", 100, 110);
+        must_prewrite_delete(&engine, b"key", b"key", 120);
+        must_commit(&engine, b"key", 120, 130);
+        do_gc_by_compact(&raw_engine, None, None, 200, None);
+        must_get_none(&engine, b"key", 110);
+
+        must_prewrite_put(&engine, b"key", &value, b"key", 100);
+        must_commit(&engine, b"key", 100, 110);
+        must_prewrite_delete(&engine, b"key", b"key", 120);
+        must_commit(&engine, b"key", 120, 130);
+        must_prewrite_put(&engine, b"key1", &value, b"key1", 120);
+        must_commit(&engine, b"key1", 120, 130);
+        do_gc_by_compact(&raw_engine, None, None, 200, None);
+        must_get_none(&engine, b"key", 110);
     }
 
     // Test a key can be GCed correctly if its MVCC versions cover multiple SST files.
