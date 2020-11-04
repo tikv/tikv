@@ -885,13 +885,14 @@ mod tests {
             ScalarFuncSig::NeString,
         ];
         let cases = vec![
-            // strA, strB, [binOrd, utfbin_no_padding, utf8bin, ciOrd]
+            // strA, strB, [binOrd, utfbin_no_padding, utf8bin, utf8_general_ci, utf8_unicode_ci, utf8_pinyin_as_cs]
             (
                 "",
                 " ",
                 [
                     Ordering::Less,
                     Ordering::Less,
+                    Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
@@ -906,6 +907,7 @@ mod tests {
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
+                    Ordering::Less,
                 ],
             ),
             (
@@ -917,6 +919,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Greater,
                 ],
             ),
             (
@@ -928,6 +931,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Greater,
                 ],
             ),
             (
@@ -936,6 +940,7 @@ mod tests {
                 [
                     Ordering::Less,
                     Ordering::Less,
+                    Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
@@ -950,12 +955,14 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Greater,
                 ],
             ),
             (
                 "À\t",
                 "A",
                 [
+                    Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
@@ -972,12 +979,14 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
+                    Ordering::Greater,
                 ],
             ),
             (
                 "a bc",
                 "ab ",
                 [
+                    Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
@@ -994,6 +1003,7 @@ mod tests {
                     Ordering::Less,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Less,
                 ],
             ),
             (
@@ -1005,6 +1015,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Less,
                     Ordering::Less,
+                    Ordering::Greater,
                 ],
             ),
             (
@@ -1016,6 +1027,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Greater,
                 ],
             ),
             (
@@ -1027,6 +1039,19 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Less,
                     Ordering::Equal,
+                    Ordering::Greater,
+                ],
+            ),
+            (
+                "汉字",
+                "哈哈",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
                 ],
             ),
         ];
@@ -1036,6 +1061,7 @@ mod tests {
             (Collation::Utf8Mb4Bin, 2),
             (Collation::Utf8Mb4GeneralCi, 3),
             (Collation::Utf8Mb4UnicodeCi, 4),
+            (Collation::CollatorUtf8Mb4PinyinAsCs, 5),
         ];
 
         for (str_a, str_b, ordering_in_collations) in cases {

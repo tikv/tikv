@@ -59,12 +59,10 @@ fn zh_pinyin_convert(c: char) -> u32 {
 		ZH_PINYIN_TIDB_AS_CS_BMP[r]
 	}
 
-	let cp = map_no_bmp(r);
-	if cp != 0 {
-		cp
+	match map_no_bmp(r) {
+		0 => 0xFF000000 + r as u32 + 0x1E248,
+		n => n,
 	}
-
-	0xFF000000 + r as u32 + 0x1E248
 }
 
 // The following Chinese character weight array is base upon the PINYIN collation in zh.xml file 

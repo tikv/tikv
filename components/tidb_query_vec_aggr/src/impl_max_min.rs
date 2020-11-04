@@ -396,11 +396,13 @@ mod tests {
             (Collation::Utf8Mb4GeneralCi, true, vec!["B", "a"], "B"),
             (Collation::Utf8Mb4UnicodeCi, true, vec!["ß", "sr"], "ß"),
             (Collation::Utf8Mb4BinNoPadding, true, vec!["B", "a"], "a"),
+            (Collation::CollatorUtf8Mb4PinyinAsCs, true, vec!["啊", "哦"], "哦"),
             (Collation::Binary, false, vec!["B", "a"], "B"),
             (Collation::Utf8Mb4Bin, false, vec!["B", "a"], "B"),
             (Collation::Utf8Mb4GeneralCi, false, vec!["B", "a"], "a"),
             (Collation::Utf8Mb4UnicodeCi, false, vec!["ß", "st"], "ß"),
             (Collation::Utf8Mb4BinNoPadding, false, vec!["B", "a"], "B"),
+            (Collation::CollatorUtf8Mb4PinyinAsCs, false, vec!["啊", "哦"], "啊"),
         ];
         for (coll, is_max, args, expected) in cases {
             let function = match_template_collator! {
