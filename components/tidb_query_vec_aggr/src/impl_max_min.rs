@@ -396,12 +396,7 @@ mod tests {
             (Collation::Utf8Mb4GeneralCi, true, vec!["B", "a"], "B"),
             (Collation::Utf8Mb4UnicodeCi, true, vec!["ß", "sr"], "ß"),
             (Collation::Utf8Mb4BinNoPadding, true, vec!["B", "a"], "a"),
-            (
-                Collation::Utf8Mb4ZhPinyinAsCs,
-                true,
-                vec!["啊", "哦"],
-                "哦",
-            ),
+            (Collation::Utf8Mb4ZhPinyinAsCs, true, vec!["啊", "哦"], "哦"),
             (Collation::Binary, false, vec!["B", "a"], "B"),
             (Collation::Utf8Mb4Bin, false, vec!["B", "a"], "B"),
             (Collation::Utf8Mb4GeneralCi, false, vec!["B", "a"], "a"),
