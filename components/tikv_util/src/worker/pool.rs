@@ -190,6 +190,11 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
     pub fn stop(&mut self) {
         self.scheduler.stop();
     }
+
+    pub fn stop_worker(mut self) {
+        self.stop();
+        self.worker.stop()
+    }
 }
 
 pub struct ReceiverWrapper<T: Display + Send> {

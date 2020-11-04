@@ -10,7 +10,7 @@
 
 use std::{
     convert::TryFrom,
-    env,
+    env, fmt,
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
@@ -74,6 +74,7 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{setup::*, signal_handler};
+use tikv_util::worker::LazyWorker;
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -452,7 +453,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         // Create cdc.
-        let mut cdc_worker = self.background_worker.lazy_build("cdc");
+        let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
         let cdc_scheduler = cdc_worker.scheduler();
         let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
 
@@ -662,13 +663,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let cdc_endpoint = cdc::Endpoint::new(
             &self.config.cdc,
             self.pd_client.clone(),
-            cdc_worker.scheduler(),
+            cdc_scheduler.clone(),
             self.router.clone(),
             cdc_ob,
             engines.store_meta.clone(),
             self.concurrency_manager.clone(),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
+        self.to_stop.push(cdc_worker);
 
         self.servers = Some(Servers {
             lock_mgr,
@@ -1092,5 +1094,11 @@ impl<ER: RaftEngine> Stop for MetricsFlusher<RocksEngine, ER> {
 impl Stop for Worker {
     fn stop(self: Box<Self>) {
         Worker::stop(&self);
+    }
+}
+
+impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
+    fn stop(self: Box<Self>) {
+        self.stop_worker();
     }
 }
