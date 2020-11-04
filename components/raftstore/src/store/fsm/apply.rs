@@ -169,6 +169,10 @@ where
     fn set_conf_change(&mut self, cmd: PendingCmd<S>) {
         self.conf_change = Some(cmd);
     }
+
+    fn is_empty(&self) -> bool {
+        self.normals.is_empty() && self.conf_change.is_none()
+    }
 }
 
 #[derive(Default, Debug)]
@@ -932,7 +936,10 @@ where
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
+            // We can accumulate a larger WriteBatch for follower replication
+            if should_write_to_engine(&cmd)
+                || (!self.pending_cmds.is_empty() && apply_ctx.kv_wb().should_write_to_engine())
+            {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
                     if start.elapsed() >= apply_ctx.yield_duration {
@@ -3068,7 +3075,9 @@ where
         self.delegate.apply_state.set_commit_index(cur_state.1);
         self.delegate.apply_state.set_commit_term(cur_state.2);
 
-        self.append_proposal(apply.cbs.drain(..));
+        if !apply.cbs.is_empty() {
+            self.append_proposal(apply.cbs.drain(..));
+        }
         self.delegate
             .handle_raft_committed_entries(apply_ctx, apply.entries.drain(..));
         fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
