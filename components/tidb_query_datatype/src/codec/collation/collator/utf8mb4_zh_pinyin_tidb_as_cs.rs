@@ -17,55 +17,55 @@ impl Collator for CollatorUtf8Mb4PinyinAsCs {
 
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
         let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
-		let mut n = 0;
-		for ch in s.chars() {
-			let cp = zh_pinyin_convert(ch);
-			if cp <= 0xFF {
-				writer.write_u8(cp as u8)?;
-				n += 1;
-			} else if cp <= 0xFFFF {
-				writer.write_u16_be(cp as u16)?;
-				n += 2;
-			} else {
-				writer.write_u32_be(cp)?;
-				n += 4;
-			}
-		}
-		Ok(n)
+        let mut n = 0;
+        for ch in s.chars() {
+            let cp = zh_pinyin_convert(ch);
+            if cp <= 0xFF {
+                writer.write_u8(cp as u8)?;
+                n += 1;
+            } else if cp <= 0xFFFF {
+                writer.write_u16_be(cp as u16)?;
+                n += 2;
+            } else {
+                writer.write_u32_be(cp)?;
+                n += 4;
+            }
+        }
+        Ok(n)
     }
 
     fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-		let sa = str::from_utf8(a)?.trim_end_matches(TRIM_PADDING_SPACE);
-		let sb = str::from_utf8(b)?.trim_end_matches(TRIM_PADDING_SPACE);
-		Ok(sa
-			.chars()
-			.map(zh_pinyin_convert)
-			.cmp(sb.chars().map(zh_pinyin_convert)))
+        let sa = str::from_utf8(a)?.trim_end_matches(TRIM_PADDING_SPACE);
+        let sb = str::from_utf8(b)?.trim_end_matches(TRIM_PADDING_SPACE);
+        Ok(sa
+            .chars()
+            .map(zh_pinyin_convert)
+            .cmp(sb.chars().map(zh_pinyin_convert)))
     }
 
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
-		let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
-		for ch in s.chars().map(zh_pinyin_convert) {
-			ch.hash(state);
-		}
-		Ok(())
+        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
+        for ch in s.chars().map(zh_pinyin_convert) {
+            ch.hash(state);
+        }
+        Ok(())
     }
 }
 
 #[inline]
 fn zh_pinyin_convert(c: char) -> u32 {
-	let r = c as usize;
-	if r <= 0xFFFF {
-		ZH_PINYIN_TIDB_AS_CS_BMP[r]
-	}
+    let r = c as usize;
+    if r <= 0xFFFF {
+        return ZH_PINYIN_TIDB_AS_CS_BMP[r];
+    }
 
-	match map_no_bmp(r) {
-		0 => 0xFF000000 + r as u32 + 0x1E248,
-		n => n,
-	}
+    match map_no_bmp(r) {
+        0 => 0xFF000000 + r as u32 + 0x1E248,
+        n => n,
+    }
 }
 
-// The following Chinese character weight array is base upon the PINYIN collation in zh.xml file 
+// The following Chinese character weight array is base upon the PINYIN collation in zh.xml file
 // of CLDR24(http://cldr.unicode.org/)(http://unicode.org/Public/cldr/24/core.zip)
 #[rustfmt::skip]
 static ZH_PINYIN_TIDB_AS_CS_BMP: [u32; 0x10000] = [
