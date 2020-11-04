@@ -284,8 +284,8 @@ impl Drop for WriteCompactionFilter {
             x.update(|(mut versions, mut deletes)| {
                 versions += self.total_versions;
                 deletes += self.total_deleted;
-                if versions >= 1024 * 128 {
-                    info!("Compaction filter reports"; "stale" => versions, "gc" => deletes);
+                if versions >= 1024 * 1024 {
+                    info!("Compaction filter reports"; "total" => versions, "gc" => deletes);
                     return (0, 0);
                 }
                 (versions, deletes)
