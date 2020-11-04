@@ -17,7 +17,7 @@ fn test_check_cn_success() {
     cluster.run();
 
     let leader = cluster.get_region(b"").get_peers()[0].clone();
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
+    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
 
     let env = Arc::new(Environment::new(1));
     let cred = test_util::new_channel_cred();
@@ -37,7 +37,7 @@ fn test_check_cn_fail() {
     cluster.run();
 
     let leader = cluster.get_region(b"").get_peers()[0].clone();
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
+    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
 
     let env = Arc::new(Environment::new(1));
     let cred = test_util::new_channel_cred();

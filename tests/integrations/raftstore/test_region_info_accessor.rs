@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
+use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 
 fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
@@ -167,18 +168,18 @@ fn test_node_cluster_region_info_accessor() {
 
     // Create a RegionInfoAccessor on node 1
     let (tx, rx) = channel();
+    let worker = Worker::new("test");
     cluster
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
             if id == 1 {
-                let c = RegionInfoAccessor::new(host);
+                let c = RegionInfoAccessor::new(host, &worker);
                 tx.send(c).unwrap();
             }
         }));
     cluster.run_conf_change();
     let c = rx.recv().unwrap();
-    c.start();
     // We only created it on the node whose id == 1 so we shouldn't receive more than one item.
     assert!(rx.try_recv().is_err());
 

@@ -91,7 +91,7 @@ fn test_applied_lock_collector() {
     let leader_client = clients.get(&leader_store_id).unwrap();
     let mut ctx = Context::default();
     ctx.set_region_id(region_id);
-    ctx.set_peer(leader_peer.clone());
+    ctx.set_peer(leader_peer);
     ctx.set_region_epoch(cluster.get_region_epoch(region_id));
 
     // It's used to make sure all stores applies all logs.
@@ -224,7 +224,7 @@ fn test_applied_lock_collector() {
     let leader_client = clients.get(&leader_store_id).unwrap();
     must_kv_prewrite(
         &leader_client,
-        ctx.clone(),
+        ctx,
         vec![new_mutation(Op::Put, b"key1100", b"v")],
         b"key1100".to_vec(),
         safe_point,

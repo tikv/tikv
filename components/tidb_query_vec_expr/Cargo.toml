@@ -10,9 +10,9 @@ base64 = "0.12"
 bstr = "0.2.8"
 byteorder = "1.2"
 codec = { path = "../codec" }
-hex = "0.3"
+hex = "0.4"
 match_template = { path = "../match_template" }
-num = { version = "0.2", default-features = false }
+num = { version = "0.3", default-features = false }
 num-traits = "0.2"
 openssl = { version = "0.10" }
 protobuf = "2"

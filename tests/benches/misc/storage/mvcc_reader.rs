@@ -35,7 +35,7 @@ fn bench_get_txn_commit_record(b: &mut test::Bencher, n: u64) {
     let store = prepare_mvcc_data(&key, n);
     b.iter(|| {
         let mut mvcc_reader = MvccReader::new(
-            store.get_engine().snapshot(&Context::default()).unwrap(),
+            store.get_engine().snapshot(Default::default()).unwrap(),
             None,
             true,
             IsolationLevel::Si,
