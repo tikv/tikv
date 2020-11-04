@@ -1263,7 +1263,7 @@ impl DBConfigManger {
     }
 
     fn set_max_background_jobs(&self, max_background_jobs: i32) -> Result<(), Box<dyn Error>> {
-        let opt = self.db.as_inner().get_db_options();
+        let opt = self.db.get_db_options();
         if max_background_jobs < opt.get_max_background_jobs() {
             return Err("unable to shrink background jobs while the instance is running".into());
         }
@@ -1275,7 +1275,7 @@ impl DBConfigManger {
         &self,
         max_background_flushes: i32,
     ) -> Result<(), Box<dyn Error>> {
-        let opt = self.db.as_inner().get_db_options();
+        let opt = self.db.get_db_options();
         if max_background_flushes < opt.get_max_background_flushes() {
             return Err("unable to shrink background jobs while the instance is running".into());
         }
