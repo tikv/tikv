@@ -138,10 +138,8 @@ impl TestSuite {
         let mut req = ChangeDataRequest::default();
         req.region_id = region_id;
         req.set_region_epoch(self.get_context(region_id).take_region_epoch());
-        // Assume batch resolved ts will be release in v4.0.7
-        // For easy of testing (nightly CI), we lower the gate to v4.0.6
-        // TODO bump the version when cherry pick to release branch.
-        req.mut_header().set_ticdc_version("4.0.6".into());
+        // Batch resolved ts is supported by TiCDC in v4.0.8 release.
+        req.mut_header().set_ticdc_version("4.0.8".into());
         req
     }
 

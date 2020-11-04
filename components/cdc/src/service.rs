@@ -177,10 +177,7 @@ impl Conn {
 
     // TODO refactor into Error::Version.
     pub fn check_version_and_set_feature(&mut self, ver: semver::Version) -> Option<Compatibility> {
-        // Assume batch resolved ts will be release in v4.0.7
-        // For easy of testing (nightly CI), we lower the gate to v4.0.6
-        // TODO bump the version when cherry pick to release branch.
-        let v407_bacth_resoled_ts = semver::Version::new(4, 0, 6);
+        let v408_bacth_resoled_ts = semver::Version::new(4, 0, 8);
 
         match &self.version {
             Some((version, _)) => {
@@ -197,7 +194,7 @@ impl Conn {
             }
             None => {
                 let mut features = FeatureGate::empty();
-                if v407_bacth_resoled_ts <= ver {
+                if v408_bacth_resoled_ts <= ver {
                     features.toggle(FeatureGate::BATCH_RESOLVED_TS);
                 }
                 info!("cdc connection version"; "version" => ver.to_string(), "features" => ?features);
@@ -364,7 +361,7 @@ impl ChangeData for Service {
             }
             match res {
                 Ok(_s) => {
-                    info!("cdc send half closed"; "downstream" => peer, "conn_id" => ?conn_id);
+                    info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
                 }
                 Err(e) => {
                     warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
