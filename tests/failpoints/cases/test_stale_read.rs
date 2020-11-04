@@ -328,16 +328,19 @@ fn test_read_index_when_transfer_leader_2() {
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
+    // Add peer 2 and 3 and wait them to apply it.
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k0", b"v0");
     cluster.pd_client.must_add_peer(r1, new_peer(2, 2));
     cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
     // Put and test again to ensure that peer 3 get the latest writes by message append
     // instead of snapshot, so that transfer leader to peer 3 can 100% success.
     cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     let r1 = cluster.get_region(b"k1");
     let old_leader = cluster.leader_of_region(r1.get_id()).unwrap();
