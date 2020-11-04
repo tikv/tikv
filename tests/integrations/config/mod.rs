@@ -93,6 +93,7 @@ fn test_serde_custom_tikv_config() {
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),
         enable_request_batch: false,
+        background_thread_count: 999,
         raft_client_backoff_step: ReadableDuration::secs(1),
     };
     value.readpool = ReadPoolConfig {
