@@ -24,7 +24,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::SnapManager;
 use security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::worker::Worker;
+use tikv_util::worker::{LazyWorker, Worker};
 use tikv_util::Either;
 
 use super::load_statistics::*;
@@ -58,7 +58,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     raft_router: T,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
-    snap_worker: Worker<SnapTask>,
+    snap_worker: LazyWorker<SnapTask>,
 
     // Currently load statistics is done in the thread.
     stats_pool: Option<Runtime>,
@@ -107,13 +107,14 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
                 .build(),
         );
         let snap_worker = Worker::new("snap-handler");
+        let lazy_worker = snap_worker.lazy_build("snap-handler");
 
         let kv_service = KvService::new(
             storage,
             gc_worker,
             cop,
             raft_router.clone(),
-            snap_worker.scheduler(),
+            lazy_worker.scheduler(),
             Arc::clone(&grpc_thread_load),
             Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
@@ -148,7 +149,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             security_mgr.clone(),
             resolver,
             raft_router.clone(),
-            snap_worker.scheduler(),
+            lazy_worker.scheduler(),
         );
         let raft_client = RaftClient::new(conn_builder);
 
@@ -161,7 +162,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             trans,
             raft_router,
             snap_mgr,
-            snap_worker,
+            snap_worker: lazy_worker,
             stats_pool,
             grpc_thread_load,
             yatp_read_pool,
@@ -219,7 +220,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             security_mgr,
             Arc::clone(&cfg),
         );
-        box_try!(self.snap_worker.start(snap_runner));
+        self.snap_worker.start(snap_runner);
 
         let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
         info!("listening on addr"; "addr" => &self.local_addr);

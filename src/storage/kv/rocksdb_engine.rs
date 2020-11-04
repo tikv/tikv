@@ -67,16 +67,12 @@ impl Runnable for Runner {
 struct RocksEngineCore {
     // only use for memory mode
     temp_dir: Option<TempDir>,
-    worker: Worker<Task>,
+    worker: Worker,
 }
 
 impl Drop for RocksEngineCore {
     fn drop(&mut self) {
-        if let Some(h) = self.worker.stop() {
-            if let Err(e) = h.join() {
-                safe_panic!("RocksEngineCore engine thread panicked: {:?}", e);
-            }
-        }
+        self.worker.stop();
     }
 }
 
@@ -106,7 +102,7 @@ impl RocksEngine {
             }
             _ => (path.to_owned(), None),
         };
-        let mut worker = Worker::new("engine-rocksdb");
+        let worker = Worker::new("engine-rocksdb");
         let db = Arc::new(engine_rocks::raw_util::new_engine(
             &path, None, cfs, cfs_opts,
         )?);
@@ -117,9 +113,9 @@ impl RocksEngine {
         kv_engine.set_shared_block_cache(shared_block_cache);
         raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
-        box_try!(worker.start(Runner(engines.clone())));
+        let sched = worker.start("engine-rocksdb", Runner(engines.clone()));
         Ok(RocksEngine {
-            sched: worker.scheduler(),
+            sched,
             core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),
             not_leader: Arc::new(AtomicBool::new(false)),
             engines,
@@ -143,10 +139,8 @@ impl RocksEngine {
     }
 
     pub fn stop(&self) {
-        let mut core = self.core.lock().unwrap();
-        if let Some(h) = core.worker.stop() {
-            h.join().unwrap();
-        }
+        let core = self.core.lock().unwrap();
+        core.worker.stop();
     }
 }
 
