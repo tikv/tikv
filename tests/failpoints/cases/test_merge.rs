@@ -1357,7 +1357,7 @@ fn test_prewrite_before_max_ts_is_synced() {
         client.kv_prewrite(&req).unwrap()
     };
 
-    fail::cfg("test_raftstore_get_tso", "pause").unwrap();
+    fail::cfg("test_raftstore_get_tso", "return(50)").unwrap();
     cluster.pd_client.must_merge(left.get_id(), right.get_id());
     let resp = do_prewrite(&mut cluster);
     assert!(resp.get_region_error().has_max_timestamp_not_synced());

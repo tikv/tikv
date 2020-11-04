@@ -78,7 +78,7 @@ fn test_prewrite_before_max_ts_is_synced() {
     };
 
     cluster.must_transfer_leader(1, new_peer(2, 2));
-    fail::cfg("test_raftstore_get_tso", "pause").unwrap();
+    fail::cfg("test_raftstore_get_tso", "return(50)").unwrap();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     let resp = do_prewrite(&mut cluster);
     assert!(resp.get_region_error().has_max_timestamp_not_synced());
