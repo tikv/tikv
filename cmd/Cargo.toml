@@ -72,7 +72,7 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "../components/log_wrappers" }
 nix = "0.11"
 pd_client = { path = "../components/pd_client" }
-prometheus = { version = "0.10", features = ["nightly", "push"] }
+prometheus = { version = "0.8", features = ["nightly", "push"] }
 promptly = "0.3.0"
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }

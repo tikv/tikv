@@ -100,9 +100,6 @@ impl Task {
             cf: req.get_cf().to_owned(),
         })?;
 
-        // Check storage backend eagerly.
-        create_storage(req.get_storage_backend())?;
-
         let task = Task {
             request: Request {
                 start_key: req.get_start_key().to_owned(),
@@ -618,8 +615,20 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             if branges.is_empty() {
                 return;
             }
-            // Storage backend has been checked in `Task::new()`.
-            let backend = create_storage(&request.backend).unwrap();
+
+            // Check if we can open external storage.
+            let backend = match create_storage(&request.backend) {
+                Ok(backend) => backend,
+                Err(err) => {
+                    error!(?err; "backup create storage failed");
+                    let mut response = BackupResponse::default();
+                    response.set_error(crate::Error::Io(err).into());
+                    if let Err(err) = tx.unbounded_send(response) {
+                        error!(?err; "backup failed to send response");
+                    }
+                    return;
+                }
+            };
             let storage = LimitedStorage {
                 limiter: request.limiter.clone(),
                 storage: backend,
@@ -1131,8 +1140,6 @@ pub mod tests {
             req.set_start_version(0);
             req.set_end_version(ts.into_inner());
             let (tx, rx) = unbounded();
-            // Empty path should return an error.
-            Task::new(req.clone(), tx.clone()).unwrap_err();
 
             // Set an unique path to avoid AlreadyExists error.
             req.set_storage_backend(make_local_backend(&tmp.path().join(ts.to_string())));

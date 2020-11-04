@@ -10,12 +10,13 @@ prost-codec = ["engine/prost-codec"]
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
+failpoints = ["fail/failpoints"]
 
 [dependencies]
 encryption = { path = "../encryption" }
 engine = { path = "../engine" }
 engine_traits = { path = "../engine_traits" }
-prometheus = { version = "0.10", features = ["nightly", "push"] }
+prometheus = { version = "0.8", features = ["nightly", "push"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tikv_alloc = { path = "../tikv_alloc" }
@@ -27,6 +28,7 @@ configuration = { path = "../configuration" }
 serde = "1.0"
 serde_derive = "1.0"
 coarsetime = "0.1"
+fail = "0.3"
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"

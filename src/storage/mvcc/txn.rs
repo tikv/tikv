@@ -539,6 +539,25 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
+        // Check whether the current key is locked at any timestamp.
+        if let Some(lock) = self.reader.load_lock(&key)? {
+            if lock.ts != self.start_ts {
+                return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
+            }
+            // TODO: remove it in future
+            if lock.lock_type == LockType::Pessimistic {
+                return Err(ErrorInner::LockTypeNotMatch {
+                    start_ts: self.start_ts,
+                    key: key.into_raw()?,
+                    pessimistic: true,
+                }
+                .into());
+            }
+            // Duplicated command. No need to overwrite the lock and data.
+            MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+            return Ok(());
+        }
+
         let mut prev_write = None;
         // Check whether there is a newer version.
         if !skip_constraint_check {
@@ -558,29 +577,13 @@ impl<S: Snapshot> MvccTxn<S> {
                     }
                     .into());
                 }
+                // Should check it when no lock exists, otherwise it can report error when there is
+                // a lock belonging to a committed transaction which deletes the key.
                 self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
                 prev_write = Some(write);
             }
         }
         if should_not_write {
-            return Ok(());
-        }
-        // Check whether the current key is locked at any timestamp.
-        if let Some(lock) = self.reader.load_lock(&key)? {
-            if lock.ts != self.start_ts {
-                return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
-            }
-            // TODO: remove it in future
-            if lock.lock_type == LockType::Pessimistic {
-                return Err(ErrorInner::LockTypeNotMatch {
-                    start_ts: self.start_ts,
-                    key: key.into_raw()?,
-                    pessimistic: true,
-                }
-                .into());
-            }
-            // Duplicated command. No need to overwrite the lock and data.
-            MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
             return Ok(());
         }
 
@@ -1257,11 +1260,31 @@ mod tests {
         must_prewrite_put(&engine, k1, v1, k1, 1);
         must_commit(&engine, k1, 1, 2);
 
+        fn expect_error<T, F>(x: Result<T>, err_matcher: F)
+        where
+            F: FnOnce(Error) + Send + 'static,
+        {
+            match x {
+                Err(e) => err_matcher(e),
+                _ => panic!("expect result to be an error"),
+            }
+        }
+
         // "k1" already exist, returns AlreadyExist error.
-        assert!(try_prewrite_insert(&engine, k1, v2, k1, 3).is_err());
+        expect_error(try_prewrite_insert(&engine, k1, v2, k1, 3), |e| match e {
+            Error(box ErrorInner::AlreadyExist { .. }) => (),
+            _ => panic!("unexpected error: {:?}", e),
+        });
 
         // Delete "k1"
         must_prewrite_delete(&engine, k1, k1, 4);
+
+        // There is a lock, returns KeyIsLocked error.
+        expect_error(try_prewrite_insert(&engine, k1, v2, k1, 6), |e| match e {
+            Error(box ErrorInner::KeyIsLocked(_)) => (),
+            _ => panic!("unexpected error: {:?}", e),
+        });
+
         must_commit(&engine, k1, 4, 5);
 
         // After delete "k1", insert returns ok.
@@ -1272,7 +1295,10 @@ mod tests {
         must_prewrite_put(&engine, k1, v3, k1, 8);
         must_rollback(&engine, k1, 8);
 
-        assert!(try_prewrite_insert(&engine, k1, v3, k1, 9).is_err());
+        expect_error(try_prewrite_insert(&engine, k1, v3, k1, 9), |e| match e {
+            Error(box ErrorInner::AlreadyExist { .. }) => (),
+            _ => panic!("unexpected error: {:?}", e),
+        });
 
         // Delete "k1" again
         must_prewrite_delete(&engine, k1, k1, 10);
