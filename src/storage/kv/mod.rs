@@ -65,7 +65,7 @@ pub enum Modify {
 
     Prewrite {
         key: Key,
-        value: Option<Value>,
+        value: Value,
         lock: Value,
         start_ts: TimeStamp,
     },

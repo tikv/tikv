@@ -87,7 +87,7 @@ pub struct ReleasedLock {
 }
 
 impl ReleasedLock {
-    fn new(key: &Key, pessimistic: bool) -> Self {
+    pub fn new(key: &Key, pessimistic: bool) -> Self {
         Self {
             hash: key.gen_hash(),
             pessimistic,
@@ -214,7 +214,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.write_size
     }
 
-    pub fn put_prewrite(&mut self, key: Key, value: Option<Value>, lock: &Lock) {
+    pub fn put_prewrite(&mut self, key: Key, value: Value, lock: &Lock) {
         let write = Modify::Prewrite {
             key,
             value,
@@ -253,11 +253,11 @@ impl<S: Snapshot> MvccTxn<S> {
         Some(released)
     }
 
-    pub(crate) fn put_value(&mut self, key: Key, ts: TimeStamp, value: Value) {
-        let write = Modify::Put(CF_DEFAULT, key.append_ts(ts), value);
-        self.write_size += write.size();
-        self.writes.modifies.push(write);
-    }
+    // pub(crate) fn put_value(&mut self, key: Key, ts: TimeStamp, value: Value) {
+    //     let write = Modify::Put(CF_DEFAULT, key.append_ts(ts), value);
+    //     self.write_size += write.size();
+    //     self.writes.modifies.push(write);
+    // }
 
     fn delete_value(&mut self, key: Key, ts: TimeStamp) {
         let write = Modify::Delete(CF_DEFAULT, key.append_ts(ts));

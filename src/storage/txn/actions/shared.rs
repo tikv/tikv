@@ -83,7 +83,7 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
     if try_one_pc {
         txn.put_locks_for_1pc(key, lock, has_pessimistic_lock);
     } else {
-        txn.put_prewrite(key, value, &lock);
+        txn.put_prewrite(key, value.unwrap_or_default(), &lock);
     }
 
     fail_point!("after_prewrite_one_key");

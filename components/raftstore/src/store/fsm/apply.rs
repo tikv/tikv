@@ -19,7 +19,7 @@ use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{
-    DeleteStrategy, KvEngine, Mutable, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
+    DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
