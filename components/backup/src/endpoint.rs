@@ -28,7 +28,6 @@ use tikv::storage::txn::{
 };
 use tikv::storage::Statistics;
 use tikv_util::time::Limiter;
-use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use txn_types::{Key, Lock, TimeStamp};
 use yatp::task::callback::{Handle, TaskCell};
@@ -633,12 +632,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         }
     }
 
-    pub fn new_timer(&self) -> Timer<()> {
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(self.pool_idle_threshold), ());
-        timer
-    }
-
     pub fn get_config_manager(&self) -> ConfigManager {
         self.config_manager.clone()
     }
@@ -837,12 +830,13 @@ impl<E: Engine, R: RegionInfoProvider> Runnable for Endpoint<E, R> {
 }
 
 impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer for Endpoint<E, R> {
-    type TimeoutTask = ();
-
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+    fn on_timeout(&mut self) {
         let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
         self.pool.borrow_mut().check_active(pool_idle_duration);
-        timer.add_task(pool_idle_duration, ());
+    }
+
+    fn get_interval(&self) -> Duration {
+        Duration::from_millis(self.pool_idle_threshold)
     }
 }
 
@@ -938,7 +932,7 @@ pub mod tests {
     use tempfile::TempDir;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
-    use tikv_util::time::Instant;
+    use tikv_util::worker::Worker;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     #[derive(Clone)]
@@ -1419,31 +1413,38 @@ pub mod tests {
         assert!(endpoint.pool.borrow().size == 3);
     }
 
+    pub struct EndpointWrapper<E: Engine, R: RegionInfoProvider> {
+        inner: Arc<Mutex<Endpoint<E, R>>>,
+    }
+    impl<E: Engine, R: RegionInfoProvider> Runnable for EndpointWrapper<E, R> {
+        type Task = Task;
+
+        fn run(&mut self, task: Task) {
+            self.inner.lock().unwrap().run(task);
+        }
+    }
+
+    impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer for EndpointWrapper<E, R> {
+        fn on_timeout(&mut self) {
+            self.inner.lock().unwrap().on_timeout();
+        }
+
+        fn get_interval(&self) -> Duration {
+            self.inner.lock().unwrap().get_interval()
+        }
+    }
+
     #[test]
     fn test_thread_pool_shutdown_when_idle() {
         let (_, mut endpoint) = new_endpoint();
 
         // set the idle threshold to 100ms
         endpoint.pool_idle_threshold = 100;
-        let mut backup_timer = endpoint.new_timer();
         let endpoint = Arc::new(Mutex::new(endpoint));
+        let worker = Worker::new("endpoint");
         let scheduler = {
-            let endpoint = endpoint.clone();
-            let (tx, rx) = tikv_util::mpsc::unbounded();
-            thread::spawn(move || loop {
-                let tick_time = backup_timer.next_timeout().unwrap();
-                let timeout = tick_time.checked_sub(Instant::now()).unwrap_or_default();
-                let task = match rx.recv_timeout(timeout) {
-                    Ok(Some(task)) => Some(task),
-                    _ => None,
-                };
-                if let Some(task) = task {
-                    let mut endpoint = endpoint.lock().unwrap();
-                    endpoint.run(task);
-                }
-                endpoint.lock().unwrap().on_timeout(&mut backup_timer, ());
-            });
-            tx
+            let inner = endpoint.clone();
+            worker.start_with_timer("endpoint", EndpointWrapper { inner })
         };
 
         let mut req = BackupRequest::default();
@@ -1465,7 +1466,7 @@ pub mod tests {
         // if not task arrive after create the thread pool is empty
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
 
-        scheduler.send(Some(task)).unwrap();
+        scheduler.schedule(task).unwrap();
         // wait until the task finish
         let _ = block_on(resp_rx.into_future());
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
@@ -1475,7 +1476,7 @@ pub mod tests {
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
 
         // thread pool shutdown if not task arrive more than 100ms
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(160));
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
     }
     // TODO: region err in txn(engine(request))
