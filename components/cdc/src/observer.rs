@@ -334,12 +334,13 @@ mod tests {
     use kvproto::raft_cmdpb::*;
     use std::time::Duration;
     use tikv::storage::kv::TestEngineBuilder;
-    use tikv::storage::mvcc::tests::*;
-    use tikv::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
+    use tikv::storage::txn::tests::{
+        must_commit, must_prewrite_delete, must_prewrite_put, must_rollback,
+    };
 
     #[test]
     fn test_register_and_deregister() {
-        let (scheduler, rx) = tikv_util::worker::dummy_scheduler();
+        let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
         let observe_id = ObserveID::new();
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();

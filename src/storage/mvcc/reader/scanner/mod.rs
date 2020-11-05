@@ -368,10 +368,8 @@ pub fn has_data_in_range<S: Snapshot>(
     let mut iter = snapshot.iter_cf(cf, iter_opt, ScanMode::Forward)?;
     match iter.seek(left, statistic) {
         Ok(valid) => {
-            if valid {
-                if iter.key(statistic) < right.as_encoded().as_slice() {
-                    return Ok(true);
-                }
+            if valid && iter.key(statistic) < right.as_encoded().as_slice() {
+                return Ok(true);
             }
         }
         Err(e)
@@ -460,7 +458,6 @@ mod tests {
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
     use crate::storage::txn::tests::*;
     use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-    use kvproto::kvrpcpb::Context;
 
     // Collect data from the scanner and assert it equals to `expected`, which is a collection of
     // (raw_key, value).
@@ -502,7 +499,7 @@ mod tests {
 
         let test_scanner_result =
             move |engine: &RocksEngine, expected_result: Vec<(Vec<u8>, Option<Vec<u8>>)>| {
-                let snapshot = engine.snapshot(&Context::default()).unwrap();
+                let snapshot = engine.snapshot(Default::default()).unwrap();
 
                 let scanner = ScannerBuilder::new(snapshot, SCAN_TS, desc)
                     .build()
@@ -582,7 +579,7 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, &[3], &[3], 105, 110);
         must_prewrite_put(&engine, &[4], b"a", &[4], 105);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         let mut expected_result = vec![
             (vec![0], Some(vec![b'v', 0])),
@@ -663,7 +660,7 @@ mod tests {
             expected_result = expected_result.into_iter().rev().collect();
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let scanner = ScannerBuilder::new(snapshot, 65.into(), desc)
             .bypass_locks(bypass_locks)
             .build()
@@ -686,7 +683,7 @@ mod tests {
         expected_met_newer_ts_data: bool,
     ) {
         let mut scanner = ScannerBuilder::new(
-            engine.snapshot(&Context::default()).unwrap(),
+            engine.snapshot(Default::default()).unwrap(),
             scanner_ts.into(),
             desc,
         )

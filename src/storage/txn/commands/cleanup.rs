@@ -9,7 +9,7 @@ use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
     WriteResult,
 };
-use crate::storage::txn::Result;
+use crate::storage::txn::{cleanup, Result};
 use crate::storage::{ProcessResult, Snapshot};
 
 command! {
@@ -53,7 +53,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
         let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
         // The rollback must be protected, see more on
         // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-        released_locks.push(txn.cleanup(self.key, self.current_ts, true)?);
+        released_locks.push(cleanup(&mut txn, self.key, self.current_ts, true)?);
         released_locks.wake_up(context.lock_mgr);
 
         context.statistics.add(&txn.take_statistics());

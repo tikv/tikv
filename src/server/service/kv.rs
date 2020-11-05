@@ -14,7 +14,7 @@ use crate::server::Result as ServerResult;
 use crate::storage::{
     errors::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-        extract_region_error,
+        extract_kv_pairs_and_statistics, extract_region_error,
     },
     kv::Engine,
     lock_manager::LockManager,
@@ -699,6 +699,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             region_epoch: req.take_context().take_region_epoch(),
             split_keys,
             callback: Callback::write(cb),
+            source: ctx.peer().into(),
         };
 
         if let Err(e) = self.ch.send_casual_msg(region_id, req) {
@@ -1166,8 +1167,14 @@ fn future_get<E: Engine, L: LockManager>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok(Some(val)) => resp.set_value(val),
-                Ok(None) => resp.set_not_found(true),
+                Ok((val, statistics, perf_statistics_delta)) => {
+                    statistics.write_scan_detail(resp.mut_scan_detail_v2());
+                    perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
+                    match val {
+                        Some(val) => resp.set_value(val),
+                        None => resp.set_not_found(true),
+                    }
+                }
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -1216,7 +1223,10 @@ fn future_batch_get<E: Engine, L: LockManager>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_pairs(extract_kv_pairs(v).into());
+            let (val, statistics, perf_statistics_delta) = extract_kv_pairs_and_statistics(v);
+            statistics.write_scan_detail(resp.mut_scan_detail_v2());
+            perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
+            resp.set_pairs(val.into());
         }
         Ok(resp)
     }
@@ -1581,6 +1591,7 @@ macro_rules! txn_command_future {
 txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp) {{
     if let Ok(v) = &v {
         resp.set_min_commit_ts(v.min_commit_ts.into_inner());
+        resp.set_one_pc_commit_ts(v.one_pc_commit_ts.into_inner());
     }
     resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
 }});
