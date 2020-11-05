@@ -86,6 +86,7 @@ use std::{
 };
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
+use tikv_util::trace::*;
 use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -321,7 +322,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     Ok((result?, statistics, perf_statistics.delta()))
                 }
-            },
+            }
+            .in_span(Span::from_local_parent("Storage::get")),
             priority,
             thread_rng().next_u64(),
         );
@@ -449,7 +451,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
                     Ok(results)
-                },
+                }
+                .in_span(Span::from_local_parent("Storage::batch_get_command")),
                 priority,
                 thread_rng().next_u64(),
             );
@@ -541,7 +544,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     Ok((result?, statistics, perf_statistics.delta()))
                 }
-            },
+            }
+            .in_span(Span::from_local_parent("Storage::batch_get")),
             priority,
             thread_rng().next_u64(),
         );
@@ -678,7 +682,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             .collect()
                     })
                 }
-            },
+            }
+            .in_span(Span::from_local_parent("Storage::scan")),
             priority,
             thread_rng().next_u64(),
         );

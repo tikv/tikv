@@ -8,6 +8,7 @@ pub use tidb_query_common::execute_stats::{
     ExecSummaryCollector, ExecuteStats, WithSummaryCollector,
 };
 
+use tikv_util::trace::*;
 use tipb::FieldType;
 
 use tidb_query_common::execute_stats::ExecSummaryCollectorEnabled;
@@ -103,6 +104,7 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
         self.inner.schema()
     }
 
+    #[trace("WithSummaryCollector::next_batch")]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let timer = self.summary_collector.on_start_iterate();
         let result = self.inner.next_batch(scan_rows);

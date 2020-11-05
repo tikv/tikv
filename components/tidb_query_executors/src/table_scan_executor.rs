@@ -7,6 +7,7 @@ use std::sync::Arc;
 use collections::HashMap;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tikv_util::trace::*;
 use tipb::ColumnInfo;
 use tipb::FieldType;
 use tipb::TableScan;
@@ -106,6 +107,7 @@ impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
     }
 
     #[inline]
+    #[trace("BatchTableScanExecutor::next_batch")]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
     }

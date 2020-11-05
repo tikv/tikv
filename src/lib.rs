@@ -27,6 +27,7 @@
 #![feature(shrink_to)]
 #![feature(drain_filter)]
 #![feature(negative_impls)]
+#![feature(concat_idents)]
 
 #[macro_use(fail_point)]
 extern crate fail;

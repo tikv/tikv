@@ -48,6 +48,7 @@ use raftstore::{
 };
 use raftstore::{coprocessor::ReadIndexObserver, errors::Error as RaftServerError};
 use tikv_util::time::Instant;
+use tikv_util::trace::*;
 
 quick_error! {
     #[derive(Debug)]
@@ -232,10 +233,11 @@ where
             .read(
                 ctx.read_id,
                 cmd,
-                StoreCallback::Read(Box::new(move |resp| {
+                StoreCallback::read(Box::new(move |resp| {
                     let (cb_ctx, res) = on_read_result(resp, 1);
                     cb((cb_ctx, res.map_err(Error::into)));
-                })),
+                }))
+                .in_span(Span::from_local_parent("snapshot::RaftCmdRequest")),
             )
             .map_err(From::from)
     }
@@ -297,7 +299,8 @@ where
                     }),
                     proposed_cb,
                     committed_cb,
-                ),
+                )
+                .in_span(Span::from_local_parent("write_requests::RaftCmdRequest")),
             )
             .map_err(From::from)
     }
@@ -373,6 +376,7 @@ where
         write_modifies(&self.engine, modifies)
     }
 
+    #[trace("RaftKv::async_write")]
     fn async_write(
         &self,
         ctx: &Context,
@@ -467,6 +471,7 @@ where
         })
     }
 
+    #[trace("RaftKv::async_snapshot")]
     fn async_snapshot(&self, mut ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> kv::Result<()> {
         fail_point!("raftkv_async_snapshot_err", |_| Err(box_err!(
             "injected error for async_snapshot"

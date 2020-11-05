@@ -975,3 +975,16 @@
 
 ## Garbage ratio threshold to trigger a GC.
 # ratio-threshold = 1.1
+
+[trace]
+## Jaeger agent to report minitrace tracing results. Commonly, it's set to "127.0.0.1:6831"
+# jaeger-thrift-compact-agent = ""
+
+## Threshold to determine whether to report tracing results to Jaeger agent or not.
+## The tracing results will be reported if the latency of a reqeust greater than
+## duration-threshold.
+# duration-threshold = "5ms"
+
+## The maximum number of spans to report for each request. If the number of recorded spans
+## greater than `spans-max-length`, it will be truncated to this amount.
+# max-spans-length = 1000

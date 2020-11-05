@@ -32,7 +32,7 @@ use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
-use minitrace::prelude::*;
+use tikv_util::trace::*;
 use txn_types::Lock;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
@@ -391,7 +391,6 @@ impl<E: Engine> Endpoint<E> {
         // exists.
         let snapshot =
             unsafe { with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx)) }
-                .trace_async(tipb::Event::TiKvCoprGetSnapshot as u32)
                 .await?;
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
@@ -408,12 +407,7 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
 
-        let handle_request_future = track(
-            handler
-                .handle_request()
-                .trace_async(tipb::Event::TiKvCoprHandleRequest as u32),
-            &mut tracker,
-        );
+        let handle_request_future = track(handler.handle_request(), &mut tracker);
         let result = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
@@ -458,7 +452,9 @@ impl<E: Engine> Endpoint<E> {
             .read_pool
             .spawn_handle(
                 Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                    .trace_task(tipb::Event::TiKvCoprScheduleTask as u32),
+                    .in_span(Span::from_local_parent(
+                        "Endpoint::handle_unary_request_impl",
+                    )),
                 priority,
                 task_id,
             )
@@ -470,30 +466,21 @@ impl<E: Engine> Endpoint<E> {
     /// errors during parsing or handling, they will be converted into a `Response` as the success
     /// result of the future.
     #[inline]
+    #[trace("Endpoint::parse_and_handle_unary_request")]
     pub fn parse_and_handle_unary_request(
         &self,
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = coppb::Response> {
-        let (_guard, collector) = minitrace::trace_may_enable(
-            req.is_trace_enabled,
-            tipb::Event::TiKvCoprGetRequest as u32,
-        );
-
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         async move {
-            let mut resp = match result_of_future {
+            match result_of_future {
                 Err(e) => make_error_response(e),
                 Ok(handle_fut) => handle_fut.await.unwrap_or_else(make_error_response),
-            };
-            if let Some(collector) = collector {
-                let span_sets = collector.collect();
-                resp.set_spans(tikv_util::trace::encode_spans(span_sets).collect())
             }
-            resp
         }
     }
 

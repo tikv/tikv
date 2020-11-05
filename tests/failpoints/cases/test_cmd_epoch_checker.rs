@@ -91,7 +91,7 @@ fn test_reject_proposal_during_region_split() {
 
     // Try to split region.
     let (split_tx, split_rx) = mpsc::channel();
-    let cb = Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+    let cb = Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
         split_tx.send(resp.response).unwrap()
     }));
     let r = cluster.get_region(b"");
@@ -156,7 +156,7 @@ fn test_reject_proposal_during_region_merge() {
     fail::cfg(prepare_merge_fp, "pause").unwrap();
     // Try to merge region.
     let (merge_tx, merge_rx) = mpsc::channel();
-    let cb = Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+    let cb = Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
         merge_tx.send(resp.response).unwrap()
     }));
     let source = cluster.get_region(b"");

@@ -4,6 +4,7 @@ use std::convert::TryFrom;
 use std::{cmp::Ordering, sync::Arc};
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tikv_util::trace::*;
 use tipb::Aggregation;
 use tipb::{Expr, FieldType};
 
@@ -32,6 +33,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     }
 
     #[inline]
+    #[trace("BatchStreamAggregationExecutor::next_batch")]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
     }

@@ -44,6 +44,7 @@ use tikv::server::gc_worker::GcWorker;
 use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve::{self, StoreAddrResolver};
 use tikv::server::service::DebugService;
+use tikv::server::trace::ReporterBuilder as TraceReporterBuilder;
 use tikv::server::Result as ServerResult;
 use tikv::server::{
     create_raft_storage, ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
@@ -325,6 +326,8 @@ impl Simulator for ServerCluster {
             ConfigController::default(),
         );
 
+        let trace_reporter = Arc::new(TraceReporterBuilder::new().build());
+
         for _ in 0..100 {
             let mut svr = Server::new(
                 &server_cfg,
@@ -338,6 +341,7 @@ impl Simulator for ServerCluster {
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
+                trace_reporter.clone(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));

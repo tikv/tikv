@@ -542,7 +542,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             SignificantMsg::CaptureChange {
                 cmd: change_cmd,
                 region_epoch: request.take_region_epoch(),
-                callback: Callback::Read(Box::new(move |resp| {
+                callback: Callback::read(Box::new(move |resp| {
                     if let Err(e) = scheduler.schedule(Task::InitDownstream {
                         downstream_id,
                         downstream_state,
@@ -796,7 +796,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     if let Err(e) = raft_router_clone.significant_send(
                         region_id,
-                        SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
+                        SignificantMsg::LeaderCallback(Callback::read(Box::new(move |resp| {
                             let resp = if resp.response.get_header().has_error() {
                                 None
                             } else {

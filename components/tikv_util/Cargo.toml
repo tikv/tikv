@@ -58,9 +58,10 @@ tokio-executor = "0.1"
 tokio-timer = "0.2"
 url = "2"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", branch = "master" }
-protobuf = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+minitrace = { git = "https://github.com/tikv/minitrace-rust.git", rev = "2b4655d89089da5d251c83db47fc399aedf5b620" }
+minitrace-macro = { git = "https://github.com/tikv/minitrace-rust.git", rev = "2b4655d89089da5d251c83db47fc399aedf5b620" }
+minitrace-jaeger = { git = "https://github.com/tikv/minitrace-rust.git", rev = "2b4655d89089da5d251c83db47fc399aedf5b620" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
