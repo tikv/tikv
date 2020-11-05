@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fs::File;
 use std::path::Path;
 use std::sync::*;
 use std::thread;
@@ -27,23 +28,24 @@ use tempfile::Builder;
 use test_raftstore::*;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::{IntervalRange, Range};
-use tikv::config::BackupConfig;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
+use tikv::{config::BackupConfig, storage::kv::SnapContext};
 use tikv_util::collections::HashMap;
 use tikv_util::file::calc_crc32_bytes;
-use tikv_util::worker::Worker;
+use tikv_util::worker::{LazyWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
 struct TestSuite {
     cluster: Cluster<ServerCluster>,
-    endpoints: HashMap<u64, Worker<Task>>,
+    endpoints: HashMap<u64, LazyWorker<Task>>,
     tikv_cli: TikvClient,
     context: Context,
     ts: TimeStamp,
+    bg_worker: Worker,
 
     _env: Arc<Environment>,
 }
@@ -78,6 +80,7 @@ impl TestSuite {
         let concurrency_manager =
             ConcurrencyManager::new(block_on(cluster.pd_client.get_tso()).unwrap());
         let mut endpoints = HashMap::default();
+        let bg_worker = Worker::new("backup-test");
         for (id, engines) in &cluster.engines {
             // Create and run backup endpoints.
             let sim = cluster.sim.rl();
@@ -89,8 +92,8 @@ impl TestSuite {
                 BackupConfig { num_threads: 4 },
                 concurrency_manager.clone(),
             );
-            let mut worker = Worker::new(format!("backup-{}", id));
-            worker.start(backup_endpoint).unwrap();
+            let mut worker = bg_worker.lazy_build(format!("backup-{}", id));
+            worker.start(backup_endpoint);
             endpoints.insert(*id, worker);
         }
 
@@ -117,6 +120,7 @@ impl TestSuite {
             context,
             ts: TimeStamp::zero(),
             _env: env,
+            bg_worker,
         }
     }
 
@@ -126,8 +130,9 @@ impl TestSuite {
 
     fn stop(mut self) {
         for (_, mut worker) in self.endpoints {
-            worker.stop().unwrap();
+            worker.stop();
         }
+        self.bg_worker.stop();
         self.cluster.shutdown();
     }
 
@@ -220,7 +225,7 @@ impl TestSuite {
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
             let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
-            end.schedule(task).unwrap();
+            end.scheduler().schedule(task).unwrap();
         }
         rx
     }
@@ -241,7 +246,7 @@ impl TestSuite {
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
             let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
-            end.schedule(task).unwrap();
+            end.scheduler().schedule(task).unwrap();
         }
         rx
     }
@@ -252,7 +257,11 @@ impl TestSuite {
         let mut total_bytes = 0;
         let sim = self.cluster.sim.rl();
         let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
-        let snapshot = engine.snapshot(&self.context.clone()).unwrap();
+        let snap_ctx = SnapContext {
+            pb_ctx: &self.context,
+            ..Default::default()
+        };
+        let snapshot = engine.snapshot(snap_ctx).unwrap();
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
@@ -290,7 +299,11 @@ impl TestSuite {
 
         let sim = self.cluster.sim.rl();
         let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
-        let snapshot = engine.snapshot(&self.context.clone()).unwrap();
+        let snap_ctx = SnapContext {
+            pb_ctx: &self.context,
+            ..Default::default()
+        };
+        let snapshot = engine.snapshot(snap_ctx).unwrap();
         let mut iter_opt = IterOptions::default();
         if !end.is_empty() {
             iter_opt.set_upper_bound(&end, DATA_KEY_PREFIX_LEN);
@@ -650,6 +663,37 @@ fn test_backup_raw_meta() {
     assert_eq!(checksum, admin_checksum);
     assert_eq!(total_size, 1611);
     // please update this number (must be > 0) when the test failed
+
+    suite.stop();
+}
+
+#[test]
+fn test_invalid_external_storage() {
+    let mut suite = TestSuite::new(1);
+
+    // Set backup directory read-only. TiKV will fail to open external storage.
+    let tmp = Builder::new().tempdir().unwrap();
+    let f = File::open(&tmp.path()).unwrap();
+    let mut perms = f.metadata().unwrap().permissions();
+    perms.set_readonly(true);
+    f.set_permissions(perms.clone()).unwrap();
+
+    let backup_ts = suite.alloc_ts();
+    let storage_path = tmp.path();
+    let rx = suite.backup(
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
+        backup_ts,
+        &storage_path,
+    );
+
+    // Wait util the backup request is handled.
+    let resps = block_on(rx.collect::<Vec<_>>());
+    assert!(resps[0].has_error());
+
+    perms.set_readonly(false);
+    f.set_permissions(perms).unwrap();
 
     suite.stop();
 }

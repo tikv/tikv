@@ -218,13 +218,11 @@ impl CmdBatch {
                 ref response,
                 ..
             } = cmd;
-            if !response.get_header().has_error() {
-                if !request.has_admin_request() {
-                    for req in request.requests.iter() {
-                        let put = req.get_put();
-                        cmd_bytes += put.get_key().len();
-                        cmd_bytes += put.get_value().len();
-                    }
+            if !response.get_header().has_error() && !request.has_admin_request() {
+                for req in request.requests.iter() {
+                    let put = req.get_put();
+                    cmd_bytes += put.get_key().len();
+                    cmd_bytes += put.get_value().len();
                 }
             }
         }

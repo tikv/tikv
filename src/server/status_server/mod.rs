@@ -38,12 +38,13 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use super::Result;
-use crate::config::ConfigController;
+use crate::config::{log_level_serde, ConfigController};
 use configuration::Configuration;
 use pd_client::RpcClient;
 use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
+use tikv_util::logger::set_log_level;
 use tikv_util::metrics::dump;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
@@ -87,6 +88,13 @@ static MISSING_NAME: &[u8] = b"Missing param name";
 static MISSING_ACTIONS: &[u8] = b"Missing param actions";
 #[cfg(feature = "failpoints")]
 static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct LogLevelRequest {
+    #[serde(with = "log_level_serde")]
+    pub log_level: slog::Level,
+}
 
 pub struct StatusServer<E, R> {
     thread_pool: Runtime,
@@ -188,7 +196,7 @@ where
         let os_path = tmp_dir.path().join("tikv_dump_profile").into_os_string();
         let path = os_path
             .into_string()
-            .map_err(|path| ProfError::PathEncodingError(path))?;
+            .map_err(ProfError::PathEncodingError)?;
         tikv_alloc::dump_prof(&path)?;
         drop(guard);
         let mut file = tokio::fs::File::open(path).await?;
@@ -398,6 +406,30 @@ where
                     err.to_string(),
                 )),
             }
+        }
+    }
+
+    async fn change_log_level(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let mut body = Vec::new();
+        req.into_body()
+            .try_for_each(|bytes| {
+                body.extend(bytes);
+                ok(())
+            })
+            .await?;
+
+        let log_level_request: std::result::Result<LogLevelRequest, serde_json::error::Error> =
+            serde_json::from_slice(&body);
+
+        match log_level_request {
+            Ok(req) => {
+                set_log_level(req.log_level);
+                Ok(Response::new(Body::empty()))
+            }
+            Err(err) => Ok(StatusServer::err_response(
+                StatusCode::BAD_REQUEST,
+                err.to_string(),
+            )),
         }
     }
 
@@ -693,13 +725,11 @@ where
                             _ => true,
                         };
 
-                        if should_check_cert {
-                            if !check_cert(security_config, x509) {
-                                return Ok(StatusServer::err_response(
-                                    StatusCode::FORBIDDEN,
-                                    "certificate role error",
-                                ));
-                            }
+                        if should_check_cert && !check_cert(security_config, x509) {
+                            return Ok(StatusServer::err_response(
+                                StatusCode::FORBIDDEN,
+                                "certificate role error",
+                            ));
                         }
 
                         match (method, path.as_ref()) {
@@ -719,6 +749,9 @@ where
                             }
                             (Method::GET, path) if path.starts_with("/region") => {
                                 Self::dump_region_meta(req, router).await
+                            }
+                            (Method::PUT, path) if path.starts_with("/log-level") => {
+                                Self::change_log_level(req).await
                             }
                             _ => Ok(StatusServer::err_response(
                                 StatusCode::NOT_FOUND,
@@ -978,7 +1011,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::config::{ConfigController, TiKvConfig};
-    use crate::server::status_server::StatusServer;
+    use crate::server::status_server::{LogLevelRequest, StatusServer};
     use configuration::Configuration;
     use engine_rocks::RocksEngine;
     use raftstore::store::transport::CasualRouter;
@@ -986,6 +1019,7 @@ mod tests {
     use security::SecurityConfig;
     use test_util::new_security_cfg;
     use tikv_util::collections::HashSet;
+    use tikv_util::logger::get_log_level;
 
     #[derive(Clone)]
     struct MockRouter;
@@ -1433,6 +1467,54 @@ mod tests {
         let resp = block_on(handle).unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
+        status_server.stop();
+    }
+
+    #[test]
+    fn test_change_log_level() {
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr);
+
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/log-level")
+            .build()
+            .unwrap();
+
+        let new_log_level = slog::Level::Debug;
+        let mut log_level_request = Request::new(Body::from(
+            serde_json::to_string(&LogLevelRequest {
+                log_level: new_log_level,
+            })
+            .unwrap(),
+        ));
+        *log_level_request.method_mut() = Method::PUT;
+        *log_level_request.uri_mut() = uri;
+        log_level_request.headers_mut().insert(
+            hyper::header::CONTENT_TYPE,
+            hyper::header::HeaderValue::from_static("application/json"),
+        );
+
+        let handle = status_server.thread_pool.spawn(async move {
+            Client::new()
+                .request(log_level_request)
+                .await
+                .map(move |res| {
+                    assert_eq!(res.status(), StatusCode::OK);
+                    assert_eq!(get_log_level(), Some(new_log_level));
+                })
+                .unwrap()
+        });
+        block_on(handle).unwrap();
         status_server.stop();
     }
 }

@@ -411,10 +411,12 @@ pub fn least_time(mut ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Resul
 }
 
 #[inline]
-fn do_get_extremum<'a, T, E>(args: &[Option<&'a T>], chooser: E) -> Result<Option<T::Owned>>
+fn do_get_extremum<'a, T>(
+    args: &[Option<&'a T>],
+    chooser: fn(&'a T, &'a T) -> &'a T,
+) -> Result<Option<T::Owned>>
 where
     T: Ord + ToOwned + ?Sized,
-    E: Fn(&'a T, &'a T) -> &'a T,
 {
     let first = args[0];
     match first {

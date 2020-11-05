@@ -75,17 +75,13 @@ where
     M: Measurement + 'static,
 {
     let mut inputs = vec![
-        Input::new(util::NormalIndexScanNext1024Bencher::<MemStore>::new()),
         Input::new(util::BatchIndexScanNext1024Bencher::<MemStore>::new()),
         Input::new(util::IndexScanDAGBencher::<RocksStore>::new(false, ROWS)),
         Input::new(util::IndexScanDAGBencher::<RocksStore>::new(true, ROWS)),
     ];
     if crate::util::bench_level() >= 2 {
         let mut additional_inputs = vec![
-            Input::new(util::NormalIndexScanNext1024Bencher::<RocksStore>::new()),
             Input::new(util::BatchIndexScanNext1024Bencher::<RocksStore>::new()),
-            Input::new(util::NormalIndexScanNext1Bencher::<MemStore>::new()),
-            Input::new(util::NormalIndexScanNext1Bencher::<RocksStore>::new()),
             Input::new(util::IndexScanDAGBencher::<MemStore>::new(false, ROWS)),
             Input::new(util::IndexScanDAGBencher::<MemStore>::new(true, ROWS)),
         ];

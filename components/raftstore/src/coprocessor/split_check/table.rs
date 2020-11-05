@@ -162,8 +162,8 @@ where
             }
             _ => panic!(
                 "start_key {} and end_key {} out of order",
-                hex::encode_upper(encoded_start_key),
-                hex::encode_upper(encoded_end_key)
+                log_wrappers::Value::key(&encoded_start_key),
+                log_wrappers::Value::key(&encoded_end_key)
             ),
         }
         host.add_checker(Box::new(Checker {
@@ -234,7 +234,7 @@ mod tests {
     use tempfile::Builder;
 
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use engine_rocks::util::new_engine;
+    use engine_test::kv::new_engine;
     use engine_traits::{SyncMutable, ALL_CFS};
     use tidb_query_datatype::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;

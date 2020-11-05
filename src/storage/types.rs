@@ -87,14 +87,20 @@ pub enum TxnStatus {
     /// The txn is just rolled back due to lock not exist.
     LockNotExist,
     /// The txn haven't yet been committed.
-    Uncommitted { lock: Lock },
+    Uncommitted {
+        lock: Lock,
+        min_commit_ts_pushed: bool,
+    },
     /// The txn was committed.
     Committed { commit_ts: TimeStamp },
 }
 
 impl TxnStatus {
-    pub fn uncommitted(lock: Lock) -> Self {
-        Self::Uncommitted { lock }
+    pub fn uncommitted(lock: Lock, min_commit_ts_pushed: bool) -> Self {
+        Self::Uncommitted {
+            lock,
+            min_commit_ts_pushed,
+        }
     }
 
     pub fn committed(commit_ts: TimeStamp) -> Self {
@@ -106,6 +112,7 @@ impl TxnStatus {
 pub struct PrewriteResult {
     pub locks: Vec<Result<()>>,
     pub min_commit_ts: TimeStamp,
+    pub one_pc_commit_ts: TimeStamp,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -8,7 +8,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
 use tidb_query_datatype::codec::mysql::time::weekmode::WeekMode;
-use tidb_query_datatype::codec::mysql::time::WeekdayExtension;
+use tidb_query_datatype::codec::mysql::time::{WeekdayExtension, MONTH_NAMES};
 use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::SqlMode;
@@ -200,6 +200,18 @@ pub fn make_date(
 #[inline]
 pub fn month(t: Option<&DateTime>) -> Result<Option<Int>> {
     t.map_or(Ok(None), |time| Ok(Some(Int::from(time.month()))))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn month_name(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<Bytes>> {
+    if t.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
+            .map(|_| Ok(None))?;
+    }
+    let month = t.month() as usize;
+    Ok(Some(MONTH_NAMES[month - 1].to_string().into_bytes()))
 }
 
 #[rpn_fn(nullable)]
@@ -798,6 +810,58 @@ mod tests {
                 .evaluate(ScalarFuncSig::Month)
                 .unwrap();
             assert_eq!(output, expect);
+        }
+    }
+
+    #[test]
+    fn test_month_name() {
+        let cases = vec![
+            (None, None, None),
+            (
+                Some("0000-00-00 00:00:00"),
+                Some(ERR_TRUNCATE_WRONG_VALUE),
+                None,
+            ),
+            (
+                Some("2018-01-00 01:01:01"),
+                Some(ERR_TRUNCATE_WRONG_VALUE),
+                None,
+            ),
+            (
+                Some("2018-00-00 01:01:01"),
+                Some(ERR_TRUNCATE_WRONG_VALUE),
+                None,
+            ),
+            (
+                Some("2018-00-01 01:01:01"),
+                Some(ERR_TRUNCATE_WRONG_VALUE),
+                None,
+            ),
+            (Some("2018-01-01 01:01:01"), None, Some("January")),
+            (Some("2018-02-01 01:01:01"), None, Some("February")),
+            (Some("2018-03-01 01:01:01"), None, Some("March")),
+            (Some("2018-04-01 01:01:01"), None, Some("April")),
+            (Some("2018-05-01 01:01:01"), None, Some("May")),
+            (Some("2018-06-01 01:01:01"), None, Some("June")),
+            (Some("2018-07-01 01:01:01"), None, Some("July")),
+            (Some("2018-08-01 01:01:01"), None, Some("August")),
+            (Some("2018-09-01 01:01:01"), None, Some("September")),
+            (Some("2018-10-01 01:01:01"), None, Some("October")),
+            (Some("2018-11-01 01:01:01"), None, Some("November")),
+            (Some("2018-12-01 01:01:01"), None, Some("December")),
+        ];
+        for (time, err_code, expect) in cases {
+            let mut ctx = EvalContext::default();
+            let time = time.map(|time: &str| Time::parse_date(&mut ctx, time).unwrap());
+            let (output, ctx) = RpnFnScalarEvaluator::new()
+                .push_param(time)
+                .context(ctx)
+                .evaluate_raw(FieldTypeTp::String, ScalarFuncSig::MonthName);
+            let output = output.unwrap();
+            assert_eq!(output.as_bytes(), expect.map(|v| v.as_bytes()));
+            if let Some(err_code) = err_code {
+                assert_eq!(ctx.warnings.warnings[0].get_code(), err_code);
+            }
         }
     }
 

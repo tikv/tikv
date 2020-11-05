@@ -94,16 +94,13 @@ pub struct Config {
     pub end_point_enable_batch_if_possible: bool,
     pub end_point_request_max_handle_duration: ReadableDuration,
     pub end_point_max_concurrency: usize,
-    // Memory locks must be checked if async commit is enabled.
-    // CAUTION: The current lock table implementation doesn't have good performance. Enabling
-    // it may slow down TiKV. This option may be removed in the future.
-    pub end_point_check_memory_locks: bool,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
     pub stats_concurrency: usize,
     pub heavy_load_threshold: usize,
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
+    pub background_thread_count: usize,
 
     // Test only.
     #[doc(hidden)]
@@ -132,6 +129,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         let cpu_num = SysQuota::new().cpu_cores_quota();
+        let mut background_thread_count = (cpu_num.round() as usize + 7) / 8;
+        background_thread_count = std::cmp::max(1, background_thread_count);
+        background_thread_count = std::cmp::min(4, background_thread_count);
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
@@ -165,7 +165,6 @@ impl Default for Config {
                 DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
-            end_point_check_memory_locks: true,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
@@ -176,6 +175,7 @@ impl Default for Config {
             heavy_load_wait_duration: ReadableDuration::millis(1),
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
+            background_thread_count,
         }
     }
 }
