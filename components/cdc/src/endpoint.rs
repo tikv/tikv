@@ -1230,7 +1230,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 6),
+            version: semver::Version::new(4, 0, 8),
         });
         assert_eq!(ep.capture_regions.len(), 1);
 
@@ -1240,7 +1240,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 6),
+            version: semver::Version::new(4, 0, 8),
         });
         let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
         if let CdcEvent::Event(mut e) = cdc_event {
@@ -1318,7 +1318,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 6),
+            version: semver::Version::new(4, 0, 8),
         });
         let mut resolver = Resolver::new(1);
         resolver.init();
@@ -1343,7 +1343,7 @@ mod tests {
             request: req.clone(),
             downstream,
             conn_id,
-            version: semver::Version::new(4, 0, 6),
+            version: semver::Version::new(4, 0, 8),
         });
         let mut resolver = Resolver::new(2);
         resolver.init();
