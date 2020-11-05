@@ -19,7 +19,7 @@ use tikv::server::resolve::Callback;
 use tikv::server::{
     self, Config, ConnectionBuilder, RaftClient, StoreAddrResolver, TestRaftStoreRouter,
 };
-use tikv_util::worker::Worker;
+use tikv_util::worker::LazyWorker;
 
 use super::{mock_kv_service, MockKv, MockKvService};
 
@@ -43,7 +43,7 @@ where
     let cfg = Arc::new(Config::default());
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let resolver = StaticResolver { port };
-    let worker = Worker::new("test-raftclient");
+    let worker = LazyWorker::new("test-raftclient");
     let builder =
         ConnectionBuilder::new(env, cfg, security_mgr, resolver, router, worker.scheduler());
     RaftClient::new(builder)
