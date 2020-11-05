@@ -209,13 +209,14 @@ impl Tracker {
         let total_storage_stats = std::mem::take(&mut self.total_storage_stats);
 
         if time::duration_to_sec(self.req_lifetime) > SLOW_QUERY_LOWER_BOUND {
-            let some_table_id = self.req_ctx.first_range.as_ref().map(|range| {
+            let first_range = self.req_ctx.ranges.first();
+            let some_table_id = first_range.as_ref().map(|range| {
                 tidb_query_datatype::codec::table::decode_table_id(range.get_start())
                     .unwrap_or_default()
             });
 
             info!(#"slow_log", "slow-query";
-                "region_id" => self.req_ctx.context.get_region_id(),
+                "region_id" => &self.req_ctx.context.get_region_id(),
                 "remote_host" => &self.req_ctx.peer,
                 "total_lifetime" => ?self.req_lifetime,
                 "wait_time" => ?self.wait_time,
@@ -229,8 +230,8 @@ impl Tracker {
                 "scan.is_desc" => self.req_ctx.is_desc_scan,
                 "scan.processed" => total_storage_stats.write.processed_keys,
                 "scan.total" => total_storage_stats.write.total_op_count(),
-                "scan.ranges" => self.req_ctx.ranges_len,
-                "scan.range.first" => ?self.req_ctx.first_range,
+                "scan.ranges" => self.req_ctx.ranges.len(),
+                "scan.range.first" => ?first_range,
                 self.total_perf_stats,
             );
         }

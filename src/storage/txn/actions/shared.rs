@@ -69,8 +69,7 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
                     start_ts: txn.start_ts,
                     min_commit_ts: lock.min_commit_ts,
                     max_commit_ts,
-                })
-                .into();
+                });
             }
 
             *l = Some(lock.clone());

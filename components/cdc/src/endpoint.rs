@@ -33,7 +33,7 @@ use tikv::storage::Statistics;
 use tikv_util::collections::HashMap;
 use tikv_util::lru::LruCache;
 use tikv_util::time::Instant;
-use tikv_util::timer::{SteadyTimer, Timer};
+use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{
@@ -320,14 +320,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         };
         ep.register_min_ts_event();
         ep
-    }
-
-    pub fn new_timer(&self) -> Timer<()> {
-        // Currently there is only one timeout for CDC.
-        let cdc_timer_cap = 1;
-        let mut timer = Timer::new(cdc_timer_cap);
-        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
-        timer
     }
 
     pub fn set_min_ts_interval(&mut self, dur: Duration) {
@@ -1260,9 +1252,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
 }
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T> {
-    type TimeoutTask = ();
-
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+    fn on_timeout(&mut self) {
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         if self.min_resolved_ts != TimeStamp::max() {
             CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
@@ -1282,8 +1272,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
         CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_cache.miss_count as i64);
         self.old_value_cache.access_count = 0;
         self.old_value_cache.miss_count = 0;
+    }
 
-        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
+    fn get_interval(&self) -> Duration {
+        // Currently there is only one timeout for CDC.
+        Duration::from_millis(METRICS_FLUSH_INTERVAL)
     }
 }
 
@@ -1312,7 +1305,6 @@ mod tests {
     #[cfg(feature = "prost-codec")]
     use kvproto::cdcpb::event::Event as Event_oneof_event;
     use kvproto::errorpb::Error as ErrorHeader;
-    use kvproto::kvrpcpb::Context;
     use raftstore::errors::Error as RaftStoreError;
     use raftstore::store::msg::CasualMessage;
     use std::collections::BTreeMap;
@@ -1327,13 +1319,13 @@ mod tests {
     use tikv_util::collections::HashSet;
     use tikv_util::config::ReadableDuration;
     use tikv_util::mpsc::batch;
-    use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, Worker};
+    use tikv_util::worker::{dummy_scheduler, LazyWorker};
 
-    struct ReceiverRunnable<T> {
+    struct ReceiverRunnable<T: Display + Send> {
         tx: Sender<T>,
     }
 
-    impl<T: Display> Runnable for ReceiverRunnable<T> {
+    impl<T: Display + Send + 'static> Runnable for ReceiverRunnable<T> {
         type Task = T;
 
         fn run(&mut self, task: T) {
@@ -1341,15 +1333,15 @@ mod tests {
         }
     }
 
-    fn new_receiver_worker<T: Display + Send + 'static>() -> (Worker<T>, Receiver<T>) {
+    fn new_receiver_worker<T: Display + Send + 'static>() -> (LazyWorker<T>, Receiver<T>) {
         let (tx, rx) = channel();
         let runnable = ReceiverRunnable { tx };
-        let mut worker = WorkerBuilder::new("test-receiver-worker").create();
-        worker.start(runnable).unwrap();
+        let mut worker = LazyWorker::new("test-receiver-worker");
+        worker.start(runnable);
         (worker, rx)
     }
 
-    fn mock_initializer() -> (Worker<Task>, Runtime, Initializer, Receiver<Task>) {
+    fn mock_initializer() -> (LazyWorker<Task>, Runtime, Initializer, Receiver<Task>) {
         let (receiver_worker, rx) = new_receiver_worker();
 
         let pool = Builder::new()
@@ -1431,7 +1423,7 @@ mod tests {
         }
 
         let region = Region::default();
-        let snap = engine.snapshot(&Context::default()).unwrap();
+        let snap = engine.snapshot(Default::default()).unwrap();
 
         let check_result = || loop {
             let task = rx.recv().unwrap();
@@ -1485,7 +1477,7 @@ mod tests {
             }
         }
 
-        worker.stop().unwrap().join().unwrap();
+        worker.stop();
     }
 
     #[test]

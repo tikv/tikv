@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_rocks::raw::PerfContext;
+use kvproto::kvrpcpb::ScanDetailV2;
 
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign, KV)]
 pub struct PerfStatisticsFields {
@@ -57,6 +58,16 @@ impl PerfStatisticsInstant {
 /// This statistics store delta values between two instant statistics.
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign)]
 pub struct PerfStatisticsDelta(pub PerfStatisticsFields);
+
+impl PerfStatisticsDelta {
+    pub fn write_scan_detail(&self, detail_v2: &mut ScanDetailV2) {
+        detail_v2.set_rocksdb_delete_skipped_count(self.0.internal_delete_skipped_count as u64);
+        detail_v2.set_rocksdb_key_skipped_count(self.0.internal_key_skipped_count as u64);
+        detail_v2.set_rocksdb_block_cache_hit_count(self.0.block_cache_hit_count as u64);
+        detail_v2.set_rocksdb_block_read_count(self.0.block_read_count as u64);
+        detail_v2.set_rocksdb_block_read_byte(self.0.block_read_byte as u64);
+    }
+}
 
 impl slog::KV for PerfStatisticsDelta {
     fn serialize(
