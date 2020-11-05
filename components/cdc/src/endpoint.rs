@@ -1319,7 +1319,7 @@ mod tests {
     use tikv_util::collections::HashSet;
     use tikv_util::config::ReadableDuration;
     use tikv_util::mpsc::batch;
-    use tikv_util::worker::{dummy_scheduler, LazyWorker};
+    use tikv_util::worker::{dummy_scheduler, LazyWorker, ReceiverWrapper};
 
     struct ReceiverRunnable<T: Display + Send> {
         tx: Sender<T>,
@@ -1373,7 +1373,7 @@ mod tests {
     ) -> (
         Endpoint<MockRaftStoreRouter>,
         MockRaftStoreRouter,
-        tikv_util::mpsc::Receiver<Option<Task>>,
+        ReceiverWrapper<Task>,
     ) {
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
