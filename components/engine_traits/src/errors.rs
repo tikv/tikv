@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use raft::{Error as RaftError, StorageError};
 use std::{error, result};
 
 quick_error! {
@@ -15,7 +16,7 @@ quick_error! {
         NotInRange( key: Vec<u8>, region_id: u64, start: Vec<u8>, end: Vec<u8>) {
             display(
                 "Key {} is out of [region {}] [{}, {})",
-                hex::encode_upper(&key), region_id, hex::encode_upper(&start), hex::encode_upper(&end)
+                log_wrappers::Value::key(&key), region_id, log_wrappers::Value::key(&start), log_wrappers::Value::key(&end)
             )
         }
         Protobuf(err: protobuf::ProtobufError) {
@@ -41,6 +42,14 @@ quick_error! {
             cause(err)
             display("Codec {}", err)
         }
+        EntriesUnavailable {
+            from()
+            display("The entries of region is unavailable")
+        }
+        EntriesCompacted {
+            from()
+            display("The entries of region is compacted")
+        }
     }
 }
 
@@ -55,7 +64,22 @@ impl ErrorCodeExt for Error {
             Error::Io(_) => error_code::engine::IO,
             Error::CFName(_) => error_code::engine::CF_NAME,
             Error::Codec(_) => error_code::engine::CODEC,
-            Error::Other(_) => error_code::engine::UNKNOWN,
+            Error::Other(_) => error_code::UNKNOWN,
+            Error::EntriesUnavailable => error_code::engine::DATALOSS,
+            Error::EntriesCompacted => error_code::engine::DATACOMPACTED,
+        }
+    }
+}
+
+impl From<Error> for RaftError {
+    fn from(e: Error) -> RaftError {
+        match e {
+            Error::EntriesUnavailable => RaftError::Store(StorageError::Unavailable),
+            Error::EntriesCompacted => RaftError::Store(StorageError::Compacted),
+            e => {
+                let boxed = Box::new(e) as Box<dyn std::error::Error + Sync + Send>;
+                raft::Error::Store(StorageError::Other(boxed))
+            }
         }
     }
 }

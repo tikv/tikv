@@ -1,0 +1,32 @@
+[package]
+name = "raft_log_engine"
+version = "0.0.1"
+publish = false
+edition = "2018"
+
+[features]
+protobuf-codec = [
+  "raft/protobuf-codec",
+  "kvproto/protobuf-codec",
+]
+
+prost-codec = [
+  "raft/prost-codec",
+  "kvproto/prost-codec",
+]
+
+[dependencies]
+engine_traits = { path = "../engine_traits" }
+tikv_util = { path = "../tikv_util" }
+num_cpus = "1"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+lazy_static = "1.4.0"
+time = "0.1"
+configuration = { path = "../configuration" }
+serde = "1.0"
+serde_derive = "1.0"
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+raft = { version = "0.6.0-alpha", default-features = false }
+raft-engine = { git = "https://github.com/tikv/raft-engine", branch = "master" }
+protobuf = "2"

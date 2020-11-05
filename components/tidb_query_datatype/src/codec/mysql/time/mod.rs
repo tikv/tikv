@@ -27,7 +27,7 @@ use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::{EvalContext, Flag, SqlMode};
 
 const MIN_TIMESTAMP: i64 = 0;
-const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
+pub const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
 const MICRO_WIDTH: usize = 6;
 const COMPLETE_COMPONENTS_LEN: usize = 7;
 
@@ -115,7 +115,7 @@ fn chrono_datetime<T: TimeZone>(
         .and_then(|date| date.and_hms_opt(hour, minute, second))
         .and_then(|t| t.checked_add_signed(chrono::Duration::microseconds(i64::from(micro))))
         .and_then(|datetime| time_zone.from_local_datetime(&datetime).earliest())
-        .ok_or_else(|| Error::truncated())
+        .ok_or_else(Error::truncated)
 }
 
 #[inline]
@@ -131,7 +131,7 @@ fn chrono_naive_datetime(
     NaiveDate::from_ymd_opt(year as i32, month, day)
         .and_then(|date| date.and_hms_opt(hour, minute, second))
         .and_then(|t| t.checked_add_signed(chrono::Duration::microseconds(i64::from(micro))))
-        .ok_or_else(|| Error::truncated())
+        .ok_or_else(Error::truncated)
 }
 
 /// Round `frac` with `fsp`, return if there is a carry and the result.
@@ -505,6 +505,55 @@ mod parser {
         }
     }
 
+    pub fn parse_from_decimal(
+        ctx: &mut EvalContext,
+        input: &Decimal,
+        time_type: TimeType,
+        fsp: u8,
+        round: bool,
+    ) -> Option<Time> {
+        let decimal_as_string = input.to_string();
+        let components = split_components(decimal_as_string.as_str())?;
+        match components.len() {
+            1 | 2 => {
+                let result: i64 = components[0].convert(ctx).ok()?;
+                let whole_time = parse_from_i64(ctx, result, time_type, fsp)?;
+                let mut whole = [
+                    whole_time.get_year(),
+                    whole_time.get_month(),
+                    whole_time.get_day(),
+                    whole_time.get_hour(),
+                    whole_time.get_minute(),
+                    whole_time.get_second(),
+                    0,
+                ];
+
+                let (carry, frac) = if let Some(frac) = components.get(1) {
+                    // If we have a fractional part,
+                    // we expect the `whole` is in format: `yymmddhhmmss/yyyymmddhhmmss`,
+                    // which match the `whole` part length from 9 to 14.
+                    // Otherwise, the fractional part is meaningless.
+                    if components[0].len() >= 9 && components[0].len() <= 14 {
+                        parse_frac(frac, fsp, round)?
+                    } else {
+                        (false, 0)
+                    }
+                } else {
+                    (false, 0)
+                };
+
+                whole[6] = frac;
+                let mut parts = whole;
+                if carry {
+                    round_components(&mut parts)?;
+                }
+
+                Time::from_slice(ctx, &parts, time_type, fsp)
+            }
+            _ => None,
+        }
+    }
+
     /// Try to parse a `i64` into a `Time` with the given type and fsp
     pub fn parse_from_i64(
         ctx: &mut EvalContext,
@@ -522,7 +571,7 @@ mod parser {
         let aligned = match input {
             101..=691_231 => (input + 20_000_000) * 1_000_000,
             700_101..=991_231 => (input + 19_000_000) * 1_000_000,
-            10_000_101..=99_991_231 => input * 1_000_000,
+            991_232..=99_991_231 => input * 1_000_000,
             101_000_000..=691_231_235_959 => input + 20_000_000_000_000,
             700_101_000_000..=991_231_235_959 => input + 19_000_000_000_000,
             1_000_000_000_000..=std::i64::MAX => input,
@@ -570,6 +619,16 @@ impl Time {
         fsp: i8,
     ) -> Result<Time> {
         parser::parse_from_i64(ctx, input, time_type, check_fsp(fsp)?)
+            .ok_or_else(|| Error::incorrect_datetime_value(input))
+    }
+    pub fn parse_from_decimal(
+        ctx: &mut EvalContext,
+        input: &Decimal,
+        time_type: TimeType,
+        fsp: i8,
+        round: bool,
+    ) -> Result<Time> {
+        parser::parse_from_decimal(ctx, input, time_type, check_fsp(fsp)?, round)
             .ok_or_else(|| Error::incorrect_datetime_value(input))
     }
 }
@@ -1792,6 +1851,7 @@ mod tests {
             ("2059-12-31 00:00:00", 591_231),
             ("1970-01-01 00:00:00", 700_101),
             ("1999-12-31 00:00:00", 991_231),
+            ("1000-01-00 00:00:00", 10_000_100),
             ("2000-01-01 00:00:00", 101_000_000),
             ("2069-12-31 23:59:59", 691_231_235_959),
             ("1970-01-01 00:00:00", 700_101_000_000),
@@ -1806,17 +1866,46 @@ mod tests {
             assert_eq!(actual.to_string(), expected);
         }
 
-        let should_fail = vec![
-            -1111,
-            1,
-            100,
-            700_100,
-            10_000_100,
-            100_000_000,
-            100_000_101_000_000,
-        ];
+        let should_fail = vec![-1111, 1, 100, 700_100, 100_000_000, 100_000_101_000_000];
         for case in should_fail {
             assert!(Time::parse_from_i64(&mut ctx, case, TimeType::DateTime, 0).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_from_decimal() -> Result<()> {
+        let cases = vec![
+            ("2000-03-05 00:00:00", "305", 0),
+            ("2000-12-03 00:00:00", "1203", 0),
+            ("2003-12-05 00:00:00.0", "31205", 1),
+            ("2007-01-18 00:00:00.00", "070118", 2),
+            ("0101-12-09 00:00:00.000", "1011209.333", 3),
+            ("2017-01-18 00:00:00.0000", "20170118.123", 4),
+            ("2012-12-31 11:30:45.12335", "121231113045.123345", 5),
+            ("2012-12-31 11:30:45.123345", "20121231113045.123345", 6),
+            ("2012-12-31 11:30:46.00000", "121231113045.9999999", 5),
+            ("2017-01-05 08:40:59.5756", "170105084059.575601", 4),
+        ];
+        let mut ctx = EvalContext::default();
+        for (expected, input, fsp) in cases {
+            let input: Decimal = input.parse().unwrap();
+            let actual = Time::parse_from_decimal(&mut ctx, &input, TimeType::DateTime, fsp, true)?;
+            assert_eq!(actual.to_string(), expected);
+        }
+
+        let should_fail = vec![
+            "201705051315111.22",
+            "2011110859.1111",
+            "2011110859.1111",
+            "191203081.1111",
+            "43128.121105",
+        ];
+        for case in should_fail {
+            let case: Decimal = case.parse().unwrap();
+            assert!(
+                Time::parse_from_decimal(&mut ctx, &case, TimeType::DateTime, 0, true).is_err()
+            );
         }
         Ok(())
     }

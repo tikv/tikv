@@ -5,9 +5,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::*;
 
-use futures::Future;
+use futures::executor::block_on;
 
-use kvproto::metapb;
+use kvproto::metapb::{self, PeerRole};
 use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
@@ -254,7 +254,7 @@ fn test_server_pd_conf_change() {
 fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize) {
     let mut replica_count = 0;
     for _ in 0..1000 {
-        let region = match pd_client.get_region_by_id(region_id).wait().unwrap() {
+        let region = match block_on(pd_client.get_region_by_id(region_id)).unwrap() {
             Some(r) => r,
             None => continue,
         };
@@ -286,9 +286,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    region = pd_client
-        .get_region_by_id(region_id)
-        .wait()
+    region = block_on(pd_client.get_region_by_id(region_id))
         .unwrap()
         .unwrap();
     let i = stores
@@ -306,23 +304,21 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     let mut peer = new_conf_change_peer(&stores[i], &pd_client);
-    peer.set_role(metapb::PeerRole::Learner);
+    peer.set_role(PeerRole::Learner);
     let engine = cluster.get_engine(peer.get_store_id());
     must_get_none(&engine, b"k1");
 
     pd_client.must_add_peer(region_id, peer.clone());
     wait_till_reach_count(Arc::clone(&pd_client), region_id, 6);
     must_get_equal(&engine, b"k1", b"v1");
-    peer.set_role(metapb::PeerRole::Voter);
+    peer.set_role(PeerRole::Voter);
     pd_client.must_add_peer(region_id, peer);
 
     // it should remove extra replica.
     pd_client.enable_default_operator();
     wait_till_reach_count(Arc::clone(&pd_client), region_id, 5);
 
-    region = pd_client
-        .get_region_by_id(region_id)
-        .wait()
+    region = block_on(pd_client.get_region_by_id(region_id))
         .unwrap()
         .unwrap();
     let peer = region.get_peers().get(1).unwrap().clone();
@@ -383,10 +379,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     pd_client.remove_peer(1, new_peer(1, 1));
 
-    let epoch = cluster
-        .pd_client
-        .get_region_by_id(1)
-        .wait()
+    let epoch = block_on(cluster.pd_client.get_region_by_id(1))
         .unwrap()
         .unwrap()
         .take_region_epoch();
@@ -946,6 +939,7 @@ fn test_conf_change_fast() {
     let timer = Instant::now();
     // If conf change relies on heartbeat, it will take more than 5 seconds to finish,
     // hence it must timeout.
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     assert!(timer.elapsed() < Duration::from_secs(5));

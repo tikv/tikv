@@ -2,7 +2,7 @@
 
 use std::cell::Cell;
 use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -14,7 +14,6 @@ use kvproto::metapb;
 use kvproto::raft_cmdpb::{
     CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
 };
-use raft_engine::RaftEngine;
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
@@ -25,8 +24,7 @@ use crate::store::{
 };
 use crate::Result;
 
-use engine_traits::KvEngine;
-use error_code::ErrorCodeExt;
+use engine_traits::{KvEngine, RaftEngine};
 use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};
@@ -52,7 +50,7 @@ pub trait ReadExecutor<E: KvEngine> {
                     panic!(
                         "[region {}] failed to get {} with cf {}: {:?}",
                         region.get_id(),
-                        hex::encode_upper(key),
+                        log_wrappers::Value::key(key),
                         cf,
                         e
                     )
@@ -62,7 +60,7 @@ pub trait ReadExecutor<E: KvEngine> {
                 panic!(
                     "[region {}] failed to get {}: {:?}",
                     region.get_id(),
-                    hex::encode_upper(key),
+                    log_wrappers::Value::key(key),
                     e
                 )
             })
@@ -94,11 +92,9 @@ pub trait ReadExecutor<E: KvEngine> {
                 CmdType::Get => match self.get_value(req, region.as_ref()) {
                     Ok(resp) => resp,
                     Err(e) => {
-                        error!(
+                        error!(?e;
                             "failed to execute get command";
                             "region_id" => region.get_id(),
-                            "err" => ?e,
-                            "error_code" => %e.error_code(),
                         );
                         response.response = cmd_resp::new_error(e);
                         return response;
@@ -150,6 +146,7 @@ pub struct ReadDelegate {
     tag: String,
     invalid: Arc<AtomicBool>,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    max_ts_sync_status: Arc<AtomicU64>,
 }
 
 impl ReadDelegate {
@@ -167,6 +164,7 @@ impl ReadDelegate {
             tag: format!("[region {}] {}", region_id, peer_id),
             invalid: Arc::new(AtomicBool::new(false)),
             txn_extra_op: peer.txn_extra_op.clone(),
+            max_ts_sync_status: peer.max_ts_sync_status.clone(),
         }
     }
 
@@ -369,13 +367,10 @@ where
         // Check region id.
         let region_id = req.get_header().get_region_id();
         let delegate = match self.delegates.get_mut(&region_id) {
-            Some(delegate) => {
-                fail_point!("localreader_on_find_delegate");
-                match delegate.take() {
-                    Some(d) => d,
-                    None => return Ok(None),
-                }
-            }
+            Some(delegate) => match delegate.take() {
+                Some(d) => d,
+                None => return Ok(None),
+            },
             None => {
                 self.metrics.rejected_by_cache_miss += 1;
                 debug!("rejected by cache miss"; "region_id" => region_id);
@@ -387,6 +382,8 @@ where
             self.delegates.remove(&region_id);
             return Ok(None);
         }
+
+        fail_point!("localreader_on_find_delegate");
 
         // Check peer id.
         if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
@@ -451,6 +448,9 @@ where
                         let mut response = self.execute(&req, &delegate.region, None, read_id);
                         // Leader can read local if and only if it is in lease.
                         cmd_resp::bind_term(&mut response.response, delegate.term);
+                        if let Some(snap) = response.snapshot.as_mut() {
+                            snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
+                        }
                         response.txn_extra_op = delegate.txn_extra_op.load();
                         cb.invoke_read(response);
                         self.delegates.insert(region_id, Some(delegate));
@@ -695,7 +695,7 @@ mod tests {
 
     use crate::store::util::Lease;
     use crate::store::Callback;
-    use engine_rocks::{RocksEngine, RocksSnapshot};
+    use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_traits::ALL_CFS;
     use tikv_util::time::monotonic_raw_now;
 
@@ -708,11 +708,11 @@ mod tests {
         store_meta: Arc<Mutex<StoreMeta>>,
     ) -> (
         TempDir,
-        LocalReader<SyncSender<RaftCommand<RocksSnapshot>>, RocksEngine>,
-        Receiver<RaftCommand<RocksSnapshot>>,
+        LocalReader<SyncSender<RaftCommand<KvTestSnapshot>>, KvTestEngine>,
+        Receiver<RaftCommand<KvTestSnapshot>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
-        let db = engine_rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+        let db = engine_test::kv::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
             .unwrap();
         let (ch, rx) = sync_channel(1);
         let mut reader = LocalReader::new(db, store_meta, ch);
@@ -733,8 +733,8 @@ mod tests {
     }
 
     fn must_redirect(
-        reader: &mut LocalReader<SyncSender<RaftCommand<RocksSnapshot>>, RocksEngine>,
-        rx: &Receiver<RaftCommand<RocksSnapshot>>,
+        reader: &mut LocalReader<SyncSender<RaftCommand<KvTestSnapshot>>, KvTestEngine>,
+        rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         cmd: RaftCmdRequest,
     ) {
         reader.propose_raft_command(
@@ -753,9 +753,9 @@ mod tests {
     }
 
     fn must_not_redirect(
-        reader: &mut LocalReader<SyncSender<RaftCommand<RocksSnapshot>>, RocksEngine>,
-        rx: &Receiver<RaftCommand<RocksSnapshot>>,
-        task: RaftCommand<RocksSnapshot>,
+        reader: &mut LocalReader<SyncSender<RaftCommand<KvTestSnapshot>>, KvTestEngine>,
+        rx: &Receiver<RaftCommand<KvTestSnapshot>>,
+        task: RaftCommand<KvTestSnapshot>,
     ) {
         reader.propose_raft_command(None, task.request, task.callback);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
@@ -820,6 +820,7 @@ mod tests {
                 last_valid_ts: Timespec::new(0, 0),
                 invalid: Arc::new(AtomicBool::new(false)),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
+                max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             };
             meta.readers.insert(1, read_delegate);
         }
@@ -837,15 +838,15 @@ mod tests {
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
         let task =
-            RaftCommand::<RocksSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
+            RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
 
         // Let's read.
         let region = region1;
-        let task = RaftCommand::<RocksSnapshot>::new(
+        let task = RaftCommand::<KvTestSnapshot>::new(
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let snap = resp.snapshot.unwrap();
                 assert_eq!(snap.get_region(), &region);
             })),
@@ -869,7 +870,7 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd_store_id,
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_store_not_match());
                 assert!(resp.snapshot.is_none());
@@ -887,7 +888,7 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd_peer_id,
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 assert!(
                     resp.response.get_header().has_error(),
                     "{:?}",
@@ -911,7 +912,7 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd_term,
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_stale_command(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());
@@ -945,7 +946,7 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_server_is_busy(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());

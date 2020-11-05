@@ -7,7 +7,6 @@
 #![feature(test)]
 #![feature(decl_macro)]
 #![feature(str_internals)]
-#![feature(ptr_offset_from)]
 
 #[macro_use]
 extern crate failure;
@@ -15,9 +14,7 @@ extern crate failure;
 extern crate num_derive;
 #[macro_use]
 extern crate static_assertions;
-#[macro_use(error, warn)]
-extern crate slog_global;
-#[macro_use(box_err, box_try, try_opt)]
+#[macro_use(box_err, box_try, try_opt, error, warn)]
 extern crate tikv_util;
 
 #[macro_use]

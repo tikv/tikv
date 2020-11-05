@@ -88,27 +88,18 @@ pub enum TxnStatus {
     LockNotExist,
     /// The txn haven't yet been committed.
     Uncommitted {
-        lock_ttl: u64,
-        min_commit_ts: TimeStamp,
-        use_async_commit: bool,
-        secondaries: Vec<Vec<u8>>,
+        lock: Lock,
+        min_commit_ts_pushed: bool,
     },
     /// The txn was committed.
     Committed { commit_ts: TimeStamp },
 }
 
 impl TxnStatus {
-    pub fn uncommitted(
-        lock_ttl: u64,
-        min_commit_ts: TimeStamp,
-        use_async_commit: bool,
-        secondaries: Vec<Vec<u8>>,
-    ) -> Self {
+    pub fn uncommitted(lock: Lock, min_commit_ts_pushed: bool) -> Self {
         Self::Uncommitted {
-            lock_ttl,
-            min_commit_ts,
-            use_async_commit,
-            secondaries,
+            lock,
+            min_commit_ts_pushed,
         }
     }
 
@@ -121,6 +112,7 @@ impl TxnStatus {
 pub struct PrewriteResult {
     pub locks: Vec<Result<()>>,
     pub min_commit_ts: TimeStamp,
+    pub one_pc_commit_ts: TimeStamp,
 }
 
 #[derive(Clone, Debug, PartialEq)]

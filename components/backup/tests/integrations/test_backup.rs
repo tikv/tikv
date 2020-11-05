@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fs::File;
 use std::path::Path;
 use std::sync::*;
 use std::thread;
@@ -7,13 +8,13 @@ use std::time::Duration;
 use std::time::Instant;
 
 use futures::channel::mpsc as future_mpsc;
-use futures::compat::Future01CompatExt;
 use futures::StreamExt;
 use futures_executor::block_on;
 use futures_util::io::AsyncReadExt;
 use grpcio::{ChannelBuilder, Environment};
 
 use backup::Task;
+use concurrency_manager::ConcurrencyManager;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
@@ -27,12 +28,11 @@ use tempfile::Builder;
 use test_raftstore::*;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::{IntervalRange, Range};
-use tikv::config::BackupConfig;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
-use tikv::storage::concurrency_manager::ConcurrencyManager;
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
+use tikv::{config::BackupConfig, storage::kv::SnapContext};
 use tikv_util::collections::HashMap;
 use tikv_util::file::calc_crc32_bytes;
 use tikv_util::worker::Worker;
@@ -77,7 +77,7 @@ impl TestSuite {
         cluster.run();
 
         let concurrency_manager =
-            ConcurrencyManager::new(block_on(cluster.pd_client.get_tso().compat()).unwrap());
+            ConcurrencyManager::new(block_on(cluster.pd_client.get_tso()).unwrap());
         let mut endpoints = HashMap::default();
         for (id, engines) in &cluster.engines {
             // Create and run backup endpoints.
@@ -99,7 +99,7 @@ impl TestSuite {
         cluster.must_put(b"foo", b"foo");
         let region_id = 1;
         let leader = cluster.leader_of_region(region_id).unwrap();
-        let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
+        let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id());
 
         let epoch = cluster.get_region_epoch(region_id);
         let mut context = Context::default();
@@ -253,7 +253,11 @@ impl TestSuite {
         let mut total_bytes = 0;
         let sim = self.cluster.sim.rl();
         let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
-        let snapshot = engine.snapshot(&self.context.clone()).unwrap();
+        let snap_ctx = SnapContext {
+            pb_ctx: &self.context,
+            ..Default::default()
+        };
+        let snapshot = engine.snapshot(snap_ctx).unwrap();
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
@@ -291,7 +295,11 @@ impl TestSuite {
 
         let sim = self.cluster.sim.rl();
         let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
-        let snapshot = engine.snapshot(&self.context.clone()).unwrap();
+        let snap_ctx = SnapContext {
+            pb_ctx: &self.context,
+            ..Default::default()
+        };
+        let snapshot = engine.snapshot(snap_ctx).unwrap();
         let mut iter_opt = IterOptions::default();
         if !end.is_empty() {
             iter_opt.set_upper_bound(&end, DATA_KEY_PREFIX_LEN);
@@ -591,8 +599,17 @@ fn test_backup_rawkv() {
         &tmp.path().join(format!("{}", backup_ts.next().next())),
     );
     let resps3 = block_on(rx.collect::<Vec<_>>());
-    assert_eq!(files1, resps3[0].files);
+    let files3 = resps3[0].files.clone();
 
+    // After https://github.com/tikv/tikv/pull/8707 merged.
+    // the backup file name will based on local timestamp.
+    // so the two backup's file name may not be same, we should skip this check.
+    assert_eq!(files1.len(), 1);
+    assert_eq!(files3.len(), 1);
+    assert_eq!(files1[0].sha256, files3[0].sha256);
+    assert_eq!(files1[0].total_bytes, files3[0].total_bytes);
+    assert_eq!(files1[0].total_kvs, files3[0].total_kvs);
+    assert_eq!(files1[0].size, files3[0].size);
     suite.stop();
 }
 
@@ -642,6 +659,37 @@ fn test_backup_raw_meta() {
     assert_eq!(checksum, admin_checksum);
     assert_eq!(total_size, 1611);
     // please update this number (must be > 0) when the test failed
+
+    suite.stop();
+}
+
+#[test]
+fn test_invalid_external_storage() {
+    let mut suite = TestSuite::new(1);
+
+    // Set backup directory read-only. TiKV will fail to open external storage.
+    let tmp = Builder::new().tempdir().unwrap();
+    let f = File::open(&tmp.path()).unwrap();
+    let mut perms = f.metadata().unwrap().permissions();
+    perms.set_readonly(true);
+    f.set_permissions(perms.clone()).unwrap();
+
+    let backup_ts = suite.alloc_ts();
+    let storage_path = tmp.path();
+    let rx = suite.backup(
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
+        backup_ts,
+        &storage_path,
+    );
+
+    // Wait util the backup request is handled.
+    let resps = block_on(rx.collect::<Vec<_>>());
+    assert!(resps[0].has_error());
+
+    perms.set_readonly(false);
+    f.set_permissions(perms).unwrap();
 
     suite.stop();
 }

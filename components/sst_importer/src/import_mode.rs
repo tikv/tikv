@@ -5,9 +5,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use engine_traits::{ColumnFamilyOptions, DBOptions, KvEngine};
-use futures_cpupool::CpuPool;
-use futures_util::compat::{Compat, Future01CompatExt};
-use futures_util::future::FutureExt;
+use futures::executor::ThreadPool;
+use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
@@ -73,7 +72,7 @@ pub struct ImportModeSwitcher<E: KvEngine> {
 }
 
 impl<E: KvEngine> ImportModeSwitcher<E> {
-    pub fn new(cfg: &Config, executor: &CpuPool, db: E) -> ImportModeSwitcher<E> {
+    pub fn new(cfg: &Config, executor: &ThreadPool, db: E) -> ImportModeSwitcher<E> {
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
         let timeout = cfg.import_mode_timeout.0;
@@ -114,9 +113,7 @@ impl<E: KvEngine> ImportModeSwitcher<E> {
                 }
             }
         };
-        executor
-            .spawn(Compat::new(timer_loop.unit_error().boxed()))
-            .forget();
+        executor.spawn_ok(timer_loop);
 
         ImportModeSwitcher { inner }
     }
@@ -191,8 +188,7 @@ impl ImportModeCFOptions {
     }
 
     fn new_options(db: &impl KvEngine, cf_name: &str) -> ImportModeCFOptions {
-        let cf = db.cf_handle(cf_name).unwrap();
-        let cf_opts = db.get_options_cf(cf);
+        let cf_opts = db.get_options_cf(cf_name).unwrap(); //FIXME unwrap
 
         ImportModeCFOptions {
             level0_stop_writes_trigger: cf_opts.get_level_zero_stop_writes_trigger(),
@@ -203,7 +199,6 @@ impl ImportModeCFOptions {
     }
 
     fn set_options(&self, db: &impl KvEngine, cf_name: &str, mf: RocksDBMetricsFn) -> Result<()> {
-        let cf = db.cf_handle(cf_name).unwrap();
         let opts = [
             (
                 "level0_stop_writes_trigger".to_owned(),
@@ -224,7 +219,7 @@ impl ImportModeCFOptions {
         ];
 
         let tmp_opts: Vec<_> = opts.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        db.set_options_cf(cf, tmp_opts.as_slice())?;
+        db.set_options_cf(cf_name, tmp_opts.as_slice())?;
         for (key, value) in &opts {
             if let Ok(v) = value.parse::<f64>() {
                 mf(cf_name, key, v);
@@ -239,6 +234,7 @@ mod tests {
     use super::*;
 
     use engine_traits::KvEngine;
+    use futures::executor::ThreadPoolBuilder;
     use std::thread;
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
@@ -258,8 +254,7 @@ mod tests {
         );
 
         for cf_name in db.cf_names() {
-            let cf = db.cf_handle(cf_name).unwrap();
-            let cf_opts = db.get_options_cf(cf);
+            let cf_opts = db.get_options_cf(cf_name).unwrap();
             assert_eq!(
                 cf_opts.get_level_zero_stop_writes_trigger(),
                 expected_cf_opts.level0_stop_writes_trigger
@@ -300,10 +295,11 @@ mod tests {
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
         let cfg = Config::default();
-        let threads = futures_cpupool::Builder::new()
-            .name_prefix("sst-importer")
+        let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
-            .create();
+            .name_prefix("sst-importer")
+            .create()
+            .unwrap();
 
         let mut switcher = ImportModeSwitcher::new(&cfg, &threads, db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
@@ -336,10 +332,11 @@ mod tests {
             import_mode_timeout: ReadableDuration::millis(300),
             ..Config::default()
         };
-        let threads = futures_cpupool::Builder::new()
-            .name_prefix("sst-importer")
+        let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
-            .create();
+            .name_prefix("sst-importer")
+            .create()
+            .unwrap();
 
         let mut switcher = ImportModeSwitcher::new(&cfg, &threads, db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);

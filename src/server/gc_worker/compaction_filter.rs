@@ -12,8 +12,8 @@ use engine_rocks::raw::{
 };
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, MiscExt, Mutable, SeekKey, WriteBatch, WriteBatchExt,
-    WriteOptions, CF_WRITE,
+    IterOptions, Iterable, Iterator, MiscExt, Mutable, SeekKey, WriteBatchExt, WriteOptions,
+    CF_WRITE,
 };
 use pd_client::ClusterVersion;
 use txn_types::{Key, WriteRef, WriteType};
@@ -314,9 +314,8 @@ pub mod tests {
     use super::*;
     use crate::config::DbConfig;
     use crate::storage::kv::{RocksEngine as StorageRocksEngine, TestEngineBuilder};
-    use crate::storage::mvcc::tests::{
-        must_commit, must_get_none, must_prewrite_delete, must_prewrite_put,
-    };
+    use crate::storage::mvcc::tests::must_get_none;
+    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_rocks::raw::CompactOptions;
     use engine_rocks::util::get_cf_handle;
     use engine_rocks::RocksEngine;

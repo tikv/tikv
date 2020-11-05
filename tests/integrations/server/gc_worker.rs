@@ -78,7 +78,7 @@ fn test_applied_lock_collector() {
     let mut clients = HashMap::default();
     for node_id in cluster.get_node_ids() {
         let channel =
-            ChannelBuilder::new(Arc::clone(&env)).connect(cluster.sim.rl().get_addr(node_id));
+            ChannelBuilder::new(Arc::clone(&env)).connect(&cluster.sim.rl().get_addr(node_id));
         let client = TikvClient::new(channel);
         clients.insert(node_id, client);
     }
@@ -91,7 +91,7 @@ fn test_applied_lock_collector() {
     let leader_client = clients.get(&leader_store_id).unwrap();
     let mut ctx = Context::default();
     ctx.set_region_id(region_id);
-    ctx.set_peer(leader_peer.clone());
+    ctx.set_peer(leader_peer);
     ctx.set_region_epoch(cluster.get_region_epoch(region_id));
 
     // It's used to make sure all stores applies all logs.
@@ -167,7 +167,7 @@ fn test_applied_lock_collector() {
     // Add a new store and register lock observer.
     let store_id = cluster.add_new_engine();
     let channel =
-        ChannelBuilder::new(Arc::clone(&env)).connect(cluster.sim.rl().get_addr(store_id));
+        ChannelBuilder::new(Arc::clone(&env)).connect(&cluster.sim.rl().get_addr(store_id));
     let client = TikvClient::new(channel);
     must_register_lock_observer(&client, safe_point);
 
@@ -224,7 +224,7 @@ fn test_applied_lock_collector() {
     let leader_client = clients.get(&leader_store_id).unwrap();
     must_kv_prewrite(
         &leader_client,
-        ctx.clone(),
+        ctx,
         vec![new_mutation(Op::Put, b"key1100", b"v")],
         b"key1100".to_vec(),
         safe_point,
