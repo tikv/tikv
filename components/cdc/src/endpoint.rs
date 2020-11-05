@@ -1483,7 +1483,7 @@ mod tests {
     #[test]
     fn test_raftstore_is_busy() {
         let (tx, _rx) = batch::unbounded(1);
-        let (mut ep, raft_router, task_rx) = mock_endpoint(&CdcConfig::default());
+        let (mut ep, raft_router, mut task_rx) = mock_endpoint(&CdcConfig::default());
         // Fill the channel.
         let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
         loop {
