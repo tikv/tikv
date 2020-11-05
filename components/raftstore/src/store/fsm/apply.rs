@@ -3564,8 +3564,8 @@ impl<EK: KvEngine, W> Builder<EK, W>
 where
     W: WriteBatch<EK>,
 {
-    pub fn new<T, C, ER: RaftEngine>(
-        builder: &RaftPollerBuilder<EK, ER, T, C>,
+    pub fn new<T, ER: RaftEngine>(
+        builder: &RaftPollerBuilder<EK, ER, T>,
         sender: Box<dyn Notifier<EK>>,
         router: ApplyRouter<EK>,
     ) -> Builder<EK, W> {

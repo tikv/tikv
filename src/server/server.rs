@@ -8,9 +8,7 @@ use std::time::{Duration, Instant};
 
 use futures::compat::Stream01CompatExt;
 use futures::stream::StreamExt;
-use grpcio::{
-    ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
-};
+use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use kvproto::tikvpb::*;
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
 use tokio_timer::timer::Handle;

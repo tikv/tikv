@@ -25,6 +25,7 @@ use engine_traits::{
 };
 use fs2::FileExt;
 use futures::executor::block_on;
+use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
@@ -45,7 +46,6 @@ use raftstore::{
         SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
 };
-use grpcio::{EnvBuilder, Environment};
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR},
@@ -60,8 +60,7 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
-        Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
-        GRPC_THREAD_PREFIX,
+        Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
     storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver},
 };
@@ -181,7 +180,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .build(),
         );
-        let pd_client = Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
+        let pd_client =
+            Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
 
         // Initialize and check config
         let cfg_controller = Self::init_config(config);
