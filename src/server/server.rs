@@ -356,6 +356,7 @@ mod tests {
     use crate::coprocessor::{self, readpool_impl};
     use crate::server::TestRaftStoreRouter;
     use crate::storage::TestStorageBuilder;
+    use grpcio::EnvBuilder;
     use raftstore::store::transport::Transport;
     use raftstore::store::*;
 
@@ -414,6 +415,12 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
         let router = TestRaftStoreRouter::new(tx, significant_msg_sender);
+        let env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(1)
+                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
+                .build(),
+        );
 
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
@@ -457,6 +464,7 @@ mod tests {
             },
             SnapManager::new(""),
             gc_worker,
+            env,
             None,
             debug_thread_pool,
         )
