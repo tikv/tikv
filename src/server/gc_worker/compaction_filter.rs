@@ -2,7 +2,6 @@
 
 use std::cell::Cell;
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::VecDeque;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -118,8 +117,7 @@ struct WriteCompactionFilter {
 
     key_prefix: Vec<u8>,
     remove_older: bool,
-    // Layout: (prefix, all_versions).
-    deleting: (Vec<u8>, VecDeque<Vec<u8>>),
+    deleting: Option<Vec<Vec<u8>>>,
 
     // To handle delete marks.
     write_iter: Option<RocksEngineIterator>,
@@ -152,7 +150,7 @@ impl WriteCompactionFilter {
             write_batch,
             key_prefix: vec![],
             remove_older: false,
-            deleting: (vec![], VecDeque::with_capacity(16)),
+            deleting: None,
             write_iter,
             near_seek_distance: NEAR_SEEK_LIMIT,
             versions: 0,
@@ -162,32 +160,31 @@ impl WriteCompactionFilter {
         }
     }
 
-    // Do gc before a delete mark.
+    // Do gc before a delete mark. Must be called before switching `key_prefix`.
     fn handle_deleting(&mut self) {
-        if self.deleting.0.is_empty() {
-            return;
-        }
+        let mut deleting = match self.deleting.take() {
+            Some(v) => v,
+            None => return,
+        };
 
-        let mut valid = self.seek_to_deleting_position();
+        let mut valid = self.write_iter_seek_to(deleting[0].as_slice());
         let mut write_iter = self.write_iter.take().unwrap();
         while valid {
             let (key, value) = (write_iter.key(), write_iter.value());
-            if truncate_ts(key) > self.deleting.0.as_slice() {
-                self.deleting.0.clear();
-                self.deleting.1.clear();
+            if truncate_ts(key) != self.key_prefix.as_slice() {
                 break;
             }
 
             let (mut drain_pos, mut found) = (0, false);
-            while drain_pos < self.deleting.1.len() {
-                match write_iter.key().cmp(self.deleting.1[drain_pos].as_slice()) {
+            while drain_pos < deleting.len() {
+                match write_iter.key().cmp(deleting[drain_pos].as_slice()) {
                     CmpOrdering::Equal => found = true,
                     CmpOrdering::Less => break,
                     _ => {}
                 }
                 drain_pos += 1;
             }
-            self.deleting.1.drain(0..drain_pos);
+            deleting.drain(0..drain_pos);
             if !found {
                 self.handle_filtered_write(parse_write(value));
                 self.delete_write_key(key);
@@ -198,8 +195,7 @@ impl WriteCompactionFilter {
         self.write_iter = Some(write_iter);
     }
 
-    fn seek_to_deleting_position(&mut self) -> bool {
-        let mark = self.deleting.1[0].as_slice();
+    fn write_iter_seek_to(&mut self, mark: &[u8]) -> bool {
         let write_iter = self.write_iter.as_mut().unwrap();
         if self.near_seek_distance >= NEAR_SEEK_LIMIT {
             self.near_seek_distance = 0;
@@ -311,10 +307,10 @@ impl CompactionFilter for WriteCompactionFilter {
 
         self.versions += 1;
         if self.key_prefix != key_prefix {
+            self.handle_deleting();
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
             self.remove_older = false;
-            self.handle_deleting();
             self.switch_key_metrics();
         }
 
@@ -327,15 +323,15 @@ impl CompactionFilter for WriteCompactionFilter {
                 WriteType::Delete => {
                     self.remove_older = true;
                     filtered = true;
-                    self.deleting.0 = key_prefix.to_vec();
+                    self.deleting = Some(Vec::with_capacity(16));
                 }
             }
         }
 
         if filtered {
             self.handle_filtered_write(write);
-            if !self.deleting.0.is_empty() {
-                self.deleting.1.push_back(key.to_vec());
+            if let Some(deleting) = self.deleting.as_mut() {
+                deleting.push(key.to_vec());
             }
             self.deleted += 1;
         }
