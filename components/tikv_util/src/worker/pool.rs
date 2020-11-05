@@ -379,7 +379,8 @@ impl Worker {
 
     /// Checks if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
-        self.stop.load(Ordering::Acquire) || self.counter.load(Ordering::Acquire) >= self.thread_count
+        self.stop.load(Ordering::Acquire)
+            || self.counter.load(Ordering::Acquire) >= self.thread_count
     }
 
     fn start_impl<R: Runnable + 'static>(
