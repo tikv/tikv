@@ -26,7 +26,7 @@ use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::server::gc_worker::sync_gc;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
-use tikv_util::worker::{FutureWorker, Worker};
+use tikv_util::worker::{dummy_scheduler, FutureWorker};
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
@@ -234,7 +234,7 @@ fn test_mvcc_rollback_and_cleanup() {
     rollback_req.set_context(ctx.clone());
     rollback_req.start_version = rollback_start_version;
     rollback_req.set_keys(vec![k2.clone()].into_iter().collect());
-    let rollback_resp = client.kv_batch_rollback(&rollback_req.clone()).unwrap();
+    let rollback_resp = client.kv_batch_rollback(&rollback_req).unwrap();
     assert!(!rollback_resp.has_region_error());
     assert!(!rollback_resp.has_error());
     rollback_req.set_keys(vec![k].into_iter().collect());
@@ -496,7 +496,7 @@ fn test_debug_get() {
     req.set_cf(CF_DEFAULT.to_owned());
     req.set_db(debugpb::Db::Kv);
     req.set_key(key);
-    let mut resp = debug_client.get(&req.clone()).unwrap();
+    let mut resp = debug_client.get(&req).unwrap();
     assert_eq!(resp.take_value(), v);
 
     req.set_key(b"foo".to_vec());
@@ -604,7 +604,7 @@ fn test_debug_region_info() {
     // Debug region_info
     let mut req = debugpb::RegionInfoRequest::default();
     req.set_region_id(region_id);
-    let mut resp = debug_client.region_info(&req.clone()).unwrap();
+    let mut resp = debug_client.region_info(&req).unwrap();
     assert_eq!(resp.take_raft_local_state(), raft_state);
     assert_eq!(resp.take_raft_apply_state(), apply_state);
     assert_eq!(resp.take_region_local_state(), region_state);
@@ -762,6 +762,7 @@ fn test_double_run_node() {
         let dir = Path::new(engines.kv.path()).join("import-sst");
         Arc::new(SSTImporter::new(dir, None).unwrap())
     };
+    let (split_check_scheduler, _) = dummy_scheduler();
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
     let e = node
@@ -773,7 +774,7 @@ fn test_double_run_node() {
             store_meta,
             coprocessor_host,
             importer,
-            Worker::new("split"),
+            split_check_scheduler,
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),
         )
@@ -846,7 +847,7 @@ fn test_check_txn_status_with_max_ts() {
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.set_key(k.clone());
-    mutation.set_value(v.clone());
+    mutation.set_value(v);
     must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), lock_ts);
 
     // Should return MinCommitTsPushed even if caller_start_ts is max.

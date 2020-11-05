@@ -173,6 +173,11 @@
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
 
+## The working thread count of the background pool, which include the endpoint of cdc and br, split-check,
+## region thread and other thread of delay-insensitive tasks.
+## The default value is min(4, LOGICAL_CPU_NUM / 8).
+# background-thread-count = 4
+
 [storage]
 ## The path to RocksDB directory.
 # data-dir = "/tmp/tikv/store"
@@ -361,15 +366,16 @@
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
 ## The background tasks include compaction and flush. For detailed information why RocksDB needs to
-## do compaction, see RocksDB-related materials. RocksDB will adjust flush and compaction threads
-## according to the formula:
-##   max_flushes = max_flushes = max(1, max_background_jobs / 4)
-##   max_compactions = max(1, max_background_jobs - max_flushes)
-## When write traffic (like the importing data size)  is big, it is recommended to enable more
-## threads. But set the number of the enabled threads  smaller than that of CPU cores. For example,
+## do compaction, see RocksDB-related materials.
+## When write traffic (like the importing data size) is big, it is recommended to enable more
+## threads. But set the number of the enabled threads smaller than that of CPU cores. For example,
 ## when importing data, for a machine with a 32-core CPU, set the value to 28.
 ## The default value is set to 8 or CPU_NUM - 1, whichever is smaller.
 # max-background-jobs = 8
+
+## Maximum number of threads of RocksDB background memtable flush jobs.
+## The default value is set to 2 or max_background_jobs / 4, whichever is bigger.
+# max-background-flushes = 2
 
 ## Represents the maximum number of threads that will concurrently perform a sub-compaction job by
 ## breaking it into multiple, smaller ones running simultaneously.
@@ -459,11 +465,11 @@
 ##    2 : WriteOnly
 ##    3 : AllIo
 ## 4. auto_tuned enables dynamic adjustment of rate limit within the range
-##    [rate_bytes_per_sec / 20, rate_bytes_per_sec], according to the recent demand for background I/O.
-# rate-bytes-per-sec = 0
+##    [10MB/s, rate_bytes_per_sec], according to the recent demand for background I/O.
+# rate-bytes-per-sec = "10GB"
 # rate-limiter-refill-period = "100ms"
 # rate-limiter-mode = 2
-# auto-tuned = false
+# auto-tuned = true
 
 
 ## Enable or disable the pipelined write.

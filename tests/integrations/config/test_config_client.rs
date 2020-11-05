@@ -18,7 +18,7 @@ fn change(name: &str, value: &str) -> HashMap<String, String> {
 fn test_update_config() {
     let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     let cfg_controller = ConfigController::new(cfg);
-    let mut cfg = cfg_controller.get_current().clone();
+    let mut cfg = cfg_controller.get_current();
 
     // normal update
     cfg_controller
@@ -67,7 +67,7 @@ fn test_dispatch_change() {
 
     let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     let cfg_controller = ConfigController::new(cfg);
-    let mut cfg = cfg_controller.get_current().clone();
+    let mut cfg = cfg_controller.get_current();
     let mgr = CfgManager(Arc::new(Mutex::new(cfg.raft_store.clone())));
     cfg_controller.register(Module::Raftstore, Box::new(mgr.clone()));
 
