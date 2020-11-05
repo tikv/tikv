@@ -20,7 +20,7 @@ use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
 use engine_rocks::RocksEngine;
-use raftstore::router::RaftStoreRouter;
+use raftstore::router::{RaftPeerRouter, RaftStoreRouter};
 use raftstore::store::SnapManager;
 use security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -46,7 +46,7 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
-pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static> {
+pub struct Server<S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
@@ -54,8 +54,8 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
     local_addr: SocketAddr,
     // Transport.
-    trans: ServerTransport<T, S>,
-    raft_router: T,
+    trans: ServerTransport<S>,
+    raft_router: Box<dyn RaftPeerRouter>,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: LazyWorker<SnapTask>,
@@ -69,9 +69,9 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
+impl<S: StoreAddrResolver + 'static> Server<S> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<E: Engine, L: LockManager>(
+    pub fn new<E: Engine, L: LockManager, T: RaftStoreRouter<RocksEngine> + Unpin>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
@@ -79,7 +79,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        gc_worker: GcWorker<E, T>,
+        gc_worker: GcWorker<E>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
     ) -> Result<Self> {
@@ -148,7 +148,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             cfg.clone(),
             security_mgr.clone(),
             resolver,
-            raft_router.clone(),
+            Box::new(raft_router.clone()),
             lazy_worker.scheduler(),
         );
         let raft_client = RaftClient::new(conn_builder);
@@ -160,7 +160,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             builder_or_server: Some(builder),
             local_addr: addr,
             trans,
-            raft_router,
+            raft_router: Box::new(raft_router),
             snap_mgr,
             snap_worker: lazy_worker,
             stats_pool,
@@ -178,7 +178,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         self.debug_thread_pool.handle()
     }
 
-    pub fn transport(&self) -> ServerTransport<T, S> {
+    pub fn transport(&self) -> ServerTransport<S> {
         self.trans.clone()
     }
 
@@ -216,7 +216,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         let snap_runner = SnapHandler::new(
             Arc::clone(&self.env),
             self.snap_mgr.clone(),
-            self.raft_router.clone(),
+            self.raft_router.clone_box(),
             security_mgr,
             Arc::clone(&cfg),
         );
@@ -285,6 +285,7 @@ pub mod test_router {
     use engine_rocks::RocksSnapshot;
     use engine_traits::{KvEngine, Snapshot};
     use kvproto::raft_serverpb::RaftMessage;
+    use raftstore::router::RaftPeerRouter;
 
     #[derive(Clone)]
     pub struct TestRaftStoreRouter {
@@ -327,13 +328,18 @@ pub mod test_router {
             Ok(())
         }
     }
-
-    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
+    impl RaftPeerRouter for TestRaftStoreRouter {
         fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
 
+        fn clone_box(&self) -> Box<dyn RaftPeerRouter> {
+            Box::new(self.clone())
+        }
+    }
+
+    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn significant_send(
             &self,
             _: u64,

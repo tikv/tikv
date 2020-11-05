@@ -140,7 +140,7 @@ impl ServerCluster {
             Arc::default(),
             security_mgr,
             map.clone(),
-            RaftStoreBlackHole,
+            Box::new(RaftStoreBlackHole),
             worker.scheduler(),
         );
         let raft_client = RaftClient::new(conn_builder);

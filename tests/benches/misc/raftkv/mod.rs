@@ -10,7 +10,7 @@ use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
-use raftstore::router::{LocalReadRouter, RaftStoreRouter};
+use raftstore::router::{LocalReadRouter, RaftPeerRouter, RaftStoreRouter};
 use raftstore::store::{
     cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand,
     ReadResponse, RegionSnapshot, SignificantMsg, StoreMsg, StoreRouter, WriteResponse,
@@ -88,12 +88,18 @@ impl StoreRouter<RocksEngine> for SyncBenchRouter {
     }
 }
 
-impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
+impl RaftPeerRouter for SyncBenchRouter {
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, _: RaftMessage) -> Result<()> {
         Ok(())
     }
 
+    fn clone_box(&self) -> Box<dyn RaftPeerRouter> {
+        Box::new(self.clone())
+    }
+}
+
+impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
     /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, _: u64, _: SignificantMsg<RocksSnapshot>) -> Result<()> {
         Ok(())

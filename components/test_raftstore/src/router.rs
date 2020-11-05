@@ -6,7 +6,7 @@ use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};
-use raftstore::router::{handle_send_error, RaftStoreRouter};
+use raftstore::router::{handle_send_error, RaftPeerRouter, RaftStoreRouter};
 use raftstore::store::msg::{CasualMessage, PeerMsg, SignificantMsg};
 use raftstore::store::{CasualRouter, ProposalRouter, RaftCommand, StoreMsg, StoreRouter};
 use tikv_util::collections::HashMap;
@@ -58,11 +58,16 @@ impl CasualRouter<RocksEngine> for MockRaftStoreRouter {
     }
 }
 
-impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
+impl RaftPeerRouter for MockRaftStoreRouter {
     fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
         unimplemented!()
     }
+    fn clone_box(&self) -> Box<dyn RaftPeerRouter> {
+        Box::new(self.clone())
+    }
+}
 
+impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
     fn significant_send(
         &self,
         region_id: u64,

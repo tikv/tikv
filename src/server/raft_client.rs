@@ -4,7 +4,6 @@ use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::{self, Config, StoreAddrResolver};
 use crossbeam::queue::{ArrayQueue, PushError};
-use engine_rocks::RocksEngine;
 use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
@@ -17,7 +16,7 @@ use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
 use raft::SnapshotStatus;
 use raftstore::errors::DiscardReason;
-use raftstore::router::RaftStoreRouter;
+use raftstore::router::RaftPeerRouter;
 use security::SecurityManager;
 use std::collections::VecDeque;
 use std::ffi::CString;
@@ -288,14 +287,14 @@ impl Buffer for MessageBuffer {
 }
 
 /// Reporter reports whether a snapshot is sent successfully.
-struct SnapshotReporter<T> {
-    raft_router: T,
+struct SnapshotReporter {
+    raft_router: Box<dyn RaftPeerRouter>,
     region_id: u64,
     to_peer_id: u64,
     to_store_id: u64,
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
+impl SnapshotReporter {
     pub fn report(&self, status: SnapshotStatus) {
         debug!(
             "send snapshot";
@@ -325,10 +324,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
     }
 }
 
-fn report_unreachable<R>(router: &R, msg: &RaftMessage)
-where
-    R: RaftStoreRouter<RocksEngine>,
-{
+fn report_unreachable(router: &Box<dyn RaftPeerRouter>, msg: &RaftMessage) {
     let to_peer = msg.get_to_peer();
     if msg.get_message().has_snapshot() {
         let store = to_peer.store_id.to_string();
@@ -358,30 +354,29 @@ fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
 }
 
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
-struct RaftCall<R, M, B> {
+struct RaftCall<M, B> {
     sender: ClientCStreamSender<M>,
     receiver: ClientCStreamReceiver<Done>,
     queue: Arc<Queue>,
     buffer: B,
-    router: R,
+    router: Box<dyn RaftPeerRouter>,
     snap_scheduler: Scheduler<SnapTask>,
     lifetime: Option<oneshot::Sender<()>>,
     store_id: u64,
     addr: String,
 }
 
-impl<R, M, B> RaftCall<R, M, B>
+impl<M, B> RaftCall<M, B>
 where
-    R: RaftStoreRouter<RocksEngine> + 'static,
     B: Buffer<OutputMessage = M>,
 {
-    fn new_snapshot_reporter(&self, msg: &RaftMessage) -> SnapshotReporter<R> {
+    fn new_snapshot_reporter(&self, msg: &RaftMessage) -> SnapshotReporter {
         let region_id = msg.get_region_id();
         let to_peer_id = msg.get_to_peer().get_id();
         let to_store_id = msg.get_to_peer().get_store_id();
 
         SnapshotReporter {
-            raft_router: self.router.clone(),
+            raft_router: self.router.clone_box(),
             region_id,
             to_peer_id,
             to_store_id,
@@ -445,9 +440,8 @@ where
     }
 }
 
-impl<R, M, B> Future for RaftCall<R, M, B>
+impl<M, B> Future for RaftCall<M, B>
 where
-    R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
     B: Buffer<OutputMessage = M> + Unpin,
 {
     type Output = ();
@@ -498,25 +492,37 @@ where
     }
 }
 
-#[derive(Clone)]
-pub struct ConnectionBuilder<S, R> {
+pub struct ConnectionBuilder<S> {
     env: Arc<Environment>,
     cfg: Arc<Config>,
     security_mgr: Arc<SecurityManager>,
     resolver: S,
-    router: R,
+    router: Box<dyn RaftPeerRouter>,
     snap_scheduler: Scheduler<SnapTask>,
 }
 
-impl<S, R> ConnectionBuilder<S, R> {
+impl<S: Clone> Clone for ConnectionBuilder<S> {
+    fn clone(&self) -> Self {
+        ConnectionBuilder {
+            env: self.env.clone(),
+            cfg: self.cfg.clone(),
+            security_mgr: self.security_mgr.clone(),
+            resolver: self.resolver.clone(),
+            router: self.router.clone_box(),
+            snap_scheduler: self.snap_scheduler.clone(),
+        }
+    }
+}
+
+impl<S> ConnectionBuilder<S> {
     pub fn new(
         env: Arc<Environment>,
         cfg: Arc<Config>,
         security_mgr: Arc<SecurityManager>,
         resolver: S,
-        router: R,
+        router: Box<dyn RaftPeerRouter>,
         snap_scheduler: Scheduler<SnapTask>,
-    ) -> ConnectionBuilder<S, R> {
+    ) -> ConnectionBuilder<S> {
         ConnectionBuilder {
             env,
             cfg,
@@ -530,16 +536,15 @@ impl<S, R> ConnectionBuilder<S, R> {
 
 /// StreamBackEnd watches lifetime of a connection and handles reconnecting,
 /// spawn new RPC.
-struct StreamBackEnd<S, R> {
+struct StreamBackEnd<S> {
     store_id: u64,
     queue: Arc<Queue>,
-    builder: ConnectionBuilder<S, R>,
+    builder: ConnectionBuilder<S>,
 }
 
-impl<S, R> StreamBackEnd<S, R>
+impl<S> StreamBackEnd<S>
 where
     S: StoreAddrResolver,
-    R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
 {
     fn resolve(&self) -> impl Future<Output = server::Result<String>> {
         let (tx, rx) = oneshot::channel();
@@ -610,7 +615,7 @@ where
             receiver: batch_stream,
             queue: self.queue.clone(),
             buffer: BatchMessageBuffer::new(self.builder.cfg.clone()),
-            router: self.builder.router.clone(),
+            router: self.builder.router.clone_box(),
             snap_scheduler: self.builder.snap_scheduler.clone(),
             lifetime: Some(tx),
             store_id: self.store_id,
@@ -629,7 +634,7 @@ where
             receiver: stream,
             queue: self.queue.clone(),
             buffer: MessageBuffer::new(),
-            router: self.builder.router.clone(),
+            router: self.builder.router.clone_box(),
             snap_scheduler: self.builder.snap_scheduler.clone(),
             lifetime: Some(tx),
             store_id: self.store_id,
@@ -668,13 +673,9 @@ async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: 
 /// 4. fallback to legacy API if incompatible
 ///
 /// Every failure during the process should trigger retry automatically.
-async fn start<S, R>(
-    back_end: StreamBackEnd<S, R>,
-    conn_id: usize,
-    pool: Arc<Mutex<ConnectionPool>>,
-) where
+async fn start<S>(back_end: StreamBackEnd<S>, conn_id: usize, pool: Arc<Mutex<ConnectionPool>>)
+where
     S: StoreAddrResolver + Send,
-    R: RaftStoreRouter<RocksEngine> + Unpin + Send + 'static,
 {
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
@@ -764,20 +765,19 @@ struct CachedQueue {
 /// }
 /// raft_client.flush();
 /// ```
-pub struct RaftClient<S, R> {
+pub struct RaftClient<S> {
     pool: Arc<Mutex<ConnectionPool>>,
     cache: LruCache<(u64, usize), CachedQueue>,
     need_flush: Vec<(u64, usize)>,
     future_pool: Arc<ThreadPool<TaskCell>>,
-    builder: ConnectionBuilder<S, R>,
+    builder: ConnectionBuilder<S>,
 }
 
-impl<S, R> RaftClient<S, R>
+impl<S> RaftClient<S>
 where
     S: StoreAddrResolver + Send + 'static,
-    R: RaftStoreRouter<RocksEngine> + Unpin + Send + 'static,
 {
-    pub fn new(builder: ConnectionBuilder<S, R>) -> RaftClient<S, R> {
+    pub fn new(builder: ConnectionBuilder<S>) -> RaftClient<S> {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
                 .max_thread_count(1)
@@ -912,10 +912,9 @@ where
     }
 }
 
-impl<S, R> Clone for RaftClient<S, R>
+impl<S> Clone for RaftClient<S>
 where
     S: Clone,
-    R: Clone,
 {
     fn clone(&self) -> Self {
         RaftClient {

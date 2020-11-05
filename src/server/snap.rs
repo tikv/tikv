@@ -19,8 +19,7 @@ use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb::TikvClient;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
-use engine_rocks::RocksEngine;
-use raftstore::router::RaftStoreRouter;
+use raftstore::router::RaftPeerRouter;
 use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
 use security::SecurityManager;
 use tikv_util::worker::Runnable;
@@ -222,7 +221,7 @@ impl RecvSnapContext {
         })
     }
 
-    fn finish<R: RaftStoreRouter<RocksEngine>>(self, raft_router: R) -> Result<()> {
+    fn finish(self, raft_router: Box<dyn RaftPeerRouter>) -> Result<()> {
         let key = self.key;
         if let Some(mut file) = self.file {
             info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
@@ -239,11 +238,11 @@ impl RecvSnapContext {
     }
 }
 
-fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
+fn recv_snap(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
     snap_mgr: SnapManager,
-    raft_router: R,
+    raft_router: Box<dyn RaftPeerRouter>,
 ) -> impl Future<Output = Result<()>> {
     let recv_task = async move {
         let mut stream = stream.map_err(Error::from);
@@ -285,25 +284,25 @@ fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
     }
 }
 
-pub struct Runner<R: RaftStoreRouter<RocksEngine> + 'static> {
+pub struct Runner {
     env: Arc<Environment>,
     snap_mgr: SnapManager,
     pool: Runtime,
-    raft_router: R,
+    raft_router: Box<dyn RaftPeerRouter>,
     security_mgr: Arc<SecurityManager>,
     cfg: Arc<Config>,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
 }
 
-impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
+impl Runner {
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: SnapManager,
-        r: R,
+        r: Box<dyn RaftPeerRouter>,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<Config>,
-    ) -> Runner<R> {
+    ) -> Runner {
         Runner {
             env,
             snap_mgr,
@@ -324,7 +323,7 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
     }
 }
 
-impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable for Runner<R> {
+impl Runnable for Runner {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
@@ -346,7 +345,7 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable for Runner<R> {
                 SNAP_TASK_COUNTER_STATIC.recv.inc();
 
                 let snap_mgr = self.snap_mgr.clone();
-                let raft_router = self.raft_router.clone();
+                let raft_router = self.raft_router.clone_box();
                 let recving_count = Arc::clone(&self.recving_count);
                 recving_count.fetch_add(1, Ordering::SeqCst);
                 let task = async move {
