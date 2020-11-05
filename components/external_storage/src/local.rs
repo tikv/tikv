@@ -4,7 +4,7 @@ use std::fs::{self, File};
 use std::io;
 use std::marker::Unpin;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures_executor::block_on;
 use futures_io::AsyncRead;
@@ -12,9 +12,16 @@ use futures_util::{
     io::{copy, AllowStdIo},
     stream::TryStreamExt,
 };
-use rand::Rng;
 
+use rand::Rng;
+use lazy_static::*;
+use lru_cache::LruCache;
+use super::metrics::LOCAL_STORAGE_NUM_GAUGE;
 use super::{util::error_stream, ExternalStorage};
+
+lazy_static! {
+    static ref LRU_CACHE: Mutex<LruCache<PathBuf, LocalStorage>> = Mutex::new(LruCache::new(100));
+}
 
 const LOCAL_STORAGE_TMP_DIR: &str = "localtmp";
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
@@ -39,15 +46,27 @@ pub struct LocalStorage {
 impl LocalStorage {
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
-        info!("create local storage"; "base" => base.display());
-        let tmp_dir = base.join(LOCAL_STORAGE_TMP_DIR);
-        maybe_create_dir(&tmp_dir)?;
-        let base_dir = Arc::new(File::open(base)?);
-        Ok(LocalStorage {
-            base: base.to_owned(),
-            base_dir,
-            tmp: tmp_dir,
-        })
+        let mut lru = LRU_CACHE.lock().unwrap();
+        let key = base.to_path_buf();
+        let is_hit = lru.contains_key(&key); 
+        if is_hit {
+            info!("get local storage by cache"; "base" => base.display());
+            LOCAL_STORAGE_NUM_GAUGE.with_label_values(&["hit"]).inc();
+            Ok(lru.get_mut(&key).unwrap().to_owned())
+        } else {
+            info!("create local storage"; "base" => base.display());
+            LOCAL_STORAGE_NUM_GAUGE.with_label_values(&["miss"]).inc();
+            let tmp_dir = base.join(LOCAL_STORAGE_TMP_DIR);
+            maybe_create_dir(&tmp_dir)?;
+            let base_dir = Arc::new(File::open(base)?);
+            let local = LocalStorage {
+                base: base.to_path_buf(),
+                base_dir,
+                tmp: tmp_dir,
+            };
+            lru.insert(key.clone(), local.clone());
+            Ok(local)
+        }
     }
 
     fn tmp_path(&self, path: &Path) -> PathBuf {

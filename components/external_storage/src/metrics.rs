@@ -11,4 +11,11 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+
+    pub static ref LOCAL_STORAGE_NUM_GAUGE: IntCounterVec = register_int_counter_vec!(
+        "tikv_localstorage_cache_num",
+        "Number of local storage being cached",
+        &["type"]
+    )
+    .unwrap();
 }
