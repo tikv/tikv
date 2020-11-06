@@ -913,7 +913,7 @@ mod tests {
     use time::Duration as TimeDuration;
 
     use crate::store::peer_storage;
-    use tikv_util::time::{monotonic_now, monotonic_raw_now};
+    use tikv_util::time::monotonic_raw_now;
 
     use super::*;
 
