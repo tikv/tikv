@@ -68,11 +68,6 @@ where
             .map_err(|e| handle_send_error(region_id, e))
     }
 
-    /// Broadcast an `StoreUnreachable` event to all Raft groups.
-    fn broadcast_unreachable(&self, store_id: u64) {
-        let _ = self.send_store_msg(StoreMsg::StoreUnreachable { store_id });
-    }
-
     /// Report a `StoreResolved` event to all Raft groups.
     fn report_resolved(&self, store_id: u64, group_id: u64) {
         self.broadcast_normal(|| {
@@ -213,6 +208,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftPeerRouter for ServerRaftStoreRouter<EK, 
         self.significant_send(region_id, msg)
     }
 
+    fn broadcast_unreachable(&self, store_id: u64) {
+        let _ = self.send_store_msg(StoreMsg::StoreUnreachable { store_id });
+    }
+
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
         self.significant_send(
             region_id,
@@ -287,6 +286,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftPeerRouter for RaftRouter<EK, ER> {
             status,
         };
         self.significant_send(region_id, msg)
+    }
+
+    fn broadcast_unreachable(&self, store_id: u64) {
+        let _ = self.send_store_msg(StoreMsg::StoreUnreachable { store_id });
     }
 
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {

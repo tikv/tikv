@@ -329,6 +329,7 @@ pub mod test_router {
             Ok(())
         }
     }
+
     impl RaftPeerRouter for TestRaftStoreRouter {
         fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
@@ -351,6 +352,10 @@ pub mod test_router {
                 status,
             };
             self.significant_send(region_id, msg)
+        }
+
+        fn broadcast_unreachable(&self, store_id: u64) {
+            let _ = self.send_store_msg(StoreMsg::StoreUnreachable { store_id });
         }
 
         fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {

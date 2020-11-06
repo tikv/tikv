@@ -236,6 +236,11 @@ impl<C: RaftStoreRouter<RocksEngine> + 'static> RaftPeerRouter for SimulateTrans
             },
         )
     }
+
+    fn broadcast_unreachable(&self, store_id: u64) {
+        let _ = self.send_store_msg(StoreMsg::StoreUnreachable { store_id });
+    }
+
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
         self.significant_send(
             region_id,
