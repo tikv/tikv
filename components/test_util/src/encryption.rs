@@ -15,20 +15,20 @@ pub fn create_test_key_file(path: &str) {
 fn new_test_file_master_key(tmp: &tempfile::TempDir) -> MasterKeyConfig {
     let key_path = tmp.path().join("test_key").to_str().unwrap().to_owned();
     create_test_key_file(&key_path);
-    return MasterKeyConfig::File {
+    MasterKeyConfig::File {
         config: FileConfig { path: key_path },
-    };
+    }
 }
 
 pub fn new_file_security_config(dir: &tempfile::TempDir) -> EncryptionConfig {
     let master_key_cfg = new_test_file_master_key(dir);
-    return EncryptionConfig {
+    EncryptionConfig {
         data_encryption_method: EncryptionMethod::Aes256Ctr,
         data_key_rotation_period: ReadableDuration::days(7),
         file_rewrite_threshold: 100000,
         master_key: master_key_cfg.clone(),
         previous_master_key: master_key_cfg,
-    };
+    }
 }
 
 pub fn new_test_key_manager(

@@ -536,7 +536,7 @@ impl<E: KvEngine> SSTWriter<E> {
     // move file from temp to save.
     fn save(mut import_path: ImportPath, key_manager: Option<&DataKeyManager>) -> Result<()> {
         fs::rename(&import_path.temp, &import_path.save)?;
-        if let Some(ref key_manager) = key_manager {
+        if let Some(key_manager) = key_manager {
             let temp_str = import_path
                 .temp
                 .to_str()
