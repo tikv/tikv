@@ -1,14 +1,23 @@
 use std::cmp::Ordering;
+use std::sync::Arc;
 use tikv_util::buffer_vec::BufferVec;
 
 #[derive(Clone, Debug)]
 pub struct Set {
-    // TODO: Optimize me using Arc or others to prevent deep clone
-    data: BufferVec,
+    data: Arc<BufferVec>,
 
     // TIDB makes sure there will be no more than 64 bits
     // https://github.com/pingcap/tidb/blob/master/types/set.go
     value: usize,
+}
+
+impl Set {
+    pub fn new(data: Arc<BufferVec>, value: usize) -> Self {
+        Self { data, value }
+    }
+    pub fn value(&self) -> usize {
+        self.value
+    }
 }
 
 impl ToString for Set {
@@ -68,6 +77,12 @@ pub struct SetRef<'a> {
     value: usize,
 }
 
+impl<'a> SetRef<'a> {
+    pub fn new(data: &'a BufferVec, value: usize) -> Self {
+        Self { data, value }
+    }
+}
+
 impl<'a> Eq for SetRef<'a> {}
 
 impl<'a> PartialEq for SetRef<'a> {
@@ -102,13 +117,15 @@ mod tests {
         ];
 
         for (data, value, expect) in cases {
-            let mut s = Set {
-                data: BufferVec::new(),
+            let mut buf = BufferVec::new();
+            for v in data {
+                buf.push(v)
+            }
+
+            let s = Set {
+                data: Arc::new(buf),
                 value,
             };
-            for v in data {
-                s.data.push(v);
-            }
 
             assert_eq!(s.to_string(), expect.to_string())
         }
