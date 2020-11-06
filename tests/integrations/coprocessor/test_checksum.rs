@@ -65,9 +65,8 @@ fn test_checksum() {
 }
 
 fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> u64 {
-    let ctx = Context::default();
     let store = SnapshotStore::new(
-        store.get_engine().snapshot(&ctx).unwrap(),
+        store.get_engine().snapshot(Default::default()).unwrap(),
         TimeStamp::max(),
         IsolationLevel::Si,
         true,

@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(1, statistic.write.seek);
         let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
         commit(&engine, &mut statistic, keys.clone(), 104, 105).unwrap();
-        let snap = engine.snapshot(&ctx).unwrap();
+        let snap = engine.snapshot(Default::default()).unwrap();
         for k in keys {
             let v = snap.get_cf(CF_WRITE, &k.append_ts(105.into())).unwrap();
             assert!(v.is_some());

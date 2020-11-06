@@ -21,12 +21,11 @@ use txn_types::{Key, Value};
 
 use crate::storage::config::BlockCacheConfig;
 use tikv_util::escape;
-use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
     Callback, CbContext, Cursor, Engine, Error, ErrorInner, ExtCallback,
-    Iterator as EngineIterator, Modify, Result, ScanMode, Snapshot, WriteData,
+    Iterator as EngineIterator, Modify, Result, ScanMode, SnapContext, Snapshot, WriteData,
 };
 
 pub use engine_rocks::RocksSnapshot;
@@ -68,16 +67,12 @@ impl Runnable for Runner {
 struct RocksEngineCore {
     // only use for memory mode
     temp_dir: Option<TempDir>,
-    worker: Worker<Task>,
+    worker: Worker,
 }
 
 impl Drop for RocksEngineCore {
     fn drop(&mut self) {
-        if let Some(h) = self.worker.stop() {
-            if let Err(e) = h.join() {
-                safe_panic!("RocksEngineCore engine thread panicked: {:?}", e);
-            }
-        }
+        self.worker.stop();
     }
 }
 
@@ -107,7 +102,7 @@ impl RocksEngine {
             }
             _ => (path.to_owned(), None),
         };
-        let mut worker = Worker::new("engine-rocksdb");
+        let worker = Worker::new("engine-rocksdb");
         let db = Arc::new(engine_rocks::raw_util::new_engine(
             &path, None, cfs, cfs_opts,
         )?);
@@ -118,9 +113,9 @@ impl RocksEngine {
         kv_engine.set_shared_block_cache(shared_block_cache);
         raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
-        box_try!(worker.start(Runner(engines.clone())));
+        let sched = worker.start("engine-rocksdb", Runner(engines.clone()));
         Ok(RocksEngine {
-            sched: worker.scheduler(),
+            sched,
             core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),
             not_leader: Arc::new(AtomicBool::new(false)),
             engines,
@@ -144,10 +139,8 @@ impl RocksEngine {
     }
 
     pub fn stop(&self) {
-        let mut core = self.core.lock().unwrap();
-        if let Some(h) = core.worker.stop() {
-            h.join().unwrap();
-        }
+        let core = self.core.lock().unwrap();
+        core.worker.stop();
     }
 }
 
@@ -287,7 +280,7 @@ impl Engine for RocksEngine {
     }
 
     fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
-        self.snapshot(&Context::default())
+        self.snapshot(Default::default())
     }
 
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
@@ -321,12 +314,7 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    fn async_snapshot(
-        &self,
-        _: &Context,
-        _: Option<ThreadReadId>,
-        cb: Callback<Self::Snap>,
-    ) -> Result<()> {
+    fn async_snapshot(&self, _: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
         fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
             "snapshot failed"
         )));
@@ -540,7 +528,7 @@ mod tests {
         must_delete(&engine, b"foo1");
         must_put(&engine, b"foo2", b"bar2");
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let iter_opt = IterOptions::default().set_max_skippable_internal_keys(1);
         let mut iter = snapshot.iter(iter_opt, ScanMode::Forward).unwrap();
 
@@ -565,7 +553,7 @@ mod tests {
         must_delete(engine, b"foo42");
         must_delete(engine, b"foo5");
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut iter = snapshot
             .iter(IterOptions::default(), ScanMode::Forward)
             .unwrap();
@@ -636,7 +624,7 @@ mod tests {
             )
             .unwrap();
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let iter_opt = IterOptions::default()
             .use_prefix_seek()
             .set_prefix_same_as_start(true);

@@ -9,6 +9,7 @@ use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
+use tikv::storage::kv::SnapContext;
 use tikv_util::config::*;
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -189,8 +190,11 @@ fn test_sync_max_ts_after_leader_transfer() {
         ctx.set_region_id(region_id);
         ctx.set_peer(leader);
         ctx.set_region_epoch(epoch);
-
-        let snapshot = storage.snapshot(&ctx).unwrap();
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = storage.snapshot(snap_ctx).unwrap();
         let max_ts_sync_status = snapshot.max_ts_sync_status.clone().unwrap();
         for retry in 0..10 {
             if max_ts_sync_status.load(Ordering::SeqCst) & 1 == 1 {

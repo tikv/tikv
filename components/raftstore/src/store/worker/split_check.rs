@@ -244,7 +244,7 @@ where
 
         if !split_keys.is_empty() {
             let region_epoch = region.get_region_epoch().clone();
-            let msg = new_split_region(region_epoch, split_keys);
+            let msg = new_split_region(region_epoch, split_keys, "split checker");
             let res = self.router.send(region_id, msg);
             if let Err(e) = res {
                 warn!("failed to send check result"; "region_id" => region_id, "err" => %e);
@@ -339,7 +339,11 @@ where
     }
 }
 
-fn new_split_region<E>(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage<E>
+fn new_split_region<E>(
+    region_epoch: RegionEpoch,
+    split_keys: Vec<Vec<u8>>,
+    source: &'static str,
+) -> CasualMessage<E>
 where
     E: KvEngine,
 {
@@ -347,5 +351,6 @@ where
         region_epoch,
         split_keys,
         callback: Callback::None,
+        source: source.into(),
     }
 }

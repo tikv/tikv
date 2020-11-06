@@ -26,7 +26,7 @@ use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::server::gc_worker::sync_gc;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
-use tikv_util::worker::{FutureWorker, Worker};
+use tikv_util::worker::{dummy_scheduler, FutureWorker};
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
@@ -762,6 +762,7 @@ fn test_double_run_node() {
         let dir = Path::new(engines.kv.path()).join("import-sst");
         Arc::new(SSTImporter::new(dir, None).unwrap())
     };
+    let (split_check_scheduler, _) = dummy_scheduler();
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
     let e = node
@@ -773,7 +774,7 @@ fn test_double_run_node() {
             store_meta,
             coprocessor_host,
             importer,
-            Worker::new("split"),
+            split_check_scheduler,
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),
         )

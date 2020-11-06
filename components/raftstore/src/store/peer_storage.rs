@@ -1650,7 +1650,7 @@ mod tests {
     use std::sync::*;
     use std::time::Duration;
     use tempfile::{Builder, TempDir};
-    use tikv_util::worker::{Scheduler, Worker};
+    use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
     use super::*;
 
@@ -1775,7 +1775,7 @@ mod tests {
         ];
         for (i, (idx, wterm)) in tests.drain(..).enumerate() {
             let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-            let worker = Worker::new("snap-manager");
+            let worker = Worker::new("snap-manager").lazy_build("snap-manager");
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
             let t = store.term(idx);
@@ -1829,7 +1829,7 @@ mod tests {
     #[test]
     fn test_storage_clear_meta() {
         let td = Builder::new().prefix("tikv-store").tempdir().unwrap();
-        let worker = Worker::new("snap-manager");
+        let worker = Worker::new("snap-manager").lazy_build("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &[new_entry(3, 3), new_entry(4, 4)]);
         append_ents(&mut store, &[new_entry(5, 5), new_entry(6, 6)]);
@@ -1907,7 +1907,7 @@ mod tests {
 
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
             let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-            let worker = Worker::new("snap-manager");
+            let worker = Worker::new("snap-manager").lazy_build("snap-manager");
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
             let e = store.entries(lo, hi, maxsize);
@@ -1931,7 +1931,7 @@ mod tests {
         ];
         for (i, (idx, werr)) in tests.drain(..).enumerate() {
             let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-            let worker = Worker::new("snap-manager");
+            let worker = Worker::new("snap-manager").lazy_build("snap-manager");
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
             let mut ctx = InvokeContext::new(&store);
@@ -1984,19 +1984,19 @@ mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = Worker::new("region-worker");
+        let mut worker = Worker::new("region-worker").lazy_build("la");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
-            s.engines.clone(),
+            s.engines.kv.clone(),
             mgr,
             0,
             true,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
         );
-        worker.start(runner).unwrap();
+        worker.start_with_timer(runner);
         let snap = s.snapshot(0);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
@@ -2080,7 +2080,7 @@ mod tests {
         match *s.snap_state.borrow() {
             SnapState::Generating(ref rx) => {
                 rx.recv_timeout(Duration::from_secs(3)).unwrap();
-                worker.stop().unwrap().join().unwrap();
+                worker.stop();
                 match rx.recv_timeout(Duration::from_secs(3)) {
                     Err(RecvTimeoutError::Disconnected) => {}
                     res => panic!("unexpected result: {:?}", res),
@@ -2145,7 +2145,7 @@ mod tests {
         ];
         for (i, (entries, wentries)) in tests.drain(..).enumerate() {
             let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-            let worker = Worker::new("snap-manager");
+            let worker = LazyWorker::new("snap-manager");
             let sched = worker.scheduler();
             let mut store = new_storage_from_ents(sched, &td, &ents);
             append_ents(&mut store, &entries);
@@ -2161,7 +2161,7 @@ mod tests {
     fn test_storage_cache_fetch() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-        let worker = Worker::new("snap-manager");
+        let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
         store.cache.as_mut().unwrap().cache.clear();
@@ -2204,7 +2204,7 @@ mod tests {
     fn test_storage_cache_update() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-        let worker = Worker::new("snap-manager");
+        let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
         store.cache.as_mut().unwrap().cache.clear();
@@ -2300,19 +2300,19 @@ mod tests {
         let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = Worker::new("snap-manager");
+        let mut worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
-            s1.engines.clone(),
+            s1.engines.kv.clone(),
             mgr,
             0,
             true,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
         );
-        worker.start(runner).unwrap();
+        worker.start(runner);
         assert!(s1.snapshot(0).is_err());
         let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();
@@ -2323,7 +2323,7 @@ mod tests {
         };
         assert_eq!(s1.truncated_index(), 3);
         assert_eq!(s1.truncated_term(), 3);
-        worker.stop().unwrap().join().unwrap();
+        worker.stop();
 
         let td2 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let mut s2 = new_storage(sched.clone(), &td2);
@@ -2363,7 +2363,7 @@ mod tests {
     #[test]
     fn test_canceling_snapshot() {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-        let worker = Worker::new("snap-manager");
+        let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
         let mut s = new_storage(sched, &td);
 
@@ -2409,7 +2409,7 @@ mod tests {
     #[test]
     fn test_try_finish_snapshot() {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-        let worker = Worker::new("snap-manager");
+        let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
         let mut s = new_storage(sched, &td);
 
@@ -2485,7 +2485,7 @@ mod tests {
     #[test]
     fn test_validate_states() {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-        let worker = Worker::new("snap-manager");
+        let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
         let kv_db =
             engine_test::kv::new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();

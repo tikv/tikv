@@ -33,7 +33,7 @@ use txn_types::TimeStamp;
 
 use crate::storage::kv::{
     drop_snapshot_callback, with_tls_engine, Engine, ExtCallback, Result as EngineResult,
-    Statistics,
+    SnapContext, Statistics,
 };
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::metrics::{
@@ -399,7 +399,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         );
 
         let f = |engine: &E| {
-            if let Err(e) = engine.async_snapshot(&ctx, None, cb) {
+            let snap_ctx = SnapContext {
+                pb_ctx: &ctx,
+                ..Default::default()
+            };
+            if let Err(e) = engine.async_snapshot(snap_ctx, cb) {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);

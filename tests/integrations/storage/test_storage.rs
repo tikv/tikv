@@ -866,8 +866,8 @@ fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Re
     for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
         let number: i32 = match store.get(Context::default(), &key_address, start_ts) {
-            Ok(Some(x)) => String::from_utf8(x).unwrap().parse().unwrap(),
-            Ok(None) => 0,
+            Ok((Some(x), _, _)) => String::from_utf8(x).unwrap().parse().unwrap(),
+            Ok((None, _, _)) => 0,
             Err(_) => {
                 backoff(i);
                 continue;
@@ -949,8 +949,8 @@ fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -
         let mut mutations = vec![];
         for key in keys.iter().take(n) {
             let number = match store.get(Context::default(), key, start_ts) {
-                Ok(Some(n)) => String::from_utf8(n).unwrap().parse().unwrap(),
-                Ok(None) => 0,
+                Ok((Some(n), _, _)) => String::from_utf8(n).unwrap().parse().unwrap(),
+                Ok((None, _, _)) => 0,
                 Err(_) => {
                     backoff(i);
                     continue 'retry;

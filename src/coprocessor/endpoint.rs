@@ -10,19 +10,19 @@ use futures::channel::mpsc;
 use futures::prelude::*;
 use tokio::sync::Semaphore;
 
-use kvproto::kvrpcpb::IsolationLevel;
-use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
+use kvproto::kvrpcpb::{self, IsolationLevel};
+use kvproto::{coprocessor as coppb, errorpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 
-use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
 use crate::storage::kv::PerfStatisticsInstant;
 use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::mvcc::Error as MvccError;
-use crate::storage::{self, Engine, Snapshot, SnapshotStore};
+use crate::storage::{self, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore};
+use crate::{read_pool::ReadPoolHandle, storage::kv::SnapContext};
 
 use crate::coprocessor::cache::CachedRequestHandler;
 use crate::coprocessor::interceptors::limit_concurrency;
@@ -104,15 +104,11 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
-    fn check_memory_locks(
-        &self,
-        req_ctx: &ReqContext,
-        key_ranges: &[coppb::KeyRange],
-    ) -> Result<()> {
+    fn check_memory_locks(&self, req_ctx: &ReqContext) -> Result<()> {
         let start_ts = req_ctx.txn_start_ts;
         self.concurrency_manager.update_max_ts(start_ts);
         if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
-            for range in key_ranges {
+            for range in &req_ctx.ranges {
                 let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());
                 let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
                 self.concurrency_manager
@@ -227,7 +223,7 @@ impl<E: Engine> Endpoint<E> {
                 req_ctx = ReqContext::new(
                     tag,
                     context,
-                    ranges.as_slice(),
+                    ranges,
                     self.max_handle_duration,
                     peer,
                     Some(is_desc_scan),
@@ -235,11 +231,10 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                 );
 
-                self.check_memory_locks(&req_ctx, &ranges)?;
+                self.check_memory_locks(&req_ctx)?;
 
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
-                builder = Box::new(move |snap, req_ctx: &ReqContext| {
-                    // TODO: Remove explicit type once rust-lang#41078 is resolved
+                builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.get_data_version();
                     let store = SnapshotStore::new(
                         snap,
@@ -251,7 +246,7 @@ impl<E: Engine> Endpoint<E> {
                     );
                     dag::DagHandlerBuilder::new(
                         dag,
-                        ranges,
+                        req_ctx.ranges.clone(),
                         store,
                         req_ctx.deadline,
                         batch_row_limit,
@@ -278,7 +273,7 @@ impl<E: Engine> Endpoint<E> {
                 req_ctx = ReqContext::new(
                     tag,
                     context,
-                    ranges.as_slice(),
+                    ranges,
                     self.max_handle_duration,
                     peer,
                     None,
@@ -286,12 +281,15 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                 );
 
-                self.check_memory_locks(&req_ctx, &ranges)?;
+                self.check_memory_locks(&req_ctx)?;
 
-                builder = Box::new(move |snap, req_ctx: &_| {
-                    // TODO: Remove explicit type once rust-lang#41078 is resolved
+                builder = Box::new(move |snap, req_ctx| {
                     statistics::analyze::AnalyzeContext::new(
-                        analyze, ranges, start_ts, snap, req_ctx,
+                        analyze,
+                        req_ctx.ranges.clone(),
+                        start_ts,
+                        snap,
+                        req_ctx,
                     )
                     .map(|h| h.into_boxed())
                 });
@@ -312,7 +310,7 @@ impl<E: Engine> Endpoint<E> {
                 req_ctx = ReqContext::new(
                     tag,
                     context,
-                    ranges.as_slice(),
+                    ranges,
                     self.max_handle_duration,
                     peer,
                     None,
@@ -320,12 +318,17 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                 );
 
-                self.check_memory_locks(&req_ctx, &ranges)?;
+                self.check_memory_locks(&req_ctx)?;
 
-                builder = Box::new(move |snap, req_ctx: &_| {
-                    // TODO: Remove explicit type once rust-lang#41078 is resolved
-                    checksum::ChecksumContext::new(checksum, ranges, start_ts, snap, req_ctx)
-                        .map(|h| h.into_boxed())
+                builder = Box::new(move |snap, req_ctx| {
+                    checksum::ChecksumContext::new(
+                        checksum,
+                        req_ctx.ranges.clone(),
+                        start_ts,
+                        snap,
+                        req_ctx,
+                    )
+                    .map(|h| h.into_boxed())
                 });
             }
             tp => return Err(box_err!("unsupported tp {}", tp)),
@@ -342,13 +345,31 @@ impl<E: Engine> Endpoint<E> {
             self.batch_row_limit
         }
     }
+
     #[inline]
     fn async_snapshot(
         engine: &E,
-        ctx: &kvrpcpb::Context,
+        ctx: &ReqContext,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
-        kv::snapshot(engine, None, ctx).map_err(Error::from)
+        let mut snap_ctx = SnapContext {
+            pb_ctx: &ctx.context,
+            ..Default::default()
+        };
+        // need to pass start_ts and ranges to check memory locks for replica read
+        if need_check_locks_in_replica_read(&ctx.context) {
+            snap_ctx.start_ts = ctx.txn_start_ts;
+            for r in &ctx.ranges {
+                let start_key = txn_types::Key::from_raw(r.get_start());
+                let end_key = txn_types::Key::from_raw(r.get_end());
+                let mut key_range = kvrpcpb::KeyRange::default();
+                key_range.set_start_key(start_key.into_encoded());
+                key_range.set_end_key(end_key.into_encoded());
+                snap_ctx.key_ranges.push(key_range);
+            }
+        }
+        kv::snapshot(engine, snap_ctx).map_err(Error::from)
     }
+
     /// The real implementation of handling a unary request.
     ///
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
@@ -366,11 +387,10 @@ impl<E: Engine> Endpoint<E> {
 
         // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
         // exists.
-        let snapshot = unsafe {
-            with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
-        }
-        .trace_async(tipb::Event::TiKvCoprGetSnapshot as u32)
-        .await?;
+        let snapshot =
+            unsafe { with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx)) }
+                .trace_async(tipb::Event::TiKvCoprGetSnapshot as u32)
+                .await?;
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
@@ -499,7 +519,7 @@ impl<E: Engine> Endpoint<E> {
             // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
             // exists.
             let snapshot = unsafe {
-                with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
+                with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx))
             }
             .await?;
             // When snapshot is retrieved, deadline may exceed.
@@ -825,8 +845,8 @@ mod tests {
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let outdated_req_ctx = ReqContext::new(
             ReqTag::test,
-            kvrpcpb::Context::default(),
-            &[],
+            Default::default(),
+            Vec::new(),
             Duration::from_secs(0),
             None,
             None,

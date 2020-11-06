@@ -201,7 +201,7 @@ pub mod tests {
         status_pred: impl FnOnce(TxnStatus) -> bool,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
         let lock_ts: TimeStamp = lock_ts.into();
@@ -242,7 +242,7 @@ pub mod tests {
         rollback_if_not_exist: bool,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
         let lock_ts: TimeStamp = lock_ts.into();

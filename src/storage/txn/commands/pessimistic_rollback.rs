@@ -110,7 +110,7 @@ pub mod tests {
         for_update_ts: impl Into<TimeStamp>,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let for_update_ts = for_update_ts.into();
         let cm = ConcurrencyManager::new(for_update_ts);
         let start_ts = start_ts.into();
