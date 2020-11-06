@@ -10,12 +10,12 @@ use tipb::{Expr, FieldType};
 
 use crate::interface::*;
 use crate::util::aggr_executor::*;
+use tidb_query_aggr::*;
 use tidb_query_common::storage::IntervalRange;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_aggr::*;
 use tidb_query_expr::RpnStackNode;
 
 pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor>(

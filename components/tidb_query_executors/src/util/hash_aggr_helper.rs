@@ -2,10 +2,10 @@
 
 use super::aggr_executor::*;
 use crate::interface::*;
+use tidb_query_aggr::{update, AggrFunctionState};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_aggr::{update, AggrFunctionState};
 use tidb_query_expr::RpnStackNode;
 
 pub struct HashAggregationHelper;

@@ -33,12 +33,12 @@ use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::{Expr, FieldType};
 
 use crate::interface::*;
+use tidb_query_aggr::*;
 use tidb_query_common::storage::IntervalRange;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_aggr::*;
 use tidb_query_expr::RpnExpression;
 
 pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
@@ -336,11 +336,11 @@ pub mod tests {
 
     use crate::interface::*;
     use crate::util::mock_executor::MockExecutor;
+    use tidb_query_aggr::*;
     use tidb_query_common::Result;
     use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
     use tidb_query_datatype::codec::data_type::*;
     use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
-    use tidb_query_aggr::*;
 
     #[derive(Debug, AggrFunction)]
     #[aggr_function(state = AggrFnUnreachableState)]

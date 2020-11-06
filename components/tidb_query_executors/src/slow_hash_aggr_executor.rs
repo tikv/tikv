@@ -15,11 +15,11 @@ use crate::interface::*;
 use crate::util::aggr_executor::*;
 use crate::util::hash_aggr_helper::HashAggregationHelper;
 use crate::util::*;
+use tidb_query_aggr::*;
 use tidb_query_common::storage::IntervalRange;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_aggr::*;
 use tidb_query_expr::RpnStackNode;
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
 
