@@ -18,6 +18,7 @@ use tikv_util::buffer_vec::BufferVec;
 /// stored representation issue
 ///
 /// TODO: add way to set set column data
+/// TODO: code fot set/enum looks nearly the same, considering refactor them using macro
 #[derive(Debug, Clone)]
 pub struct ChunkedVecSet {
     data: Arc<BufferVec>,
