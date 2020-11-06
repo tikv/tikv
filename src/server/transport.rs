@@ -4,22 +4,18 @@ use kvproto::raft_serverpb::RaftMessage;
 
 use crate::server::raft_client::RaftClient;
 use crate::server::resolve::StoreAddrResolver;
-use engine_rocks::RocksEngine;
-use raftstore::router::RaftStoreRouter;
 use raftstore::store::Transport;
 use raftstore::Result as RaftStoreResult;
 
-pub struct ServerTransport<T, S>
+pub struct ServerTransport<S>
 where
-    T: RaftStoreRouter<RocksEngine> + 'static,
     S: StoreAddrResolver + 'static,
 {
-    raft_client: RaftClient<S, T>,
+    raft_client: RaftClient<S>,
 }
 
-impl<T, S> Clone for ServerTransport<T, S>
+impl<S> Clone for ServerTransport<S>
 where
-    T: RaftStoreRouter<RocksEngine> + 'static,
     S: StoreAddrResolver + 'static,
 {
     fn clone(&self) -> Self {
@@ -29,17 +25,14 @@ where
     }
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static>
-    ServerTransport<T, S>
-{
-    pub fn new(raft_client: RaftClient<S, T>) -> ServerTransport<T, S> {
+impl<S: StoreAddrResolver + 'static> ServerTransport<S> {
+    pub fn new(raft_client: RaftClient<S>) -> ServerTransport<S> {
         ServerTransport { raft_client }
     }
 }
 
-impl<T, S> Transport for ServerTransport<T, S>
+impl<S> Transport for ServerTransport<S>
 where
-    T: RaftStoreRouter<RocksEngine> + Unpin + 'static,
     S: StoreAddrResolver + Unpin + 'static,
 {
     fn send(&mut self, msg: RaftMessage) -> RaftStoreResult<()> {
