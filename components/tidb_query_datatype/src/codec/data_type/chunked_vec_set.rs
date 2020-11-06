@@ -5,6 +5,19 @@ use crate::impl_chunked_vec_common;
 use std::sync::Arc;
 use tikv_util::buffer_vec::BufferVec;
 
+/// `ChunkedVecSet` stores set in a compact way.
+///
+/// Inside `ChunkedVecSet`:
+/// - `data` stores the real set data.
+/// - `bitmap` indicates if an element at given index is null.
+/// - `value` is slice for set value bitmap which up to 64 bits.
+///
+/// # Notes
+///
+/// Make sure operating `bitmap` and `value` together to prevent different
+/// stored representation issue
+///
+/// TODO: add way to set set column data
 #[derive(Debug, Clone)]
 pub struct ChunkedVecSet {
     data: Arc<BufferVec>,
