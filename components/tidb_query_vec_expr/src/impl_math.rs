@@ -3,12 +3,12 @@ use std::cell::RefCell;
 use num::traits::Pow;
 use tidb_query_codegen::rpn_fn;
 
+use crate::rand::MySQLRng;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::{RoundMode, DEFAULT_FSP};
 use tidb_query_datatype::codec::{self, Error};
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_shared_expr::rand::MySQLRng;
 
 const I64_TEN_POWS: [i64; 19] = [
     1,
@@ -400,9 +400,8 @@ pub fn atan_2_args(arg0: &Real, arg1: &Real) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 pub fn conv(n: BytesRef, from_base: &Int, to_base: &Int) -> Result<Option<Bytes>> {
-    use tidb_query_shared_expr::conv::conv as conv_impl;
     let s = String::from_utf8_lossy(n);
-    Ok(conv_impl(s.as_ref(), *from_base, *to_base))
+    Ok(crate::conv::conv(s.as_ref(), *from_base, *to_base))
 }
 
 #[inline]

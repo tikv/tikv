@@ -9,7 +9,6 @@ use tidb_query_codegen::rpn_fn;
 
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_shared_expr::*;
 
 const IPV4_LENGTH: usize = 4;
 const IPV6_LENGTH: usize = 16;
@@ -54,7 +53,7 @@ pub fn inet_aton(addr: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(addr
         .as_ref()
         .map(|addr| String::from_utf8_lossy(addr))
-        .and_then(miscellaneous::inet_aton))
+        .and_then(crate::miscellaneous::inet_aton))
 }
 
 #[rpn_fn(nullable)]

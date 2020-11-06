@@ -5,9 +5,9 @@ use tidb_query_codegen::rpn_fn;
 
 use tidb_query_datatype::expr::{Error, EvalContext};
 
+use crate::rand::{gen_random_bytes, MAX_RAND_BYTES_LENGTH};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_shared_expr::rand::{gen_random_bytes, MAX_RAND_BYTES_LENGTH};
 
 const SHA0: i64 = 0;
 const SHA224: i64 = 224;

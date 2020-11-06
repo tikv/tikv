@@ -5,13 +5,12 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_shared_expr::*;
 
 #[rpn_fn]
 #[inline]
 pub fn like<C: Collator>(target: BytesRef, pattern: BytesRef, escape: &i64) -> Result<Option<i64>> {
     Ok(Some(
-        like::like::<C>(target, pattern, *escape as u32)? as i64
+        crate::like::like::<C>(target, pattern, *escape as u32)? as i64,
     ))
 }
 

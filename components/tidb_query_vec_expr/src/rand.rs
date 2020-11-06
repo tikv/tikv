@@ -26,6 +26,12 @@ impl MySQLRng {
     }
 }
 
+impl Default for MySQLRng {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Generate random bytes.
 pub fn gen_random_bytes(len: usize) -> Vec<u8> {
     (0..len).map(|_| rand::random::<u8>()).collect()
