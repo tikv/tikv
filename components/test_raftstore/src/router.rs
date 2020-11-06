@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_serverpb::RaftMessage;
+use raft::SnapshotStatus;
 use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};
 use raftstore::router::{handle_send_error, RaftPeerRouter, RaftStoreRouter};
 use raftstore::store::msg::{CasualMessage, PeerMsg, SignificantMsg};
@@ -64,6 +65,19 @@ impl RaftPeerRouter for MockRaftStoreRouter {
     }
     fn clone_box(&self) -> Box<dyn RaftPeerRouter> {
         Box::new(self.clone())
+    }
+    fn report_snapshot_status(
+        &self,
+        region_id: u64,
+        to_peer_id: u64,
+        status: SnapshotStatus,
+    ) -> RaftStoreResult<()> {
+        let msg = SignificantMsg::SnapshotStatus {
+            region_id,
+            to_peer_id,
+            status,
+        };
+        self.significant_send(region_id, msg)
     }
 }
 

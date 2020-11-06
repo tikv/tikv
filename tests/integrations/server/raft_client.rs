@@ -35,7 +35,7 @@ impl StoreAddrResolver for StaticResolver {
     }
 }
 
-pub fn get_raft_client_with_router<R>(router: R, port: u16) -> RaftClient<StaticResolver, R>
+pub fn get_raft_client_with_router<R>(router: R, port: u16) -> RaftClient<StaticResolver>
 where
     R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
 {
@@ -45,11 +45,11 @@ where
     let resolver = StaticResolver { port };
     let worker = LazyWorker::new("test-raftclient");
     let builder =
-        ConnectionBuilder::new(env, cfg, security_mgr, resolver, router, worker.scheduler());
+        ConnectionBuilder::new(env, cfg, security_mgr, resolver, Box::new(router), worker.scheduler());
     RaftClient::new(builder)
 }
 
-pub fn get_raft_client(port: u16) -> RaftClient<StaticResolver, RaftStoreBlackHole> {
+pub fn get_raft_client(port: u16) -> RaftClient<StaticResolver> {
     get_raft_client_with_router(RaftStoreBlackHole, port)
 }
 

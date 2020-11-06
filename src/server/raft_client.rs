@@ -324,7 +324,7 @@ impl SnapshotReporter {
     }
 }
 
-fn report_unreachable(router: &Box<dyn RaftPeerRouter>, msg: &RaftMessage) {
+fn report_unreachable(router: &dyn RaftPeerRouter, msg: &RaftMessage) {
     let to_peer = msg.get_to_peer();
     if msg.get_message().has_snapshot() {
         let store = to_peer.store_id.to_string();
@@ -585,7 +585,7 @@ where
         let len = self.queue.len();
         for _ in 0..len {
             let msg = self.queue.try_pop().unwrap();
-            report_unreachable(&self.builder.router, &msg)
+            report_unreachable(self.builder.router.as_ref(), &msg)
         }
     }
 

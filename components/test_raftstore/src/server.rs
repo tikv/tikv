@@ -57,8 +57,7 @@ use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker};
 use tikv_util::HandyRwLock;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
-type SimulateServerTransport =
-    SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
+type SimulateServerTransport = SimulateTransport<ServerTransport<PdStoreAddrResolver>>;
 
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
@@ -98,7 +97,7 @@ impl StoreAddrResolver for AddressMap {
 
 struct ServerMeta {
     node: Node<TestPdClient, RocksEngine>,
-    server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
+    server: Server<PdStoreAddrResolver>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
@@ -119,7 +118,7 @@ pub struct ServerCluster {
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient<AddressMap, RaftStoreBlackHole>,
+    raft_client: RaftClient<AddressMap>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
 }
 

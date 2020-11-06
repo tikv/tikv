@@ -19,7 +19,7 @@ use engine_traits::{Engines, MiscExt, Peekable};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::errors::Error as RaftError;
-use raftstore::router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter};
+use raftstore::router::{LocalReadRouter, RaftPeerRouter, RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::config::RaftstoreConfigManager;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};

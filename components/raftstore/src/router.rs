@@ -76,21 +76,6 @@ where
         self.significant_send(region_id, msg)
     }
 
-    /// Reports the sending snapshot status to the peer of the Region.
-    fn report_snapshot_status(
-        &self,
-        region_id: u64,
-        to_peer_id: u64,
-        status: SnapshotStatus,
-    ) -> RaftStoreResult<()> {
-        let msg = SignificantMsg::SnapshotStatus {
-            region_id,
-            to_peer_id,
-            status,
-        };
-        self.significant_send(region_id, msg)
-    }
-
     /// Broadcast an `StoreUnreachable` event to all Raft groups.
     fn broadcast_unreachable(&self, store_id: u64) {
         let _ = self.send_store_msg(StoreMsg::StoreUnreachable { store_id });
@@ -221,6 +206,20 @@ impl<EK: KvEngine, ER: RaftEngine> RaftPeerRouter for ServerRaftStoreRouter<EK, 
     fn clone_box(&self) -> Box<dyn RaftPeerRouter> {
         Box::new(self.clone())
     }
+
+    fn report_snapshot_status(
+        &self,
+        region_id: u64,
+        to_peer_id: u64,
+        status: SnapshotStatus,
+    ) -> RaftStoreResult<()> {
+        let msg = SignificantMsg::SnapshotStatus {
+            region_id,
+            to_peer_id,
+            status,
+        };
+        self.significant_send(region_id, msg)
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK, ER> {
@@ -272,6 +271,20 @@ impl<EK: KvEngine, ER: RaftEngine> RaftPeerRouter for RaftRouter<EK, ER> {
     }
     fn clone_box(&self) -> Box<dyn RaftPeerRouter> {
         Box::new(self.clone())
+    }
+
+    fn report_snapshot_status(
+        &self,
+        region_id: u64,
+        to_peer_id: u64,
+        status: SnapshotStatus,
+    ) -> RaftStoreResult<()> {
+        let msg = SignificantMsg::SnapshotStatus {
+            region_id,
+            to_peer_id,
+            status,
+        };
+        self.significant_send(region_id, msg)
     }
 }
 
