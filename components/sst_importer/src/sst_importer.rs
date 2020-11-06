@@ -518,12 +518,12 @@ impl<E: KvEngine> SSTWriter<E> {
         let (w1, w2, key_manager) = (self.default, self.write, self.key_manager);
         if default_entries > 0 {
             w1.finish()?;
-            Self::save(p1, key_manager.as_ref())?;
+            Self::save(p1, key_manager.as_deref())?;
             metas.push(default_meta);
         }
         if write_entries > 0 {
             w2.finish()?;
-            Self::save(p2, key_manager.as_ref())?;
+            Self::save(p2, key_manager.as_deref())?;
             metas.push(write_meta);
         }
         info!("finish write to sst";
@@ -534,7 +534,7 @@ impl<E: KvEngine> SSTWriter<E> {
     }
 
     // move file from temp to save.
-    fn save(mut import_path: ImportPath, key_manager: Option<&Arc<DataKeyManager>>) -> Result<()> {
+    fn save(mut import_path: ImportPath, key_manager: Option<&DataKeyManager>) -> Result<()> {
         fs::rename(&import_path.temp, &import_path.save)?;
         if let Some(ref key_manager) = key_manager {
             let temp_str = import_path
