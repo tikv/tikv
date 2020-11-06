@@ -363,7 +363,7 @@ fn rand() -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn(nullable)]
 fn rand_with_seed_first_gen(seed: Option<&i64>) -> Result<Option<Real>> {
-    let mut rng =MySQLRng::new_with_seed(seed.cloned().unwrap_or(0));
+    let mut rng = MySQLRng::new_with_seed(seed.cloned().unwrap_or(0));
     let res = rng.gen();
     Ok(Real::new(res).ok())
 }
@@ -646,8 +646,6 @@ pub fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
         (i, false)
     }
 }
-
-
 
 pub struct MySQLRng {
     seed1: u32,
