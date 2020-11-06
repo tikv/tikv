@@ -409,6 +409,13 @@ pub mod tests {
         static ref LOCK: Mutex<()> = std::sync::Mutex::new(());
     }
 
+    fn compact_options() -> CompactOptions {
+        let mut compact_opts = CompactOptions::new();
+        compact_opts.set_exclusive_manual_compaction(false);
+        compact_opts.set_max_subcompactions(1);
+        compact_opts
+    }
+
     fn do_gc_by_compact(
         engine: &RocksEngine,
         start: Option<&[u8]>,
@@ -417,6 +424,7 @@ pub mod tests {
         target_level: Option<usize>,
     ) {
         let _guard = LOCK.lock().unwrap();
+
         let safe_point = Arc::new(AtomicU64::new(safe_point));
         let cfg = GcWorkerConfigManager(Arc::new(Default::default()));
         cfg.0.update(|v| v.enable_compaction_filter = true);
@@ -425,15 +433,33 @@ pub mod tests {
 
         let db = engine.as_inner();
         let handle = get_cf_handle(db, CF_WRITE).unwrap();
-
-        let mut compact_opts = CompactOptions::new();
-        compact_opts.set_exclusive_manual_compaction(false);
-        compact_opts.set_max_subcompactions(1);
+        let mut compact_opts = compact_options();
         if let Some(target_level) = target_level {
             compact_opts.set_change_level(true);
             compact_opts.set_target_level(target_level as i32);
         }
         db.compact_range_cf_opt(handle, &compact_opts, start, end);
+    }
+
+    fn do_gc_by_compact_with_ratio_threshold(
+        engine: &RocksEngine,
+        safe_point: u64,
+        ratio_threshold: f64,
+    ) {
+        let _guard = LOCK.lock().unwrap();
+
+        let safe_point = Arc::new(AtomicU64::new(safe_point));
+        let cfg = GcWorkerConfigManager(Arc::new(Default::default()));
+        cfg.0.update(|v| {
+            v.enable_compaction_filter = true;
+            v.ratio_threshold = ratio_threshold;
+        });
+        let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
+        engine.init_compaction_filter(safe_point, cfg, cluster_version);
+
+        let db = engine.as_inner();
+        let handle = get_cf_handle(db, CF_WRITE).unwrap();
+        db.compact_range_cf_opt(handle, &compact_options(), None, None);
     }
 
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
@@ -523,6 +549,26 @@ pub mod tests {
         must_commit(&engine, b"key1", 120, 130);
         do_gc_by_compact(&raw_engine, None, None, 200, None);
         must_get_none(&engine, b"key", 110);
+    }
+
+    #[test]
+    fn test_mvcc_properties() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let raw_engine = engine.get_rocksdb();
+        let value = vec![b'v'; 512];
+
+        for start_ts in &[100, 110, 120, 130] {
+            must_prewrite_put(&engine, b"key", &value, b"key", *start_ts);
+            must_commit(&engine, b"key", *start_ts, *start_ts + 5);
+        }
+        must_prewrite_delete(&engine, b"key", b"key", 140);
+        must_commit(&engine, b"key", 140, 145);
+
+        // Can't GC stale versions because of the threshold.
+        do_gc_by_compact_with_ratio_threshold(&raw_engine, 200, 10.0);
+        for commit_ts in &[105, 115, 125, 135] {
+            must_get(&engine, b"key", commit_ts, &value);
+        }
     }
 
     // Test a key can be GCed correctly if its MVCC versions cover multiple SST files.
