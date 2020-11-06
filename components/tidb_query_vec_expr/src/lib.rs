@@ -42,6 +42,8 @@ pub mod impl_other;
 pub mod impl_string;
 pub mod impl_time;
 
+mod util;
+
 pub use self::types::*;
 
 use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeFlag};

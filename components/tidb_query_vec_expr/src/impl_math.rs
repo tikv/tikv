@@ -361,7 +361,7 @@ fn rand() -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn(nullable)]
 fn rand_with_seed_first_gen(seed: Option<&i64>) -> Result<Option<Real>> {
-    let mut rng = super::MySQLRng::new_with_seed(seed.cloned().unwrap_or(0));
+    let mut rng = super::util::MySQLRng::new_with_seed(seed.cloned().unwrap_or(0));
     let res = rng.gen();
     Ok(Real::new(res).ok())
 }
@@ -528,7 +528,7 @@ pub fn round_with_frac_real(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
 }
 
 thread_local! {
-   static MYSQL_RNG: RefCell<super::MySQLRng> = RefCell::new(super::MySQLRng::new())
+   static MYSQL_RNG: RefCell<super::util::MySQLRng> = RefCell::new(super::util::MySQLRng::new())
 }
 
 #[derive(Copy, Clone)]

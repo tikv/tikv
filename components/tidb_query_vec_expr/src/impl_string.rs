@@ -15,8 +15,8 @@ const MAX_BLOB_WIDTH: i32 = 16_777_216; // FIXME: Should be isize
 const BASE64_LINE_WRAP_LENGTH: usize = 76;
 
 // mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
-pub const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
-pub const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
+const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
+const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
 const BASE64_LINE_WRAP: u8 = b'\n';
 
 #[rpn_fn(writer)]
