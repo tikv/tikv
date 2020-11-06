@@ -226,7 +226,7 @@ pub fn rpad(arg: BytesRef, len: &Int, pad: BytesRef, writer: BytesWriter) -> Res
 //   3. target_len is greater than length of input string, *and* pad string is empty
 // otherwise return Some(target_len)
 #[inline]
-pub fn validate_target_len_for_pad(
+fn validate_target_len_for_pad(
     len_unsigned: bool,
     target_len: i64,
     input_len: usize,
@@ -651,14 +651,14 @@ pub fn trim_3_args(
     }
 }
 
-pub enum TrimDirection {
+enum TrimDirection {
     Both = 1,
     Leading,
     Trailing,
 }
 
 impl TrimDirection {
-    pub fn from_i64(i: i64) -> Option<Self> {
+    fn from_i64(i: i64) -> Option<Self> {
         match i {
             1 => Some(TrimDirection::Both),
             2 => Some(TrimDirection::Leading),
@@ -669,7 +669,7 @@ impl TrimDirection {
 }
 
 #[inline]
-pub fn trim(s: &str, pat: &str, direction: TrimDirection) -> Vec<u8> {
+fn trim(s: &str, pat: &str, direction: TrimDirection) -> Vec<u8> {
     let r = match direction {
         TrimDirection::Leading => s.trim_start_matches(pat),
         TrimDirection::Trailing => s.trim_end_matches(pat),
@@ -713,7 +713,7 @@ pub fn to_base64(bs: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 // similar logic to crate `line-wrap`, since we had call `encoded_size` before,
 // there is no need to use checked_xxx math operation like `line-wrap` does.
 #[inline]
-pub fn line_wrap(buf: &mut [u8], input_len: usize) {
+fn line_wrap(buf: &mut [u8], input_len: usize) {
     let line_len = BASE64_LINE_WRAP_LENGTH;
     if input_len <= line_len {
         return;
@@ -737,7 +737,7 @@ pub fn line_wrap(buf: &mut [u8], input_len: usize) {
 }
 
 #[inline]
-pub fn encoded_size(len: usize) -> Option<usize> {
+fn encoded_size(len: usize) -> Option<usize> {
     if len == 0 {
         return Some(0);
     }
@@ -767,7 +767,7 @@ pub fn from_base64(bs: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 }
 
 #[inline]
-pub fn strip_whitespace(input: &[u8]) -> Vec<u8> {
+fn strip_whitespace(input: &[u8]) -> Vec<u8> {
     let mut input_copy = Vec::<u8>::with_capacity(input.len());
     input_copy.extend(input.iter().filter(|b| !b" \n\t\r\x0b\x0c".contains(b)));
     input_copy

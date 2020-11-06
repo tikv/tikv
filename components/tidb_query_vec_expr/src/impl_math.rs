@@ -481,7 +481,7 @@ pub fn truncate_real_with_uint(arg0: &Real, arg1: &Int) -> Result<Option<Real>> 
     Ok(Some(truncate_real(*x, d)))
 }
 
-pub fn truncate_real(x: Real, d: i32) -> Real {
+fn truncate_real(x: Real, d: i32) -> Real {
     let shift = 10_f64.powi(d);
     let tmp = x * shift;
     if *tmp == 0_f64 {
@@ -653,19 +653,19 @@ pub struct MySQLRng {
 }
 
 impl MySQLRng {
-    pub fn new() -> Self {
+    fn new() -> Self {
         let current_time = time::get_time();
         let nsec = i64::from(current_time.nsec);
         Self::new_with_seed(nsec)
     }
 
-    pub fn new_with_seed(seed: i64) -> Self {
+    fn new_with_seed(seed: i64) -> Self {
         let seed1 = (seed.wrapping_mul(0x10001).wrapping_add(55555555)) as u32 % MAX_RAND_VALUE;
         let seed2 = (seed.wrapping_mul(0x10000001)) as u32 % MAX_RAND_VALUE;
         MySQLRng { seed1, seed2 }
     }
 
-    pub fn gen(&mut self) -> f64 {
+    fn gen(&mut self) -> f64 {
         self.seed1 = (self.seed1 * 3 + self.seed2) % MAX_RAND_VALUE;
         self.seed2 = (self.seed1 + self.seed2 + 33) % MAX_RAND_VALUE;
         f64::from(self.seed1) / f64::from(MAX_RAND_VALUE)
