@@ -85,6 +85,8 @@ pub enum TrimDirection {
     Trailing,
 }
 
+// FIXME: We could use `TryInto` here but then we need to introduce some ad-hoc error type?
+//        Maybe once Rust have something like `MaybeInto`...
 impl TrimDirection {
     pub fn from_i64(i: i64) -> Option<Self> {
         match i {
@@ -92,6 +94,14 @@ impl TrimDirection {
             2 => Some(TrimDirection::Leading),
             3 => Some(TrimDirection::Trailing),
             _ => None,
+        }
+    }
+
+    pub fn into_i64(&self) -> i64 {
+        match self {
+            TrimDirection::Both => 1,
+            TrimDirection::Leading => 2,
+            TrimDirection::Trailing => 3
         }
     }
 }
