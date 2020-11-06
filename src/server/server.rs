@@ -285,6 +285,7 @@ pub mod test_router {
     use engine_rocks::RocksSnapshot;
     use engine_traits::{KvEngine, Snapshot};
     use kvproto::raft_serverpb::RaftMessage;
+    use raft::SnapshotStatus;
     use raftstore::router::RaftPeerRouter;
 
     #[derive(Clone)]
@@ -336,6 +337,30 @@ pub mod test_router {
 
         fn clone_box(&self) -> Box<dyn RaftPeerRouter> {
             Box::new(self.clone())
+        }
+
+        fn report_snapshot_status(
+            &self,
+            region_id: u64,
+            to_peer_id: u64,
+            status: SnapshotStatus,
+        ) -> RaftStoreResult<()> {
+            let msg = SignificantMsg::SnapshotStatus {
+                region_id,
+                to_peer_id,
+                status,
+            };
+            self.significant_send(region_id, msg)
+        }
+
+        fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
+            self.significant_send(
+                region_id,
+                SignificantMsg::Unreachable {
+                    region_id,
+                    to_peer_id,
+                },
+            )
         }
     }
 
