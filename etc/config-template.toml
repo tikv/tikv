@@ -173,6 +173,11 @@
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
 
+## The working thread count of the background pool, which include the endpoint of cdc and br, split-check,
+## region thread and other thread of delay-insensitive tasks.
+## The default value is min(4, LOGICAL_CPU_NUM / 8).
+# background-thread-count = 4
+
 [storage]
 ## The path to RocksDB directory.
 # data-dir = "/tmp/tikv/store"

@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn test_register_and_deregister() {
-        let (scheduler, rx) = tikv_util::worker::dummy_scheduler();
+        let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
         let observe_id = ObserveID::new();
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();

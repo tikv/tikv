@@ -1123,12 +1123,7 @@ where
 
 struct Workers<EK: KvEngine> {
     pd_worker: FutureWorker<PdTask<EK>>,
-    consistency_check_worker: Worker<ConsistencyCheckTask<EK::Snapshot>>,
-    split_check_worker: Worker<SplitCheckTask>,
-    // handle Compact, CleanupSST task
-    cleanup_worker: Worker<CleanupTask>,
-    raftlog_gc_worker: Worker<RaftlogGcTask>,
-    region_worker: Worker<RegionTask<EK::Snapshot>>,
+    background_worker: Worker,
     coprocessor_host: CoprocessorHost<EK>,
 }
 
@@ -1162,7 +1157,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask>,
+        background_worker: Worker,
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
@@ -1176,29 +1172,60 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
 
         let workers = Workers {
-            split_check_worker,
-            region_worker: Worker::new("snapshot-worker"),
             pd_worker,
-            consistency_check_worker: Worker::new("consistency-check"),
-            cleanup_worker: Worker::new("cleanup-worker"),
-            raftlog_gc_worker: Worker::new("raft-gc-worker"),
+            background_worker,
             coprocessor_host: coprocessor_host.clone(),
         };
+        mgr.init()?;
+        let region_runner = RegionRunner::new(
+            engines.kv.clone(),
+            mgr.clone(),
+            cfg.value().snap_apply_batch_size.0 as usize,
+            cfg.value().use_delete_range,
+            workers.coprocessor_host.clone(),
+            self.router(),
+        );
+        let region_scheduler = workers
+            .background_worker
+            .start_with_timer("snapshot-worker", region_runner);
+
+        let raftlog_gc_runner = RaftlogGcRunner::new(self.router(), engines.clone());
+        let raftlog_gc_scheduler = workers
+            .background_worker
+            .start_with_timer("raft-gc-worker", raftlog_gc_runner);
+
+        let compact_runner = CompactRunner::new(engines.kv.clone());
+        let cleanup_sst_runner = CleanupSSTRunner::new(
+            meta.get_id(),
+            self.router.clone(),
+            Arc::clone(&importer),
+            Arc::clone(&pd_client),
+        );
+        let cleanup_runner = CleanupRunner::new(compact_runner, cleanup_sst_runner);
+        let cleanup_scheduler = workers
+            .background_worker
+            .start("cleanup-worker", cleanup_runner);
+        let consistency_check_runner =
+            ConsistencyCheckRunner::<EK, _>::new(self.router.clone(), coprocessor_host.clone());
+        let consistency_check_scheduler = workers
+            .background_worker
+            .start("consistency-check", consistency_check_runner);
+
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
             engines,
             router: self.router.clone(),
-            split_check_scheduler: workers.split_check_worker.scheduler(),
-            region_scheduler: workers.region_worker.scheduler(),
+            split_check_scheduler,
+            region_scheduler,
             pd_scheduler: workers.pd_worker.scheduler(),
-            consistency_check_scheduler: workers.consistency_check_worker.scheduler(),
-            cleanup_scheduler: workers.cleanup_worker.scheduler(),
-            raftlog_gc_scheduler: workers.raftlog_gc_worker.scheduler(),
+            consistency_check_scheduler,
+            cleanup_scheduler,
+            raftlog_gc_scheduler,
             apply_router: self.apply_router.clone(),
             trans,
             pd_client,
-            coprocessor_host: coprocessor_host.clone(),
+            coprocessor_host,
             importer,
             snap_mgr: mgr,
             global_replication_state,
@@ -1215,7 +1242,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 region_peers,
                 builder,
                 auto_split_controller,
-                coprocessor_host,
                 concurrency_manager,
             )?;
         } else {
@@ -1224,7 +1250,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 region_peers,
                 builder,
                 auto_split_controller,
-                coprocessor_host,
                 concurrency_manager,
             )?;
         }
@@ -1237,17 +1262,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         region_peers: Vec<SenderFsmPair<EK, ER>>,
         builder: RaftPollerBuilder<EK, ER, T, C>,
         auto_split_controller: AutoSplitController,
-        coprocessor_host: CoprocessorHost<EK>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
-        builder.snap_mgr.init()?;
-
         let engines = builder.engines.clone();
-        let snap_mgr = builder.snap_mgr.clone();
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
         let pd_client = builder.pd_client.clone();
-        let importer = builder.importer.clone();
 
         let apply_poller_builder = ApplyPollerBuilder::<EK, W>::new(
             &builder,
@@ -1297,33 +1317,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
 
-        let region_runner = RegionRunner::new(
-            engines.clone(),
-            snap_mgr,
-            cfg.snap_apply_batch_size.0 as usize,
-            cfg.use_delete_range,
-            workers.coprocessor_host.clone(),
-            self.router(),
-        );
-        let timer = region_runner.new_timer();
-        box_try!(workers.region_worker.start_with_timer(region_runner, timer));
-
-        let raftlog_gc_runner = RaftlogGcRunner::new(self.router(), engines.clone());
-        let timer = raftlog_gc_runner.new_timer();
-        box_try!(workers
-            .raftlog_gc_worker
-            .start_with_timer(raftlog_gc_runner, timer));
-
-        let compact_runner = CompactRunner::new(engines.kv.clone());
-        let cleanup_sst_runner = CleanupSSTRunner::new(
-            store.get_id(),
-            self.router.clone(),
-            Arc::clone(&importer),
-            Arc::clone(&pd_client),
-        );
-        let cleanup_runner = CleanupRunner::new(compact_runner, cleanup_sst_runner);
-        box_try!(workers.cleanup_worker.start(cleanup_runner));
-
         let pd_runner = PdRunner::new(
             store.get_id(),
             Arc::clone(&pd_client),
@@ -1335,12 +1328,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             concurrency_manager,
         );
         box_try!(workers.pd_worker.start(pd_runner));
-
-        let consistency_check_runner =
-            ConsistencyCheckRunner::<EK, _>::new(self.router.clone(), coprocessor_host);
-        box_try!(workers
-            .consistency_check_worker
-            .start(consistency_check_runner));
 
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
@@ -1356,12 +1343,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let mut workers = self.workers.take().unwrap();
         // Wait all workers finish.
         let mut handles: Vec<Option<thread::JoinHandle<()>>> = vec![];
-        handles.push(workers.split_check_worker.stop());
-        handles.push(workers.region_worker.stop());
         handles.push(workers.pd_worker.stop());
-        handles.push(workers.consistency_check_worker.stop());
-        handles.push(workers.cleanup_worker.stop());
-        handles.push(workers.raftlog_gc_worker.stop());
         self.apply_system.shutdown();
         self.system.shutdown();
         for h in handles {
@@ -1370,6 +1352,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             }
         }
         workers.coprocessor_host.shutdown();
+        workers.background_worker.stop();
     }
 }
 

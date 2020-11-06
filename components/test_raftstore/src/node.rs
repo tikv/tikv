@@ -33,7 +33,7 @@ use tikv::server::Result as ServerResult;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
-use tikv_util::worker::{FutureWorker, Worker};
+use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker};
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
@@ -190,12 +190,14 @@ impl Simulator for NodeCluster {
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut raft_store = cfg.raft_store.clone();
         raft_store.validate().unwrap();
+        let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let mut node = Node::new(
             system,
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
             Arc::default(),
+            Some(bg_worker.clone()),
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0
@@ -233,17 +235,16 @@ impl Simulator for NodeCluster {
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let cfg_controller = ConfigController::new(cfg.clone());
 
-        let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
             engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),
             cfg.coprocessor.clone(),
         );
-        split_check_worker.start(split_check_runner).unwrap();
+        let split_scheduler = bg_worker.start("test-split-check", split_check_runner);
         cfg_controller.register(
             Module::Coprocessor,
-            Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
+            Box::new(SplitCheckConfigManager(split_scheduler.clone())),
         );
 
         let mut raftstore_cfg = cfg.raft_store;
@@ -262,7 +263,7 @@ impl Simulator for NodeCluster {
             store_meta,
             coprocessor_host,
             importer,
-            split_check_worker,
+            split_scheduler,
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),
         )?;
