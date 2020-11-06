@@ -2,6 +2,17 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 use tikv_util::buffer_vec::BufferVec;
 
+/// `Set` stores set.
+///
+/// Inside `ChunkedVecSet`:
+/// - `data` stores the real set data.
+/// - `value` is a bitmap for set data
+///
+/// Take `data` = 'ab' as an example:
+///
+/// Set('a','b') -> 11B
+/// Set('a')     -> 01B
+/// Set('')      -> 00B
 #[derive(Clone, Debug)]
 pub struct Set {
     data: Arc<BufferVec>,
