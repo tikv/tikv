@@ -5,8 +5,11 @@ use std::sync::*;
 use std::thread;
 use std::time::*;
 
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::kvrpcpb::*;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
+use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::MessageType;
 
 use engine_rocks::Compat;
@@ -1307,4 +1310,59 @@ fn test_node_merge_crash_when_snapshot() {
             );
         }
     }
+}
+
+#[test]
+fn test_prewrite_before_max_ts_is_synced() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.run();
+
+    // Transfer leader to node 1 first to ensure all operations happen on node 1
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    let addr = cluster.sim.rl().get_addr(1);
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = TikvClient::new(channel);
+
+    let do_prewrite = |cluster: &mut Cluster<ServerCluster>| {
+        let region_id = right.get_id();
+        let leader = cluster.leader_of_region(region_id).unwrap();
+        let epoch = cluster.get_region_epoch(region_id);
+        let mut ctx = Context::default();
+        ctx.set_region_id(region_id);
+        ctx.set_peer(leader);
+        ctx.set_region_epoch(epoch);
+
+        let mut req = PrewriteRequest::default();
+        req.set_context(ctx);
+        req.set_primary_lock(b"key".to_vec());
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.set_key(b"key".to_vec());
+        mutation.set_value(b"value".to_vec());
+        req.mut_mutations().push(mutation);
+        req.set_start_version(100);
+        req.set_lock_ttl(20000);
+        req.set_use_async_commit(true);
+        client.kv_prewrite(&req).unwrap()
+    };
+
+    fail::cfg("test_raftstore_get_tso", "return(50)").unwrap();
+    cluster.pd_client.must_merge(left.get_id(), right.get_id());
+    let resp = do_prewrite(&mut cluster);
+    assert!(resp.get_region_error().has_max_timestamp_not_synced());
+    fail::remove("test_raftstore_get_tso");
+    thread::sleep(Duration::from_millis(200));
+    let resp = do_prewrite(&mut cluster);
+    assert!(!resp.get_region_error().has_max_timestamp_not_synced());
 }
