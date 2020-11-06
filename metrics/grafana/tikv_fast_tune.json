@@ -4696,7 +4696,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"kv\"}[1m]))",
+              "expr": "sum(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"kv\"})",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -4712,7 +4712,7 @@
               "refId": "A"
             },
             {
-              "expr": "sum(rate(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"raft\"}[1m]))",
+              "expr": "sum(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"raft\"})",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "pending-bytes-raft",
@@ -4823,11 +4823,7 @@
           "steppedLine": false,
           "targets": [
             {
-<<<<<<< HEAD
               "expr": "sum(rate(tikv_engine_locate{instance=~\"$instance\", db=\"kv\", type=\"number_db_next\"}[1m]))",
-=======
-              "expr": "tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"kv\"}",
->>>>>>> 3eafdc6f9... metrics: fix compaction pending bytes metrics (#8991)
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
