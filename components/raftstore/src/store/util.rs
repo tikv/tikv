@@ -921,25 +921,16 @@ mod tests {
     fn test_lease() {
         #[inline]
         fn sleep_test(duration: TimeDuration, lease: &Lease, state: LeaseState) {
-            // In linux, sleep uses CLOCK_MONOTONIC.
-            let monotonic_start = monotonic_now();
-            // In linux, lease uses CLOCK_MONOTONIC_RAW.
+            // In linux, lease uses CLOCK_MONOTONIC_RAW, while sleep uses CLOCK_MONOTONIC
             let monotonic_raw_start = monotonic_raw_now();
             thread::sleep(duration.to_std().unwrap());
-            let monotonic_end = monotonic_now();
             let mut monotonic_raw_end = monotonic_raw_now();
             // spin wait to make sure pace is aligned with MONOTONIC_RAW clock
             while monotonic_raw_end - monotonic_raw_start < duration {
                 thread::yield_now();
                 monotonic_raw_end = monotonic_raw_now();
             }
-            assert_eq!(
-                lease.inspect(Some(monotonic_raw_end)),
-                state,
-                "elapsed monotonic_raw: {:?}, monotonic: {:?}",
-                monotonic_raw_end - monotonic_raw_start,
-                monotonic_end - monotonic_start
-            );
+            assert_eq!(lease.inspect(Some(monotonic_raw_end)), state);
             assert_eq!(lease.inspect(None), state);
         }
 
