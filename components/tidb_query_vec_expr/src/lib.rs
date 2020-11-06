@@ -42,7 +42,7 @@ pub mod impl_other;
 pub mod impl_string;
 pub mod impl_time;
 
-mod util;
+mod utils;
 
 pub use self::types::*;
 
