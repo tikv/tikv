@@ -105,6 +105,7 @@ impl TableProperties<RocksUserCollectedProperties> for RocksTableProperties {
     }
 }
 
+#[repr(transparent)]
 pub struct RocksUserCollectedProperties(raw::UserCollectedProperties);
 
 impl UserCollectedProperties for RocksUserCollectedProperties {
@@ -120,6 +121,16 @@ impl UserCollectedProperties for RocksUserCollectedProperties {
 impl DecodeProperties for RocksUserCollectedProperties {
     fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
         self.get(k.as_bytes())
+            .ok_or(tikv_util::codec::Error::KeyNotFound)
+    }
+}
+
+#[repr(transparent)]
+pub struct RocksUserCollectedPropertiesNoRc(rocksdb::UserCollectedProperties);
+impl DecodeProperties for RocksUserCollectedPropertiesNoRc {
+    fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
+        self.0
+            .get(k.as_bytes())
             .ok_or(tikv_util::codec::Error::KeyNotFound)
     }
 }

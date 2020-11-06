@@ -400,6 +400,7 @@ impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
     }
 }
 
+/// Can only be used for write CF.
 pub struct MvccPropertiesCollector {
     props: MvccProperties,
     last_row: Vec<u8>,
@@ -428,11 +429,6 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
         // To prevent seeing outdated (GC) records, we should consider
         // RocksDB delete entry type.
         if entry_type != DBEntryType::Put && entry_type != DBEntryType::Delete {
-            return;
-        }
-
-        if !keys::validate_data_key(key) {
-            self.num_errors += 1;
             return;
         }
 
@@ -506,6 +502,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
     }
 }
 
+/// Can only be used for write CF.
 #[derive(Default)]
 pub struct MvccPropertiesCollectorFactory {}
 

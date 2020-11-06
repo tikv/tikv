@@ -7,15 +7,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::{GcConfig, GcWorkerConfigManager};
-use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
+use crate::storage::mvcc::{check_need_gc, GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterFactory,
     DBCompactionFilter, DB,
 };
-use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatch};
+use engine_rocks::{
+    RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksUserCollectedPropertiesNoRc,
+    RocksWriteBatch,
+};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, MiscExt, Mutable, SeekKey, WriteBatchExt, WriteOptions,
-    CF_WRITE,
+    IterOptions, Iterable, Iterator, MiscExt, Mutable, MvccProperties, SeekKey, WriteBatchExt,
+    WriteOptions, CF_WRITE,
 };
 use pd_client::ClusterVersion;
 use txn_types::{Key, WriteRef, WriteType};
@@ -100,6 +103,23 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             &*gc_context.cfg_tracker.value(),
             &gc_context.cluster_version,
         ) {
+            return std::ptr::null_mut();
+        }
+
+        let mut mvcc_props = MvccProperties::new();
+        for i in 0..context.file_numbers().len() {
+            let table_props = context.table_properties(i);
+            let user_props = unsafe {
+                &*(table_props.user_collected_properties() as *const _
+                    as *const RocksUserCollectedPropertiesNoRc)
+            };
+            if let Ok(props) = RocksMvccProperties::decode(user_props) {
+                mvcc_props.add(&props);
+            }
+        }
+
+        let ratio_threshold = gc_context.cfg_tracker.value().ratio_threshold;
+        if !check_need_gc(safe_point.into(), ratio_threshold, mvcc_props) {
             return std::ptr::null_mut();
         }
 
