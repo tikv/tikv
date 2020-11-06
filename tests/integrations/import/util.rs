@@ -47,13 +47,8 @@ fn open_cluster_and_tikv_import_client(
     let ch = {
         let env = Arc::new(Environment::new(1));
         let node = ctx.get_peer().get_store_id();
-<<<<<<< HEAD
-        ChannelBuilder::new(env)
-            .http2_max_ping_strikes(std::i32::MAX) // For pings without data from clients.
-=======
         let builder = ChannelBuilder::new(env)
-            .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
->>>>>>> 187774ed9... importer: rename sst file with key manager to fix ingest sst failure (#8985)
+            .http2_max_ping_strikes(std::i32::MAX) // For pings without data from clients.
             .keepalive_time(cluster.cfg.server.grpc_keepalive_time.into())
             .keepalive_timeout(cluster.cfg.server.grpc_keepalive_timeout.into());
 
