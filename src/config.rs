@@ -426,6 +426,16 @@ macro_rules! build_cf_opt {
         assert!($opt.compression_per_level.len() >= $opt.num_levels as usize);
         let compression_per_level = $opt.compression_per_level[..$opt.num_levels as usize].to_vec();
         cf_opts.compression_per_level(compression_per_level.as_slice());
+        cf_opts.bottommost_compression(DBCompressionType::Zstd);
+        // To set for bottommost level sst compression. The first 3 parameters refer to the
+        // default value in `CompressionOptions` in `rocksdb/include/rocksdb/advanced_options.h`.
+        cf_opts.set_bottommost_level_compression_options(
+            -14,
+            32767,
+            0,
+            $opt.block_size.0 as i32,
+            $opt.target_file_size_base.0 as i32,
+        );
         cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
         cf_opts.set_min_write_buffer_number_to_merge($opt.min_write_buffer_number_to_merge);
