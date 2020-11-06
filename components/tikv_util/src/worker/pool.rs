@@ -59,6 +59,7 @@ pub trait Runnable: Send {
         unimplemented!()
     }
     fn on_tick(&mut self) {}
+    fn before_start(&mut self) {}
     fn shutdown(&mut self) {}
 }
 

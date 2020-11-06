@@ -5,7 +5,7 @@ use tikv_util::time::{duration_to_sec, Instant};
 
 use super::batch::ReqBatcher;
 use crate::coprocessor::Endpoint;
-use crate::server::gc_worker::GcWorker;
+use crate::server::gc_worker::GcController;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
@@ -50,7 +50,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 /// Service handles the RPC messages for the `Tikv` service.
 pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> {
     /// Used to handle requests related to GC.
-    gc_worker: GcWorker<E, T>,
+    gc_controller: GcController,
     // For handling KV requests.
     storage: Storage<E, L>,
     // For handling coprocessor requests.
@@ -77,7 +77,7 @@ impl<
 {
     fn clone(&self) -> Self {
         Service {
-            gc_worker: self.gc_worker.clone(),
+            gc_controller: self.gc_controller.clone(),
             storage: self.storage.clone(),
             cop: self.cop.clone(),
             ch: self.ch.clone(),
@@ -94,7 +94,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         storage: Storage<E, L>,
-        gc_worker: GcWorker<E, T>,
+        gc_controller: GcController,
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
@@ -104,7 +104,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         security_mgr: Arc<SecurityManager>,
     ) -> Self {
         Service {
-            gc_worker,
+            gc_controller,
             storage,
             cop,
             ch,
@@ -323,7 +323,9 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.start_collecting(req.get_max_ts().into(), cb);
+        let res = self
+            .gc_controller
+            .start_collecting(req.get_max_ts().into(), cb);
 
         let task = async move {
             // Here except for the receiving error of `futures::channel::oneshot`,
@@ -367,7 +369,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
         let (cb, f) = paired_future_callback();
         let res = self
-            .gc_worker
+            .gc_controller
             .get_collected_locks(req.get_max_ts().into(), cb);
 
         let task = async move {
@@ -413,7 +415,9 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.stop_collecting(req.get_max_ts().into(), cb);
+        let res = self
+            .gc_controller
+            .stop_collecting(req.get_max_ts().into(), cb);
 
         let task = async move {
             let res = match res {
@@ -454,7 +458,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.physical_scan_lock(
+        let res = self.gc_controller.physical_scan_lock(
             req.take_context(),
             req.get_max_ts().into(),
             Key::from_raw(req.get_start_key()),
@@ -507,7 +511,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         assert!(!req.get_end_key().is_empty());
 
         let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.unsafe_destroy_range(
+        let res = self.gc_controller.unsafe_destroy_range(
             req.take_context(),
             Key::from_raw(&req.take_start_key()),
             Key::from_raw(&req.take_end_key()),

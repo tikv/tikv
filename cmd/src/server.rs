@@ -54,7 +54,7 @@ use tikv::{
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
-        gc_worker::{AutoGcConfig, GcWorker},
+        gc_worker::{AutoGcConfig, GcController},
         lock_manager::LockManager,
         resolve,
         service::{DebugService, DiagnosticsService},
@@ -419,37 +419,21 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         });
     }
 
-    fn init_gc_worker(
-        &mut self,
-    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>, RaftRouter<RocksEngine, ER>> {
-        let engines = self.engines.as_ref().unwrap();
-        let mut gc_worker = GcWorker::new(
-            engines.engine.clone(),
-            self.router.clone(),
-            self.config.gc.clone(),
-            self.pd_client.cluster_version(),
-        );
-        gc_worker
-            .start()
-            .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
-        gc_worker
+    fn init_gc_worker(&mut self) -> GcController {
+        let mut gc_controller =
+            GcController::new(self.config.gc.clone(), self.pd_client.cluster_version());
+        gc_controller
             .start_observe_lock_apply(self.coprocessor_host.as_mut().unwrap())
             .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
 
-        gc_worker
+        gc_controller
     }
 
-    fn init_servers(
-        &mut self,
-        gc_worker: &GcWorker<
-            RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
-            RaftRouter<RocksEngine, ER>,
-        >,
-    ) -> Arc<ServerConfig> {
+    fn init_servers(&mut self, gc_controller: &GcController) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Gc,
-            Box::new(gc_worker.get_config_manager()),
+            Box::new(gc_controller.get_config_manager()),
         );
 
         // Create cdc.
@@ -566,7 +550,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
-            gc_worker.clone(),
+            gc_controller.clone(),
             unified_read_pool,
             debug_thread_pool,
         )
@@ -641,7 +625,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             node.id(),
         );
 
-        let safe_point = match gc_worker.start_auto_gc(auto_gc_config) {
+        let safe_point = match gc_controller.start_auto_gc(
+            auto_gc_config,
+            engines.engine.clone(),
+            self.router.clone(),
+        ) {
             Err(e) => fatal!("failed to start auto_gc on storage, error: {}", e),
             Ok(safe_point) => safe_point,
         };
