@@ -44,8 +44,14 @@ where
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let resolver = StaticResolver { port };
     let worker = LazyWorker::new("test-raftclient");
-    let builder =
-        ConnectionBuilder::new(env, cfg, security_mgr, resolver, Box::new(router), worker.scheduler());
+    let builder = ConnectionBuilder::new(
+        env,
+        cfg,
+        security_mgr,
+        resolver,
+        Box::new(router),
+        worker.scheduler(),
+    );
     RaftClient::new(builder)
 }
 

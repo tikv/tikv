@@ -28,6 +28,7 @@ pub trait RaftPeerRouter: Send {
         Ok(())
     }
 
+    /// Reports the peer being unreachable to the Region.
     fn report_unreachable(&self, _: u64, _: u64) -> RaftStoreResult<()> {
         Ok(())
     }
@@ -65,15 +66,6 @@ where
         let cmd = RaftCommand::new(req, cb);
         <Self as ProposalRouter<EK::Snapshot>>::send(self, cmd)
             .map_err(|e| handle_send_error(region_id, e))
-    }
-
-    /// Reports the peer being unreachable to the Region.
-    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
-        let msg = SignificantMsg::Unreachable {
-            region_id,
-            to_peer_id,
-        };
-        self.significant_send(region_id, msg)
     }
 
     /// Broadcast an `StoreUnreachable` event to all Raft groups.
@@ -220,6 +212,16 @@ impl<EK: KvEngine, ER: RaftEngine> RaftPeerRouter for ServerRaftStoreRouter<EK, 
         };
         self.significant_send(region_id, msg)
     }
+
+    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
+        self.significant_send(
+            region_id,
+            SignificantMsg::Unreachable {
+                region_id,
+                to_peer_id,
+            },
+        )
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK, ER> {
@@ -285,6 +287,16 @@ impl<EK: KvEngine, ER: RaftEngine> RaftPeerRouter for RaftRouter<EK, ER> {
             status,
         };
         self.significant_send(region_id, msg)
+    }
+
+    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
+        self.significant_send(
+            region_id,
+            SignificantMsg::Unreachable {
+                region_id,
+                to_peer_id,
+            },
+        )
     }
 }
 

@@ -72,12 +72,14 @@ impl RaftPeerRouter for MockRaftStoreRouter {
         to_peer_id: u64,
         status: SnapshotStatus,
     ) -> RaftStoreResult<()> {
-        let msg = SignificantMsg::SnapshotStatus {
+        self.significant_send(
             region_id,
-            to_peer_id,
-            status,
-        };
-        self.significant_send(region_id, msg)
+            SignificantMsg::SnapshotStatus {
+                region_id,
+                to_peer_id,
+                status,
+            },
+        )
     }
 }
 

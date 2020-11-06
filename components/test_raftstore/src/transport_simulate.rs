@@ -227,12 +227,23 @@ impl<C: RaftStoreRouter<RocksEngine> + 'static> RaftPeerRouter for SimulateTrans
         to_peer_id: u64,
         status: SnapshotStatus,
     ) -> RaftStoreResult<()> {
-        let msg = SignificantMsg::SnapshotStatus {
+        self.significant_send(
             region_id,
-            to_peer_id,
-            status,
-        };
-        self.significant_send(region_id, msg)
+            SignificantMsg::SnapshotStatus {
+                region_id,
+                to_peer_id,
+                status,
+            },
+        )
+    }
+    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
+        self.significant_send(
+            region_id,
+            SignificantMsg::Unreachable {
+                region_id,
+                to_peer_id,
+            },
+        )
     }
 }
 
