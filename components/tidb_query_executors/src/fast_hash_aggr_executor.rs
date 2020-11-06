@@ -20,8 +20,8 @@ use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::collation::{match_template_collator, SortKey};
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_vec_aggr::*;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
+use tidb_query_aggr::*;
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 
 pub macro match_template_hashable($t:tt, $($tail:tt)*) {
     match_template::match_template! {
@@ -458,8 +458,8 @@ mod tests {
     use crate::util::mock_executor::MockExecutor;
     use crate::BatchSlowHashAggregationExecutor;
     use tidb_query_datatype::expr::EvalWarnings;
-    use tidb_query_vec_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
-    use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+    use tidb_query_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
+    use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
     use tipb::ExprType;
     use tipb_helper::ExprDefBuilder;
 

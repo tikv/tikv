@@ -38,8 +38,8 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_vec_aggr::*;
-use tidb_query_vec_expr::RpnExpression;
+use tidb_query_aggr::*;
+use tidb_query_expr::RpnExpression;
 
 pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
     /// Accepts entities without any group by columns and modifies them optionally.
@@ -340,7 +340,7 @@ pub mod tests {
     use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
     use tidb_query_datatype::codec::data_type::*;
     use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
-    use tidb_query_vec_aggr::*;
+    use tidb_query_aggr::*;
 
     #[derive(Debug, AggrFunction)]
     #[aggr_function(state = AggrFnUnreachableState)]

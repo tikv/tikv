@@ -7,7 +7,7 @@ use crate::impl_max_min::*;
 use crate::AggrFunction;
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
 
 /// Parse a specific aggregate function definition from protobuf.
 ///

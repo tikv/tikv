@@ -22,11 +22,11 @@ extern crate tikv_util;
 extern crate tidb_query_common;
 
 #[cfg(test)]
-pub use tidb_query_vec_aggr::*;
+pub use tidb_query_aggr::*;
 #[cfg(test)]
-pub use tidb_query_vec_expr::function::*;
+pub use tidb_query_expr::function::*;
 #[cfg(test)]
-pub use tidb_query_vec_expr::*;
+pub use tidb_query_expr::*;
 mod fast_hash_aggr_executor;
 mod index_scan_executor;
 pub mod interface;

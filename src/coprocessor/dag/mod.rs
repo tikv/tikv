@@ -69,7 +69,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
 }
 
 pub struct BatchDAGHandler {
-    runner: tidb_query_vec_executors::runner::BatchExecutorsRunner<Statistics>,
+    runner: tidb_query_executors::runner::BatchExecutorsRunner<Statistics>,
     data_version: Option<u64>,
 }
 
@@ -85,7 +85,7 @@ impl BatchDAGHandler {
         is_streaming: bool,
     ) -> Result<Self> {
         Ok(Self {
-            runner: tidb_query_vec_executors::runner::BatchExecutorsRunner::from_request(
+            runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request(
                 req,
                 ranges,
                 TiKVStorage::new(store, is_cache_enabled),

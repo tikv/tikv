@@ -11,8 +11,8 @@ use tidb_query_common::storage::IntervalRange;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_vec_expr::RpnStackNode;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_expr::RpnStackNode;
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
 
 pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     context: EvalContext,
