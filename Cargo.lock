@@ -4520,16 +4520,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tidb_query_shared_expr"
-version = "0.0.1"
-dependencies = [
- "rand",
- "safemem",
- "tidb_query_datatype",
- "time 0.1.42",
-]
-
-[[package]]
 name = "tidb_query_vec_aggr"
 version = "0.0.1"
 dependencies = [
@@ -4586,12 +4576,14 @@ dependencies = [
  "panic_hook",
  "profiler",
  "protobuf",
+ "rand",
+ "safemem",
  "static_assertions",
  "tidb_query_codegen",
  "tidb_query_common",
  "tidb_query_datatype",
- "tidb_query_shared_expr",
  "tikv_util",
+ "time 0.1.42",
  "tipb",
  "tipb_helper",
  "twoway",
@@ -4685,7 +4677,6 @@ dependencies = [
  "test_util",
  "tidb_query_common",
  "tidb_query_datatype",
- "tidb_query_shared_expr",
  "tidb_query_vec_aggr",
  "tidb_query_vec_executors",
  "tidb_query_vec_expr",

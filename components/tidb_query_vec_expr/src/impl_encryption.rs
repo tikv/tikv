@@ -7,13 +7,14 @@ use tidb_query_datatype::expr::{Error, EvalContext};
 
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_shared_expr::rand::{gen_random_bytes, MAX_RAND_BYTES_LENGTH};
 
 const SHA0: i64 = 0;
 const SHA224: i64 = 224;
 const SHA256: i64 = 256;
 const SHA384: i64 = 384;
 const SHA512: i64 = 512;
+
+const MAX_RAND_BYTES_LENGTH: i64 = 1024;
 
 #[rpn_fn(nullable)]
 #[inline]
@@ -112,7 +113,9 @@ pub fn random_bytes(_ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<
             if *arg < 1 || *arg > MAX_RAND_BYTES_LENGTH {
                 return Err(Error::overflow("length", "random_bytes").into());
             }
-            Ok(Some(gen_random_bytes(*arg as usize)))
+            Ok(Some(
+                (0..*arg as usize).map(|_| rand::random::<u8>()).collect(),
+            ))
         }
         _ => Ok(None),
     }
