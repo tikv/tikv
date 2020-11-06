@@ -50,6 +50,7 @@ crc64fast = "0.1"
 engine = { path = "../engine" }
 engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }
+error_code = { path = "../error_code" }
 external_storage = { path = "../external_storage" }
 failure = "0.1"
 futures = { version = "0.3", features = ["compat"] }

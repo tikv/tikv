@@ -1,5 +1,6 @@
 log-level = "debug"
 log-file = "foo"
+log-format = "json"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
@@ -152,6 +153,7 @@ store-pool-size = 3
 store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
+hibernate-timeout = "1h"
 early-apply = false
 dev-assert = true
 perf-level = 5
@@ -171,6 +173,7 @@ wal-ttl-seconds = 1
 wal-size-limit = "1KB"
 max-total-wal-size = "1GB"
 max-background-jobs = 12
+max-background-flushes = 4
 max-manifest-file-size = "12MB"
 create-if-missing = false
 max-open-files = 12345
@@ -391,6 +394,7 @@ wal-ttl-seconds = 1
 wal-size-limit = "12KB"
 max-total-wal-size = "1GB"
 max-background-jobs = 12
+max-background-flushes = 4
 max-manifest-file-size = "12MB"
 create-if-missing = false
 max-open-files = 12345
@@ -477,6 +481,7 @@ gc-merge-rewrite = true
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
+redact-info-log = true
 cert-allowed-cn = [
     "example.tikv.com",
 ]
@@ -510,3 +515,5 @@ wait-for-lock-timeout = "10ms"
 wake-up-delay-duration = 100 # test backward compatible
 pipelined = true
 
+[cdc]
+min-ts-interval = "4s"

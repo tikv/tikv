@@ -7,21 +7,19 @@ use std::time::Duration;
 
 use engine::IterOption;
 use engine_rocks::{RocksEngine, RocksTablePropertiesCollection};
-use engine_traits::CfName;
-use engine_traits::Peekable;
-use engine_traits::CF_DEFAULT;
+use engine_traits::{CfName, Peekable, ReadOptions, CF_DEFAULT};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
 };
-use txn_types::{Key, Value};
+use txn_types::{Key, TxnExtra, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
     Callback, CbContext, Cursor, Engine, Error as KvError, ErrorInner as KvErrorInner,
-    Iterator as EngineIterator, Modify, ScanMode, Snapshot,
+    Iterator as EngineIterator, Modify, ScanMode, Snapshot, WriteData,
 };
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
@@ -148,7 +146,8 @@ fn on_read_result(
     mut read_resp: ReadResponse<RocksEngine>,
     req_cnt: usize,
 ) -> (CbContext, Result<CmdRes>) {
-    let cb_ctx = new_ctx(&read_resp.response);
+    let mut cb_ctx = new_ctx(&read_resp.response);
+    cb_ctx.txn_extra_op = read_resp.txn_extra_op;
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
     }
@@ -206,6 +205,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
+        txn_extra: TxnExtra,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
@@ -237,8 +237,9 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         cmd.set_requests(reqs.into());
 
         self.router
-            .send_command(
+            .send_command_txn_extra(
                 cmd,
+                txn_extra,
                 StoreCallback::Write(Box::new(move |resp| {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
@@ -270,19 +271,14 @@ impl<S: RaftStoreRouter> Debug for RaftKv<S> {
 impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     type Snap = RegionSnapshot<RocksEngine>;
 
-    fn async_write(
-        &self,
-        ctx: &Context,
-        modifies: Vec<Modify>,
-        cb: Callback<()>,
-    ) -> kv::Result<()> {
+    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
-        if modifies.is_empty() {
+        if batch.modifies.is_empty() {
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
-        let mut reqs = Vec::with_capacity(modifies.len());
-        for m in modifies {
+        let mut reqs = Vec::with_capacity(batch.modifies.len());
+        for m in batch.modifies {
             let mut req = Request::default();
             let (cf, size) = m.cf_size();
             ASYNC_WRITE_SIZE_VEC
@@ -327,6 +323,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         self.exec_write_requests(
             ctx,
             reqs,
+            batch.extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     req_timer.observe_duration();
@@ -404,6 +401,14 @@ impl Snapshot for RegionSnapshot<RocksEngine> {
             "injected error for get_cf"
         )));
         let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> kv::Result<Option<Value>> {
+        fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
+            "injected error for get_cf"
+        )));
+        let v = box_try!(self.get_value_cf_opt(&opts, cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 

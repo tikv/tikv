@@ -3,17 +3,29 @@ use std::ops::Bound;
 use tikv_util::keybuilder::KeyBuilder;
 
 #[derive(Clone)]
-pub struct ReadOptions {}
+pub struct ReadOptions {
+    fill_cache: bool,
+}
 
 impl ReadOptions {
     pub fn new() -> ReadOptions {
-        ReadOptions {}
+        ReadOptions::default()
+    }
+
+    #[inline]
+    pub fn fill_cache(&self) -> bool {
+        self.fill_cache
+    }
+
+    #[inline]
+    pub fn set_fill_cache(&mut self, v: bool) {
+        self.fill_cache = v;
     }
 }
 
 impl Default for ReadOptions {
     fn default() -> ReadOptions {
-        ReadOptions {}
+        ReadOptions { fill_cache: true }
     }
 }
 
@@ -48,6 +60,7 @@ pub enum SeekMode {
     Prefix,
 }
 
+#[derive(Clone)]
 pub struct IterOptions {
     lower_bound: Option<KeyBuilder>,
     upper_bound: Option<KeyBuilder>,

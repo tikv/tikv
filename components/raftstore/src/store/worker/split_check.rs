@@ -186,8 +186,8 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
         debug!(
             "executing task";
             "region_id" => region_id,
-            "start_key" => log_wrappers::Key(&start_key),
-            "end_key" => log_wrappers::Key(&end_key),
+            "start_key" => log_wrappers::Value::key(&start_key),
+            "end_key" => log_wrappers::Value::key(&end_key),
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
@@ -208,7 +208,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
                 match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                     Ok(keys) => keys,
                     Err(e) => {
-                        error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
+                        error!(%e; "failed to scan split key"; "region_id" => region_id,);
                         return;
                     }
                 }
@@ -220,15 +220,14 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
                     .map(|k| keys::origin_key(&k).to_vec())
                     .collect(),
                 Err(e) => {
-                    error!(
+                    error!(%e;
                         "failed to get approximate split key, try scan way";
                         "region_id" => region_id,
-                        "err" => %e,
                     );
                     match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                         Ok(keys) => keys,
                         Err(e) => {
-                            error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
+                            error!(%e; "failed to scan split key"; "region_id" => region_id,);
                             return;
                         }
                     }

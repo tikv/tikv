@@ -29,7 +29,7 @@
 //! - mem-profiling - compiles jemalloc and this crate with profiling
 //!   capability
 //!
-//! - jemalloc - compiles jemallocator (default)
+//! - jemalloc - compiles tikv-jemallocator (default)
 //!
 //! - tcmalloc - compiles tcmalloc
 //!

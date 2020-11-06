@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use std::ops::Bound;
 
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine_rocks::PerfContext;
 use engine_traits::CfName;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
@@ -298,21 +299,33 @@ impl<I: Iterator> Cursor<I> {
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
-        self.iter.seek_to_first().expect("Invalid Iterator")
+        let before = PerfContext::get().internal_delete_skipped_count();
+        let res = self.iter.seek_to_first().expect("Invalid Iterator");
+        statistics.seek_tombstone +=
+            (PerfContext::get().internal_delete_skipped_count() - before) as usize;
+        res
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
-        self.iter.seek_to_last().expect("Invalid Iterator")
+        let before = PerfContext::get().internal_delete_skipped_count();
+        let res = self.iter.seek_to_last().expect("Invalid Iterator");
+        statistics.seek_tombstone +=
+            (PerfContext::get().internal_delete_skipped_count() - before) as usize;
+        res
     }
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         statistics.seek += 1;
         self.mark_unread();
-        self.iter.seek(key)
+        let before = PerfContext::get().internal_delete_skipped_count();
+        let res = self.iter.seek(key);
+        statistics.seek_tombstone +=
+            (PerfContext::get().internal_delete_skipped_count() - before) as usize;
+        res
     }
 
     #[inline]
@@ -323,21 +336,33 @@ impl<I: Iterator> Cursor<I> {
     ) -> Result<bool> {
         statistics.seek_for_prev += 1;
         self.mark_unread();
-        self.iter.seek_for_prev(key)
+        let before = PerfContext::get().internal_delete_skipped_count();
+        let res = self.iter.seek_for_prev(key);
+        statistics.seek_for_prev_tombstone +=
+            (PerfContext::get().internal_delete_skipped_count() - before) as usize;
+        res
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.next += 1;
         self.mark_unread();
-        self.iter.next().expect("Invalid Iterator")
+        let before = PerfContext::get().internal_delete_skipped_count();
+        let res = self.iter.next().expect("Invalid Iterator");
+        statistics.next_tombstone +=
+            (PerfContext::get().internal_delete_skipped_count() - before) as usize;
+        res
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.prev += 1;
         self.mark_unread();
-        self.iter.prev().expect("Invalid Iterator")
+        let before = PerfContext::get().internal_delete_skipped_count();
+        let res = self.iter.prev().expect("Invalid Iterator");
+        statistics.prev_tombstone +=
+            (PerfContext::get().internal_delete_skipped_count() - before) as usize;
+        res
     }
 
     #[inline]
@@ -368,11 +393,10 @@ impl<I: Iterator> Cursor<I> {
                 self.max_key.as_ref().map(|v| hex::encode_upper(v)),
             );
         } else {
-            error!(
+            error!(?e;
                 "failed to iterate";
                 "min_key" => ?self.min_key.as_ref().map(|v| hex::encode_upper(v)),
                 "max_key" => ?self.max_key.as_ref().map(|v| hex::encode_upper(v)),
-                "error" => ?e,
             );
             Err(e)
         }

@@ -828,9 +828,15 @@ fn tls_incoming(
                 }
                 None => break,
             };
-            yield tokio_openssl::accept(&acceptor, stream)
-                .await
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "TLS handshake error"));
+            match tokio_openssl::accept(&acceptor, stream).await {
+                Err(_) => {
+                    error!("Status server error: TLS handshake error");
+                    continue;
+                },
+                Ok(ssl_stream) => {
+                    yield Ok(ssl_stream);
+                },
+            }
         }
     };
     TlsIncoming(s)
@@ -1375,6 +1381,7 @@ mod tests {
 
     #[cfg(feature = "mem-profiling")]
     #[test]
+    #[ignore]
     fn test_pprof_heap_service() {
         let mut status_server = StatusServer::new(
             1,

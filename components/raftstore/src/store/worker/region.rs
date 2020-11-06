@@ -92,8 +92,8 @@ impl Display for Task {
                 f,
                 "Destroy {} [{}, {})",
                 region_id,
-                hex::encode_upper(start_key),
-                hex::encode_upper(end_key)
+                log_wrappers::Value::key(&start_key),
+                log_wrappers::Value::key(&end_key)
             ),
         }
     }
@@ -178,8 +178,8 @@ impl PendingDeleteRanges {
             panic!(
                 "[region {}] register deleting data in [{}, {}) failed due to overlap",
                 region_id,
-                hex::encode_upper(&start_key),
-                hex::encode_upper(&end_key),
+                log_wrappers::Value::key(&start_key),
+                log_wrappers::Value::key(&end_key),
             );
         }
         let info = StalePeerInfo {
@@ -275,7 +275,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             kv_snap,
             notifier,
         ) {
-            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
+            error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
             return;
         }
 
@@ -297,7 +297,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                 None => {
                     return Err(box_err!(
                         "failed to get region_state from {}",
-                        hex::encode_upper(&region_key)
+                        log_wrappers::Value::key(&region_key)
                     ));
                 }
             };
@@ -323,7 +323,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                 None => {
                     return Err(box_err!(
                         "failed to get raftstate from {}",
-                        hex::encode_upper(&state_key)
+                        log_wrappers::Value::key(&state_key)
                     ));
                 }
             };
@@ -389,7 +389,8 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                     .inc();
             }
             Err(e) => {
-                error!("failed to apply snap!!!"; "err" => %e);
+                error!(%e; "failed to apply snap!!!");
+
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
             }
@@ -413,12 +414,11 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                 .c()
                 .delete_all_files_in_range(start_key, end_key)
             {
-                error!(
+                error!(%e;
                     "failed to delete files in range";
                     "region_id" => region_id,
-                    "start_key" => log_wrappers::Key(start_key),
-                    "end_key" => log_wrappers::Key(end_key),
-                    "err" => %e,
+                    "start_key" => log_wrappers::Value::key(start_key),
+                    "end_key" => log_wrappers::Value::key(end_key),
                 );
                 return;
             }
@@ -429,21 +429,35 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                 .c()
                 .delete_all_in_range(start_key, end_key, self.use_delete_range)
         {
-            error!(
+            error!(%e;
                 "failed to delete data in range";
                 "region_id" => region_id,
-                "start_key" => log_wrappers::Key(start_key),
-                "end_key" => log_wrappers::Key(end_key),
-                "err" => %e,
-            );
-        } else {
-            info!(
-                "succeed in deleting data in range";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Key(start_key),
-                "end_key" => log_wrappers::Key(end_key),
+                "start_key" => log_wrappers::Value::key(start_key),
+                "end_key" => log_wrappers::Value::key(end_key),
             );
         }
+        if use_delete_files {
+            if let Err(e) = self
+                .engines
+                .kv
+                .c()
+                .delete_blob_files_in_range(start_key, end_key)
+            {
+                error!(%e;
+                    "failed to delete blob files in range";
+                    "region_id" => region_id,
+                    "start_key" => log_wrappers::Value::key(start_key),
+                    "end_key" => log_wrappers::Value::key(end_key),
+                );
+                return;
+            }
+        }
+        info!(
+            "succeed in deleting data in range";
+            "region_id" => region_id,
+            "start_key" => log_wrappers::Value::key(start_key),
+            "end_key" => log_wrappers::Value::key(end_key),
+        );
     }
 
     /// Gets the overlapping ranges and cleans them up.
@@ -473,8 +487,8 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         info!(
             "register deleting data in range";
             "region_id" => region_id,
-            "start_key" => log_wrappers::Key(start_key),
-            "end_key" => log_wrappers::Key(end_key),
+            "start_key" => log_wrappers::Value::key(start_key),
+            "end_key" => log_wrappers::Value::key(end_key),
         );
         let timeout = time::Instant::now() + self.clean_stale_peer_delay;
         self.pending_delete_ranges
@@ -511,7 +525,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             assert!(
                 self.pending_delete_ranges.remove(&key).is_some(),
                 "cleanup pending_delete_ranges {} should exist",
-                hex::encode_upper(&key)
+                log_wrappers::Value::key(&key)
             );
         }
     }

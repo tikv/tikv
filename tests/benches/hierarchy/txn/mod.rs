@@ -3,7 +3,7 @@
 use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
-use tikv::storage::kv::Engine;
+use tikv::storage::kv::{Engine, WriteData};
 use tikv::storage::mvcc::{self, MvccTxn};
 use txn_types::{Key, Mutation, TimeStamp};
 
@@ -34,8 +34,8 @@ where
         )
         .unwrap();
     }
-    let modifies = txn.into_modifies();
-    let _ = engine.write(&ctx, modifies);
+    let write_data = WriteData::from_modifies(txn.into_modifies());
+    let _ = engine.write(&ctx, write_data);
     let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(&k)).collect();
     keys
 }
@@ -59,8 +59,8 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
                 let mut txn = mvcc::new_txn!(snapshot, 1, true);
                 txn.prewrite(mutation, &primary, false, 0, 0, TimeStamp::default())
                     .unwrap();
-                let modifies = txn.into_modifies();
-                black_box(engine.write(&ctx, modifies)).unwrap();
+                let write_data = WriteData::from_modifies(txn.into_modifies());
+                black_box(engine.write(&ctx, write_data)).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -77,8 +77,8 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
                 let snapshot = engine.snapshot(&ctx).unwrap();
                 let mut txn = mvcc::new_txn!(snapshot, 1, true);
                 txn.commit(key, 2.into()).unwrap();
-                let modifies = txn.into_modifies();
-                black_box(engine.write(&ctx, modifies)).unwrap();
+                let write_data = WriteData::from_modifies(txn.into_modifies());
+                black_box(engine.write(&ctx, write_data)).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -95,8 +95,8 @@ fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
                 let snapshot = engine.snapshot(&ctx).unwrap();
                 let mut txn = mvcc::new_txn!(snapshot, 1, true);
                 txn.rollback(key).unwrap();
-                let modifies = txn.into_modifies();
-                black_box(engine.write(&ctx, modifies)).unwrap();
+                let write_data = WriteData::from_modifies(txn.into_modifies());
+                black_box(engine.write(&ctx, write_data)).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -113,8 +113,8 @@ fn txn_rollback_conflict<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
                 let snapshot = engine.snapshot(&ctx).unwrap();
                 let mut txn = mvcc::new_txn!(snapshot, 1, true);
                 txn.rollback(key).unwrap();
-                let modifies = txn.into_modifies();
-                black_box(engine.write(&ctx, modifies)).unwrap();
+                let write_data = WriteData::from_modifies(txn.into_modifies());
+                black_box(engine.write(&ctx, write_data)).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -139,8 +139,8 @@ fn txn_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
                 let snapshot = engine.snapshot(&ctx).unwrap();
                 let mut txn = mvcc::new_txn!(snapshot, 1, true);
                 txn.rollback(key).unwrap();
-                let modifies = txn.into_modifies();
-                black_box(engine.write(&ctx, modifies)).unwrap();
+                let write_data = WriteData::from_modifies(txn.into_modifies());
+                black_box(engine.write(&ctx, write_data)).unwrap();
             }
         },
         BatchSize::SmallInput,

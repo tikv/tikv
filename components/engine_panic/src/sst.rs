@@ -108,6 +108,9 @@ impl SstWriterBuilder<PanicEngine> for PanicSstWriterBuilder {
     fn set_compression_type(self, compression: Option<SstCompressionType>) -> Self {
         panic!()
     }
+    fn set_compression_level(self, level: i32) -> Self {
+        panic!()
+    }
 
     fn build(self, path: &str) -> Result<PanicSstWriter> {
         panic!()

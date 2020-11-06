@@ -10,7 +10,7 @@ pub enum SeekKey<'a> {
     Key(&'a [u8]),
 }
 
-pub trait Iterator {
+pub trait Iterator: Send {
     fn seek(&mut self, key: SeekKey) -> Result<bool>;
     fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool>;
 

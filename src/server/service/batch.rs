@@ -8,11 +8,12 @@ use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
 use crate::server::service::kv::{
     batch_commands_request, batch_commands_response, future_batch_get_command,
-    future_raw_batch_get_command, poll_future_notify,
+    future_raw_batch_get_command,
 };
 use crate::storage::{kv::Engine, lock_manager::LockManager, PointGetCommand, Storage};
 use kvproto::kvrpcpb::*;
 use tikv_util::collections::HashMap;
+use tikv_util::future::poll_future_notify;
 use tikv_util::metrics::HistogramReader;
 use tikv_util::mpsc::batch::Sender;
 

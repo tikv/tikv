@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use engine::rocks::util::compact_files_in_range;
 use engine::rocks::DB;
 use engine_rocks::util::ingest_maybe_slowdown_writes;
-use engine_traits::{name_to_cf, CF_DEFAULT, CF_WRITE};
+use engine_traits::{name_to_cf, CF_DEFAULT};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -107,7 +107,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         };
         match res {
             Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
-            Err(ref e) => error!("switch mode failed"; "mode" => ?req.get_mode(), "err" => %e),
+            Err(ref e) => error!(%e; "switch mode failed"; "mode" => ?req.get_mode(),),
         }
 
         ctx.spawn(
@@ -186,13 +186,17 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
         let engine = Arc::clone(&self.engine);
-        let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
-            .set_db(RocksEngine::from_ref(&engine))
-            .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
-            .build(self.importer.get_path(req.get_sst()).to_str().unwrap())
-            .unwrap();
 
         ctx.spawn(self.threads.spawn_fn(move || {
+            // SST writer must not be opened in gRPC threads, because it may be
+            // blocked for a long time due to IO, especially, when encryption at rest
+            // is enabled, and it leads to gRPC keepalive timeout.
+            let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
+                .set_db(RocksEngine::from_ref(&engine))
+                .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
+                .build(importer.get_path(req.get_sst()).to_str().unwrap())
+                .unwrap();
+
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
             // Unfortunately, this currently can't happen because the S3Storage
@@ -332,14 +336,14 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             match res {
                 Ok(_) => info!(
                     "compact files in range";
-                    "start" => start.map(log_wrappers::Key),
-                    "end" => end.map(log_wrappers::Key),
+                    "start" => start.map(log_wrappers::Value::key),
+                    "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level, "takes" => ?timer.elapsed()
                 ),
                 Err(ref e) => error!(
                     "compact files in range failed";
-                    "start" => start.map(log_wrappers::Key),
-                    "end" => end.map(log_wrappers::Key),
+                    "start" => start.map(log_wrappers::Value::key),
+                    "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level, "err" => %e
                 ),
             }
@@ -403,19 +407,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                             },
                             _ => return Err(Error::InvalidChunk),
                         };
-                        let name = import.get_path(&meta);
-
-                        let default = <RocksEngine as SstExt>::SstWriterBuilder::new()
-                            .set_in_memory(true)
-                            .set_db(RocksEngine::from_ref(&engine))
-                            .set_cf(CF_DEFAULT)
-                            .build(&name.to_str().unwrap())?;
-                        let write = <RocksEngine as SstExt>::SstWriterBuilder::new()
-                            .set_in_memory(true)
-                            .set_db(RocksEngine::from_ref(&engine))
-                            .set_cf(CF_WRITE)
-                            .build(&name.to_str().unwrap())?;
-                        let writer = match import.new_writer::<RocksEngine>(default, write, meta) {
+                        let writer = match import.new_writer(RocksEngine::from_ref(&engine), meta) {
                             Ok(w) => w,
                             Err(e) => {
                                 error!("build writer failed {:?}", e);

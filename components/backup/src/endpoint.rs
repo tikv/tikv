@@ -48,7 +48,8 @@ struct Request {
     cancel: Arc<AtomicBool>,
     is_raw_kv: bool,
     cf: CfName,
-    compress_type: CompressionType,
+    compression_type: CompressionType,
+    compression_level: i32,
 }
 
 /// Backup Task.
@@ -99,9 +100,6 @@ impl Task {
             cf: req.get_cf().to_owned(),
         })?;
 
-        // Check storage backend eagerly.
-        create_storage(req.get_storage_backend())?;
-
         let task = Task {
             request: Request {
                 start_key: req.get_start_key().to_owned(),
@@ -113,7 +111,8 @@ impl Task {
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
                 cf,
-                compress_type: req.get_compression_type(),
+                compression_type: req.get_compression_type(),
+                compression_level: req.get_compression_level(),
             },
             resp,
         };
@@ -154,7 +153,7 @@ impl BackupRange {
         let snapshot = match engine.snapshot(&ctx) {
             Ok(s) => s,
             Err(e) => {
-                error!("backup snapshot failed"; "error" => ?e);
+                error!(?e; "backup snapshot failed");
                 return Err(e.into());
             }
         };
@@ -178,7 +177,7 @@ impl BackupRange {
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
-                error!("backup scan entries failed"; "error" => ?e);
+                error!(?e; "backup scan entries failed");
                 return Err(e.into());
             };
             if batch.is_empty() {
@@ -187,7 +186,7 @@ impl BackupRange {
             debug!("backup scan entries"; "len" => batch.len());
             // Build sst files.
             if let Err(e) = writer.write(batch.drain(), true) {
-                error!("backup build sst failed"; "error" => ?e);
+                error!(?e; "backup build sst failed");
                 return Err(e);
             }
         }
@@ -212,7 +211,7 @@ impl BackupRange {
         let snapshot = match engine.snapshot(&ctx) {
             Ok(s) => s,
             Err(e) => {
-                error!("backup raw kv snapshot failed"; "error" => ?e);
+                error!(?e; "backup raw kv snapshot failed");
                 return Err(e.into());
             }
         };
@@ -248,7 +247,7 @@ impl BackupRange {
             debug!("backup scan raw kv entries"; "len" => batch.len());
             // Build sst files.
             if let Err(e) = writer.write(batch.drain(..), false) {
-                error!("backup raw kv build sst failed"; "error" => ?e);
+                error!(?e; "backup raw kv build sst failed");
                 return Err(e);
             }
         }
@@ -267,15 +266,21 @@ impl BackupRange {
         backup_ts: TimeStamp,
         start_ts: TimeStamp,
         compression_type: Option<SstCompressionType>,
+        compression_level: i32,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer =
-            match BackupWriter::new(db, &file_name, storage.limiter.clone(), compression_type) {
-                Ok(w) => w,
-                Err(e) => {
-                    error!("backup writer failed"; "error" => ?e);
-                    return Err(e);
-                }
-            };
+        let mut writer = match BackupWriter::new(
+            db,
+            &file_name,
+            storage.limiter.clone(),
+            compression_type,
+            compression_level,
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                error!(?e; "backup writer failed");
+                return Err(e);
+            }
+        };
         let stat = match self.backup(&mut writer, engine, backup_ts, start_ts) {
             Ok(s) => s,
             Err(e) => return Err(e),
@@ -284,7 +289,7 @@ impl BackupRange {
         match writer.save(&storage.storage) {
             Ok(files) => Ok((files, stat)),
             Err(e) => {
-                error!("backup save file failed"; "error" => ?e);
+                error!(?e; "backup save file failed");
                 Err(e)
             }
         }
@@ -297,16 +302,23 @@ impl BackupRange {
         storage: &LimitedStorage,
         file_name: String,
         cf: CfName,
-        ct: Option<SstCompressionType>,
+        compression_type: Option<SstCompressionType>,
+        compression_level: i32,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer =
-            match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone(), ct) {
-                Ok(w) => w,
-                Err(e) => {
-                    error!("backup writer failed"; "error" => ?e);
-                    return Err(e);
-                }
-            };
+        let mut writer = match BackupRawKVWriter::new(
+            db,
+            &file_name,
+            cf,
+            storage.limiter.clone(),
+            compression_type,
+            compression_level,
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                error!(?e; "backup writer failed");
+                return Err(e);
+            }
+        };
         let stat = match self.backup_raw(&mut writer, engine) {
             Ok(s) => s,
             Err(e) => return Err(e),
@@ -315,7 +327,7 @@ impl BackupRange {
         match writer.save(&storage.storage) {
             Ok(files) => Ok((files, stat)),
             Err(e) => {
-                error!("backup save file failed"; "error" => ?e);
+                error!(?e; "backup save file failed");
                 Err(e)
             }
         }
@@ -441,7 +453,7 @@ impl<R: RegionInfoProvider> Progress<R> {
         );
         if let Err(e) = res {
             // TODO: handle error.
-            error!("backup seek region failed"; "error" => ?e);
+            error!(?e; "backup seek region failed");
         }
 
         let branges: Vec<_> = rx.iter().collect();
@@ -603,8 +615,20 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             if branges.is_empty() {
                 return;
             }
-            // Storage backend has been checked in `Task::new()`.
-            let backend = create_storage(&request.backend).unwrap();
+
+            // Check if we can open external storage.
+            let backend = match create_storage(&request.backend) {
+                Ok(backend) => backend,
+                Err(err) => {
+                    error!(?err; "backup create storage failed");
+                    let mut response = BackupResponse::default();
+                    response.set_error(crate::Error::Io(err).into());
+                    if let Err(err) = tx.unbounded_send(response) {
+                        error!(?err; "backup failed to send response");
+                    }
+                    return;
+                }
+            };
             let storage = LimitedStorage {
                 limiter: request.limiter.clone(),
                 storage: backend,
@@ -626,10 +650,18 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     tikv_util::file::sha256(&input).ok().map(|b| hex::encode(b))
                 });
                 let name = backup_file_name(store_id, &brange.region, key);
-                let ct = to_sst_compression_type(request.compress_type);
+                let ct = to_sst_compression_type(request.compression_type);
                 let (res, start_key, end_key) = if is_raw_kv {
                     (
-                        brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf, ct),
+                        brange.backup_raw_kv_to_file(
+                            &engine,
+                            db.clone(),
+                            &storage,
+                            name,
+                            cf,
+                            ct,
+                            request.compression_level,
+                        ),
                         brange
                             .start_key
                             .map_or_else(|| vec![], |k| k.into_encoded()),
@@ -645,6 +677,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             backup_ts,
                             start_ts,
                             ct,
+                            request.compression_level,
                         ),
                         brange
                             .start_key
@@ -658,11 +691,11 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 let mut response = BackupResponse::default();
                 match res {
                     Err(e) => {
-                        error!("backup region failed";
+                        error!(?e; "backup region failed";
                             "region" => ?brange.region,
                             "start_key" => hex::encode_upper(&start_key),
                             "end_key" => hex::encode_upper(&end_key),
-                            "error" => ?e);
+                        );
                         response.set_error(e.into());
                     }
                     Ok((mut files, stat)) => {
@@ -685,7 +718,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 response.set_end_key(end_key);
 
                 if let Err(e) = tx.unbounded_send(response) {
-                    error!("backup failed to send response"; "error" => ?e);
+                    error!(?e; "backup failed to send response");
                     return;
                 }
             }
@@ -793,16 +826,23 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
     }
 }
 
-/// Construct an backup file name based on the given store id and region.
-/// A name consists with three parts: store id, region_id and a epoch version.
+/// Construct an backup file name based on the given store id, region, range start key and local unix timestamp.
+/// A name consists with five parts: store id, region_id, a epoch version, the hash of range start key and timestamp.
+/// range start key is used to keep the unique file name for file, to handle different tables exists on the same region.
+/// local unix timestamp is used to keep the unique file name for file, to handle receive the same request after connection reset.
 fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
+    let start = SystemTime::now();
+    let since_the_epoch = start
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards");
     match key {
         Some(k) => format!(
-            "{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}",
             store_id,
             region.get_id(),
             region.get_region_epoch().get_version(),
-            k
+            k,
+            since_the_epoch.as_millis()
         ),
         None => format!(
             "{}_{}_{}",
@@ -1004,7 +1044,8 @@ pub mod tests {
                         cancel: Arc::default(),
                         is_raw_kv: false,
                         cf: engine_traits::CF_DEFAULT,
-                        compress_type: CompressionType::Unknown,
+                        compression_type: CompressionType::Unknown,
+                        compression_level: 0,
                     },
                     resp: tx,
                 };
@@ -1099,8 +1140,6 @@ pub mod tests {
             req.set_start_version(0);
             req.set_end_version(ts.into_inner());
             let (tx, rx) = unbounded();
-            // Empty path should return an error.
-            Task::new(req.clone(), tx.clone()).unwrap_err();
 
             // Set an unique path to avoid AlreadyExists error.
             req.set_storage_backend(make_local_backend(&tmp.path().join(ts.to_string())));

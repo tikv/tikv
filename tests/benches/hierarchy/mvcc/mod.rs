@@ -3,7 +3,7 @@
 use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
-use tikv::storage::kv::Engine;
+use tikv::storage::kv::{Engine, WriteData};
 use tikv::storage::mvcc::{self, MvccReader, MvccTxn};
 use txn_types::{Key, Mutation, TimeStamp};
 
@@ -39,8 +39,8 @@ where
         )
         .unwrap();
     }
-    let modifies = txn.into_modifies();
-    let _ = engine.async_write(&ctx, modifies, Box::new(move |(_, _)| {}));
+    let write_data = WriteData::from_modifies(txn.into_modifies());
+    let _ = engine.async_write(&ctx, write_data, Box::new(move |(_, _)| {}));
     let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(&k)).collect();
     let snapshot = engine.snapshot(&ctx).unwrap();
     (snapshot, keys)

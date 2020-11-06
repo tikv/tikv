@@ -8,7 +8,7 @@ default = ["test-runner"]
 test-runner = ["derive_more"]
 
 [dependencies]
-crossbeam = "0.7"
+crossbeam = "0.8"
 tikv_util = { path = "../tikv_util" }
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"

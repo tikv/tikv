@@ -5,7 +5,8 @@ edition = "2018"
 publish = false
 
 [dependencies]
-hex = "0.4"
+error_code = { path = "../error_code" }
+log_wrappers = { path = "../log_wrappers" }
 protobuf = "2"
 quick-error = "1.2.2"
 tikv_alloc = { path = "../tikv_alloc" }

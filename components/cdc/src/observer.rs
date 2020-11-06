@@ -1,17 +1,29 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::ops::{Bound, Deref};
 use std::sync::{Arc, RwLock};
 
+use engine_rocks::RocksEngine;
+use engine_traits::{
+    IterOptions, KvEngine, ReadOptions, Snapshot, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    DATA_KEY_PREFIX_LEN,
+};
+use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
 use raftstore::store::fsm::ObserveID;
+use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
+use tikv::storage::{Cursor, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use tikv_util::collections::HashMap;
+use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
+use txn_types::{Key, Lock, MutationType, TimeStamp, TxnExtra, Value, WriteRef, WriteType};
 
 use crate::endpoint::{Deregister, Task};
-use crate::Error as CdcError;
+use crate::metrics::*;
+use crate::{Error as CdcError, Result};
 
 /// An Observer for CDC.
 ///
@@ -90,7 +102,7 @@ impl CdcObserver {
 
 impl Coprocessor for CdcObserver {}
 
-impl CmdObserver for CdcObserver {
+impl CmdObserver<RocksEngine> for CdcObserver {
     fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
         self.cmd_batches
             .borrow_mut()
@@ -105,11 +117,59 @@ impl CmdObserver for CdcObserver {
             .push(observe_id, region_id, cmd);
     }
 
-    fn on_flush_apply(&self) {
+    fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>, engine: RocksEngine) {
         fail_point!("before_cdc_flush_apply");
+        let mut txn_extra = TxnExtra::default();
+        txn_extras
+            .into_iter()
+            .for_each(|mut e| txn_extra.extend(&mut e));
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
-            if let Err(e) = self.sched.schedule(Task::MultiBatch { multi: batches }) {
+            let mut region = Region::default();
+            region.mut_peers().push(Peer::default());
+            // Create a snapshot here for preventing the old value was GC-ed.
+            let snapshot = RegionSnapshot::from_snapshot(engine.snapshot().into_sync(), region);
+            let mut reader = OldValueReader::new(snapshot);
+            let get_old_value = move |key, statistics: &mut Statistics| {
+                if let Some((old_value, mutation_type)) = txn_extra.mut_old_values().remove(&key) {
+                    match mutation_type {
+                        MutationType::Insert => {
+                            assert!(old_value.is_none());
+                            return None;
+                        }
+                        MutationType::Put | MutationType::Delete => {
+                            if let Some(old_value) = old_value {
+                                let start_ts = old_value.start_ts;
+                                return old_value.short_value.or_else(|| {
+                                    let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
+                                    let start = Instant::now();
+                                    let mut opts = ReadOptions::new();
+                                    opts.set_fill_cache(false);
+                                    let value = reader.get_value_default(&prev_key, statistics);
+                                    CDC_OLD_VALUE_DURATION_HISTOGRAM
+                                        .with_label_values(&["get"])
+                                        .observe(start.elapsed().as_secs_f64());
+                                    value
+                                });
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                // Cannot get old value from cache, seek for it in engine.
+                let start = Instant::now();
+                let value = reader
+                    .near_seek_old_value(&key, statistics)
+                    .unwrap_or_default();
+                CDC_OLD_VALUE_DURATION_HISTOGRAM
+                    .with_label_values(&["seek"])
+                    .observe(start.elapsed().as_secs_f64());
+                value
+            };
+            if let Err(e) = self.sched.schedule(Task::MultiBatch {
+                multi: batches,
+                old_value_cb: Box::new(get_old_value),
+            }) {
                 warn!("schedule cdc task failed"; "error" => ?e);
             }
         }
@@ -161,29 +221,138 @@ impl RegionChangeObserver for CdcObserver {
     }
 }
 
+struct OldValueReader<S: EngineSnapshot> {
+    snapshot: S,
+}
+
+impl<S: EngineSnapshot> OldValueReader<S> {
+    fn new(snapshot: S) -> Self {
+        Self { snapshot }
+    }
+
+    fn new_write_cursor(&self, key: &Key) -> Cursor<S::Iter> {
+        let mut iter_opts = IterOptions::default();
+        let ts = Key::decode_ts_from(key.as_encoded()).unwrap();
+        let upper = Key::from_encoded_slice(Key::truncate_ts_for(key.as_encoded()).unwrap())
+            .append_ts(TimeStamp::zero());
+        iter_opts.set_fill_cache(false);
+        iter_opts.set_hint_max_ts(Bound::Included(ts.into_inner()));
+        iter_opts.set_lower_bound(key.as_encoded(), DATA_KEY_PREFIX_LEN);
+        iter_opts.set_upper_bound(upper.as_encoded(), DATA_KEY_PREFIX_LEN);
+        self.snapshot
+            .iter_cf(CF_WRITE, iter_opts, ScanMode::Mixed)
+            .unwrap()
+    }
+
+    // return Some(vec![]) if value is empty.
+    // return None if key not exist.
+    fn get_value_default(&mut self, key: &Key, statistics: &mut Statistics) -> Option<Value> {
+        statistics.data.get += 1;
+        let mut opts = ReadOptions::new();
+        opts.set_fill_cache(false);
+        self.snapshot
+            .get_cf_opt(opts, CF_DEFAULT, &key)
+            .unwrap()
+            .map(|v| v.deref().to_vec())
+    }
+
+    fn check_lock(&mut self, key: &Key, statistics: &mut Statistics) -> bool {
+        statistics.lock.get += 1;
+        let mut opts = ReadOptions::new();
+        opts.set_fill_cache(false);
+        let key_slice = key.as_encoded();
+        let user_key = Key::from_encoded_slice(Key::truncate_ts_for(key_slice).unwrap());
+
+        match self.snapshot.get_cf_opt(opts, CF_LOCK, &user_key).unwrap() {
+            Some(v) => {
+                let lock = Lock::parse(v.deref()).unwrap();
+                lock.ts == Key::decode_ts_from(key_slice).unwrap()
+            }
+            None => false,
+        }
+    }
+
+    // return Some(vec![]) if value is empty.
+    // return None if key not exist.
+    fn near_seek_old_value(
+        &mut self,
+        key: &Key,
+        statistics: &mut Statistics,
+    ) -> Result<Option<Value>> {
+        let user_key = Key::truncate_ts_for(key.as_encoded()).unwrap();
+        let mut write_cursor = self.new_write_cursor(key);
+        if write_cursor.near_seek(key, &mut statistics.write)?
+            && Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key)
+        {
+            if write_cursor.key(&mut statistics.write) == key.as_encoded().as_slice() {
+                // Key was committed, move cursor to the next key to seek for old value.
+                if !write_cursor.next(&mut statistics.write) {
+                    // Do not has any next key, return empty value.
+                    return Ok(Some(Vec::default()));
+                }
+            } else if !self.check_lock(key, statistics) {
+                return Ok(None);
+            }
+
+            // Key was not committed, check if the lock is corresponding to the key.
+            let mut old_value = Some(Vec::default());
+            while Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
+                let write = WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
+                old_value = match write.write_type {
+                    WriteType::Put => match write.short_value {
+                        Some(short_value) => Some(short_value.to_vec()),
+                        None => {
+                            let key = key.clone().truncate_ts().unwrap().append_ts(write.start_ts);
+                            self.get_value_default(&key, statistics)
+                        }
+                    },
+                    WriteType::Delete => Some(Vec::default()),
+                    WriteType::Rollback | WriteType::Lock => {
+                        if !write_cursor.next(&mut statistics.write) {
+                            Some(Vec::default())
+                        } else {
+                            continue;
+                        }
+                    }
+                };
+                break;
+            }
+            Ok(old_value)
+        } else if self.check_lock(key, statistics) {
+            Ok(Some(Vec::default()))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine_rocks::RocksEngine;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::*;
     use std::time::Duration;
+    use tikv::storage::kv::TestEngineBuilder;
 
     #[test]
     fn test_register_and_deregister() {
         let (scheduler, rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
         let observe_id = ObserveID::new();
+        let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
-        observer.on_prepare_for_apply(observe_id, 0);
-        observer.on_apply_cmd(
+        <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(&observer, observe_id, 0);
+        <CdcObserver as CmdObserver<RocksEngine>>::on_apply_cmd(
+            &observer,
             observe_id,
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
-        observer.on_flush_apply();
+        observer.on_flush_apply(Vec::default(), RocksEngine::from_db(engine));
 
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
-            Task::MultiBatch { multi } => {
+            Task::MultiBatch { multi, .. } => {
                 assert_eq!(multi.len(), 1);
                 assert_eq!(multi[0].len(), 1);
             }

@@ -3,6 +3,53 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.8] - 2020-10-30
+
++ Improvements
+  + Add the **Fast-Tune** panel page to assist performance diagnostics [#8804](https://github.com/tikv/tikv/pull/8804)
+  + Add the `security.redact-info-log` configuration item, which redacts user data from logs [#8746](https://github.com/tikv/tikv/pull/8746)
+  + Reformat the metafile of error codes [#8877](https://github.com/tikv/tikv/pull/8877)
+  + Enable dynamically changing the `pessimistic-txn.pipelined` configuration [#8853](https://github.com/tikv/tikv/pull/8853)
+  + Enable the memory profiling features by default [#8801](https://github.com/tikv/tikv/pull/8801)
++ Bug Fixes
+  + Fix the bug that the mutex conflict in encryption causes pd-worker to process heartbeats slowly [#8869](https://github.com/tikv/tikv/pull/8869)
+  + Fix the issue that the memory profile is mistakenly generated [#8790](https://github.com/tikv/tikv/pull/8790)
+  + Fix the failure to back up databases on GCS when the storage class is specified [#8763](https://github.com/tikv/tikv/pull/8763)
+  + Fix the bug that a learner cannot find a leader when the Region is restarted or newly split [#8864](https://github.com/tikv/tikv/pull/8864)
+
+## [4.0.7] - 2020-09-29
+
++ Improvements
+  + Support the JSON log format [#8382](https://github.com/tikv/tikv/pull/8382)
++ Bug Fixes
+  + Fix the issue of unavailable Status API when TLS handshake fails [#8649](https://github.com/tikv/tikv/pull/8649)
+  + Fix the potential undefined behaviors [#7782](https://github.com/tikv/tikv/pull/7782)
+  + Fix the possible panic caused by generating snapshots when executing `UnsafeDestroyRange` [#8681](https://github.com/tikv/tikv/pull/8681)
+
+## [4.0.6] - 2020-09-15
+
++ Improvements
+  + Reduce QPS drop when `DropTable` or `TruncateTable` is being executed [#8627](https://github.com/tikv/tikv/pull/8627)
+  + Support generating metafile of error codes [#8619](https://github.com/tikv/tikv/pull/8619)
+  + Add performance statistics for cf scan detail [#8618](https://github.com/tikv/tikv/pull/8618)
+  + Add the `rocksdb perf context` panel in the Grafana default template [#8467](https://github.com/tikv/tikv/pull/8467)
++ Bug Fixes
+  + Fix the estimation error for a non-index column when collation is enabled [#8620](https://github.com/tikv/tikv/pull/8620)
+  + Fix the issue that Green GC might miss locks during the process of Region transfer [#8460](https://github.com/tikv/tikv/pull/8460)
+  + Fix a panic issue that occurs when TiKV runs very slowly during Raft membership change [#8497](https://github.com/tikv/tikv/pull/8497)
+  + Fix the deadlock issue that occurs between the PD client thread and other threads when calling PD sync requests [#8612](https://github.com/tikv/tikv/pull/8612)
+  + Upgrade jemalloc to v5.2.1 to address the issue of memory allocation in huge page [#8463](https://github.com/tikv/tikv/pull/8463)
+  + Fix the issue that the unified thread pool hangs for long-running queries [#8427](https://github.com/tikv/tikv/pull/8427)
+
+## [4.0.5] - 2020-08-28
+
++ New Features
+  + Define error code for errors [#8387](https://github.com/tikv/tikv/pull/8387)
++ Bug Fixes
+  + Speed up leader election when Hibernate Region is enabled [#8292](https://github.com/tikv/tikv/pull/8292)
+  + Fix the memory leak issue during scheduling [#8357](https://github.com/tikv/tikv/pull/8357)
+  + Add the `hibernate-timeout` configuration item to prevent the leader from becoming hibernate too fast [#8208](https://github.com/tikv/tikv/pull/8208)
+
 ## [4.0.3] - 2020-07-24
 
 + Improvements

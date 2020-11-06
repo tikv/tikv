@@ -43,6 +43,14 @@ else ifeq ($(SYSTEM_ALLOC),1)
 # no feature needed for system allocator
 else
 ENABLE_FEATURES += jemalloc
+
+# Only tested on Linux
+ifeq ($(shell uname -s),Linux)
+ENABLE_FEATURES += mem-profiling
+# According to jemalloc/jemalloc#585, enabling it on some platform or some
+# versions of glibc can cause deadlock.
+# export JEMALLOC_SYS_WITH_MALLOC_CONF = prof:true,prof_active:false
+endif
 endif
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
@@ -109,7 +117,7 @@ clean:
 ## Development builds
 ## ------------------
 
-all: format build test
+all: format build test error-code
 
 dev: format clippy
 	@env FAIL_POINT=1 make test
@@ -336,6 +344,9 @@ ctl:
 # per https://github.com/tikv/tikv/pull/3280
 expression: format clippy
 	RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" --no-default-features --package tidb_query "expr" -- --nocapture
+
+error-code:
+	cargo run --manifest-path components/error_code/Cargo.toml --features protobuf-codec
 
 # A special target for building TiKV docker image.
 .PHONY: docker

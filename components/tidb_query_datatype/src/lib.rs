@@ -7,6 +7,7 @@
 //! [tikv/src/coprocessor](https://github.com/tikv/tikv/blob/master/src/coprocessor/mod.rs).
 
 #![cfg_attr(test, feature(test))]
+#![feature(specialization)]
 
 #[macro_use]
 extern crate bitflags;
@@ -16,7 +17,7 @@ extern crate failure;
 extern crate tikv_alloc;
 
 pub mod builder;
-mod def;
+pub mod def;
 mod error;
 
 pub mod prelude {

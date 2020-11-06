@@ -18,8 +18,13 @@ use std::io;
 
 pub use lock::{Lock, LockType};
 pub use timestamp::{TimeStamp, TsSet};
-pub use types::{is_short_value, Key, KvPair, Mutation, Value, SHORT_VALUE_MAX_LEN};
+pub use types::{
+    is_short_value, Key, KvPair, Mutation, MutationType, OldValue, TxnExtra, Value,
+    SHORT_VALUE_MAX_LEN,
+};
 pub use write::{Write, WriteRef, WriteType};
+
+use error_code::{self, ErrorCode, ErrorCodeExt};
 
 quick_error! {
     #[derive(Debug)]
@@ -101,3 +106,15 @@ impl<T: Into<ErrorInner>> From<T> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Io(_) => error_code::storage::IO,
+            ErrorInner::Codec(e) => e.error_code(),
+            ErrorInner::BadFormatLock => error_code::storage::BAD_FORMAT_LOCK,
+            ErrorInner::BadFormatWrite => error_code::storage::BAD_FORMAT_WRITE,
+            ErrorInner::KeyIsLocked(_) => error_code::storage::KEY_IS_LOCKED,
+        }
+    }
+}

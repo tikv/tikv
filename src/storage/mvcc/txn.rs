@@ -1,13 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
+use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
 use crate::storage::types::TxnStatus;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::IsolationLevel;
+use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use std::fmt;
 use txn_types::{
-    is_short_value, Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteType,
+    is_short_value, Key, Lock, LockType, Mutation, MutationType, OldValue, TimeStamp, TxnExtra,
+    Value, Write, WriteType,
 };
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
@@ -41,9 +42,10 @@ pub struct MvccTxn<S: Snapshot> {
     reader: MvccReader<S>,
     start_ts: TimeStamp,
     write_size: usize,
-    writes: Vec<Modify>,
+    writes: WriteData,
     // collapse continuous rollbacks.
     collapse_rollback: bool,
+    pub extra_op: ExtraOp,
 }
 
 impl<S: Snapshot> MvccTxn<S> {
@@ -82,8 +84,9 @@ impl<S: Snapshot> MvccTxn<S> {
             reader,
             start_ts,
             write_size: 0,
-            writes: vec![],
+            writes: WriteData::default(),
             collapse_rollback: true,
+            extra_op: ExtraOp::Noop,
         }
     }
 
@@ -96,7 +99,11 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn into_modifies(self) -> Vec<Modify> {
-        self.writes
+        self.writes.modifies
+    }
+
+    pub fn take_extra(&mut self) -> TxnExtra {
+        std::mem::take(&mut self.writes.extra)
     }
 
     pub fn take_statistics(&mut self) -> Statistics {
@@ -112,39 +119,39 @@ impl<S: Snapshot> MvccTxn<S> {
     fn put_lock(&mut self, key: Key, lock: &Lock) {
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
         let released = ReleasedLock::new(&key, pessimistic);
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
         Some(released)
     }
 
     fn put_value(&mut self, key: Key, ts: TimeStamp, value: Value) {
         let write = Modify::Put(CF_DEFAULT, key.append_ts(ts), value);
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn delete_value(&mut self, key: Key, ts: TimeStamp) {
         let write = Modify::Delete(CF_DEFAULT, key.append_ts(ts));
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn put_write(&mut self, key: Key, ts: TimeStamp, value: Value) {
         let write = Modify::Put(CF_WRITE, key.append_ts(ts), value);
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn delete_write(&mut self, key: Key, ts: TimeStamp) {
         let write = Modify::Delete(CF_WRITE, key.append_ts(ts));
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
@@ -406,6 +413,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 "cannot handle checkNotExists in pessimistic prewrite"
             ));
         }
+        let mutation_type = mutation.mutation_type();
         let lock_type = LockType::from_mutation(&mutation);
         let (key, value) = mutation.into_key_value();
 
@@ -449,6 +457,7 @@ impl<S: Snapshot> MvccTxn<S> {
             self.amend_pessimistic_lock(pipelined_pessimistic_lock, &key)?;
         }
 
+        self.check_extra_op(&key, mutation_type, None)?;
         // No need to check data constraint, it's resolved by pessimistic locks.
         self.prewrite_key_value(
             key,
@@ -520,6 +529,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // For the insert/checkNotExists operation, the old key should not be in the system.
         let should_not_exist = mutation.should_not_exists();
         let should_not_write = mutation.should_not_write();
+        let mutation_type = mutation.mutation_type();
         let (key, value) = mutation.into_key_value();
 
         fail_point!("prewrite", |err| Err(make_txn_error(
@@ -529,30 +539,6 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        // Check whether there is a newer version.
-        if !skip_constraint_check {
-            if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
-                // Abort on writes after our start timestamp ...
-                // If exists a commit version whose commit timestamp is larger than or equal to
-                // current start timestamp, we should abort current prewrite, even if the commit
-                // type is Rollback.
-                if commit_ts >= self.start_ts {
-                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                    return Err(ErrorInner::WriteConflict {
-                        start_ts: self.start_ts,
-                        conflict_start_ts: write.start_ts,
-                        conflict_commit_ts: commit_ts,
-                        key: key.into_raw()?,
-                        primary: primary.to_vec(),
-                    }
-                    .into());
-                }
-                self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
-            }
-        }
-        if should_not_write {
-            return Ok(());
-        }
         // Check whether the current key is locked at any timestamp.
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
@@ -572,6 +558,36 @@ impl<S: Snapshot> MvccTxn<S> {
             return Ok(());
         }
 
+        let mut prev_write = None;
+        // Check whether there is a newer version.
+        if !skip_constraint_check {
+            if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
+                // Abort on writes after our start timestamp ...
+                // If exists a commit version whose commit timestamp is larger than or equal to
+                // current start timestamp, we should abort current prewrite, even if the commit
+                // type is Rollback.
+                if commit_ts >= self.start_ts {
+                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                    return Err(ErrorInner::WriteConflict {
+                        start_ts: self.start_ts,
+                        conflict_start_ts: write.start_ts,
+                        conflict_commit_ts: commit_ts,
+                        key: key.into_raw()?,
+                        primary: primary.to_vec(),
+                    }
+                    .into());
+                }
+                // Should check it when no lock exists, otherwise it can report error when there is
+                // a lock belonging to a committed transaction which deletes the key.
+                self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+                prev_write = Some(write);
+            }
+        }
+        if should_not_write {
+            return Ok(());
+        }
+
+        self.check_extra_op(&key, mutation_type, prev_write)?;
         self.prewrite_key_value(
             key,
             lock_type.unwrap(),
@@ -992,6 +1008,54 @@ impl<S: Snapshot> MvccTxn<S> {
             is_completed,
         })
     }
+
+    // Check and execute the extra operation.
+    // Currently we use it only for reading the old value for CDC.
+    fn check_extra_op(
+        &mut self,
+        key: &Key,
+        mutation_type: MutationType,
+        prev_write: Option<Write>,
+    ) -> Result<()> {
+        use crate::storage::mvcc::reader::seek_for_valid_write;
+
+        if self.extra_op == ExtraOp::ReadOldValue
+            && (mutation_type == MutationType::Put || mutation_type == MutationType::Delete)
+        {
+            let old_value = if let Some(w) = prev_write {
+                // If write is Rollback or Lock, seek for valid write record.
+                if w.write_type == WriteType::Rollback || w.write_type == WriteType::Lock {
+                    let write_cursor = self.reader.write_cursor.as_mut().unwrap();
+                    // Skip the current write record.
+                    write_cursor.next(&mut self.reader.statistics.write);
+                    let write = seek_for_valid_write(
+                        write_cursor,
+                        key,
+                        self.start_ts,
+                        &mut self.reader.statistics,
+                    )?;
+                    write.map(|w| OldValue {
+                        short_value: w.short_value,
+                        start_ts: w.start_ts,
+                    })
+                } else {
+                    Some(OldValue {
+                        short_value: w.short_value,
+                        start_ts: w.start_ts,
+                    })
+                }
+            } else {
+                None
+            };
+            // If write is None or cannot find a previously valid write record.
+            self.writes.extra.add_old_value(
+                key.clone().append_ts(self.start_ts),
+                old_value,
+                mutation_type,
+            );
+        }
+        Ok(())
+    }
 }
 
 impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
@@ -1196,11 +1260,31 @@ mod tests {
         must_prewrite_put(&engine, k1, v1, k1, 1);
         must_commit(&engine, k1, 1, 2);
 
+        fn expect_error<T, F>(x: Result<T>, err_matcher: F)
+        where
+            F: FnOnce(Error) + Send + 'static,
+        {
+            match x {
+                Err(e) => err_matcher(e),
+                _ => panic!("expect result to be an error"),
+            }
+        }
+
         // "k1" already exist, returns AlreadyExist error.
-        assert!(try_prewrite_insert(&engine, k1, v2, k1, 3).is_err());
+        expect_error(try_prewrite_insert(&engine, k1, v2, k1, 3), |e| match e {
+            Error(box ErrorInner::AlreadyExist { .. }) => (),
+            _ => panic!("unexpected error: {:?}", e),
+        });
 
         // Delete "k1"
         must_prewrite_delete(&engine, k1, k1, 4);
+
+        // There is a lock, returns KeyIsLocked error.
+        expect_error(try_prewrite_insert(&engine, k1, v2, k1, 6), |e| match e {
+            Error(box ErrorInner::KeyIsLocked(_)) => (),
+            _ => panic!("unexpected error: {:?}", e),
+        });
+
         must_commit(&engine, k1, 4, 5);
 
         // After delete "k1", insert returns ok.
@@ -1211,7 +1295,10 @@ mod tests {
         must_prewrite_put(&engine, k1, v3, k1, 8);
         must_rollback(&engine, k1, 8);
 
-        assert!(try_prewrite_insert(&engine, k1, v3, k1, 9).is_err());
+        expect_error(try_prewrite_insert(&engine, k1, v3, k1, 9), |e| match e {
+            Error(box ErrorInner::AlreadyExist { .. }) => (),
+            _ => panic!("unexpected error: {:?}", e),
+        });
 
         // Delete "k1" again
         must_prewrite_delete(&engine, k1, k1, 10);
@@ -1715,13 +1802,17 @@ mod tests {
         )
         .unwrap();
         assert!(txn.write_size() > 0);
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        engine
+            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
+            .unwrap();
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = new_txn!(snapshot, 10, true);
         txn.commit(key, 15.into()).unwrap();
         assert!(txn.write_size() > 0);
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        engine
+            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
+            .unwrap();
     }
 
     #[test]
@@ -2864,5 +2955,130 @@ mod tests {
         );
         must_pessimistic_locked(&engine, k, 75, 75);
         must_pessimistic_rollback(&engine, k, 75, 75);
+    }
+
+    #[test]
+    fn test_extra_op_old_value() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let key = Key::from_raw(b"key");
+        let ctx = Context::default();
+
+        let new_old_value = |short_value, start_ts| OldValue {
+            short_value,
+            start_ts,
+        };
+
+        let cases = vec![
+            (
+                Mutation::Put((key.clone(), b"v0".to_vec())),
+                false,
+                5,
+                5,
+                None,
+                true,
+            ),
+            (
+                Mutation::Put((key.clone(), b"v1".to_vec())),
+                false,
+                6,
+                6,
+                Some(new_old_value(Some(b"v0".to_vec()), 5.into())),
+                true,
+            ),
+            (Mutation::Lock(key.clone()), false, 7, 7, None, false),
+            (
+                Mutation::Lock(key.clone()),
+                false,
+                8,
+                8,
+                Some(new_old_value(Some(b"v1".to_vec()), 6.into())),
+                false,
+            ),
+            (
+                Mutation::Put((key.clone(), vec![b'0'; 5120])),
+                false,
+                9,
+                9,
+                Some(new_old_value(Some(b"v1".to_vec()), 6.into())),
+                true,
+            ),
+            (
+                Mutation::Put((key.clone(), b"v3".to_vec())),
+                false,
+                10,
+                10,
+                Some(new_old_value(None, 9.into())),
+                true,
+            ),
+            (
+                Mutation::Put((key.clone(), b"v4".to_vec())),
+                true,
+                11,
+                11,
+                None,
+                true,
+            ),
+        ];
+
+        let write = |modifies| {
+            engine.write(&ctx, modifies).unwrap();
+        };
+
+        let new_txn = |start_ts| {
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            MvccTxn::new(snapshot, start_ts, true)
+        };
+
+        for case in cases {
+            let (mutation, is_pessimistic, start_ts, commit_ts, old_value, check_old_value) = case;
+            let mutation_type = mutation.mutation_type();
+            let mut txn = new_txn(start_ts.into());
+            txn.extra_op = ExtraOp::ReadOldValue;
+            if is_pessimistic {
+                txn.acquire_pessimistic_lock(
+                    key.clone(),
+                    b"key",
+                    false,
+                    0,
+                    start_ts.into(),
+                    false,
+                    TimeStamp::zero(),
+                )
+                .unwrap();
+                write(WriteData::from_modifies(txn.into_modifies()));
+                txn = new_txn(start_ts.into());
+                txn.extra_op = ExtraOp::ReadOldValue;
+                txn.pessimistic_prewrite(
+                    mutation,
+                    b"key",
+                    true,
+                    0,
+                    start_ts.into(),
+                    0,
+                    TimeStamp::zero(),
+                    false,
+                )
+                .unwrap();
+            } else {
+                txn.prewrite(mutation, b"key", false, 0, 0, TimeStamp::default())
+                    .unwrap();
+            }
+            if check_old_value {
+                let extra = txn.take_extra();
+                let ts_key = key.clone().append_ts(start_ts.into());
+                assert!(
+                    extra.get_old_values().get(&ts_key).is_some(),
+                    "{}",
+                    start_ts
+                );
+                assert_eq!(extra.get_old_values()[&ts_key], (old_value, mutation_type));
+            }
+            write(WriteData::from_modifies(txn.into_modifies()));
+            let mut txn = new_txn(start_ts.into());
+            txn.commit(key.clone(), commit_ts.into()).unwrap();
+            engine
+                .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
+                .unwrap();
+        }
     }
 }

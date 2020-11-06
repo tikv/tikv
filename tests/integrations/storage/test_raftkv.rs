@@ -250,10 +250,7 @@ fn test_invalid_read_index_when_no_leader() {
 
     let resp = rx.recv_timeout(time::Duration::from_millis(500)).unwrap();
     assert!(
-        resp.get_header()
-            .get_error()
-            .get_message()
-            .contains("can not read index due to no leader"),
+        resp.get_header().get_error().has_not_leader(),
         "{:?}",
         resp.get_header()
     );
@@ -372,10 +369,10 @@ fn batch<E: Engine>(ctx: &Context, engine: &E) {
     engine
         .write(
             ctx,
-            vec![
+            WriteData::from_modifies(vec![
                 Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
                 Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
-            ],
+            ]),
         )
         .unwrap();
     assert_has(ctx, engine, b"x", b"1");
@@ -384,10 +381,10 @@ fn batch<E: Engine>(ctx: &Context, engine: &E) {
     engine
         .write(
             ctx,
-            vec![
+            WriteData::from_modifies(vec![
                 Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
                 Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
-            ],
+            ]),
         )
         .unwrap();
     assert_none(ctx, engine, b"y");
@@ -444,12 +441,12 @@ fn cf<E: Engine>(ctx: &Context, engine: &E) {
 }
 
 fn empty_write<E: Engine>(ctx: &Context, engine: &E) {
-    engine.write(ctx, vec![]).unwrap_err();
+    engine.write(ctx, WriteData::default()).unwrap_err();
 }
 
 fn wrong_context<E: Engine>(ctx: &Context, engine: &E) {
     let region_id = ctx.get_region_id();
     let mut ctx = ctx.to_owned();
     ctx.set_region_id(region_id + 1);
-    assert!(engine.write(&ctx, vec![]).is_err());
+    assert!(engine.write(&ctx, WriteData::default()).is_err());
 }

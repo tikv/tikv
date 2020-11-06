@@ -400,9 +400,9 @@ pub fn compact_files_in_range_cf(
 
     let mut opts = CompactionOptions::new();
     opts.set_compression(output_compression);
-    let max_subcompactions = SysQuota::new().cpu_cores_quota();
-    let max_subcompactions = cmp::min(max_subcompactions, 32);
-    opts.set_max_subcompactions(max_subcompactions as i32);
+    let max_subcompactions = SysQuota::new().cpu_cores_quota() as i32;
+    let max_subcompactions = cmp::min(cmp::max(max_subcompactions, 1), 32);
+    opts.set_max_subcompactions(max_subcompactions);
     opts.set_output_file_size_limit(output_file_size_limit);
     db.compact_files_cf(cf, &opts, &input_files, output_level)?;
 

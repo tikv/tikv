@@ -31,6 +31,10 @@ impl RocksDBOptions {
     pub fn into_raw(self) -> RawDBOptions {
         self.0
     }
+
+    pub fn get_max_background_flushes(&self) -> i32 {
+        self.0.get_max_background_flushes()
+    }
 }
 
 impl DBOptions for RocksDBOptions {
@@ -42,6 +46,16 @@ impl DBOptions for RocksDBOptions {
 
     fn get_max_background_jobs(&self) -> i32 {
         self.0.get_max_background_jobs()
+    }
+
+    fn get_rate_bytes_per_sec(&self) -> Option<i64> {
+        self.0.get_rate_bytes_per_sec()
+    }
+
+    fn set_rate_bytes_per_sec(&mut self, rate_bytes_per_sec: i64) -> Result<()> {
+        self.0
+            .set_rate_bytes_per_sec(rate_bytes_per_sec)
+            .map_err(|e| box_err!(e))
     }
 
     fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {

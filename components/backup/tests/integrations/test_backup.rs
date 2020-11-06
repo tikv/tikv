@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fs::File;
 use std::path::Path;
 use std::sync::*;
 use std::thread;
@@ -586,8 +587,17 @@ fn test_backup_rawkv() {
         &tmp.path().join(format!("{}", backup_ts.next().next())),
     );
     let resps3 = block_on(rx.collect::<Vec<_>>());
-    assert_eq!(files1, resps3[0].files);
+    let files3 = resps3[0].files.clone();
 
+    // After https://github.com/tikv/tikv/pull/8707 merged.
+    // the backup file name will based on local timestamp.
+    // so the two backup's file name may not be same, we should skip this check.
+    assert_eq!(files1.len(), 1);
+    assert_eq!(files3.len(), 1);
+    assert_eq!(files1[0].sha256, files3[0].sha256);
+    assert_eq!(files1[0].total_bytes, files3[0].total_bytes);
+    assert_eq!(files1[0].total_kvs, files3[0].total_kvs);
+    assert_eq!(files1[0].size, files3[0].size);
     suite.stop();
 }
 
@@ -637,6 +647,37 @@ fn test_backup_raw_meta() {
     assert_eq!(checksum, admin_checksum);
     assert_eq!(total_size, 1611);
     // please update this number (must be > 0) when the test failed
+
+    suite.stop();
+}
+
+#[test]
+fn test_invalid_external_storage() {
+    let mut suite = TestSuite::new(1);
+
+    // Set backup directory read-only. TiKV will fail to open external storage.
+    let tmp = Builder::new().tempdir().unwrap();
+    let f = File::open(&tmp.path()).unwrap();
+    let mut perms = f.metadata().unwrap().permissions();
+    perms.set_readonly(true);
+    f.set_permissions(perms.clone()).unwrap();
+
+    let backup_ts = suite.alloc_ts();
+    let storage_path = tmp.path();
+    let rx = suite.backup(
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
+        backup_ts,
+        &storage_path,
+    );
+
+    // Wait util the backup request is handled.
+    let resps = block_on(rx.collect::<Vec<_>>());
+    assert!(resps[0].has_error());
+
+    perms.set_readonly(false);
+    f.set_permissions(perms).unwrap();
 
     suite.stop();
 }

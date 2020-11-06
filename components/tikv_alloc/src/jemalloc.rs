@@ -2,14 +2,14 @@
 
 use super::error::{ProfError, ProfResult};
 use crate::AllocStats;
-use jemalloc_ctl::{stats, Epoch as JeEpoch};
-use jemallocator::ffi::malloc_stats_print;
 use libc::{self, c_char, c_void};
-use std::{io, ptr, slice};
+use std::{ptr, slice};
+use tikv_jemalloc_ctl::{epoch, stats, Error};
+use tikv_jemalloc_sys::malloc_stats_print;
 
-pub type Allocator = jemallocator::Jemalloc;
+pub type Allocator = tikv_jemallocator::Jemalloc;
 pub const fn allocator() -> Allocator {
-    jemallocator::Jemalloc
+    tikv_jemallocator::Jemalloc
 }
 
 pub use self::profiling::{activate_prof, deactivate_prof, dump_prof};
@@ -18,7 +18,7 @@ pub fn dump_stats() -> String {
     let mut buf = Vec::with_capacity(1024);
     unsafe {
         malloc_stats_print(
-            write_cb,
+            Some(write_cb),
             &mut buf as *mut Vec<u8> as *mut c_void,
             ptr::null(),
         )
@@ -26,22 +26,25 @@ pub fn dump_stats() -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
-pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
+pub fn fetch_stats() -> Result<Option<AllocStats>, Error> {
     // Stats are cached. Need to advance epoch to refresh.
-    JeEpoch::new()?.advance()?;
+    epoch::advance()?;
 
     Ok(Some(vec![
-        ("allocated", stats::allocated()?),
-        ("active", stats::active()?),
-        ("metadata", stats::metadata()?),
-        ("resident", stats::resident()?),
-        ("mapped", stats::mapped()?),
-        ("retained", stats::retained()?),
+        ("allocated", stats::allocated::read()?),
+        ("active", stats::active::read()?),
+        ("metadata", stats::metadata::read()?),
+        ("resident", stats::resident::read()?),
+        ("mapped", stats::mapped::read()?),
+        ("retained", stats::retained::read()?),
         (
             "dirty",
-            stats::resident()? - stats::active()? - stats::metadata()?,
+            stats::resident::read()? - stats::active::read()? - stats::metadata::read()?,
         ),
-        ("fragmentation", stats::active()? - stats::allocated()?),
+        (
+            "fragmentation",
+            stats::active::read()? - stats::allocated::read()?,
+        ),
     ]))
 }
 
@@ -70,21 +73,23 @@ mod tests {
 mod profiling {
     use std::ffi::CString;
 
-    use jemallocator;
     use libc::c_char;
 
     use super::{ProfError, ProfResult};
 
     // C string should end with a '\0'.
-    const PROF_ACTIVE: &'static [u8] = b"prof.active\0";
-    const PROF_DUMP: &'static [u8] = b"prof.dump\0";
+    const PROF_ACTIVE: &[u8] = b"prof.active\0";
+    const PROF_DUMP: &[u8] = b"prof.dump\0";
 
     pub fn activate_prof() -> ProfResult<()> {
         info!("start profiler");
         unsafe {
-            if let Err(e) = jemallocator::mallctl_set(PROF_ACTIVE, true) {
+            if let Err(e) = tikv_jemalloc_ctl::raw::update(PROF_ACTIVE, true) {
                 error!("failed to activate profiling: {}", e);
-                return Err(ProfError::JemallocError(e));
+                return Err(ProfError::JemallocError(format!(
+                    "failed to activate profiling: {}",
+                    e
+                )));
             }
         }
         Ok(())
@@ -93,9 +98,12 @@ mod profiling {
     pub fn deactivate_prof() -> ProfResult<()> {
         info!("stop profiler");
         unsafe {
-            if let Err(e) = jemallocator::mallctl_set(PROF_ACTIVE, false) {
+            if let Err(e) = tikv_jemalloc_ctl::raw::update(PROF_ACTIVE, false) {
                 error!("failed to deactivate profiling: {}", e);
-                return Err(ProfError::JemallocError(e));
+                return Err(ProfError::JemallocError(format!(
+                    "failed to deactivate profiling: {}",
+                    e
+                )));
             }
         }
         Ok(())
@@ -105,11 +113,14 @@ mod profiling {
     pub fn dump_prof(path: &str) -> ProfResult<()> {
         let mut bytes = CString::new(path)?.into_bytes_with_nul();
         let ptr = bytes.as_mut_ptr() as *mut c_char;
-        let res = unsafe { jemallocator::mallctl_set(PROF_DUMP, ptr) };
+        let res = unsafe { tikv_jemalloc_ctl::raw::write(PROF_DUMP, ptr) };
         match res {
             Err(e) => {
                 error!("failed to dump the profile to {:?}: {}", path, e);
-                Err(ProfError::JemallocError(e))
+                Err(ProfError::JemallocError(format!(
+                    "failed to dump the profile to {:?}: {}",
+                    path, e
+                )))
             }
             Ok(_) => {
                 info!("dump profile to {}", path);
@@ -120,21 +131,18 @@ mod profiling {
 
     #[cfg(test)]
     mod tests {
-        use jemallocator;
         use std::fs;
         use tempfile::Builder;
 
-        const OPT_PROF: &'static [u8] = b"opt.prof\0";
+        const OPT_PROF: &[u8] = b"opt.prof\0";
 
         fn is_profiling_on() -> bool {
-            let mut prof = false;
-            let res = unsafe { jemallocator::mallctl_fetch(OPT_PROF, &mut prof) };
-            match res {
+            match unsafe { tikv_jemalloc_ctl::raw::read(OPT_PROF) } {
                 Err(e) => {
                     // Shouldn't be possible since mem-profiling is set
                     panic!("is_profiling_on: {:?}", e);
                 }
-                Ok(_) => prof,
+                Ok(prof) => prof,
             }
         }
 

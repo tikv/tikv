@@ -76,7 +76,7 @@ impl Backup for Service {
         ctx.spawn(
             send_resp
                 .map(|_s /* the sink */| {
-                    info!("backup send half closed");
+                    info!("backup closed");
                 })
                 .map_err(move |e| {
                     if let Some(c) = cancel {

@@ -5,8 +5,8 @@ mod forward;
 
 use engine::IterOption;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, TimeStamp, TsSet, Value};
+use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
+use txn_types::{Key, TimeStamp, TsSet, Value, Write, WriteRef, WriteType};
 
 use self::backward::BackwardKvScanner;
 use self::forward::{
@@ -147,7 +147,11 @@ impl<S: Snapshot> ScannerBuilder<S> {
         ))
     }
 
-    pub fn build_delta_scanner(mut self, from_ts: TimeStamp) -> Result<DeltaScanner<S>> {
+    pub fn build_delta_scanner(
+        mut self,
+        from_ts: TimeStamp,
+        extra_op: ExtraOp,
+    ) -> Result<DeltaScanner<S>> {
         let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
         // Note: Create a default cf cursor will take key range, so we need to
@@ -160,7 +164,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
             lock_cursor,
             write_cursor,
             Some(default_cursor),
-            DeltaEntryPolicy::new(from_ts),
+            DeltaEntryPolicy::new(from_ts, extra_op),
         ))
     }
 }
@@ -358,6 +362,70 @@ pub fn has_data_in_range<S: Snapshot>(
         }
     }
     Ok(false)
+}
+
+/// Seek for the next valid (write type == Put or Delete) write record.
+/// The write cursor must indicate a data key of the user key of which ts >= after_ts.
+/// Return None if cannot find any valid write record.
+pub fn seek_for_valid_write<I>(
+    write_cursor: &mut Cursor<I>,
+    user_key: &Key,
+    after_ts: TimeStamp,
+    statistics: &mut Statistics,
+) -> Result<Option<Write>>
+where
+    I: Iterator,
+{
+    let mut ret = None;
+    while write_cursor.valid()?
+        && Key::is_user_key_eq(
+            write_cursor.key(&mut statistics.write),
+            user_key.as_encoded(),
+        )
+    {
+        assert_ge!(
+            after_ts,
+            Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
+        );
+        let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
+        match write_ref.write_type {
+            WriteType::Put | WriteType::Delete => {
+                ret = Some(write_ref.to_owned());
+                break;
+            }
+            WriteType::Lock | WriteType::Rollback => {
+                // Move to the next write record.
+                write_cursor.next(&mut statistics.write);
+            }
+        }
+    }
+    Ok(ret)
+}
+
+/// Seek for the last written value.
+/// The write cursor must indicate a data key of the user key of which ts >= after_ts.
+/// Return None if cannot find any valid write record or found a delete record.
+pub fn seek_for_valid_value<I>(
+    write_cursor: &mut Cursor<I>,
+    default_cursor: &mut Cursor<I>,
+    user_key: &Key,
+    after_ts: TimeStamp,
+    statistics: &mut Statistics,
+) -> Result<Option<Value>>
+where
+    I: Iterator,
+{
+    if let Some(write) = seek_for_valid_write(write_cursor, user_key, after_ts, statistics)? {
+        if write.write_type == WriteType::Put {
+            let value = if let Some(v) = write.short_value {
+                v
+            } else {
+                near_load_data_by_write(default_cursor, user_key, write.start_ts, statistics)?
+            };
+            return Ok(Some(value));
+        }
+    };
+    Ok(None)
 }
 
 #[cfg(test)]

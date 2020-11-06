@@ -4,7 +4,7 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 
-use engine_traits::MAX_DELETE_BATCH_SIZE;
+use engine_traits::MAX_DELETE_BATCH_COUNT;
 use engine_traits::{KvEngine, Mutable, WriteBatch};
 use tikv_util::worker::Runnable;
 
@@ -74,7 +74,7 @@ impl Runner {
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
             box_try!(raft_wb.delete(&key));
-            if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
+            if raft_wb.count() >= MAX_DELETE_BATCH_COUNT {
                 // Avoid large write batch to reduce latency.
                 raft_engine.write(&raft_wb).unwrap();
                 raft_wb.clear();

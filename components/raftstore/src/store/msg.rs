@@ -6,12 +6,14 @@ use std::time::Instant;
 use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use kvproto::import_sstpb::SstMeta;
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
+use txn_types::TxnExtra;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
@@ -27,6 +29,7 @@ use super::RegionSnapshot;
 pub struct ReadResponse<E: KvEngine> {
     pub response: RaftCmdResponse,
     pub snapshot: Option<RegionSnapshot<E>>,
+    pub txn_extra_op: TxnExtraOp,
 }
 
 #[derive(Debug)]
@@ -62,6 +65,7 @@ where
                 let resp = ReadResponse {
                     response: resp,
                     snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
                 };
                 read(resp);
             }
@@ -123,6 +127,17 @@ impl PeerTicks {
             PeerTicks::CHECK_PEER_STALE_STATE => "check_peer_stale_state",
             _ => unreachable!(),
         }
+    }
+    pub fn get_all_ticks() -> &'static [PeerTicks] {
+        const TICKS: &[PeerTicks] = &[
+            PeerTicks::RAFT,
+            PeerTicks::RAFT_LOG_GC,
+            PeerTicks::SPLIT_REGION_CHECK,
+            PeerTicks::PD_HEARTBEAT,
+            PeerTicks::CHECK_MERGE,
+            PeerTicks::CHECK_PEER_STALE_STATE,
+        ];
+        TICKS
     }
 }
 
@@ -235,6 +250,12 @@ pub enum CasualMessage<E: KvEngine> {
 
     /// A message to access peer's internal state.
     AccessPeer(Box<dyn FnOnce(&mut PeerFsm<E>) + Send + 'static>),
+
+    /// Region info from PD
+    QueryRegionLeaderResp {
+        region: metapb::Region,
+        leader: metapb::Peer,
+    },
 }
 
 impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
@@ -273,6 +294,7 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
+            CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
         }
     }
 }
@@ -284,16 +306,26 @@ pub struct RaftCommand<E: KvEngine> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<E>,
+    pub txn_extra: TxnExtra,
 }
 
 impl<E: KvEngine> RaftCommand<E> {
     #[inline]
-    pub fn new(request: RaftCmdRequest, callback: Callback<E>) -> RaftCommand<E> {
+    pub fn with_txn_extra(
+        request: RaftCmdRequest,
+        callback: Callback<E>,
+        txn_extra: TxnExtra,
+    ) -> RaftCommand<E> {
         RaftCommand {
             request,
             callback,
+            txn_extra,
             send_time: Instant::now(),
         }
+    }
+
+    pub fn new(request: RaftCmdRequest, callback: Callback<E>) -> RaftCommand<E> {
+        Self::with_txn_extra(request, callback, TxnExtra::default())
     }
 }
 

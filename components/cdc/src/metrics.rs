@@ -36,4 +36,17 @@ lazy_static! {
         "Total number of CDC captured regions"
     )
     .unwrap();
+    pub static ref CDC_OLD_VALUE_SCAN_DETAILS: IntCounterVec = register_int_counter_vec!(
+        "tikv_cdc_old_value_scan_details",
+        "Bucketed counter of scan details for old value",
+        &["cf", "tag"]
+    )
+    .unwrap();
+    pub static ref CDC_OLD_VALUE_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
+        "tikv_cdc_old_value_duration",
+        "Bucketed histogram of cdc old value scan duration",
+        &["tag"],
+        exponential_buckets(0.0001, 2.0, 20).unwrap()
+    )
+    .unwrap();
 }

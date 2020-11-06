@@ -8,9 +8,12 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
+use crossbeam::atomic::AtomicCell;
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{KvEngine, Peekable, Snapshot, WriteBatchExt, WriteOptions};
+use error_code::ErrorCodeExt;
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -29,6 +32,7 @@ use raft::{
     NO_LIMIT,
 };
 use time::Timespec;
+use txn_types::TxnExtra;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -75,6 +79,7 @@ pub struct ProposalMeta {
     pub term: u64,
     /// `renew_lease_time` contains the last time when a peer starts to renew lease.
     pub renew_lease_time: Option<Timespec>,
+    pub txn_extra: TxnExtra,
 }
 
 #[derive(Default)]
@@ -255,6 +260,8 @@ pub struct Peer {
     /// Send to these peers to check whether itself is stale.
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
+
+    pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 }
 
 impl Peer {
@@ -336,6 +343,7 @@ impl Peer {
             bcast_wake_up_time: None,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -425,13 +433,8 @@ impl Peer {
             );
             return None;
         }
-        // If initialized is false, it implicitly means apply fsm does not exist now.
-        let initialized = self.get_store().is_initialized();
-        // If async_remove is true, it means peer fsm needs to be removed after its
-        // corresponding apply fsm was removed.
-        // If it is false, it means either apply fsm does not exist or there is no task
-        // in apply fsm so it's ok to remove peer fsm immediately.
-        let async_remove = if self.is_applying_snapshot() {
+
+        if self.is_applying_snapshot() {
             if !self.mut_store().cancel_applying_snap() {
                 info!(
                     "stale peer is applying snapshot, will destroy next time";
@@ -440,16 +443,12 @@ impl Peer {
                 );
                 return None;
             }
-            // There is no tasks in apply/local read worker.
-            false
-        } else {
-            initialized
-        };
+        }
+
         self.pending_remove = true;
 
         Some(DestroyPeerJob {
-            async_remove,
-            initialized,
+            initialized: self.get_store().is_initialized(),
             region_id: self.region_id,
             peer: self.peer.clone(),
         })
@@ -490,11 +489,10 @@ impl Peer {
             // If we meet panic when deleting data and raft log, the dirty data
             // will be cleared by a newer snapshot applying or restart.
             if let Err(e) = self.get_store().clear_data() {
-                error!(
+                error!(?e;
                     "failed to schedule clear data task";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
-                    "err" => ?e,
                 );
             }
         }
@@ -1741,6 +1739,7 @@ impl Peer {
         cb: Callback<RocksEngine>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
+        txn_extra: TxnExtra,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -1786,6 +1785,7 @@ impl Peer {
                 let meta = ProposalMeta {
                     index: idx,
                     term: self.term(),
+                    txn_extra,
                     renew_lease_time: None,
                 };
                 self.post_propose(ctx, meta, is_conf_change, cb);
@@ -1808,7 +1808,13 @@ impl Peer {
         meta.renew_lease_time = poll_ctx.current_time;
 
         if !cb.is_none() {
-            let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
+            let p = Proposal::new(
+                is_conf_change,
+                meta.index,
+                meta.term,
+                cb,
+                meta.txn_extra.clone(),
+            );
             self.apply_proposals.push(p);
         }
 
@@ -2107,21 +2113,29 @@ impl Peer {
         // cause a long time waiting for a read response. Then we should return an error directly
         // in this situation.
         if !self.is_leader() && self.leader_id() == INVALID_ID {
-            cmd_resp::bind_error(
-                &mut err_resp,
-                box_err!("{} can not read index due to no leader", self.tag),
-            );
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             // The leader may be hibernated, send a message for trying to awaken the leader.
-            if poll_ctx.cfg.hibernate_regions
-                && (self.bcast_wake_up_time.is_none()
-                    || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
-                        >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL))
+            if self.bcast_wake_up_time.is_none()
+                || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
+                    >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL)
             {
                 self.bcast_wake_up_message(poll_ctx);
                 self.bcast_wake_up_time = Some(UtilInstant::now_coarse());
+
+                let task = PdTask::QueryRegionLeader {
+                    region_id: self.region_id,
+                };
+                if let Err(e) = poll_ctx.pd_scheduler.schedule(task) {
+                    error!(
+                        "failed to notify pd";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer_id(),
+                        "err" => %e,
+                    )
+                }
             }
             self.should_wake_up = true;
+            cmd_resp::bind_error(&mut err_resp, Error::NotLeader(self.region_id, None));
             cb.invoke_with_response(err_resp);
             return false;
         }
@@ -2168,6 +2182,7 @@ impl Peer {
                 let meta = ProposalMeta {
                     index,
                     term: self.term(),
+                    txn_extra: TxnExtra::default(),
                     renew_lease_time: Some(renew_lease_time),
                 };
                 self.post_propose(poll_ctx, meta, false, Callback::None);
@@ -2316,6 +2331,7 @@ impl Peer {
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
                 return Err(e);
             }
@@ -2520,6 +2536,7 @@ impl Peer {
             false, /* we don't need snapshot time */
         )
         .execute(&req, self.region(), read_index);
+        resp.txn_extra_op = self.txn_extra_op.load();
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -2661,6 +2678,7 @@ impl Peer {
                 "target_peer_id" => to_peer_id,
                 "target_store_id" => to_store_id,
                 "err" => ?e,
+                "error_code" => %e.error_code(),
             );
             if to_peer_id == self.leader_id() {
                 self.leader_unreachable = true;
@@ -2679,25 +2697,32 @@ impl Peer {
             if peer.get_id() == self.peer_id() {
                 continue;
             }
-            let mut send_msg = RaftMessage::default();
-            send_msg.set_region_id(self.region_id);
-            send_msg.set_from_peer(self.peer.clone());
-            send_msg.set_region_epoch(self.region().get_region_epoch().clone());
-            send_msg.set_to_peer(peer.clone());
-            let extra_msg = send_msg.mut_extra_msg();
-            extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-            if let Err(e) = ctx.trans.send(send_msg) {
-                error!(
-                    "failed to send wake up message";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                    "target_peer_id" => peer.get_id(),
-                    "target_store_id" => peer.get_store_id(),
-                    "err" => ?e,
-                );
-            } else {
-                ctx.need_flush_trans = true;
-            }
+            self.send_wake_up_message(ctx, peer);
+        }
+    }
+
+    pub fn send_wake_up_message<T: Transport, C>(
+        &self,
+        ctx: &mut PollContext<T, C>,
+        peer: &metapb::Peer,
+    ) {
+        let mut send_msg = RaftMessage::default();
+        send_msg.set_region_id(self.region_id);
+        send_msg.set_from_peer(self.peer.clone());
+        send_msg.set_region_epoch(self.region().get_region_epoch().clone());
+        send_msg.set_to_peer(peer.clone());
+        let extra_msg = send_msg.mut_extra_msg();
+        extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
+        if let Err(e) = ctx.trans.send(send_msg) {
+            error!(?e;
+                "failed to send wake up message";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "target_peer_id" => peer.get_id(),
+                "target_store_id" => peer.get_store_id(),
+            );
+        } else {
+            ctx.need_flush_trans = true;
         }
     }
 
@@ -2718,13 +2743,12 @@ impl Peer {
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgCheckStalePeer);
             if let Err(e) = ctx.trans.send(send_msg) {
-                error!(
+                error!(?e;
                     "failed to send check stale peer message";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
-                    "err" => ?e,
                 );
             } else {
                 ctx.need_flush_trans = true;
@@ -2769,13 +2793,12 @@ impl Peer {
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_premerge_commit(premerge_commit);
         if let Err(e) = ctx.trans.send(send_msg) {
-            error!(
+            error!(?e;
                 "failed to send want rollback merge message";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "target_peer_id" => to_peer.get_id(),
                 "target_store_id" => to_peer.get_store_id(),
-                "err" => ?e
             );
         } else {
             ctx.need_flush_trans = true;
@@ -2987,6 +3010,7 @@ where
                 return ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
                 };
             }
         }
@@ -3008,6 +3032,7 @@ where
                         return ReadResponse {
                             response: cmd_resp::new_error(e),
                             snapshot: None,
+                            txn_extra_op: TxnExtraOp::Noop,
                         };
                     }
                 },
@@ -3047,7 +3072,11 @@ where
         } else {
             None
         };
-        ReadResponse { response, snapshot }
+        ReadResponse {
+            response,
+            snapshot,
+            txn_extra_op: TxnExtraOp::Noop,
+        }
     }
 }
 

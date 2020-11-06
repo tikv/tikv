@@ -355,6 +355,52 @@ fn test_read_after_cleanup_range_for_snap() {
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
+/// Tests the learner of new split region will know its leader without waiting for the leader heartbeat timeout.
+/// The learner of a new split region may not know its leader if it applies log slowly and drops the no-op
+/// entry from the new leader, and it had to wait for a heartbeat timeout to know its leader before that it
+/// can't handle any read request.
+#[test]
+fn test_new_split_learner_can_not_find_leader() {
+    let mut cluster = new_node_cluster(0, 4);
+    configure_for_lease_read(&mut cluster, Some(5000), None);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k5", b"v5");
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_learner_peer(3, 3));
+    pd_client.must_add_peer(region_id, new_peer(4, 4));
+    for id in 1..=4 {
+        must_get_equal(&cluster.get_engine(id), b"k5", b"v5");
+    }
+
+    fail::cfg("apply_before_split_1_3", "pause").unwrap();
+
+    let region = cluster.get_region(b"k3");
+    cluster.must_split(&region, b"k3");
+
+    // This `put` will not inform learner leadership because the The learner is paused at apply split command,
+    // so the learner peer of the new split region is not create yet. Also, the leader will not send another
+    // append request before the previous one response as all peer is initiated with the `Probe` mod
+    cluster.must_put(b"k2", b"v2");
+    assert_eq!(cluster.get(b"k2"), Some(b"v2".to_vec()));
+
+    fail::remove("apply_before_split_1_3");
+
+    // Wait learner split
+    thread::sleep(Duration::from_millis(500));
+
+    let new_region = cluster.get_region(b"k2");
+    let learner_peer = find_peer(&new_region, 3).unwrap().clone();
+    let resp_ch = async_read_on_peer(&mut cluster, learner_peer, new_region, b"k2", true, true);
+    let resp = resp_ch.recv_timeout(Duration::from_secs(3)).unwrap();
+    let exp_value = resp.get_responses()[0].get_get().get_value();
+    assert_eq!(exp_value, b"v2");
+}
+
 fn must_truncated_to(engine: Arc<DB>, region_id: u64, index: u64) {
     for _ in 1..300 {
         let apply_state: RaftApplyState = engine

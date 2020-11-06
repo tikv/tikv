@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+#![feature(specialization)]
 
-#[macro_use]
-extern crate slog_global;
 #[macro_use]
 extern crate failure;
 #[macro_use]
@@ -16,6 +15,7 @@ mod crypter;
 mod encrypted_file;
 mod errors;
 mod io;
+mod log_file;
 mod manager;
 mod master_key;
 mod metrics;

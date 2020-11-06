@@ -3,7 +3,7 @@
 //! Type definitions
 
 mod eval_type;
-mod field_type;
+pub mod field_type;
 
 pub use self::eval_type::EvalType;
 pub use self::field_type::{Collation, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};

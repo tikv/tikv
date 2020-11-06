@@ -13,6 +13,9 @@
 ## If it is not set, logs will be appended to stderr.
 # log-file = ""
 
+## Log format, one of json, text. Default to text.
+# log-format = "text"
+
 ## File to store slow logs.
 ## If "log-file" is set, but this is not set, the slow logs will be appeneded
 ## to "log-file". If both "log-file" and "slow-log-file" are not set, all logs
@@ -354,15 +357,16 @@
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
 ## The background tasks include compaction and flush. For detailed information why RocksDB needs to
-## do compaction, see RocksDB-related materials. RocksDB will adjust flush and compaction threads
-## according to the formula:
-##   max_flushes = max_flushes = max(1, max_background_jobs / 4)
-##   max_compactions = max(1, max_background_jobs - max_flushes)
-## When write traffic (like the importing data size)  is big, it is recommended to enable more
-## threads. But set the number of the enabled threads  smaller than that of CPU cores. For example,
+## do compaction, see RocksDB-related materials.
+## When write traffic (like the importing data size) is big, it is recommended to enable more
+## threads. But set the number of the enabled threads smaller than that of CPU cores. For example,
 ## when importing data, for a machine with a 32-core CPU, set the value to 28.
 ## The default value is set to 8 or CPU_NUM - 1, whichever is smaller.
 # max-background-jobs = 8
+
+## Maximum number of threads of RocksDB background memtable flush jobs.
+## The default value is set to 2 or max_background_jobs / 4, whichever is bigger.
+# max-background-flushes = 2
 
 ## Represents the maximum number of threads that will concurrently perform a sub-compaction job by
 ## breaking it into multiple, smaller ones running simultaneously.
@@ -778,6 +782,11 @@
 # cert-path = ""
 # key-path = ""
 # cert-allowed-cn = []
+#
+## Avoid outputing data (e.g. user keys) to info log. It currently does not avoid printing
+## user data altogether, but greatly reduce those logs.
+## Default is false.
+# redact-info-log = false
 
 # Configurations for encryption at rest. Experimental.
 [security.encryption]

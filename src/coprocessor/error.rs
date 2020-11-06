@@ -5,6 +5,8 @@ use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
+
 #[derive(Fail, Debug)]
 pub enum Error {
     #[fail(display = "Region error (will back off and retry) {:?}", _0)]
@@ -97,4 +99,28 @@ impl From<tikv_util::deadline::DeadlineError> for Error {
     }
 }
 
+impl From<tidb_query_datatype::DataTypeError> for Error {
+    fn from(err: tidb_query_datatype::DataTypeError) -> Self {
+        Error::Other(err.to_string())
+    }
+}
+
+impl From<tidb_query::codec::Error> for Error {
+    fn from(err: tidb_query::codec::Error) -> Self {
+        Error::Other(err.to_string())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::Region(e) => e.error_code(),
+            Error::Locked(_) => error_code::coprocessor::LOCKED,
+            Error::DeadlineExceeded => error_code::coprocessor::DEADLINE_EXCEEDED,
+            Error::MaxPendingTasksExceeded => error_code::coprocessor::MAX_PENDING_TASKS_EXCEEDED,
+            Error::Other(_) => error_code::UNKNOWN,
+        }
+    }
+}

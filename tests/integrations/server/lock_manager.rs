@@ -148,6 +148,7 @@ fn new_cluster_for_deadlock_test(count: usize) -> Cluster<ServerCluster> {
     let region_id = cluster.run_conf_change();
     pd_client.must_add_peer(region_id, new_peer(2, 2));
     pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
     deadlock_detector_leader_must_be(&mut cluster, 1);
     must_detect_deadlock(&mut cluster, b"k", 10);
     cluster

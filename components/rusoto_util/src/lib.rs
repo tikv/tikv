@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::env::{var, VarError};
 use std::io::{self, Error, ErrorKind};
 
 use rusoto_core::{
@@ -9,7 +8,7 @@ use rusoto_core::{
 };
 use rusoto_credential::{
     AutoRefreshingProvider, AwsCredentials, ChainProvider, CredentialsError, ProvideAwsCredentials,
-    StaticProvider, Variable,
+    StaticProvider,
 };
 use rusoto_sts::WebIdentityProvider;
 
@@ -105,11 +104,6 @@ impl ProvideAwsCredentials for CredentialsProvider {
     }
 }
 
-const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
-const AWS_ROLE_ARN: &str = "AWS_ROLE_ARN";
-const AWS_ROLE_SESSION_NAME: &str = "AWS_ROLE_SESSION_NAME";
-const DEFAULT_SESSION_NAME: &str = "WebIdentitySession";
-
 // Same as rusoto_credentials::DefaultCredentialsProvider with extra
 // rusoto_sts::WebIdentityProvider support.
 pub struct DefaultCredentialsProvider {
@@ -123,29 +117,7 @@ impl Default for DefaultCredentialsProvider {
     fn default() -> DefaultCredentialsProvider {
         DefaultCredentialsProvider {
             default_provider: ChainProvider::new(),
-            // We should be using WebIdentityProvider::from_k8s_env(), after the issue have been
-            // fixed: https://github.com/rusoto/rusoto/pull/1724
-            web_identity_provider: WebIdentityProvider::new(
-                // Get token file name from env var, then read from the file.
-                Variable::dynamic(|| {
-                    Variable::from_text_file(
-                        Variable::<String, CredentialsError>::from_env_var(
-                            AWS_WEB_IDENTITY_TOKEN_FILE,
-                        )
-                        .resolve()?,
-                    )
-                    .resolve()
-                }),
-                Variable::from_env_var(AWS_ROLE_ARN),
-                // As AWS_ROLE_SESSION_NAME is optional, we cannot use Variable::from_env_var.
-                Some(Variable::dynamic(|| {
-                    match var(AWS_ROLE_SESSION_NAME).map(|v| v.trim().to_owned()) {
-                        Ok(v) if !v.is_empty() => Ok(v),
-                        Ok(_) | Err(VarError::NotPresent) => Ok(DEFAULT_SESSION_NAME.to_owned()),
-                        Err(e) => Err(CredentialsError::from(e)),
-                    }
-                })),
-            ),
+            web_identity_provider: WebIdentityProvider::from_k8s_env(),
         }
     }
 }
@@ -155,14 +127,17 @@ impl ProvideAwsCredentials for DefaultCredentialsProvider {
     async fn credentials(&self) -> Result<AwsCredentials, CredentialsError> {
         // Need to use web identity provider first to prevent default provider takes precedence in
         // kubernetes environment.
-        if let Ok(creds) = self.web_identity_provider.credentials().await {
-            return Ok(creds);
-        }
-        if let Ok(creds) = self.default_provider.credentials().await {
-            return Ok(creds);
-        }
-        Err(CredentialsError::new(
-            "Couldn't find AWS credentials in default sources or k8s environment.",
-        ))
+        let k8s_error = match self.web_identity_provider.credentials().await {
+            res @ Ok(_) => return res,
+            Err(e) => e,
+        };
+        let def_error = match self.default_provider.credentials().await {
+            res @ Ok(_) => return res,
+            Err(e) => e,
+        };
+        Err(CredentialsError::new(format_args!(
+            "Couldn't find AWS credentials in default sources ({}) or k8s environment ({}).",
+            def_error.message, k8s_error.message,
+        )))
     }
 }

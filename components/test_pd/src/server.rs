@@ -301,8 +301,13 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         hijack_unary(self, ctx, sink, |c| c.get_region_by_id(&req))
     }
 
-    fn ask_split(&mut self, _: RpcContext<'_>, _: AskSplitRequest, _: UnarySink<AskSplitResponse>) {
-        unimplemented!()
+    fn ask_split(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: AskSplitRequest,
+        sink: UnarySink<AskSplitResponse>,
+    ) {
+        hijack_unary(self, ctx, sink, |c| c.ask_split(&req))
     }
 
     fn report_split(
@@ -397,11 +402,11 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
 
     fn get_operator(
         &mut self,
-        _ctx: RpcContext<'_>,
-        _stream: GetOperatorRequest,
-        _sink: UnarySink<GetOperatorResponse>,
+        ctx: RpcContext<'_>,
+        req: GetOperatorRequest,
+        sink: UnarySink<GetOperatorResponse>,
     ) {
-        unimplemented!()
+        hijack_unary(self, ctx, sink, |c| c.get_operator(&req))
     }
 
     fn scan_regions(
@@ -409,6 +414,15 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         _ctx: RpcContext<'_>,
         _req: ScanRegionsRequest,
         _sink: UnarySink<ScanRegionsResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn update_service_gc_safe_point(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: UpdateServiceGcSafePointRequest,
+        _sink: UnarySink<UpdateServiceGcSafePointResponse>,
     ) {
         unimplemented!()
     }

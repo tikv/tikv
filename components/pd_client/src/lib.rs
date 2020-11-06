@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![feature(specialization)]
+
 extern crate futures;
 #[macro_use]
 extern crate lazy_static;
@@ -7,10 +9,10 @@ extern crate lazy_static;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use]
-extern crate slog_global;
 extern crate hex;
 extern crate kvproto;
+#[macro_use(fail_point)]
+extern crate fail;
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
@@ -156,6 +158,14 @@ pub trait PdClient: Send + Sync {
 
     /// Gets Region by Region id.
     fn get_region_by_id(&self, _region_id: u64) -> PdFuture<Option<metapb::Region>> {
+        unimplemented!();
+    }
+
+    /// Gets Region and its leader by Region id.
+    fn get_region_leader_by_id(
+        &self,
+        _region_id: u64,
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
         unimplemented!();
     }
 

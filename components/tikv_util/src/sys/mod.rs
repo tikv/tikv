@@ -21,13 +21,11 @@ pub mod sys_quota {
             }
         }
 
-        pub fn cpu_cores_quota(&self) -> usize {
-            let cpu_num = sysinfo::get_logical_cores();
-            let cgroup_quota = self.cgroup.cpu_cores_quota();
-            if cgroup_quota < 0 {
-                cpu_num
-            } else {
-                std::cmp::min(cpu_num, cgroup_quota as usize)
+        pub fn cpu_cores_quota(&self) -> f64 {
+            let cpu_num = sysinfo::get_logical_cores() as f64;
+            match self.cgroup.cpu_cores_quota() {
+                Some(cgroup_quota) if cgroup_quota > 0.0 && cgroup_quota < cpu_num => cgroup_quota,
+                _ => cpu_num,
             }
         }
 
@@ -65,8 +63,8 @@ pub mod sys_quota {
             Self {}
         }
 
-        pub fn cpu_cores_quota(&self) -> usize {
-            sysinfo::get_logical_cores()
+        pub fn cpu_cores_quota(&self) -> f64 {
+            sysinfo::get_logical_cores() as f64
         }
 
         pub fn memory_limit_in_bytes(&self) -> u64 {

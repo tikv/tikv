@@ -6,6 +6,7 @@ use tikv_util::codec;
 use tikv_util::codec::bytes;
 use tikv_util::codec::bytes::BytesEncoder;
 use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::collections::HashMap;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 255;
@@ -224,6 +225,15 @@ impl Display for Key {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum MutationType {
+    Put,
+    Delete,
+    Lock,
+    Insert,
+    Other,
+}
+
 /// A row mutation.
 #[derive(Debug, Clone)]
 pub enum Mutation {
@@ -251,6 +261,16 @@ impl Mutation {
             Mutation::Lock(ref key) => key,
             Mutation::Insert((ref key, _)) => key,
             Mutation::CheckNotExists(ref key) => key,
+        }
+    }
+
+    pub fn mutation_type(&self) -> MutationType {
+        match self {
+            Mutation::Put(_) => MutationType::Put,
+            Mutation::Delete(_) => MutationType::Delete,
+            Mutation::Lock(_) => MutationType::Lock,
+            Mutation::Insert(_) => MutationType::Insert,
+            _ => MutationType::Other,
         }
     }
 
@@ -289,6 +309,52 @@ impl From<kvrpcpb::Mutation> for Mutation {
             kvrpcpb::Op::CheckNotExists => Mutation::CheckNotExists(Key::from_raw(m.get_key())),
             _ => panic!("mismatch Op in prewrite mutations"),
         }
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct OldValue {
+    pub short_value: Option<Value>,
+    pub start_ts: TimeStamp,
+}
+
+// Returned by MvccTxn when extra_op is set to kvrpcpb::ExtraOp::ReadOldValue.
+// key with current ts -> (short value of the prev txn, start ts of the prev txn).
+// The value of the map will be None when the mutation is `Insert`.
+// MutationType is the type of mutation of the current write.
+pub type OldValues = HashMap<Key, (Option<OldValue>, MutationType)>;
+
+// Extra data fields filled by kvrpcpb::ExtraOp.
+#[derive(Default, Debug, Clone)]
+pub struct TxnExtra {
+    old_values: OldValues,
+}
+
+impl TxnExtra {
+    pub fn add_old_value(
+        &mut self,
+        key: Key,
+        value: Option<OldValue>,
+        mutation_type: MutationType,
+    ) {
+        self.old_values.insert(key, (value, mutation_type));
+    }
+
+    pub fn is_empty(&mut self) -> bool {
+        self.old_values.is_empty()
+    }
+
+    pub fn extend(&mut self, other: &mut Self) {
+        self.old_values
+            .extend(std::mem::take(&mut other.old_values))
+    }
+
+    pub fn mut_old_values(&mut self) -> &mut OldValues {
+        &mut self.old_values
+    }
+
+    pub fn get_old_values(&self) -> &OldValues {
+        &self.old_values
     }
 }
 

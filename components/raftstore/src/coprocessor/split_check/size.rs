@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use engine_traits::LARGE_CFS;
 use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use error_code::ErrorCodeExt;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
@@ -144,6 +145,7 @@ where
                     "failed to get approximate stat";
                     "region_id" => region_id,
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 // Need to check size.
                 host.add_checker(Box::new(Checker::new(
@@ -163,6 +165,7 @@ where
                 "failed to send approximate region size";
                 "region_id" => region_id,
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
         }
 
@@ -517,7 +520,7 @@ pub mod tests {
 
         // Approximate size of memtable is inaccurate for small data,
         // we flush it to SST so we can use the size properties instead.
-        engine.flush(true).unwrap();
+        engine.flush_cf(&cf_handle, true).unwrap();
 
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
@@ -531,7 +534,7 @@ pub mod tests {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             engine.put_cf(&cf_handle, &s, &s).unwrap();
         }
-        engine.flush(true).unwrap();
+        engine.flush_cf(&cf_handle, true).unwrap();
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,
@@ -545,7 +548,7 @@ pub mod tests {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             engine.put_cf(&cf_handle, &s, &s).unwrap();
         }
-        engine.flush(true).unwrap();
+        engine.flush_cf(&cf_handle, true).unwrap();
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,

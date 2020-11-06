@@ -3,6 +3,7 @@
 use std::cmp::Ordering;
 
 use engine_traits::{IterOptions, Iterator, KvEngine, SeekKey, CF_WRITE};
+use error_code::ErrorCodeExt;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;
@@ -100,6 +101,7 @@ where
                     "failed to get region last key";
                     "region_id" => region.get_id(),
                     "err" => %err,
+                    "error_code" => %err.error_code(),
                 );
                 return;
             }
@@ -160,8 +162,8 @@ where
             }
             _ => panic!(
                 "start_key {} and end_key {} out of order",
-                hex::encode_upper(encoded_start_key),
-                hex::encode_upper(encoded_end_key)
+                log_wrappers::Value::key(&encoded_start_key),
+                log_wrappers::Value::key(&encoded_end_key)
             ),
         }
         host.add_checker(Box::new(Checker {

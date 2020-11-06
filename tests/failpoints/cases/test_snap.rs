@@ -277,11 +277,11 @@ fn test_node_request_snapshot_on_split() {
 // A peer on store 3 is isolated and is applying snapshot. (add failpoint so it's always pending)
 // Then two conf change happens, this peer is removed and a new peer is added on store 3.
 // Then isolation clear, this peer will be destroyed because of a bigger peer id in msg.
-// Peerfsm can be destroyed synchronously because snapshot state is pending and can be canceled.
-// I.e. async_remove is false.
+// In previous implementation, peer fsm can be destroyed synchronously because snapshot state is
+// pending and can be canceled, but panic may happen if the applyfsm runs very slow.
 #[test]
 fn test_destroy_peer_on_pending_snapshot() {
-    let mut cluster = new_server_cluster(0, 4);
+    let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -310,24 +310,28 @@ fn test_destroy_peer_on_pending_snapshot() {
     sleep_ms(100);
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
+    // Don't send check stale msg to PD
+    let peer_check_stale_state_fp = "peer_check_stale_state";
+    fail::cfg(peer_check_stale_state_fp, "return()").unwrap();
 
     pd_client.must_remove_peer(r1, new_peer(3, 3));
-    pd_client.must_add_peer(r1, new_peer(4, 4));
+    pd_client.must_add_peer(r1, new_peer(3, 4));
 
-    pd_client.must_remove_peer(r1, new_peer(4, 4));
-    pd_client.must_add_peer(r1, new_peer(3, 5));
+    let before_handle_normal_3_fp = "before_handle_normal_3";
+    fail::cfg(before_handle_normal_3_fp, "pause").unwrap();
 
-    let destroy_peer_fp = "destroy_peer";
-    fail::cfg(destroy_peer_fp, "pause").unwrap();
     cluster.clear_send_filters();
     // Wait for leader send msg to peer 3.
-    // Then destroy peer 3 and create peer 5.
+    // Then destroy peer 3 and create peer 4.
     sleep_ms(100);
-    fail::remove(destroy_peer_fp);
 
     fail::remove(apply_snapshot_fp);
-    // After peer 5 has applied snapshot, data should be got.
-    must_get_equal(&cluster.get_engine(3), b"k119", b"v1");
+
+    fail::remove(before_handle_normal_3_fp);
+
+    cluster.must_put(b"k120", b"v1");
+    // After peer 4 has applied snapshot, data should be got.
+    must_get_equal(&cluster.get_engine(3), b"k120", b"v1");
 }
 
 #[test]

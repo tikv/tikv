@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::result;
 
 use encryption::Error as EncryptionError;
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use grpcio::Error as GrpcError;
 use kvproto::import_sstpb;
 use tikv_util::codec::Error as CodecError;
@@ -74,8 +75,8 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        FileExists(path: PathBuf) {
-            display("File {:?} exists", path)
+        FileExists(path: PathBuf, action: &'static str) {
+            display("File {:?} exists, cannot {}", path, action)
         }
         FileCorrupted(path: PathBuf, reason: String) {
             display("File {:?} corrupted: {}", path, reason)
@@ -95,8 +96,8 @@ quick_error! {
             display("\
                 {} has wrong prefix: key {} does not start with {}",
                 what,
-                hex::encode_upper(&key),
-                hex::encode_upper(&prefix),
+                log_wrappers::Value::key(&key),
+                log_wrappers::Value::key(&prefix),
             )
         }
         BadFormat(msg: String) {
@@ -122,5 +123,31 @@ impl From<Error> for import_sstpb::Error {
         let mut err = import_sstpb::Error::default();
         err.set_message(format!("{}", e));
         err
+    }
+}
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::Io(_) => error_code::sst_importer::IO,
+            Error::Grpc(_) => error_code::sst_importer::GRPC,
+            Error::Uuid(_) => error_code::sst_importer::UUID,
+            Error::Future(_) => error_code::sst_importer::FUTURE,
+            Error::RocksDB(_) => error_code::sst_importer::ROCKSDB,
+            Error::EngineTraits(e) => e.error_code(),
+            Error::ParseIntError(_) => error_code::sst_importer::PARSE_INT_ERROR,
+            Error::FileExists(..) => error_code::sst_importer::FILE_EXISTS,
+            Error::FileCorrupted(_, _) => error_code::sst_importer::FILE_CORRUPTED,
+            Error::InvalidSSTPath(_) => error_code::sst_importer::INVALID_SST_PATH,
+            Error::InvalidChunk => error_code::sst_importer::INVALID_CHUNK,
+            Error::Engine(_) => error_code::sst_importer::ENGINE,
+            Error::CannotReadExternalStorage(_, _, _, _) => {
+                error_code::sst_importer::CANNOT_READ_EXTERNAL_STORAGE
+            }
+            Error::WrongKeyPrefix(_, _, _) => error_code::sst_importer::WRONG_KEY_PREFIX,
+            Error::BadFormat(_) => error_code::sst_importer::BAD_FORMAT,
+            Error::Encryption(e) => e.error_code(),
+            Error::CodecError(e) => e.error_code(),
+        }
     }
 }

@@ -53,7 +53,7 @@ use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
 use security::SecurityConfig;
 use tikv_util::config::{
-    self, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
+    self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
 };
 use tikv_util::future_pool;
 use tikv_util::sys::sys_quota::SysQuota;
@@ -158,18 +158,25 @@ impl TitanCfConfig {
 
 fn get_background_job_limit(
     default_background_jobs: i32,
+    default_background_flushes: i32,
     default_sub_compactions: u32,
     default_background_gc: i32,
-) -> (i32, u32, i32) {
+) -> (i32, i32, u32, i32) {
     let cpu_num = SysQuota::new().cpu_cores_quota();
     // At the minimum, we should have two background jobs: one for flush and one for compaction.
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
     // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
     // the rest shared by flush and compaction.
     let max_background_jobs: i32 =
-        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1) as i32));
+        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1.0) as i32));
+    // Scale flush threads proportionally to background jobs. Also make sure the number of flush
+    // threads doesn't exceed total jobs.
+    let max_background_flushes: i32 = cmp::min(
+        cmp::max(default_background_flushes, max_background_jobs / 4),
+        max_background_jobs - 1,
+    );
     // Cap max_sub_compactions to allow at least two compactions.
-    let max_compactions = max_background_jobs - max_background_jobs / 4;
+    let max_compactions = max_background_jobs - max_background_flushes;
     let max_sub_compactions: u32 = cmp::max(
         1,
         cmp::min(default_sub_compactions, (max_compactions - 1) as u32),
@@ -177,7 +184,12 @@ fn get_background_job_limit(
     // Maximum background GC threads for Titan
     let max_background_gc: i32 = cmp::min(default_background_gc, cpu_num as i32);
 
-    (max_background_jobs, max_sub_compactions, max_background_gc)
+    (
+        max_background_jobs,
+        max_background_flushes,
+        max_sub_compactions,
+        max_background_gc,
+    )
 }
 
 macro_rules! cf_config {
@@ -751,6 +763,7 @@ pub struct DbConfig {
     pub wal_size_limit: ReadableSize,
     pub max_total_wal_size: ReadableSize,
     pub max_background_jobs: i32,
+    pub max_background_flushes: i32,
     #[config(skip)]
     pub max_manifest_file_size: ReadableSize,
     #[config(skip)]
@@ -769,7 +782,6 @@ pub struct DbConfig {
     pub info_log_keep_log_file_num: u64,
     #[config(skip)]
     pub info_log_dir: String,
-    #[config(skip)]
     pub rate_bytes_per_sec: ReadableSize,
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[config(skip)]
@@ -803,8 +815,8 @@ pub struct DbConfig {
 
 impl Default for DbConfig {
     fn default() -> DbConfig {
-        let (max_background_jobs, max_sub_compactions, max_background_gc) =
-            get_background_job_limit(8, 3, 4);
+        let (max_background_jobs, max_background_flushes, max_sub_compactions, max_background_gc) =
+            get_background_job_limit(8, 2, 3, 4);
         let mut titan_config = TitanDBConfig::default();
         titan_config.max_background_gc = max_background_gc;
         DbConfig {
@@ -814,6 +826,7 @@ impl Default for DbConfig {
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
             max_background_jobs,
+            max_background_flushes,
             max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
@@ -855,6 +868,9 @@ impl DbConfig {
         opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
         opts.set_max_total_wal_size(self.max_total_wal_size.0);
         opts.set_max_background_jobs(self.max_background_jobs);
+        // RocksDB will cap flush and compaction threads to at least one
+        opts.set_max_background_flushes(self.max_background_flushes);
+        opts.set_max_background_compactions(self.max_background_jobs - self.max_background_flushes);
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
@@ -1029,6 +1045,7 @@ pub struct RaftDbConfig {
     pub wal_size_limit: ReadableSize,
     pub max_total_wal_size: ReadableSize,
     pub max_background_jobs: i32,
+    pub max_background_flushes: i32,
     #[config(skip)]
     pub max_manifest_file_size: ReadableSize,
     #[config(skip)]
@@ -1068,8 +1085,8 @@ pub struct RaftDbConfig {
 
 impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
-        let (max_background_jobs, max_sub_compactions, max_background_gc) =
-            get_background_job_limit(4, 2, 4);
+        let (max_background_jobs, max_background_flushes, max_sub_compactions, max_background_gc) =
+            get_background_job_limit(4, 1, 2, 4);
         let mut titan_config = TitanDBConfig::default();
         titan_config.max_background_gc = max_background_gc;
         RaftDbConfig {
@@ -1079,6 +1096,7 @@ impl Default for RaftDbConfig {
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
             max_background_jobs,
+            max_background_flushes,
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
@@ -1113,6 +1131,8 @@ impl RaftDbConfig {
         opts.set_wal_ttl_seconds(self.wal_ttl_seconds);
         opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
         opts.set_max_background_jobs(self.max_background_jobs);
+        opts.set_max_background_flushes(self.max_background_flushes);
+        opts.set_max_background_compactions(self.max_background_jobs - self.max_background_flushes);
         opts.set_max_total_wal_size(self.max_total_wal_size.0);
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
@@ -1236,6 +1256,36 @@ impl DBConfigManger {
         Ok(())
     }
 
+    fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> Result<(), Box<dyn Error>> {
+        let mut opt = self.db.get_db_options();
+        opt.set_rate_bytes_per_sec(rate_bytes_per_sec)?;
+        Ok(())
+    }
+
+    fn set_max_background_jobs(&self, max_background_jobs: i32) -> Result<(), Box<dyn Error>> {
+        let opt = self.db.get_db_options();
+        if max_background_jobs < opt.get_max_background_jobs() {
+            return Err("unable to shrink background jobs while the instance is running".into());
+        }
+        self.set_db_config(&[("max_background_jobs", &max_background_jobs.to_string())])?;
+        Ok(())
+    }
+
+    fn set_max_background_flushes(
+        &self,
+        max_background_flushes: i32,
+    ) -> Result<(), Box<dyn Error>> {
+        let opt = self.db.get_db_options();
+        if max_background_flushes < opt.get_max_background_flushes() {
+            return Err("unable to shrink background jobs while the instance is running".into());
+        }
+        self.set_db_config(&[(
+            "max_background_flushes",
+            &max_background_flushes.to_string(),
+        )])?;
+        Ok(())
+    }
+
     fn validate_cf(&self, cf: &str) -> Result<(), Box<dyn Error>> {
         match (self.db_type, cf) {
             (DBType::Kv, CF_DEFAULT)
@@ -1273,6 +1323,31 @@ impl ConfigManager for DBConfigManger {
                 }
             }
         }
+
+        if let Some(rate_bytes_config) = change
+            .drain_filter(|(name, _)| name == "rate_bytes_per_sec")
+            .next()
+        {
+            let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
+            self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
+        }
+
+        if let Some(background_jobs_config) = change
+            .drain_filter(|(name, _)| name == "max_background_jobs")
+            .next()
+        {
+            let max_background_jobs = background_jobs_config.1.into();
+            self.set_max_background_jobs(max_background_jobs)?;
+        }
+
+        if let Some(background_flushes_config) = change
+            .drain_filter(|(name, _)| name == "max_background_flushes")
+            .next()
+        {
+            let max_background_flushes = background_flushes_config.1.into();
+            self.set_max_background_flushes(max_background_flushes)?;
+        }
+
         if !change.is_empty() {
             let change = config_value_to_string(change);
             let change_slice = config_to_slice(&change);
@@ -1410,7 +1485,7 @@ const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 impl Default for UnifiedReadPoolConfig {
     fn default() -> UnifiedReadPoolConfig {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.8) as usize;
+        let mut concurrency = (cpu_num * 0.8) as usize;
         concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             min_thread_count: 1,
@@ -1646,7 +1721,7 @@ readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 impl Default for StorageReadPoolConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.5) as usize;
+        let mut concurrency = (cpu_num * 0.5) as usize;
         concurrency = cmp::max(DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY, concurrency);
         concurrency = cmp::min(DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY, concurrency);
         Self {
@@ -1688,7 +1763,7 @@ readpool_config!(
 impl Default for CoprReadPoolConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num as f64 * 0.8) as usize;
+        let mut concurrency = (cpu_num * 0.8) as usize;
         concurrency = cmp::max(DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             use_unified_pool: None,
@@ -1918,7 +1993,22 @@ impl Default for BackupConfig {
         let cpu_num = SysQuota::new().cpu_cores_quota();
         Self {
             // use at most 75% of vCPU by default
-            num_threads: (cpu_num - cpu_num / 4).clamp(1, 32),
+            num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct CdcConfig {
+    pub min_ts_interval: ReadableDuration,
+}
+
+impl Default for CdcConfig {
+    fn default() -> Self {
+        Self {
+            min_ts_interval: ReadableDuration::secs(1),
         }
     }
 }
@@ -1938,6 +2028,9 @@ pub struct TiKvConfig {
 
     #[config(skip)]
     pub log_file: String,
+
+    #[config(skip)]
+    pub log_format: LogFormat,
 
     #[config(skip)]
     pub slow_log_file: String,
@@ -1999,6 +2092,9 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub split: SplitConfig,
+
+    #[config(submodule)]
+    pub cdc: CdcConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2007,6 +2103,7 @@ impl Default for TiKvConfig {
             cfg_path: "".to_owned(),
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
+            log_format: LogFormat::Text,
             slow_log_file: "".to_owned(),
             slow_log_threshold: ReadableDuration::secs(1),
             log_rotation_timespan: ReadableDuration::hours(24),
@@ -2027,6 +2124,7 @@ impl Default for TiKvConfig {
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
             split: SplitConfig::default(),
+            cdc: CdcConfig::default(),
         }
     }
 }
@@ -2939,22 +3037,46 @@ mod tests {
     #[test]
     fn test_change_rocksdb_config() {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
-        cfg.rocksdb.max_background_jobs = 2;
+        cfg.rocksdb.max_background_jobs = 4;
+        cfg.rocksdb.max_background_flushes = 2;
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
+        cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
 
-        // update max_background_jobs
-        let db_opts = db.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 2);
+        // update max_background_jobs, set to a bigger value
+        assert_eq!(db.get_db_options().get_max_background_jobs(), 4);
 
         cfg_controller
             .update_config("rocksdb.max-background-jobs", "8")
             .unwrap();
         assert_eq!(db.get_db_options().get_max_background_jobs(), 8);
+
+        // update max_background_flushes, set to a bigger value
+        assert_eq!(db.get_db_options().get_max_background_flushes(), 2);
+
+        cfg_controller
+            .update_config("rocksdb.max-background-flushes", "5")
+            .unwrap();
+        assert_eq!(db.get_db_options().get_max_background_flushes(), 5);
+
+        // update rate_bytes_per_sec
+        let db_opts = db.get_db_options();
+        assert_eq!(
+            db_opts.get_rate_bytes_per_sec().unwrap(),
+            ReadableSize::mb(64).0 as i64
+        );
+
+        cfg_controller
+            .update_config("rocksdb.rate-bytes-per-sec", "128MB")
+            .unwrap();
+        assert_eq!(
+            db.get_db_options().get_rate_bytes_per_sec().unwrap(),
+            ReadableSize::mb(128).0 as i64
+        );
 
         // update some configs on default cf
         let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();

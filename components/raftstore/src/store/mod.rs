@@ -46,8 +46,8 @@ pub use self::snap::{
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::worker::{
-    AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, ReadStats, SplitConfig,
-    SplitConfigManager,
+    AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, ReadDelegate, ReadStats,
+    SplitConfig, SplitConfigManager,
 };
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};

@@ -59,6 +59,7 @@ encryption = { path = "../components/encryption" }
 engine = { path = "../components/engine" }
 engine_rocks = { path = "../components/engine_rocks" }
 engine_traits = { path = "../components/engine_traits" }
+error_code = { path = "../components/error_code" }
 fs2 = "0.4"
 futures = "0.1"
 futures-cpupool = "0.1"
@@ -68,6 +69,7 @@ keys = { path = "../components/keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+log_wrappers = { path = "../components/log_wrappers" }
 nix = "0.11"
 pd_client = { path = "../components/pd_client" }
 prometheus = { version = "0.8", features = ["nightly", "push"] }

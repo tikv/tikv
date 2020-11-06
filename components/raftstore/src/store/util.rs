@@ -91,16 +91,37 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
 
 /// `is_first_vote_msg` checks `msg` is the first vote (or prevote) message or not. It's used for
 /// when the message is received but there is no such region in `Store::region_peers` and the
-/// region overlaps with others. In this case we should put `msg` into `pending_votes` instead of
+/// region overlaps with others. In this case we should put `msg` into `pending_msg` instead of
 /// create the peer.
 #[inline]
-pub fn is_first_vote_msg(msg: &eraftpb::Message) -> bool {
+fn is_first_vote_msg(msg: &eraftpb::Message) -> bool {
     match msg.get_msg_type() {
         MessageType::MsgRequestVote | MessageType::MsgRequestPreVote => {
             msg.get_term() == peer_storage::RAFT_INIT_LOG_TERM + 1
         }
         _ => false,
     }
+}
+
+/// `is_first_append_entry` checks `msg` is the first append message or not. This meassge is the first
+/// message that the learner peers of the new split region will receive from the leader. It's used for
+/// when the message is received but there is no such region in `Store::region_peers`. In this case we
+/// should put `msg` into `pending_msg` instead of create the peer.
+#[inline]
+fn is_first_append_entry(msg: &eraftpb::Message) -> bool {
+    match msg.get_msg_type() {
+        MessageType::MsgAppend => {
+            let ent = msg.get_entries();
+            ent.len() == 1
+                && ent[0].data.is_empty()
+                && ent[0].index == peer_storage::RAFT_INIT_LOG_INDEX + 1
+        }
+        _ => false,
+    }
+}
+
+pub fn is_first_message(msg: &eraftpb::Message) -> bool {
+    is_first_vote_msg(msg) || is_first_append_entry(msg)
 }
 
 #[inline]
@@ -628,13 +649,13 @@ impl<
         let mut it = self.0.clone();
         match it.len() {
             0 => write!(f, "(no key)"),
-            1 => write!(f, "key {}", hex::encode_upper(it.next().unwrap())),
+            1 => write!(f, "key {}", log_wrappers::Value::key(it.next().unwrap())),
             _ => write!(
                 f,
                 "{} keys range from {} to {}",
                 it.len(),
-                hex::encode_upper(it.next().unwrap()),
-                hex::encode_upper(it.next_back().unwrap())
+                log_wrappers::Value::key(it.next().unwrap()),
+                log_wrappers::Value::key(it.next_back().unwrap())
             ),
         }
     }
@@ -736,7 +757,7 @@ mod tests {
 
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::AdminRequest;
-    use raft::eraftpb::{ConfChangeType, Message, MessageType};
+    use raft::eraftpb::{ConfChangeType, Entry, Message, MessageType};
     use time::Duration as TimeDuration;
 
     use crate::store::peer_storage;
@@ -972,6 +993,39 @@ mod tests {
             msg.set_msg_type(msg_type);
             msg.set_term(term);
             assert_eq!(is_first_vote_msg(&msg), is_vote);
+        }
+    }
+
+    #[test]
+    fn test_first_append_entry() {
+        let tbl = vec![
+            (
+                MessageType::MsgAppend,
+                peer_storage::RAFT_INIT_LOG_INDEX + 1,
+                true,
+            ),
+            (
+                MessageType::MsgAppend,
+                peer_storage::RAFT_INIT_LOG_INDEX,
+                false,
+            ),
+            (
+                MessageType::MsgHup,
+                peer_storage::RAFT_INIT_LOG_INDEX + 1,
+                false,
+            ),
+        ];
+
+        for (msg_type, index, is_append) in tbl {
+            let mut msg = Message::default();
+            msg.set_msg_type(msg_type);
+            let ent = {
+                let mut e = Entry::default();
+                e.set_index(index);
+                e
+            };
+            msg.set_entries(vec![ent].into());
+            assert_eq!(is_first_append_entry(&msg), is_append);
         }
     }
 

@@ -12,21 +12,13 @@ use std::time::Duration;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
 use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    create_change_data, event::Event as Event_oneof_event, ChangeDataClient, ChangeDataEvent,
-    ChangeDataRequest, Event,
-};
-#[cfg(not(feature = "prost-codec"))]
-use kvproto::cdcpb::{
-    create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest, Event,
-    Event_oneof_event,
-};
+use kvproto::cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest};
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
 use security::*;
 use test_raftstore::*;
+use tikv::config::CdcConfig;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
@@ -45,7 +37,7 @@ pub fn new_event_feed(
 ) -> (
     ClientDuplexSender<ChangeDataRequest>,
     Rc<Cell<Option<ClientDuplexReceiver<ChangeDataEvent>>>>,
-    impl Fn(bool) -> Vec<Event>,
+    impl Fn(bool) -> ChangeDataEvent,
 ) {
     let (req_tx, resp_rx) = client.event_feed().unwrap();
     let event_feed_wrap = Rc::new(Cell::new(Some(resp_rx)));
@@ -58,20 +50,11 @@ pub fn new_event_feed(
             Err(e) => panic!("receive failed {:?}", e.0),
         };
         event_feed.set(Some(events));
-        let mut change_data = change_data.unwrap();
-        let mut events: Vec<_> = change_data.take_events().into();
-        if !keep_resolved_ts {
-            events.retain(|e| {
-                if let Event_oneof_event::ResolvedTs(_) = e.event.as_ref().unwrap() {
-                    false
-                } else {
-                    true
-                }
-            });
+        let change_data_event = change_data.unwrap();
+        if !keep_resolved_ts && change_data_event.has_resolved_ts() {
+            continue;
         }
-        if !events.is_empty() {
-            return events;
-        }
+        break change_data_event;
     };
     (req_tx, event_feed_wrap, receive_event)
 }
@@ -127,8 +110,14 @@ impl TestSuite {
             let sim = cluster.sim.rl();
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
-            let mut cdc_endpoint =
-                cdc::Endpoint::new(pd_cli.clone(), worker.scheduler(), raft_router, cdc_ob);
+            let mut cdc_endpoint = cdc::Endpoint::new(
+                &CdcConfig::default(),
+                pd_cli.clone(),
+                worker.scheduler(),
+                raft_router,
+                cdc_ob,
+                cluster.store_metas[id].clone(),
+            );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);
             worker.start(cdc_endpoint).unwrap();
@@ -202,6 +191,27 @@ impl TestSuite {
             commit_resp.get_region_error()
         );
         assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
+    }
+
+    pub fn must_kv_rollback(&mut self, region_id: u64, keys: Vec<Vec<u8>>, start_ts: TimeStamp) {
+        let mut rollback_req = BatchRollbackRequest::default();
+        rollback_req.set_context(self.get_context(region_id));
+        rollback_req.start_version = start_ts.into_inner();
+        rollback_req.set_keys(keys.into_iter().collect());
+        let rollback_resp = self
+            .get_tikv_client(region_id)
+            .kv_batch_rollback(&rollback_req)
+            .unwrap();
+        assert!(
+            !rollback_resp.has_region_error(),
+            "{:?}",
+            rollback_resp.get_region_error()
+        );
+        assert!(
+            !rollback_resp.has_error(),
+            "{:?}",
+            rollback_resp.get_error()
+        );
     }
 
     pub fn async_kv_commit(

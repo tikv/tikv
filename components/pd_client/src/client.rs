@@ -341,6 +341,42 @@ impl PdClient for RpcClient {
             .execute()
     }
 
+    fn get_region_leader_by_id(
+        &self,
+        region_id: u64,
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetRegionByIdRequest::default();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        let executor = move |client: &RwLock<Inner>, req: pdpb::GetRegionByIdRequest| {
+            let handler = client
+                .rl()
+                .client_stub
+                .get_region_by_id_async_opt(&req, Self::call_option())
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
+                });
+            Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["get_region_by_id"])
+                    .observe(duration_to_sec(timer.elapsed()));
+                check_resp_header(resp.get_header())?;
+                if resp.has_region() {
+                    Ok(Some((resp.take_region(), resp.take_leader())))
+                } else {
+                    Ok(None)
+                }
+            })) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
     fn region_heartbeat(
         &self,
         term: u64,
@@ -399,7 +435,7 @@ impl PdClient for RpcClient {
                             Ok(())
                         }
                         Err(e) => {
-                            error!("failed to send heartbeat"; "err" => ?e);
+                            error!(?e; "failed to send heartbeat");
                             Err(e)
                         }
                     }),

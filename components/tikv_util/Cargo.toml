@@ -16,7 +16,8 @@ codec = { path = "../codec" }
 configuration = { path = "../configuration" }
 chrono = "0.4"
 crc32fast = "1.2"
-crossbeam = "0.7.2"
+crossbeam = "0.8"
+error_code = { path = "../error_code" }
 derive_more = "0.99.3"
 fail = "0.3"
 fs2 = "0.4"
@@ -32,12 +33,12 @@ openssl = "0.10"
 prometheus = { version = "0.8", features = ["nightly", "push"] }
 quick-error = "1.2.2"
 rand = "0.7"
-serde = "1.0"
-serde_derive = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-async = "2.3"
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
+slog-json = "2.3"
 slog-term = "2.4"
 sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tikv_alloc = { path = "../tikv_alloc" }

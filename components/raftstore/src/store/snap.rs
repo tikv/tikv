@@ -31,6 +31,7 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use crate::errors::Error as RaftStoreError;
 use crate::store::RaftRouter;
 use crate::Result as RaftStoreResult;
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{
@@ -88,6 +89,16 @@ quick_error! {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::Abort => error_code::raftstore::SNAP_ABORT,
+            Error::TooManySnapshots => error_code::raftstore::SNAP_TOO_MANY,
+            Error::Other(_) => error_code::raftstore::SNAP_UNKNOWN,
+        }
+    }
+}
 
 // CF_LOCK is relatively small, so we use plain file for performance issue.
 #[inline]
@@ -407,6 +418,7 @@ impl Snap {
                     "failed to load existent snapshot meta when try to build snapshot";
                     "snapshot" => %s.path(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
                 if !retry_delete_snapshot(mgr, key, &s) {
                     warn!(
@@ -680,11 +692,10 @@ impl Snap {
             match self.validate(kv_snap.get_db(), true) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
-                    error!(
+                    error!(?e;
                         "snapshot is corrupted, will rebuild";
                         "region_id" => region.get_id(),
                         "snapshot" => %self.path(),
-                        "err" => ?e,
                     );
                     if !retry_delete_snapshot(&self.mgr, &self.key, self) {
                         error!(
@@ -815,7 +826,7 @@ where
                 let path = cf_file.path.to_str().unwrap();
                 let batch_size = options.write_batch_size;
                 let cb = |kv: &[(Vec<u8>, Vec<u8>)]| {
-                    coprocessor_host.pre_apply_plain_kvs_from_snapshot(&region, cf, kv)
+                    coprocessor_host.post_apply_plain_kvs_from_snapshot(&region, cf, kv)
                 };
                 snap_io::apply_plain_cf_file(
                     path,
@@ -829,8 +840,8 @@ where
             } else {
                 let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
                 let path = cf_file.clone_path.to_str().unwrap();
-                coprocessor_host.pre_apply_sst_from_snapshot(&region, cf, path);
-                snap_io::apply_sst_cf_file(path, &options.db, cf)?
+                snap_io::apply_sst_cf_file(path, &options.db, cf)?;
+                coprocessor_host.post_apply_sst_from_snapshot(&region, cf, path);
             }
         }
         Ok(())

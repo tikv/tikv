@@ -14,7 +14,7 @@ use engine::Engines;
 use engine::IterOption;
 use engine_rocks::{Compat, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_traits::{Iterable, Iterator, Mutable, Peekable, SeekKey, WriteBatchExt};
+use engine_traits::{Iterable, Iterator, Mutable, Peekable, ReadOptions, SeekKey, WriteBatchExt};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
@@ -25,7 +25,7 @@ use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
     Callback, CbContext, Cursor, Engine, Error, ErrorInner, Iterator as EngineIterator, Modify,
-    Result, ScanMode, Snapshot,
+    Result, ScanMode, Snapshot, WriteData,
 };
 
 pub use engine_rocks::RocksSyncSnapshot as RocksSnapshot;
@@ -260,11 +260,11 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
 impl Engine for RocksEngine {
     type Snap = RocksSnapshot;
 
-    fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
-        if modifies.is_empty() {
+    fn async_write(&self, _: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
+        if batch.modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
-        box_try!(self.sched.schedule(Task::Write(modifies, cb)));
+        box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
         Ok(())
     }
 
@@ -293,13 +293,19 @@ impl Snapshot for RocksSnapshot {
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get"; "key" => %key);
-        let v = box_try!(self.get_value(key.as_encoded()));
+        let v = self.get_value(key.as_encoded())?;
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
-        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        let v = self.get_value_cf(cf, key.as_encoded())?;
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>> {
+        trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
+        let v = self.get_value_cf_opt(&opts, cf, key.as_encoded())?;
         Ok(v.map(|v| v.to_vec()))
     }
 

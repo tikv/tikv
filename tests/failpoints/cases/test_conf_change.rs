@@ -147,6 +147,7 @@ fn test_write_after_destroy() {
 fn test_tick_after_destroy() {
     // 3 nodes cluster.
     let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
@@ -163,7 +164,7 @@ fn test_tick_after_destroy() {
     must_get_equal(&engine_3, b"k1", b"v1");
 
     let tick_fp = "on_raft_log_gc_tick_1";
-    fail::cfg(tick_fp, "pause").unwrap();
+    fail::cfg(tick_fp, "return").unwrap();
     let poll_fp = "pause_on_peer_destroy_res";
     fail::cfg(poll_fp, "pause").unwrap();
 
@@ -179,8 +180,8 @@ fn test_tick_after_destroy() {
     cluster.clear_send_filters();
     cluster.must_put(b"k3", b"v3");
 
-    thread::sleep(cluster.cfg.raft_store.raft_log_gc_tick_interval.0);
     fail::remove(tick_fp);
+    thread::sleep(cluster.cfg.raft_store.raft_log_gc_tick_interval.0);
     thread::sleep(Duration::from_millis(100));
     fail::remove(poll_fp);
 

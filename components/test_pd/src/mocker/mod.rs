@@ -122,4 +122,8 @@ pub trait PdMocker {
     ) -> Option<Result<GetGcSafePointResponse>> {
         None
     }
+
+    fn get_operator(&self, _: &GetOperatorRequest) -> Option<Result<GetOperatorResponse>> {
+        None
+    }
 }
