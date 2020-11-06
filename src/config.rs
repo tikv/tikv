@@ -973,7 +973,7 @@ impl Default for DbConfig {
             rate_bytes_per_sec: ReadableSize::gb(10),
             rate_limiter_refill_period: ReadableDuration::millis(100),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
-            auto_tuned: false,
+            auto_tuned: true,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             max_sub_compactions,
