@@ -213,7 +213,7 @@ members = [
   "components/tidb_query_common",
   "components/tidb_query_codegen",
   "components/tidb_query_expr",
-    "components/tidb_query_aggr",
+  "components/tidb_query_aggr",
   "components/tidb_query_executors",
   "components/pd_client",
   "components/external_storage",
