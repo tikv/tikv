@@ -439,6 +439,7 @@ impl SSTImporter {
             write_path,
             default_meta,
             write_meta,
+            self.key_manager.clone(),
         ))
     }
 }
@@ -452,6 +453,7 @@ pub struct SSTWriter<E: KvEngine> {
     write_entries: u64,
     write_path: ImportPath,
     write_meta: SstMeta,
+    key_manager: Option<Arc<DataKeyManager>>,
 }
 
 impl<E: KvEngine> SSTWriter<E> {
@@ -462,6 +464,7 @@ impl<E: KvEngine> SSTWriter<E> {
         write_path: ImportPath,
         default_meta: SstMeta,
         write_meta: SstMeta,
+        key_manager: Option<Arc<DataKeyManager>>,
     ) -> Self {
         SSTWriter {
             default,
@@ -472,6 +475,7 @@ impl<E: KvEngine> SSTWriter<E> {
             write_path,
             write_entries: 0,
             write_meta,
+            key_manager,
         }
     }
 
@@ -507,15 +511,15 @@ impl<E: KvEngine> SSTWriter<E> {
         let mut metas = Vec::with_capacity(2);
         let (default_entries, write_entries) = (self.default_entries, self.write_entries);
         let (p1, p2) = (self.default_path.clone(), self.write_path.clone());
-        let (w1, w2) = (self.default, self.write);
+        let (w1, w2, key_manager) = (self.default, self.write, self.key_manager);
         if default_entries > 0 {
             w1.finish()?;
-            Self::save(p1)?;
+            Self::save(p1, key_manager.as_deref())?;
             metas.push(default_meta);
         }
         if write_entries > 0 {
             w2.finish()?;
-            Self::save(p2)?;
+            Self::save(p2, key_manager.as_deref())?;
             metas.push(write_meta);
         }
         info!("finish write to sst";
@@ -526,8 +530,19 @@ impl<E: KvEngine> SSTWriter<E> {
     }
 
     // move file from temp to save.
-    fn save(mut import_path: ImportPath) -> Result<()> {
+    fn save(mut import_path: ImportPath, key_manager: Option<&DataKeyManager>) -> Result<()> {
         fs::rename(&import_path.temp, &import_path.save)?;
+        if let Some(key_manager) = key_manager {
+            let temp_str = import_path
+                .temp
+                .to_str()
+                .ok_or_else(|| Error::InvalidSSTPath(import_path.temp.clone()))?;
+            let save_str = import_path
+                .save
+                .to_str()
+                .ok_or_else(|| Error::InvalidSSTPath(import_path.save.clone()))?;
+            key_manager.rename_file(temp_str, save_str)?;
+        }
         // sync the directory after rename
         import_path.save.pop();
         sync_dir(&import_path.save)?;
