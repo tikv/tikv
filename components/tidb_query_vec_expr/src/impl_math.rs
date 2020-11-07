@@ -8,7 +8,6 @@ use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::{RoundMode, DEFAULT_FSP};
 use tidb_query_datatype::codec::{self, Error};
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_shared_expr::rand::MySQLRng;
 
 const I64_TEN_POWS: [i64; 19] = [
     1,
@@ -31,6 +30,8 @@ const I64_TEN_POWS: [i64; 19] = [
     100_000_000_000_000_000,
     1_000_000_000_000_000_000,
 ];
+
+const MAX_RAND_VALUE: u32 = 0x3FFFFFFF;
 
 #[rpn_fn]
 #[inline]
@@ -400,9 +401,20 @@ pub fn atan_2_args(arg0: &Real, arg1: &Real) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 pub fn conv(n: BytesRef, from_base: &Int, to_base: &Int) -> Result<Option<Bytes>> {
-    use tidb_query_shared_expr::conv::conv as conv_impl;
     let s = String::from_utf8_lossy(n);
-    Ok(conv_impl(s.as_ref(), *from_base, *to_base))
+    let s = s.trim();
+    let from_base = IntWithSign::from_int(*from_base);
+    let to_base = IntWithSign::from_int(*to_base);
+    Ok(if is_valid_base(from_base) && is_valid_base(to_base) {
+        if let Some((num_str, is_neg)) = extract_num_str(s, from_base) {
+            let num = extract_num(num_str.as_ref(), is_neg, from_base);
+            Some(num.format_to_base(to_base).into_bytes())
+        } else {
+            Some(b"0".to_vec())
+        }
+    } else {
+        None
+    })
 }
 
 #[inline]
@@ -469,7 +481,7 @@ pub fn truncate_real_with_uint(arg0: &Real, arg1: &Int) -> Result<Option<Real>> 
     Ok(Some(truncate_real(*x, d)))
 }
 
-pub fn truncate_real(x: Real, d: i32) -> Real {
+fn truncate_real(x: Real, d: i32) -> Real {
     let shift = 10_f64.powi(d);
     let tmp = x * shift;
     if *tmp == 0_f64 {
@@ -519,6 +531,151 @@ pub fn round_with_frac_real(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
 
 thread_local! {
    static MYSQL_RNG: RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
+}
+
+#[derive(Copy, Clone)]
+struct IntWithSign(u64, bool);
+
+impl IntWithSign {
+    fn from_int(num: Int) -> IntWithSign {
+        IntWithSign(num.wrapping_abs() as u64, num < 0)
+    }
+
+    fn from_signed_uint(num: u64, is_neg: bool) -> IntWithSign {
+        IntWithSign(num, is_neg)
+    }
+
+    // Shrink num to fit the boundary of i64.
+    fn shrink_from_signed_uint(num: u64, is_neg: bool) -> IntWithSign {
+        let value = if is_neg {
+            num.min(-Int::min_value() as u64)
+        } else {
+            num.min(Int::max_value() as u64)
+        };
+        IntWithSign::from_signed_uint(value, is_neg)
+    }
+
+    fn format_radix(mut x: u64, radix: u32) -> String {
+        let mut r = vec![];
+        loop {
+            let m = x % u64::from(radix);
+            x /= u64::from(radix);
+            r.push(
+                std::char::from_digit(m as u32, radix)
+                    .unwrap()
+                    .to_ascii_uppercase(),
+            );
+            if x == 0 {
+                break;
+            }
+        }
+        r.iter().rev().collect::<String>()
+    }
+
+    fn format_to_base(self, to_base: IntWithSign) -> String {
+        let IntWithSign(value, is_neg) = self;
+        let IntWithSign(to_base, should_ignore_sign) = to_base;
+        let mut real_val = value as i64;
+        if is_neg && !should_ignore_sign {
+            real_val = -real_val;
+        }
+        let mut ret = IntWithSign::format_radix(real_val as u64, to_base as u32);
+        if is_neg && should_ignore_sign {
+            ret.insert(0, '-');
+        }
+        ret
+    }
+}
+
+fn is_valid_base(base: IntWithSign) -> bool {
+    let IntWithSign(num, _) = base;
+    num >= 2 && num <= 36
+}
+
+fn extract_num_str(s: &str, from_base: IntWithSign) -> Option<(String, bool)> {
+    let mut iter = s.chars().peekable();
+    let head = *iter.peek().unwrap();
+    let mut is_neg = false;
+    if head == '+' || head == '-' {
+        is_neg = head == '-';
+        iter.next();
+    }
+    let IntWithSign(base, _) = from_base;
+    let s = iter
+        .take_while(|x| x.is_digit(base as u32))
+        .collect::<String>();
+    if s.is_empty() {
+        None
+    } else {
+        Some((s, is_neg))
+    }
+}
+
+fn extract_num(num_s: &str, is_neg: bool, from_base: IntWithSign) -> IntWithSign {
+    let IntWithSign(from_base, signed) = from_base;
+    let value = u64::from_str_radix(num_s, from_base as u32).unwrap();
+    if signed {
+        IntWithSign::shrink_from_signed_uint(value, is_neg)
+    } else {
+        IntWithSign::from_signed_uint(value, is_neg)
+    }
+}
+
+// Returns (isize, is_positive): convert an i64 to usize, and whether the input is positive
+//
+// # Examples
+// ```
+// assert_eq!(i64_to_usize(1_i64, false), (1_usize, true));
+// assert_eq!(i64_to_usize(1_i64, false), (1_usize, true));
+// assert_eq!(i64_to_usize(-1_i64, false), (1_usize, false));
+// assert_eq!(i64_to_usize(u64::max_value() as i64, true), (u64::max_value() as usize, true));
+// assert_eq!(i64_to_usize(u64::max_value() as i64, false), (1_usize, false));
+// ```
+#[inline]
+pub fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
+    if is_unsigned {
+        (i as u64 as usize, true)
+    } else if i >= 0 {
+        (i as usize, true)
+    } else {
+        let i = if i == i64::min_value() {
+            i64::max_value() as usize + 1
+        } else {
+            -i as usize
+        };
+        (i, false)
+    }
+}
+
+pub struct MySQLRng {
+    seed1: u32,
+    seed2: u32,
+}
+
+impl MySQLRng {
+    fn new() -> Self {
+        let current_time = time::get_time();
+        let nsec = i64::from(current_time.nsec);
+        Self::new_with_seed(nsec)
+    }
+
+    fn new_with_seed(seed: i64) -> Self {
+        let seed1 = (seed.wrapping_mul(0x10001).wrapping_add(55555555)) as u32 % MAX_RAND_VALUE;
+        let seed2 = (seed.wrapping_mul(0x10000001)) as u32 % MAX_RAND_VALUE;
+        MySQLRng { seed1, seed2 }
+    }
+
+    fn gen(&mut self) -> f64 {
+        self.seed1 = (self.seed1 * 3 + self.seed2) % MAX_RAND_VALUE;
+        self.seed2 = (self.seed1 + self.seed2 + 33) % MAX_RAND_VALUE;
+        f64::from(self.seed1) / f64::from(MAX_RAND_VALUE)
+    }
+}
+
+impl Default for MySQLRng {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -1638,6 +1795,41 @@ mod tests {
                 .evaluate(ScalarFuncSig::RoundWithFracReal)
                 .unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn test_rand_new() {
+        let mut rng1 = MySQLRng::new();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let mut rng2 = MySQLRng::new();
+        let got1 = rng1.gen();
+        let got2 = rng2.gen();
+        assert!(got1 < 1.0);
+        assert!(got1 >= 0.0);
+        assert_ne!(got1, rng1.gen());
+        assert!(got2 < 1.0);
+        assert!(got2 >= 0.0);
+        assert_ne!(got2, rng2.gen());
+        assert_ne!(got1, got2);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn test_rand_new_with_seed() {
+        let tests = vec![
+            (0, 0.15522042769493574, 0.620881741513388),
+            (1, 0.40540353712197724, 0.8716141803857071),
+            (-1, 0.9050373219931845, 0.37014932126752037),
+            (9223372036854775807, 0.9050373219931845, 0.37014932126752037),
+        ];
+        for (seed, exp1, exp2) in tests {
+            let mut rand = MySQLRng::new_with_seed(seed);
+            let res1 = rand.gen();
+            assert_eq!(res1, exp1);
+            let res2 = rand.gen();
+            assert_eq!(res2, exp2);
         }
     }
 }

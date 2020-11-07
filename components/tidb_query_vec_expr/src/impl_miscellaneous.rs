@@ -9,7 +9,6 @@ use tidb_query_codegen::rpn_fn;
 
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_shared_expr::*;
 
 const IPV4_LENGTH: usize = 4;
 const IPV6_LENGTH: usize = 16;
@@ -48,13 +47,40 @@ pub fn any_value_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn]
 #[inline]
-pub fn inet_aton(addr: Option<BytesRef>) -> Result<Option<Int>> {
-    Ok(addr
-        .as_ref()
-        .map(|addr| String::from_utf8_lossy(addr))
-        .and_then(miscellaneous::inet_aton))
+pub fn inet_aton(addr: BytesRef) -> Result<Option<Int>> {
+    let addr = String::from_utf8_lossy(addr);
+
+    if addr.len() == 0 || addr.ends_with('.') {
+        return Ok(None);
+    }
+    let (mut byte_result, mut result, mut dot_count): (u64, u64, usize) = (0, 0, 0);
+    for c in addr.chars() {
+        if c >= '0' && c <= '9' {
+            let digit = c as u64 - '0' as u64;
+            byte_result = byte_result * 10 + digit;
+            if byte_result > 255 {
+                return Ok(None);
+            }
+        } else if c == '.' {
+            dot_count += 1;
+            if dot_count > 3 {
+                return Ok(None);
+            }
+            result = (result << 8) + byte_result;
+            byte_result = 0;
+        } else {
+            return Ok(None);
+        }
+    }
+    if dot_count == 1 {
+        result <<= 16;
+    } else if dot_count == 2 {
+        result <<= 8;
+    }
+
+    Ok(Some(((result << 8) + byte_result) as i64))
 }
 
 #[rpn_fn(nullable)]
