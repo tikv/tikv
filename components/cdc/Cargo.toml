@@ -35,6 +35,7 @@ failpoints = ["tikv/failpoints"]
 
 [dependencies]
 crossbeam = "0.8"
+bitflags = "1.0"
 hex = "0.4"
 engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }
@@ -47,6 +48,7 @@ raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "../raftstore" }
 resolved_ts = { path = "../resolved_ts" }
 security = { path = "../security" }
+semver = "0.9"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tikv = { path = "../../", default-features = false }
@@ -68,5 +70,11 @@ test_util = { path = "../test_util" }
 panic_hook = { path = "../panic_hook" }
 
 [[test]]
-name = "tests"
-path = "tests/mod.rs"
+name = "integrations"
+path = "tests/integrations/mod.rs"
+
+# To avoid failpoints interfere with normal tests, we separate them.
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
+required-features = ["failpoints"]
