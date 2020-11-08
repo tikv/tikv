@@ -9,7 +9,8 @@ use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
 };
 use crate::storage::txn::actions::prewrite::prewrite;
-use crate::storage::txn::commands::{WriteCommand, WriteContext, WriteResult};
+use crate::storage::txn::actions::shared::handle_1pc;
+use crate::storage::txn::commands::{ResponsePolicy, WriteCommand, WriteContext, WriteResult};
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{
     txn::commands::{Command, CommandExt, TypedCommand},
@@ -39,10 +40,15 @@ command! {
             /// How many keys this transaction involved.
             txn_size: u64,
             min_commit_ts: TimeStamp,
+            /// Limits the maximum value of commit ts of async commit and 1PC, which can be used to
+            /// avoid inconsistency with schema change.
             max_commit_ts: TimeStamp,
             /// All secondary keys in the whole transaction (i.e., as sent to all nodes, not only
             /// this node). Only present if using async commit.
             secondary_keys: Option<Vec<Vec<u8>>>,
+            /// When the transaction involves only one region, it's possible to commit the
+            /// transaction directly with 1PC protocol.
+            try_one_pc: bool,
         }
 }
 
@@ -88,6 +94,29 @@ impl Prewrite {
             TimeStamp::default(),
             TimeStamp::default(),
             None,
+            false,
+            Context::default(),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn with_1pc(
+        mutations: Vec<Mutation>,
+        primary: Vec<u8>,
+        start_ts: TimeStamp,
+        max_commit_ts: TimeStamp,
+    ) -> TypedCommand<PrewriteResult> {
+        Prewrite::new(
+            mutations,
+            primary,
+            start_ts,
+            0,
+            false,
+            0,
+            TimeStamp::default(),
+            max_commit_ts,
+            None,
+            true,
             Context::default(),
         )
     }
@@ -109,6 +138,7 @@ impl Prewrite {
             TimeStamp::default(),
             TimeStamp::default(),
             None,
+            false,
             Context::default(),
         )
     }
@@ -129,6 +159,7 @@ impl Prewrite {
             TimeStamp::default(),
             TimeStamp::default(),
             None,
+            false,
             ctx,
         )
     }
@@ -162,7 +193,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
         // Async commit requires the max timestamp in the concurrency manager to be up-to-date.
         // If it is possibly stale due to leader transfer or region merge, return an error.
         // TODO: Fallback to non-async commit if not synced instead of returning an error.
-        if self.secondary_keys.is_some() && !snapshot.is_max_ts_synced() {
+        if (self.secondary_keys.is_some() || self.try_one_pc) && !snapshot.is_max_ts_synced() {
             return Err(ErrorInner::MaxTimestampNotSynced {
                 region_id: self.get_ctx().get_region_id(),
                 start_ts: self.start_ts,
@@ -187,7 +218,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             .map(|_| Key::from_raw(&self.primary));
 
         let mut locks = vec![];
-        let mut async_commit_ts = TimeStamp::zero();
+        let mut final_min_commit_ts = TimeStamp::zero();
         for m in self.mutations {
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
 
@@ -204,10 +235,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 self.txn_size,
                 self.min_commit_ts,
                 self.max_commit_ts,
+                self.try_one_pc,
             ) {
                 Ok(ts) => {
-                    if secondaries.is_some() && async_commit_ts < ts {
-                        async_commit_ts = ts;
+                    if (secondaries.is_some() || self.try_one_pc) && final_min_commit_ts < ts {
+                        final_min_commit_ts = ts;
                     }
                 }
                 e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
@@ -220,13 +252,33 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 Err(e) => return Err(Error::from(e)),
             }
         }
-
         context.statistics.add(&txn.take_statistics());
+
+        let async_commit_ts = if self.secondary_keys.is_some() {
+            final_min_commit_ts
+        } else {
+            TimeStamp::zero()
+        };
+
         let (pr, to_be_write, rows, ctx, lock_info, lock_guards) = if locks.is_empty() {
+            let one_pc_commit_ts = if self.try_one_pc {
+                assert_eq!(txn.locks_for_1pc.len(), rows);
+                assert_ne!(final_min_commit_ts, TimeStamp::zero());
+                // All keys can be successfully locked and `try_one_pc` is set. Try to directly
+                // commit them.
+                let released_locks = handle_1pc(&mut txn, final_min_commit_ts);
+                assert!(released_locks.is_empty());
+                final_min_commit_ts
+            } else {
+                assert!(txn.locks_for_1pc.is_empty());
+                TimeStamp::zero()
+            };
+
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks: vec![],
                     min_commit_ts: async_commit_ts,
+                    one_pc_commit_ts,
                 },
             };
             let txn_extra = txn.take_extra();
@@ -242,10 +294,18 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 result: PrewriteResult {
                     locks,
                     min_commit_ts: async_commit_ts,
+                    one_pc_commit_ts: TimeStamp::zero(),
                 },
             };
             (pr, WriteData::default(), 0, self.ctx, None, vec![])
         };
+        // Currently if `try_one_pc` is set, it must have succeeded here.
+        let response_policy =
+            if (!async_commit_ts.is_zero() || self.try_one_pc) && context.async_apply_prewrite {
+                ResponsePolicy::OnCommitted
+            } else {
+                ResponsePolicy::OnApplied
+            };
         Ok(WriteResult {
             ctx,
             to_be_write,
@@ -253,29 +313,23 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             pr,
             lock_info,
             lock_guards,
+            response_policy,
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use kvproto::kvrpcpb::{Context, ExtraOp};
+    use kvproto::kvrpcpb::Context;
 
-    use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
-    use txn_types::TimeStamp;
     use txn_types::{Key, Mutation};
 
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-    use crate::storage::txn::commands::{
-        Commit, Prewrite, Rollback, WriteContext, FORWARD_MIN_MUTATIONS_NUM,
-    };
-    use crate::storage::txn::LockInfo;
-    use crate::storage::txn::{Error, ErrorInner, Result};
-    use crate::storage::DummyLockManager;
-    use crate::storage::{
-        Engine, PrewriteResult, ProcessResult, Snapshot, Statistics, TestEngineBuilder,
-    };
+    use crate::storage::txn::commands::test_util::{commit, prewrite, prewrite_with_cm, rollback};
+    use crate::storage::txn::commands::FORWARD_MIN_MUTATIONS_NUM;
+    use crate::storage::txn::{Error, ErrorInner};
+    use crate::storage::{Engine, Snapshot, Statistics, TestEngineBuilder};
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
         let mut mutations = Vec::default();
@@ -297,6 +351,7 @@ mod tests {
             ))],
             pri_key.to_vec(),
             99,
+            None,
         )
         .unwrap();
         assert_eq!(1, statistic.write.seek);
@@ -306,6 +361,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             100,
+            None,
         )
         .err()
         .unwrap();
@@ -329,6 +385,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             101,
+            None,
         )
         .err()
         .unwrap();
@@ -344,6 +401,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             104,
+            None,
         )
         .err()
         .unwrap();
@@ -367,13 +425,14 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             104,
+            None,
         )
         .unwrap();
         // All keys are prewrited successful with only one seek operations.
         assert_eq!(1, statistic.write.seek);
         let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
         commit(&engine, &mut statistic, keys.clone(), 104, 105).unwrap();
-        let snap = engine.snapshot(&ctx).unwrap();
+        let snap = engine.snapshot(Default::default()).unwrap();
         for k in keys {
             let v = snap.get_cf(CF_WRITE, &k.append_ts(105.into())).unwrap();
             assert!(v.is_some());
@@ -413,6 +472,7 @@ mod tests {
             mutations.clone(),
             pri_key.to_vec(),
             100,
+            None,
         )
         .unwrap();
         // Rollback to make tombstones in lock-cf.
@@ -426,99 +486,60 @@ mod tests {
         while mutations.len() > FORWARD_MIN_MUTATIONS_NUM + 1 {
             mutations.pop();
         }
-        prewrite(&engine, &mut statistic, mutations, pri_key.to_vec(), 110).unwrap();
+        prewrite(
+            &engine,
+            &mut statistic,
+            mutations,
+            pri_key.to_vec(),
+            110,
+            None,
+        )
+        .unwrap();
         let d = perf.delta();
         assert_eq!(1, statistic.write.seek);
         assert_eq!(d.0.internal_delete_skipped_count, 0);
     }
 
-    fn prewrite<E: Engine>(
-        engine: &E,
-        statistics: &mut Statistics,
-        mutations: Vec<Mutation>,
-        primary: Vec<u8>,
-        start_ts: u64,
-    ) -> Result<()> {
-        let ctx = Context::default();
-        let snap = engine.snapshot(&ctx)?;
-        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
-        let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts));
-        let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
-            concurrency_manager,
-            extra_op: ExtraOp::Noop,
-            statistics,
-            pipelined_pessimistic_lock: false,
-        };
-        let ret = cmd.cmd.process_write(snap, context)?;
-        if let ProcessResult::PrewriteResult {
-            result: PrewriteResult { locks, .. },
-        } = ret.pr
-        {
-            if !locks.is_empty() {
-                let info = LockInfo::default();
-                return Err(Error::from(ErrorInner::Mvcc(MvccError::from(
-                    MvccErrorInner::KeyIsLocked(info),
-                ))));
-            }
-        }
-        let ctx = Context::default();
-        engine.write(&ctx, ret.to_be_write).unwrap();
-        Ok(())
-    }
+    #[test]
+    fn test_prewrite_1pc() {
+        use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
 
-    fn commit<E: Engine>(
-        engine: &E,
-        statistics: &mut Statistics,
-        keys: Vec<Key>,
-        lock_ts: u64,
-        commit_ts: u64,
-    ) -> Result<()> {
-        let ctx = Context::default();
-        let snap = engine.snapshot(&ctx)?;
-        let concurrency_manager = ConcurrencyManager::new(lock_ts.into());
-        let cmd = Commit::new(
-            keys,
-            TimeStamp::from(lock_ts),
-            TimeStamp::from(commit_ts),
-            ctx,
-        );
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
 
-        let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
-            concurrency_manager,
-            extra_op: ExtraOp::Noop,
-            statistics,
-            pipelined_pessimistic_lock: false,
-        };
+        let key = b"k";
+        let value = b"v";
+        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
 
-        let ret = cmd.cmd.process_write(snap, context)?;
-        let ctx = Context::default();
-        engine.write(&ctx, ret.to_be_write).unwrap();
-        Ok(())
-    }
+        let mut statistics = Statistics::default();
+        prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            mutations,
+            key.to_vec(),
+            10,
+            Some(15),
+        )
+        .unwrap();
+        must_unlocked(&engine, key);
+        must_get(&engine, key, 12, value);
+        must_get_commit_ts(&engine, key, 10, 11);
 
-    fn rollback<E: Engine>(
-        engine: &E,
-        statistics: &mut Statistics,
-        keys: Vec<Key>,
-        start_ts: u64,
-    ) -> Result<()> {
-        let ctx = Context::default();
-        let snap = engine.snapshot(&ctx)?;
-        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
-        let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
-        let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
-            concurrency_manager,
-            extra_op: ExtraOp::Noop,
-            statistics,
-            pipelined_pessimistic_lock: false,
-        };
+        cm.update_max_ts(50.into());
 
-        let ret = cmd.cmd.process_write(snap, context)?;
-        let ctx = Context::default();
-        engine.write(&ctx, ret.to_be_write).unwrap();
-        Ok(())
+        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
+
+        let mut statistics = Statistics::default();
+        prewrite_with_cm(
+            &engine,
+            cm,
+            &mut statistics,
+            mutations,
+            key.to_vec(),
+            20,
+            Some(30),
+        )
+        .unwrap_err();
     }
 }

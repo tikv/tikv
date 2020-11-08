@@ -22,10 +22,12 @@ fn test_snapshot_encryption<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_node_snapshot_encryption() {
     let mut cluster = new_node_cluster(0, 2);
     test_snapshot_encryption(&mut cluster);
+    std::mem::forget(cluster.take_path());
 }
 
 #[test]
 fn test_server_snapshot_encryption() {
     let mut cluster = new_server_cluster(0, 2);
     test_snapshot_encryption(&mut cluster);
+    std::mem::forget(cluster.take_path());
 }

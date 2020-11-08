@@ -349,25 +349,25 @@ mod tests {
             None,
         ];
         let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
-        for i in 0..test_bytes.len() {
+        for test_byte in test_bytes {
             let writer = chunked_vec.into_writer();
-            let guard = writer.write(test_bytes[i].to_owned());
+            let guard = writer.write(test_byte.to_owned());
             chunked_vec = guard.into_inner();
         }
         assert_eq!(chunked_vec.to_vec(), test_bytes);
 
         let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
-        for i in 0..test_bytes.len() {
+        for test_byte in test_bytes {
             let writer = chunked_vec.into_writer();
-            let guard = writer.write(test_bytes[i].clone());
+            let guard = writer.write(test_byte.clone());
             chunked_vec = guard.into_inner();
         }
         assert_eq!(chunked_vec.to_vec(), test_bytes);
 
         let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
-        for i in 0..test_bytes.len() {
+        for test_byte in test_bytes {
             let writer = chunked_vec.into_writer();
-            let guard = match test_bytes[i].clone() {
+            let guard = match test_byte.clone() {
                 Some(x) => {
                     let mut writer = writer.begin();
                     writer.partial_write(x.as_slice());

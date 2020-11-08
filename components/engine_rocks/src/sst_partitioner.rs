@@ -24,9 +24,7 @@ impl<F: engine_traits::SstPartitionerFactory> rocksdb::SstPartitionerFactory
             smallest_key: context.smallest_key,
             largest_key: context.largest_key,
         };
-        self.0
-            .create_partitioner(&ctx)
-            .map(|p| RocksSstPartitioner(p))
+        self.0.create_partitioner(&ctx).map(RocksSstPartitioner)
     }
 }
 

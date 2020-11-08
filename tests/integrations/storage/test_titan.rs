@@ -404,7 +404,7 @@ fn test_delete_files_in_range_for_titan() {
     r.mut_peers().push(Peer::default());
     r.set_start_key(b"a".to_vec());
     r.set_end_key(b"z".to_vec());
-    let snapshot = RegionSnapshot::<RocksSnapshot>::from_raw(engines1.kv.clone(), r);
+    let snapshot = RegionSnapshot::<RocksSnapshot>::from_raw(engines1.kv, r);
     let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
         .range(Some(Key::from_raw(b"a")), None)
         .build()

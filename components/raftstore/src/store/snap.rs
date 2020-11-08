@@ -1196,15 +1196,12 @@ impl SnapManager {
                 }
 
                 let is_sending = name.starts_with(SNAP_GEN_PREFIX);
-                let numbers: Vec<u64> = name.split('.').next().map_or_else(
-                    || vec![],
-                    |s| {
-                        s.split('_')
-                            .skip(1)
-                            .filter_map(|s| s.parse().ok())
-                            .collect()
-                    },
-                );
+                let numbers: Vec<u64> = name.split('.').next().map_or_else(Vec::new, |s| {
+                    s.split('_')
+                        .skip(1)
+                        .filter_map(|s| s.parse().ok())
+                        .collect()
+                });
                 if numbers.len() != 3 {
                     error!(
                         "failed to parse snapkey";

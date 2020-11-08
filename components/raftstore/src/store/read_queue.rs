@@ -443,10 +443,10 @@ mod tests {
         queue.handled_cnt = 100;
 
         let ids: [Uuid; 2] = [Uuid::new_v4(), Uuid::new_v4()];
-        for i in 0..2 {
+        for id in &ids {
             // Push a pending read comand when the peer is follower.
             let req = ReadIndexRequest::with_command(
-                ids[i],
+                *id,
                 RaftCmdRequest::default(),
                 Callback::None,
                 Timespec::new(0, 0),
