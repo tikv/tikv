@@ -31,6 +31,25 @@ pub fn prewrite<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
     ));
 
+    // Check whether the current key is locked at any timestamp.
+    if let Some(lock) = txn.reader.load_lock(&key)? {
+        if lock.ts != txn.start_ts {
+            return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
+        }
+        // TODO: remove it in future
+        if lock.lock_type == LockType::Pessimistic {
+            return Err(ErrorInner::LockTypeNotMatch {
+                start_ts: txn.start_ts,
+                key: key.into_raw()?,
+                pessimistic: true,
+            }
+            .into());
+        }
+        // Duplicated command. No need to overwrite the lock and data.
+        MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+        return Ok(lock.min_commit_ts);
+    }
+
     let mut prev_write = None;
     // Check whether there is a newer version.
     if !skip_constraint_check {
@@ -66,30 +85,14 @@ pub fn prewrite<S: Snapshot>(
                 }
                 .into());
             }
+            // Should check it when no lock exists, otherwise it can report error when there is
+            // a lock belonging to a committed transaction which deletes the key.
             txn.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
             prev_write = Some(write);
         }
     }
     if should_not_write {
         return Ok(TimeStamp::zero());
-    }
-    // Check whether the current key is locked at any timestamp.
-    if let Some(lock) = txn.reader.load_lock(&key)? {
-        if lock.ts != txn.start_ts {
-            return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
-        }
-        // TODO: remove it in future
-        if lock.lock_type == LockType::Pessimistic {
-            return Err(ErrorInner::LockTypeNotMatch {
-                start_ts: txn.start_ts,
-                key: key.into_raw()?,
-                pessimistic: true,
-            }
-            .into());
-        }
-        // Duplicated command. No need to overwrite the lock and data.
-        MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-        return Ok(lock.min_commit_ts);
     }
 
     txn.check_extra_op(&key, mutation_type, prev_write)?;
@@ -126,7 +129,7 @@ pub mod tests {
         ts: impl Into<TimeStamp>,
     ) -> MvccResult<()> {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = ts.into();
         let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
@@ -153,8 +156,7 @@ pub mod tests {
         pk: &[u8],
         ts: impl Into<TimeStamp>,
     ) -> MvccResult<()> {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = ts.into();
         let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
@@ -179,8 +181,7 @@ pub mod tests {
         let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(42.into());
 
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok
@@ -220,8 +221,7 @@ pub mod tests {
         let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(42.into());
 
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok

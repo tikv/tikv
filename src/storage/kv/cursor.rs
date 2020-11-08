@@ -146,15 +146,13 @@ impl<I: Iterator> Cursor<I> {
                 if self.key(statistics) < key.as_encoded().as_slice() {
                     self.next(statistics);
                 }
+            } else if self.prefix_seek {
+                // When prefixed seek and prefix_same_as_start enabled
+                // seek_to_first may return false due to no key's prefix is same as iter lower bound's
+                return self.seek(key, statistics);
             } else {
-                if self.prefix_seek {
-                    // When prefixed seek and prefix_same_as_start enabled
-                    // seek_to_first may return false due to no key's prefix is same as iter lower bound's
-                    return self.seek(key, statistics);
-                } else {
-                    assert!(self.seek_to_first(statistics));
-                    return Ok(true);
-                }
+                assert!(self.seek_to_first(statistics));
+                return Ok(true);
             }
         } else {
             // ord == Less
@@ -256,13 +254,11 @@ impl<I: Iterator> Cursor<I> {
                 if self.key(statistics) > key.as_encoded().as_slice() {
                     self.prev(statistics);
                 }
+            } else if self.prefix_seek {
+                return self.seek_for_prev(key, statistics);
             } else {
-                if self.prefix_seek {
-                    return self.seek_for_prev(key, statistics);
-                } else {
-                    assert!(self.seek_to_last(statistics));
-                    return Ok(true);
-                }
+                assert!(self.seek_to_last(statistics));
+                return Ok(true);
             }
         } else {
             near_loop!(
@@ -426,14 +422,14 @@ impl<I: Iterator> Cursor<I> {
             panic!(
                 "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
                 e,
-                self.min_key.as_ref().map(|v| hex::encode_upper(v)),
-                self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+                self.min_key.as_ref().map(hex::encode_upper),
+                self.max_key.as_ref().map(hex::encode_upper),
             );
         } else {
             error!(?e;
                 "failed to iterate";
-                "min_key" => ?self.min_key.as_ref().map(|v| hex::encode_upper(v)),
-                "max_key" => ?self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+                "min_key" => ?self.min_key.as_ref().map(hex::encode_upper),
+                "max_key" => ?self.max_key.as_ref().map(hex::encode_upper),
             );
             Err(e)
         }

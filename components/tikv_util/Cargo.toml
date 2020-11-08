@@ -31,14 +31,14 @@ libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 num_cpus = "1"
 openssl = "0.10"
-prometheus = { version = "0.8", features = ["nightly"] }
+prometheus = { version = "0.10", features = ["nightly"] }
 quick-error = "1.2.3"
 rand = "0.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-async = "2.3"
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 slog-json = "2.3"
 slog-term = "2.4"
 sysinfo = "0.15"
@@ -51,19 +51,16 @@ url = "2"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", branch = "master" }
 protobuf = "2"
-
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "309c751b31e644c318ff7c33cda015d43e39ec52" }
 procfs = "0.7"
-
-[dependencies.yatp]
-git = "https://github.com/tikv/yatp.git"
 
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }
 protobuf = "2"
 regex = "1.0"
 tempfile = "3.0"
-toml = "0.4"
+toml = "0.5"
 utime = "0.2"

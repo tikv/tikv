@@ -154,7 +154,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
         .unwrap();
 
     // The prewritten lock is not seen by the reader
-    assert_eq!(block_on(get_fut).unwrap(), None);
+    assert_eq!(block_on(get_fut).unwrap().0, None);
     // But we make sure in this case min_commit_ts is greater than start_ts.
     let res = prewrite_rx.recv().unwrap().unwrap();
     assert_eq!(res.min_commit_ts, 101.into());

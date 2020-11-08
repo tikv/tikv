@@ -8,8 +8,7 @@ use kvproto::coprocessor::KeyRange;
 use tipb::ColumnInfo;
 
 use test_coprocessor::*;
-use tidb_query_normal_executors::Executor;
-use tidb_query_vec_executors::interface::*;
+use tidb_query_executors::interface::*;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Store as TxnStore};
 
@@ -68,104 +67,6 @@ where
     #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
-    }
-}
-
-pub struct NormalScanNext1Bencher<B>
-where
-    B: ScanExecutorBuilder,
-    B::E: Executor,
-{
-    _phantom: PhantomData<B>,
-}
-
-impl<B> NormalScanNext1Bencher<B>
-where
-    B: ScanExecutorBuilder,
-    B::E: Executor,
-{
-    pub fn new() -> Self {
-        Self {
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<B, M> ScanBencher<B::P, M> for NormalScanNext1Bencher<B>
-where
-    B: ScanExecutorBuilder,
-    B::E: Executor,
-    M: Measurement,
-{
-    fn name(&self) -> String {
-        format!("{}/normal/next=1", <B::T as StoreDescriber>::name())
-    }
-
-    fn bench(
-        &self,
-        b: &mut criterion::Bencher<M>,
-        columns: &[ColumnInfo],
-        ranges: &[KeyRange],
-        store: &Store<RocksEngine>,
-        parameters: B::P,
-    ) {
-        crate::util::bencher::NormalNext1Bencher::new(|| {
-            B::build(columns, ranges, store, parameters)
-        })
-        .bench(b);
-    }
-
-    fn box_clone(&self) -> Box<dyn ScanBencher<B::P, M>> {
-        Box::new(Self::new())
-    }
-}
-
-pub struct NormalScanNext1024Bencher<B>
-where
-    B: ScanExecutorBuilder,
-    B::E: Executor,
-{
-    _phantom: PhantomData<B>,
-}
-
-impl<B> NormalScanNext1024Bencher<B>
-where
-    B: ScanExecutorBuilder,
-    B::E: Executor,
-{
-    pub fn new() -> Self {
-        Self {
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<B, M> ScanBencher<B::P, M> for NormalScanNext1024Bencher<B>
-where
-    B: ScanExecutorBuilder,
-    B::E: Executor,
-    M: Measurement,
-{
-    fn name(&self) -> String {
-        format!("{}/normal/next=1024", <B::T as StoreDescriber>::name())
-    }
-
-    fn bench(
-        &self,
-        b: &mut criterion::Bencher<M>,
-        columns: &[ColumnInfo],
-        ranges: &[KeyRange],
-        store: &Store<RocksEngine>,
-        parameters: B::P,
-    ) {
-        crate::util::bencher::NormalNext1024Bencher::new(|| {
-            B::build(columns, ranges, store, parameters)
-        })
-        .bench(b);
-    }
-
-    fn box_clone(&self) -> Box<dyn ScanBencher<B::P, M>> {
-        Box::new(Self::new())
     }
 }
 

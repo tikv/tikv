@@ -18,7 +18,6 @@ pub fn pessimistic_prewrite<S: Snapshot>(
     txn_size: u64,
     mut min_commit_ts: TimeStamp,
     max_commit_ts: TimeStamp,
-    pipelined_pessimistic_lock: bool,
     try_one_pc: bool,
 ) -> MvccResult<TimeStamp> {
     if mutation.should_not_write() {
@@ -67,7 +66,7 @@ pub fn pessimistic_prewrite<S: Snapshot>(
             true
         }
     } else if is_pessimistic_lock {
-        txn.amend_pessimistic_lock(pipelined_pessimistic_lock, &key)?;
+        txn.amend_pessimistic_lock(&key)?;
         false
     } else {
         false
@@ -99,7 +98,6 @@ pub mod tests {
     use crate::storage::txn::tests::must_acquire_pessimistic_lock;
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::Context;
 
     pub fn try_pessimistic_prewrite_check_not_exists<E: Engine>(
         engine: &E,
@@ -107,8 +105,7 @@ pub mod tests {
         pk: &[u8],
         ts: impl Into<TimeStamp>,
     ) -> MvccResult<()> {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = ts.into();
         let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
@@ -125,7 +122,6 @@ pub mod tests {
             TimeStamp::default(),
             TimeStamp::default(),
             false,
-            false,
         )?;
         Ok(())
     }
@@ -138,8 +134,7 @@ pub mod tests {
         must_acquire_pessimistic_lock(&engine, b"k1", b"k1", 10, 10);
         must_acquire_pessimistic_lock(&engine, b"k2", b"k1", 10, 10);
 
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok
@@ -154,7 +149,6 @@ pub mod tests {
             2,
             10.into(),
             50.into(),
-            false,
             false,
         )
         .unwrap();
@@ -173,7 +167,6 @@ pub mod tests {
             10.into(),
             50.into(),
             false,
-            false,
         )
         .unwrap_err();
     }
@@ -186,8 +179,7 @@ pub mod tests {
         must_acquire_pessimistic_lock(&engine, b"k1", b"k1", 10, 10);
         must_acquire_pessimistic_lock(&engine, b"k2", b"k1", 10, 10);
 
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok
@@ -202,7 +194,6 @@ pub mod tests {
             2,
             10.into(),
             50.into(),
-            false,
             true,
         )
         .unwrap();
@@ -220,7 +211,6 @@ pub mod tests {
             2,
             10.into(),
             50.into(),
-            false,
             true,
         )
         .unwrap_err();

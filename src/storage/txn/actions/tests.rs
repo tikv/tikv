@@ -6,7 +6,7 @@ use super::*;
 use crate::storage::kv::WriteData;
 use crate::storage::mvcc::tests::write;
 use crate::storage::mvcc::{Error, Key, Mutation, MvccTxn, TimeStamp};
-use crate::storage::Engine;
+use crate::storage::{txn, Engine};
 use concurrency_manager::ConcurrencyManager;
 use kvproto::kvrpcpb::Context;
 use pessimistic_prewrite::pessimistic_prewrite;
@@ -25,10 +25,9 @@ pub fn must_prewrite_put_impl<E: Engine>(
     txn_size: u64,
     min_commit_ts: TimeStamp,
     max_commit_ts: TimeStamp,
-    pipelined_pessimistic_lock: bool,
 ) {
     let ctx = Context::default();
-    let snapshot = engine.snapshot(&ctx).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     let cm = ConcurrencyManager::new(ts);
     let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
@@ -59,7 +58,6 @@ pub fn must_prewrite_put_impl<E: Engine>(
             txn_size,
             min_commit_ts,
             max_commit_ts,
-            pipelined_pessimistic_lock,
             false,
         )
         .unwrap();
@@ -87,7 +85,6 @@ pub fn must_prewrite_put<E: Engine>(
         0,
         TimeStamp::default(),
         TimeStamp::default(),
-        false,
     );
 }
 
@@ -113,33 +110,6 @@ pub fn must_pessimistic_prewrite_put<E: Engine>(
         0,
         TimeStamp::default(),
         TimeStamp::default(),
-        false,
-    );
-}
-
-pub fn must_pipelined_pessimistic_prewrite_put<E: Engine>(
-    engine: &E,
-    key: &[u8],
-    value: &[u8],
-    pk: &[u8],
-    ts: impl Into<TimeStamp>,
-    for_update_ts: impl Into<TimeStamp>,
-    is_pessimistic_lock: bool,
-) {
-    must_prewrite_put_impl(
-        engine,
-        key,
-        value,
-        pk,
-        &None,
-        ts.into(),
-        is_pessimistic_lock,
-        0,
-        for_update_ts.into(),
-        0,
-        TimeStamp::default(),
-        TimeStamp::default(),
-        true,
     );
 }
 
@@ -166,7 +136,6 @@ pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
         0,
         TimeStamp::default(),
         TimeStamp::default(),
-        false,
     );
 }
 
@@ -196,7 +165,6 @@ pub fn must_prewrite_put_for_large_txn<E: Engine>(
         0,
         min_commit_ts,
         TimeStamp::default(),
-        false,
     );
 }
 
@@ -223,7 +191,6 @@ pub fn must_prewrite_put_async_commit<E: Engine>(
         0,
         min_commit_ts.into(),
         TimeStamp::default(),
-        false,
     );
 }
 
@@ -252,7 +219,6 @@ pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
         0,
         min_commit_ts.into(),
         TimeStamp::default(),
-        false,
     );
 }
 
@@ -264,10 +230,8 @@ fn must_prewrite_put_err_impl<E: Engine>(
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
     is_pessimistic_lock: bool,
-    pipelined_pessimistic_lock: bool,
 ) -> Error {
-    let ctx = Context::default();
-    let snapshot = engine.snapshot(&ctx).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
     let cm = ConcurrencyManager::new(for_update_ts);
     let mut txn = MvccTxn::new(snapshot, ts.into(), true, cm);
@@ -299,7 +263,6 @@ fn must_prewrite_put_err_impl<E: Engine>(
             0,
             TimeStamp::default(),
             TimeStamp::default(),
-            pipelined_pessimistic_lock,
             false,
         )
         .unwrap_err()
@@ -313,7 +276,7 @@ pub fn must_prewrite_put_err<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
 ) -> Error {
-    must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false, false)
+    must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false)
 }
 
 pub fn must_pessimistic_prewrite_put_err<E: Engine>(
@@ -333,28 +296,6 @@ pub fn must_pessimistic_prewrite_put_err<E: Engine>(
         ts,
         for_update_ts,
         is_pessimistic_lock,
-        false,
-    )
-}
-
-pub fn must_pipelined_pessimistic_prewrite_put_err<E: Engine>(
-    engine: &E,
-    key: &[u8],
-    value: &[u8],
-    pk: &[u8],
-    ts: impl Into<TimeStamp>,
-    for_update_ts: impl Into<TimeStamp>,
-    is_pessimistic_lock: bool,
-) -> Error {
-    must_prewrite_put_err_impl(
-        engine,
-        key,
-        value,
-        pk,
-        ts,
-        for_update_ts,
-        is_pessimistic_lock,
-        true,
     )
 }
 
@@ -367,7 +308,7 @@ fn must_prewrite_delete_impl<E: Engine>(
     is_pessimistic_lock: bool,
 ) {
     let ctx = Context::default();
-    let snapshot = engine.snapshot(&ctx).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
     let cm = ConcurrencyManager::new(for_update_ts);
     let mut txn = MvccTxn::new(snapshot, ts.into(), true, cm);
@@ -399,7 +340,6 @@ fn must_prewrite_delete_impl<E: Engine>(
             0,
             TimeStamp::default(),
             TimeStamp::default(),
-            false,
             false,
         )
         .unwrap();
@@ -438,7 +378,7 @@ fn must_prewrite_lock_impl<E: Engine>(
     is_pessimistic_lock: bool,
 ) {
     let ctx = Context::default();
-    let snapshot = engine.snapshot(&ctx).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
     let cm = ConcurrencyManager::new(for_update_ts);
     let mut txn = MvccTxn::new(snapshot, ts.into(), true, cm);
@@ -471,7 +411,6 @@ fn must_prewrite_lock_impl<E: Engine>(
             TimeStamp::default(),
             TimeStamp::default(),
             false,
-            false,
         )
         .unwrap();
     }
@@ -490,8 +429,7 @@ pub fn must_prewrite_lock_err<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
 ) {
-    let ctx = Context::default();
-    let snapshot = engine.snapshot(&ctx).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     let ts = ts.into();
     let cm = ConcurrencyManager::new(ts);
     let mut txn = MvccTxn::new(snapshot, ts, true, cm);
@@ -520,4 +458,33 @@ pub fn must_pessimistic_prewrite_lock<E: Engine>(
     is_pessimistic_lock: bool,
 ) {
     must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
+}
+
+pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
+    let ctx = Context::default();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
+    let start_ts = start_ts.into();
+    let cm = ConcurrencyManager::new(start_ts);
+    let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
+    txn.collapse_rollback(false);
+    txn::cleanup(&mut txn, Key::from_raw(key), TimeStamp::zero(), false).unwrap();
+    write(engine, &ctx, txn.into_modifies());
+}
+
+pub fn must_rollback_collapsed<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
+    let ctx = Context::default();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
+    let start_ts = start_ts.into();
+    let cm = ConcurrencyManager::new(start_ts);
+    let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
+    txn::cleanup(&mut txn, Key::from_raw(key), TimeStamp::zero(), false).unwrap();
+    write(engine, &ctx, txn.into_modifies());
+}
+
+pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
+    let snapshot = engine.snapshot(Default::default()).unwrap();
+    let start_ts = start_ts.into();
+    let cm = ConcurrencyManager::new(start_ts);
+    let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
+    assert!(txn::cleanup(&mut txn, Key::from_raw(key), TimeStamp::zero(), false).is_err());
 }

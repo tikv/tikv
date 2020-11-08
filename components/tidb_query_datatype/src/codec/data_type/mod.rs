@@ -130,7 +130,7 @@ pub trait UnsafeRefInto<T> {
     ///
     /// This function uses `std::mem::transmute`.
     /// The only place that copr uses this function is in
-    /// `tidb_query_vec_aggr`, together with a set of `update` macros.
+    /// `tidb_query_aggr`, together with a set of `update` macros.
     unsafe fn unsafe_into(self) -> T;
 }
 
@@ -159,6 +159,20 @@ pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
     fn into_vector_value(vec: Self::ChunkedType) -> VectorValue;
 }
 
+/// # Notes
+///
+/// Make sure operating `bitmap` and `value` together, so while `bitmap` is 0 and the
+/// corresponding value is None.
+///
+/// With this guaranty, we can avoid the following issue:
+///
+/// For Data [Some(1), Some(2), None], we could have different stored representation:
+///
+/// Bitmap: 110, Value: 1, 2, 0
+/// Bitmap: 110, Value: 1, 2, 1
+/// Bitmap: 110, Value: 1, 2, 3
+///
+/// `PartialEq` between `Value`'s result could be wrong.
 pub trait ChunkedVec<T> {
     fn chunked_with_capacity(capacity: usize) -> Self;
     fn chunked_push(&mut self, value: Option<T>);

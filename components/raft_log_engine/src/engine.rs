@@ -84,7 +84,7 @@ impl RaftEngine for RaftLogEngine {
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
         self.0
             .get_entry(raft_group_id, index)
-            .map_err(|e| transfer_error(e))
+            .map_err(transfer_error)
     }
 
     fn fetch_entries_to(
@@ -97,7 +97,7 @@ impl RaftEngine for RaftLogEngine {
     ) -> Result<usize> {
         self.0
             .fetch_entries_to(raft_group_id, begin, end, max_size, to)
-            .map_err(|e| transfer_error(e))
+            .map_err(transfer_error)
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {

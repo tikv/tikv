@@ -137,7 +137,7 @@ pub mod tests {
         expect_ttl: u64,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let command = crate::storage::txn::commands::TxnHeartBeat {
@@ -154,7 +154,6 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
                     async_apply_prewrite: false,
                 },
             )
@@ -177,7 +176,7 @@ pub mod tests {
         advise_ttl: u64,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let command = crate::storage::txn::commands::TxnHeartBeat {
@@ -194,7 +193,6 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
                     async_apply_prewrite: false,
                 },
             )

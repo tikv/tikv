@@ -2,7 +2,7 @@
 
 use crate::server::metrics::{GcKeysCF, GcKeysDetail};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::{ScanDetail, ScanInfo};
+use kvproto::kvrpcpb::{ScanDetail, ScanDetailV2, ScanInfo};
 pub use raftstore::store::{FlowStatistics, FlowStatsReporter};
 
 const STAT_PROCESSED_KEYS: &str = "processed_keys";
@@ -154,6 +154,11 @@ impl Statistics {
             CF_WRITE => &mut self.write,
             _ => unreachable!(),
         }
+    }
+
+    pub fn write_scan_detail(&self, detail_v2: &mut ScanDetailV2) {
+        detail_v2.set_processed_versions(self.write.processed_keys as u64);
+        detail_v2.set_total_versions(self.write.total_op_count() as u64);
     }
 }
 
