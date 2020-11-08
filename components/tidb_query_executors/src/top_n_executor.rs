@@ -15,8 +15,8 @@ use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalWarnings;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_vec_expr::RpnStackNode;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_expr::RpnStackNode;
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
 
 pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// The heap, which contains N rows at most.
@@ -483,7 +483,7 @@ mod tests {
 
     use crate::util::mock_executor::MockExecutor;
     use tidb_query_datatype::expr::EvalWarnings;
-    use tidb_query_vec_expr::RpnExpressionBuilder;
+    use tidb_query_expr::RpnExpressionBuilder;
 
     #[test]
     fn test_top_0() {
@@ -772,8 +772,8 @@ mod tests {
 
     #[test]
     fn test_integration_3() {
-        use tidb_query_vec_expr::impl_arithmetic::{arithmetic_fn_meta, IntIntPlus};
-        use tidb_query_vec_expr::impl_op::is_null_fn_meta;
+        use tidb_query_expr::impl_arithmetic::{arithmetic_fn_meta, IntIntPlus};
+        use tidb_query_expr::impl_op::is_null_fn_meta;
 
         // Order by multiple expressions, data len > n.
         //

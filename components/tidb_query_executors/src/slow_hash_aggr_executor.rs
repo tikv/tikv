@@ -15,13 +15,13 @@ use crate::interface::*;
 use crate::util::aggr_executor::*;
 use crate::util::hash_aggr_helper::HashAggregationHelper;
 use crate::util::*;
+use tidb_query_aggr::*;
 use tidb_query_common::storage::IntervalRange;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_vec_aggr::*;
-use tidb_query_vec_expr::RpnStackNode;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_expr::RpnStackNode;
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
 
 /// Slow Hash Aggregation Executor supports multiple groups but uses less efficient ways to
 /// store group keys in hash tables.
@@ -501,8 +501,8 @@ mod tests {
 
     use crate::util::aggr_executor::tests::*;
     use tidb_query_datatype::codec::data_type::*;
-    use tidb_query_vec_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
-    use tidb_query_vec_expr::RpnExpressionBuilder;
+    use tidb_query_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
+    use tidb_query_expr::RpnExpressionBuilder;
 
     #[test]
     #[allow(clippy::string_lit_as_bytes)]

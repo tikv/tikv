@@ -12,7 +12,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_vec_expr::RpnExpression;
+use tidb_query_expr::RpnExpression;
 
 /// A trait for MAX/MIN aggregation functions
 pub trait Extremum: Clone + std::fmt::Debug + Send + Sync + 'static {

@@ -27,7 +27,7 @@ use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
 const BATCH_INITIAL_SIZE: usize = 32;
 
 // TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
-pub use tidb_query_vec_expr::types::BATCH_MAX_SIZE;
+pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;

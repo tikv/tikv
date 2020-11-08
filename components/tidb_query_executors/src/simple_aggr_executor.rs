@@ -10,13 +10,13 @@ use tipb::{Expr, FieldType};
 
 use crate::interface::*;
 use crate::util::aggr_executor::*;
+use tidb_query_aggr::*;
 use tidb_query_common::storage::IntervalRange;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_vec_aggr::*;
-use tidb_query_vec_expr::RpnStackNode;
+use tidb_query_expr::RpnStackNode;
 
 pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, SimpleAggregationImpl>,
@@ -223,7 +223,7 @@ mod tests {
     use crate::util::aggr_executor::tests::*;
     use crate::util::mock_executor::MockExecutor;
     use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
-    use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+    use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
 
     #[test]
     fn test_it_works_unit() {

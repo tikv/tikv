@@ -1,5 +1,5 @@
 [package]
-name = "tidb_query_vec_expr"
+name = "tidb_query_expr"
 version = "0.0.1"
 edition = "2018"
 publish = false

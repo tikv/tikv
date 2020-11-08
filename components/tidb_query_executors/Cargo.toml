@@ -1,5 +1,5 @@
 [package]
-name = "tidb_query_vec_executors"
+name = "tidb_query_executors"
 version = "0.0.1"
 edition = "2018"
 publish = false
@@ -17,8 +17,8 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 smallvec = "1.4"
 tidb_query_datatype = { path = "../tidb_query_datatype" }
 tidb_query_common = { path = "../tidb_query_common" }
-tidb_query_vec_expr = { path = "../tidb_query_vec_expr" }
-tidb_query_vec_aggr = { path = "../tidb_query_vec_aggr" }
+tidb_query_expr = { path = "../tidb_query_expr" }
+tidb_query_aggr = { path = "../tidb_query_aggr" }
 tikv_util = { path = "../tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }

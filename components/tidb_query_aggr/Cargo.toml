@@ -1,5 +1,5 @@
 [package]
-name = "tidb_query_vec_aggr"
+name = "tidb_query_aggr"
 version = "0.0.1"
 edition = "2018"
 publish = false
@@ -10,7 +10,7 @@ match_template = { path = "../match_template" }
 tidb_query_codegen = { path = "../tidb_query_codegen" }
 tidb_query_datatype = { path = "../tidb_query_datatype" }
 tidb_query_common = { path = "../tidb_query_common" }
-tidb_query_vec_expr = { path = "../tidb_query_vec_expr" }
+tidb_query_expr = { path = "../tidb_query_expr" }
 tikv_util = { path = "../tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 
