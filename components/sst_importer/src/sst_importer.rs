@@ -719,6 +719,13 @@ impl ImportFile {
         key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<ImportFile> {
         let file: Box<dyn Write + Send> = if let Some(ref manager) = key_manager {
+            // key manager will truncate existed file, so we should check exist manually.
+            if path.temp.exists() {
+                return Err(Error::Io(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("file already exists, {}", path.temp.to_str().unwrap()),
+                )));
+            }
             Box::new(manager.create_file(&path.temp)?)
         } else {
             Box::new(
