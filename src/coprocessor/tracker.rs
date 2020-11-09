@@ -5,7 +5,7 @@ use kvproto::kvrpcpb::ScanDetailV2;
 
 use crate::storage::kv::PerfStatisticsDelta;
 
-use engine_rocks::{set_perf_level, PerfLevel};
+use engine_rocks::set_perf_level;
 use tikv_util::time::{self, Duration, Instant};
 
 use super::metrics::*;
@@ -121,7 +121,7 @@ impl Tracker {
             self.current_stage == TrackerState::AllItemsBegan
                 || self.current_stage == TrackerState::ItemFinished
         );
-        set_perf_level(PerfLevel::EnableTime);
+        set_perf_level(self.req_ctx.perf_level);
         self.item_begin_at = Instant::now_coarse();
         self.current_stage = TrackerState::ItemBegan;
     }

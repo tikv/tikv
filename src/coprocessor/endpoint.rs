@@ -31,6 +31,7 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
+use engine_rocks::PerfLevel;
 use minitrace::prelude::*;
 use txn_types::Lock;
 
@@ -47,6 +48,9 @@ pub struct Endpoint<E: Engine> {
     semaphore: Option<Arc<Semaphore>>,
 
     concurrency_manager: ConcurrencyManager,
+
+    // Perf stats level
+    perf_level: PerfLevel,
 
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     ///
@@ -81,6 +85,7 @@ impl<E: Engine> Endpoint<E> {
         cfg: &Config,
         read_pool: ReadPoolHandle,
         concurrency_manager: ConcurrencyManager,
+        perf_level: PerfLevel,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
         // using too much memory. However, if there are a number of large requests, small requests
@@ -95,6 +100,7 @@ impl<E: Engine> Endpoint<E> {
             read_pool,
             semaphore,
             concurrency_manager,
+            perf_level,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
@@ -229,6 +235,7 @@ impl<E: Engine> Endpoint<E> {
                     Some(is_desc_scan),
                     start_ts.into(),
                     cache_match_version,
+                    self.perf_level,
                 );
 
                 self.check_memory_locks(&req_ctx)?;
@@ -279,6 +286,7 @@ impl<E: Engine> Endpoint<E> {
                     None,
                     start_ts.into(),
                     cache_match_version,
+                    self.perf_level,
                 );
 
                 self.check_memory_locks(&req_ctx)?;
@@ -316,6 +324,7 @@ impl<E: Engine> Endpoint<E> {
                     None,
                     start_ts.into(),
                     cache_match_version,
+                    self.perf_level,
                 );
 
                 self.check_memory_locks(&req_ctx)?;

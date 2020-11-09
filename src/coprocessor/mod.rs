@@ -37,6 +37,7 @@ pub use checksum::checksum_crc64_xor;
 use crate::storage::mvcc::TimeStamp;
 use crate::storage::Statistics;
 use async_trait::async_trait;
+use engine_rocks::PerfLevel;
 use kvproto::{coprocessor as coppb, kvrpcpb};
 use metrics::ReqTag;
 use rand::prelude::*;
@@ -117,6 +118,9 @@ pub struct ReqContext {
 
     /// The upper bound key in ranges of the request
     pub upper_bound: Vec<u8>,
+
+    /// Perf level
+    pub perf_level: PerfLevel,
 }
 
 impl ReqContext {
@@ -129,6 +133,7 @@ impl ReqContext {
         is_desc_scan: Option<bool>,
         txn_start_ts: TimeStamp,
         cache_match_version: Option<u64>,
+        perf_level: PerfLevel,
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
@@ -152,6 +157,7 @@ impl ReqContext {
             cache_match_version,
             lower_bound,
             upper_bound,
+            perf_level,
         }
     }
 
