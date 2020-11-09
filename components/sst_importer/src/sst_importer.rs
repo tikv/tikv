@@ -57,7 +57,7 @@ impl SSTImporter {
     }
 
     pub fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
-        match self.dir.create(meta) {
+        match self.dir.create(meta, self.key_manager.clone()) {
             Ok(f) => {
                 info!("create"; "file" => ?f);
                 Ok(f)
@@ -70,7 +70,7 @@ impl SSTImporter {
     }
 
     pub fn delete(&self, meta: &SstMeta) -> Result<()> {
-        match self.dir.delete(meta) {
+        match self.dir.delete(meta, self.key_manager.as_deref()) {
             Ok(path) => {
                 info!("delete"; "path" => ?path);
                 Ok(())
@@ -603,25 +603,34 @@ impl ImportDir {
         })
     }
 
-    fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
+    fn create(
+        &self,
+        meta: &SstMeta,
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Result<ImportFile> {
         let path = self.join(meta)?;
         if path.save.exists() {
             return Err(Error::FileExists(path.save, "create SST upload cache"));
         }
-        ImportFile::create(meta.clone(), path)
+        ImportFile::create(meta.clone(), path, key_manager)
     }
 
-    fn delete(&self, meta: &SstMeta) -> Result<ImportPath> {
+    fn delete_file(&self, path: &PathBuf, key_manager: Option<&DataKeyManager>) -> Result<()> {
+        if path.exists() {
+            fs::remove_file(&path)?;
+            if let Some(manager) = key_manager {
+                manager.delete_file(path.to_str().unwrap())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn delete(&self, meta: &SstMeta, manager: Option<&DataKeyManager>) -> Result<ImportPath> {
         let path = self.join(meta)?;
-        if path.save.exists() {
-            fs::remove_file(&path.save)?;
-        }
-        if path.temp.exists() {
-            fs::remove_file(&path.temp)?;
-        }
-        if path.clone.exists() {
-            fs::remove_file(&path.clone)?;
-        }
+        self.delete_file(&path.save, manager)?;
+        self.delete_file(&path.temp, manager)?;
+        self.delete_file(&path.clone, manager)?;
         Ok(path)
     }
 
@@ -698,21 +707,33 @@ impl fmt::Debug for ImportPath {
 pub struct ImportFile {
     meta: SstMeta,
     path: ImportPath,
-    file: Option<File>,
+    file: Option<Box<dyn Write + Send>>,
     digest: crc32fast::Hasher,
+    key_manager: Option<Arc<DataKeyManager>>,
 }
 
 impl ImportFile {
-    fn create(meta: SstMeta, path: ImportPath) -> Result<ImportFile> {
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path.temp)?;
+    fn create(
+        meta: SstMeta,
+        path: ImportPath,
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Result<ImportFile> {
+        let file: Box<dyn Write + Send> = if let Some(ref manager) = key_manager {
+            Box::new(manager.create_file(&path.temp)?)
+        } else {
+            Box::new(
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path.temp)?,
+            )
+        };
         Ok(ImportFile {
             meta,
             path,
             file: Some(file),
             digest: crc32fast::Hasher::new(),
+            key_manager,
         })
     }
 
@@ -724,7 +745,7 @@ impl ImportFile {
 
     pub fn finish(&mut self) -> Result<()> {
         self.validate()?;
-        self.file.take().unwrap().sync_all()?;
+        self.file.take().unwrap().flush()?;
         if self.path.save.exists() {
             return Err(Error::FileExists(
                 self.path.save.clone(),
@@ -732,12 +753,21 @@ impl ImportFile {
             ));
         }
         fs::rename(&self.path.temp, &self.path.save)?;
+        if let Some(ref manager) = self.key_manager {
+            manager.rename_file(
+                self.path.temp.to_str().unwrap(),
+                self.path.save.to_str().unwrap(),
+            )?;
+        }
         Ok(())
     }
 
     fn cleanup(&mut self) -> Result<()> {
         self.file.take();
         if self.path.temp.exists() {
+            if let Some(ref manager) = self.key_manager {
+                manager.delete_file(self.path.temp.to_str().unwrap())?;
+            }
             fs::remove_file(&self.path.temp)?;
         }
         Ok(())
@@ -748,14 +778,6 @@ impl ImportFile {
         let expect = self.meta.get_crc32();
         if crc32 != expect {
             let reason = format!("crc32 {}, expect {}", crc32, expect);
-            return Err(Error::FileCorrupted(self.path.temp.clone(), reason));
-        }
-
-        let f = self.file.as_ref().unwrap();
-        let length = f.metadata()?.len();
-        let expect = self.meta.get_length();
-        if length != expect {
-            let reason = format!("length {}, expect {}", length, expect);
             return Err(Error::FileCorrupted(self.path.temp.clone(), reason));
         }
         Ok(())
@@ -859,7 +881,9 @@ mod tests {
 
     use std::f64::INFINITY;
 
-    use engine_traits::{collect, name_to_cf, Iterable, Iterator, SeekKey, CF_DEFAULT, DATA_CFS};
+    use engine_traits::{
+        collect, name_to_cf, EncryptionMethod, Iterable, Iterator, SeekKey, CF_DEFAULT, DATA_CFS,
+    };
     use engine_traits::{Error as TraitError, SstWriterBuilder, TablePropertiesExt};
     use engine_traits::{
         ExternalSstFileInfo, SstExt, TableProperties, TablePropertiesCollection,
@@ -870,6 +894,8 @@ mod tests {
         new_sst_reader, new_sst_writer, new_test_engine, RocksSstWriter, PROP_TEST_MARKER_CF_NAME,
     };
     use txn_types::{Value, WriteType};
+
+    use test_util::{new_file_security_config, new_test_key_manager};
 
     #[test]
     fn test_import_dir() {
@@ -883,12 +909,12 @@ mod tests {
 
         // Test ImportDir::create()
         {
-            let _file = dir.create(&meta).unwrap();
+            let _file = dir.create(&meta, None).unwrap();
             assert!(path.temp.exists());
             assert!(!path.save.exists());
             assert!(!path.clone.exists());
             // Cannot create the same file again.
-            assert!(dir.create(&meta).is_err());
+            assert!(dir.create(&meta, None).is_err());
         }
 
         // Test ImportDir::delete()
@@ -896,7 +922,7 @@ mod tests {
             File::create(&path.temp).unwrap();
             File::create(&path.save).unwrap();
             File::create(&path.clone).unwrap();
-            dir.delete(&meta).unwrap();
+            dir.delete(&meta, None).unwrap();
             assert!(!path.temp.exists());
             assert!(!path.save.exists());
             assert!(!path.clone.exists());
@@ -915,7 +941,7 @@ mod tests {
             let path = temp_dir.path().join(format!("{}.sst", i));
             let (meta, data) = gen_sst_file(&path, range);
 
-            let mut f = dir.create(&meta).unwrap();
+            let mut f = dir.create(&meta, None).unwrap();
             f.append(&data).unwrap();
             f.finish().unwrap();
 
@@ -932,13 +958,12 @@ mod tests {
                 .iter()
                 .find(|s| s.get_uuid() == sst.get_uuid())
                 .unwrap();
-            dir.delete(sst).unwrap();
+            dir.delete(sst, None).unwrap();
         }
         assert!(dir.list_ssts().unwrap().is_empty());
     }
 
-    #[test]
-    fn test_import_file() {
+    fn do_test_import_file(data_key_manager: Option<Arc<DataKeyManager>>) {
         let temp_dir = Builder::new().prefix("test_import_file").tempdir().unwrap();
 
         let path = ImportPath {
@@ -953,9 +978,12 @@ mod tests {
         let mut meta = SstMeta::default();
 
         {
-            let mut f = ImportFile::create(meta.clone(), path.clone()).unwrap();
+            let mut f =
+                ImportFile::create(meta.clone(), path.clone(), data_key_manager.clone()).unwrap();
             // Cannot create the same file again.
-            assert!(ImportFile::create(meta.clone(), path.clone()).is_err());
+            assert!(
+                ImportFile::create(meta.clone(), path.clone(), data_key_manager.clone()).is_err()
+            );
             f.append(data).unwrap();
             // Invalid crc32 and length.
             assert!(f.finish().is_err());
@@ -966,7 +994,8 @@ mod tests {
         meta.set_crc32(crc32);
 
         {
-            let mut f = ImportFile::create(meta.clone(), path.clone()).unwrap();
+            let mut f =
+                ImportFile::create(meta.clone(), path.clone(), data_key_manager.clone()).unwrap();
             f.append(data).unwrap();
             // Invalid length.
             assert!(f.finish().is_err());
@@ -975,12 +1004,34 @@ mod tests {
         meta.set_length(data.len() as u64);
 
         {
-            let mut f = ImportFile::create(meta, path.clone()).unwrap();
+            let mut f = ImportFile::create(meta, path.clone(), data_key_manager.clone()).unwrap();
             f.append(data).unwrap();
             f.finish().unwrap();
             assert!(!path.temp.exists());
             assert!(path.save.exists());
+            if let Some(ref manager) = data_key_manager {
+                let info_res = manager.get_file(path.save.to_str().unwrap());
+                assert!(info_res.is_ok());
+                let info = info_res.unwrap();
+                // the returned encryption info must not be default value
+                assert_ne!(info.method, EncryptionMethod::Plaintext);
+                assert!(!info.key.is_empty() && !info.iv.is_empty());
+            }
         }
+    }
+
+    #[test]
+    fn test_import_file() {
+        // test without tde
+        do_test_import_file(None);
+
+        // test with tde
+        let dir = tempfile::TempDir::new().unwrap();
+        let master_key_cfg = new_file_security_config(&dir);
+        let (tmp_dir, key_manager) = new_test_key_manager(Some(dir), None, None, None);
+        assert!(key_manager.is_ok());
+        let data_key_manager = Some(Arc::new(key_manager.unwrap().unwrap()));
+        do_test_import_file(data_key_manager);
     }
 
     #[test]
