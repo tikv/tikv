@@ -20,7 +20,7 @@ use kvproto::import_sstpb::*;
 use tokio::time::timeout;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use encryption::DataKeyManager;
+use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{encryption::get_env, RocksSstReader};
 use engine_traits::{
     EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
@@ -83,7 +83,7 @@ impl SSTImporter {
     }
 
     pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
-        match self.dir.ingest(meta, engine, self.key_manager.as_ref()) {
+        match self.dir.ingest(meta, engine, self.key_manager.as_deref()) {
             Ok(_) => {
                 info!("ingest"; "meta" => ?meta);
                 Ok(())
@@ -638,7 +638,7 @@ impl ImportDir {
         &self,
         meta: &SstMeta,
         engine: &E,
-        key_manager: Option<&Arc<DataKeyManager>>,
+        key_manager: Option<&DataKeyManager>,
     ) -> Result<()> {
         let start = Instant::now();
         let path = self.join(meta)?;
@@ -702,12 +702,29 @@ impl fmt::Debug for ImportPath {
             .finish()
     }
 }
+// `SyncableWrite` extends io::Write with sync
+trait SyncableWrite: io::Write + Send {
+    // sync all metadata to storage
+    fn sync(&self) -> io::Result<()>;
+}
+
+impl SyncableWrite for File {
+    fn sync(&self) -> io::Result<()> {
+        self.sync_all()
+    }
+}
+
+impl SyncableWrite for EncrypterWriter<File> {
+    fn sync(&self) -> io::Result<()> {
+        self.sync_all()
+    }
+}
 
 /// ImportFile is used to handle the writing and verification of SST files.
 pub struct ImportFile {
     meta: SstMeta,
     path: ImportPath,
-    file: Option<Box<dyn Write + Send>>,
+    file: Option<Box<dyn SyncableWrite>>,
     digest: crc32fast::Hasher,
     key_manager: Option<Arc<DataKeyManager>>,
 }
@@ -718,7 +735,7 @@ impl ImportFile {
         path: ImportPath,
         key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<ImportFile> {
-        let file: Box<dyn Write + Send> = if let Some(ref manager) = key_manager {
+        let file: Box<dyn SyncableWrite> = if let Some(ref manager) = key_manager {
             // key manager will truncate existed file, so we should check exist manually.
             if path.temp.exists() {
                 return Err(Error::Io(io::Error::new(
@@ -752,7 +769,8 @@ impl ImportFile {
 
     pub fn finish(&mut self) -> Result<()> {
         self.validate()?;
-        self.file.take().unwrap().flush()?;
+        // sync is a wrapping for File::sync_all
+        self.file.take().unwrap().sync()?;
         if self.path.save.exists() {
             return Err(Error::FileExists(
                 self.path.save.clone(),
@@ -904,8 +922,7 @@ mod tests {
 
     use test_util::new_test_key_manager;
 
-    #[test]
-    fn test_import_dir() {
+    fn do_test_import_dir(key_manager: Option<Arc<DataKeyManager>>) {
         let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
         let dir = ImportDir::new(temp_dir.path()).unwrap();
 
@@ -916,12 +933,16 @@ mod tests {
 
         // Test ImportDir::create()
         {
-            let _file = dir.create(&meta, None).unwrap();
+            let _file = dir.create(&meta, key_manager.clone()).unwrap();
             assert!(path.temp.exists());
             assert!(!path.save.exists());
             assert!(!path.clone.exists());
+            check_file_exists(&path.temp, key_manager.as_deref());
+            check_file_not_exists(&path.save, key_manager.as_deref());
+            check_file_not_exists(&path.clone, key_manager.as_deref());
+
             // Cannot create the same file again.
-            assert!(dir.create(&meta, None).is_err());
+            assert!(dir.create(&meta, key_manager.clone()).is_err());
         }
 
         // Test ImportDir::delete()
@@ -929,16 +950,20 @@ mod tests {
             File::create(&path.temp).unwrap();
             File::create(&path.save).unwrap();
             File::create(&path.clone).unwrap();
-            dir.delete(&meta, None).unwrap();
-            assert!(!path.temp.exists());
-            assert!(!path.save.exists());
-            assert!(!path.clone.exists());
+            dir.delete(&meta, key_manager.as_deref()).unwrap();
+            check_file_not_exists(&path.temp, key_manager.as_deref());
+            check_file_not_exists(&path.save, key_manager.as_deref());
+            check_file_not_exists(&path.clone, key_manager.as_deref());
         }
 
         // Test ImportDir::ingest()
 
         let db_path = temp_dir.path().join("db");
-        let db = new_test_engine(db_path.to_str().unwrap(), &[CF_DEFAULT]);
+        let env = get_env(key_manager.clone(), None /*base_env*/).unwrap();
+        let db =
+            new_test_engine_with_options(db_path.to_str().unwrap(), &[CF_DEFAULT], |_cf, opts| {
+                opts.set_env(env.clone())
+            });
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
 
@@ -946,13 +971,13 @@ mod tests {
 
         for (i, &range) in cases.iter().enumerate() {
             let path = temp_dir.path().join(format!("{}.sst", i));
-            let (meta, data) = gen_sst_file(&path, range);
+            let (meta, data) = gen_sst_file_by_db(&path, range, Some(&db));
 
-            let mut f = dir.create(&meta, None).unwrap();
+            let mut f = dir.create(&meta, key_manager.clone()).unwrap();
             f.append(&data).unwrap();
             f.finish().unwrap();
 
-            dir.ingest(&meta, &db, None).unwrap();
+            dir.ingest(&meta, &db, key_manager.as_deref()).unwrap();
             check_db_range(&db, range);
 
             ingested.push(meta);
@@ -965,9 +990,17 @@ mod tests {
                 .iter()
                 .find(|s| s.get_uuid() == sst.get_uuid())
                 .unwrap();
-            dir.delete(sst, None).unwrap();
+            dir.delete(sst, key_manager.as_deref()).unwrap();
         }
         assert!(dir.list_ssts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_import_dir() {
+        do_test_import_dir(None);
+
+        let (_tmp_dir, key_manager) = new_key_manager_for_test();
+        do_test_import_dir(Some(key_manager));
     }
 
     fn do_test_import_file(data_key_manager: Option<Arc<DataKeyManager>>) {
@@ -994,8 +1027,8 @@ mod tests {
             f.append(data).unwrap();
             // Invalid crc32 and length.
             assert!(f.finish().is_err());
-            assert!(path.temp.exists());
-            assert!(!path.save.exists());
+            check_file_exists(&path.temp, data_key_manager.as_deref());
+            check_file_not_exists(&path.save, data_key_manager.as_deref());
         }
 
         meta.set_crc32(crc32);
@@ -1005,17 +1038,36 @@ mod tests {
             let mut f = ImportFile::create(meta, path.clone(), data_key_manager.clone()).unwrap();
             f.append(data).unwrap();
             f.finish().unwrap();
-            assert!(!path.temp.exists());
-            assert!(path.save.exists());
-            if let Some(ref manager) = data_key_manager {
-                let info_res = manager.get_file(path.save.to_str().unwrap());
-                assert!(info_res.is_ok());
-                let info = info_res.unwrap();
-                // the returned encryption info must not be default value
-                assert_ne!(info.method, EncryptionMethod::Plaintext);
-                assert!(!info.key.is_empty() && !info.iv.is_empty());
-            }
+            check_file_not_exists(&path.temp, data_key_manager.as_deref());
+            check_file_exists(&path.save, data_key_manager.as_deref());
         }
+    }
+
+    fn check_file_not_exists(path: &Path, key_manager: Option<&DataKeyManager>) {
+        assert!(!path.exists());
+        if let Some(manager) = key_manager {
+            let info = manager.get_file(path.to_str().unwrap()).unwrap();
+            // the returned encryption info must be the default value
+            assert_eq!(info.method, EncryptionMethod::Plaintext);
+            assert!(info.key.is_empty() && info.iv.is_empty());
+        }
+    }
+
+    fn check_file_exists(path: &Path, key_manager: Option<&DataKeyManager>) {
+        assert!(path.exists());
+        if let Some(manager) = key_manager {
+            let info = manager.get_file(path.to_str().unwrap()).unwrap();
+            // the returned encryption info must not be default value
+            assert_ne!(info.method, EncryptionMethod::Plaintext);
+            assert!(!info.key.is_empty() && !info.iv.is_empty());
+        }
+    }
+
+    fn new_key_manager_for_test() -> (tempfile::TempDir, Arc<DataKeyManager>) {
+        // test with tde
+        let (tmp_dir, key_manager) = new_test_key_manager(None, None, None, None);
+        assert!(key_manager.is_ok());
+        (tmp_dir, Arc::new(key_manager.unwrap().unwrap()))
     }
 
     #[test]
@@ -1024,10 +1076,8 @@ mod tests {
         do_test_import_file(None);
 
         // test with tde
-        let (_tmp_dir, key_manager) = new_test_key_manager(None, None, None, None);
-        assert!(key_manager.is_ok());
-        let data_key_manager = Some(Arc::new(key_manager.unwrap().unwrap()));
-        do_test_import_file(data_key_manager);
+        let (_tmp_dir, key_manager) = new_key_manager_for_test();
+        do_test_import_file(Some(key_manager));
     }
 
     #[test]

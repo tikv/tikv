@@ -75,10 +75,16 @@ where
     }
 }
 
-pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
-    let mut w = RocksSstWriterBuilder::new()
-        .build(path.as_ref().to_str().unwrap())
-        .unwrap();
+pub fn gen_sst_file_by_db<P: AsRef<Path>>(
+    path: P,
+    range: (u8, u8),
+    db: Option<&RocksEngine>,
+) -> (SstMeta, Vec<u8>) {
+    let mut builder = RocksSstWriterBuilder::new();
+    if let Some(db) = db {
+        builder = builder.set_db(db);
+    }
+    let mut w = builder.build(path.as_ref().to_str().unwrap()).unwrap();
     for i in range.0..range.1 {
         let k = keys::data_key(&[i]);
         w.put(&k, &[i]).unwrap();
@@ -86,6 +92,10 @@ pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u
     w.finish().unwrap();
 
     read_sst_file(path, range)
+}
+
+pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
+    gen_sst_file_by_db(path, range, None)
 }
 
 pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
