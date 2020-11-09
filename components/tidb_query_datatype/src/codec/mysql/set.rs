@@ -29,6 +29,9 @@ impl Set {
     pub fn value(&self) -> usize {
         self.value
     }
+    pub fn is_set(&self, idx: usize) -> bool {
+        self.value & (1 << idx) != 0
+    }
 }
 
 impl ToString for Set {
@@ -140,5 +143,22 @@ mod tests {
 
             assert_eq!(s.to_string(), expect.to_string())
         }
+    }
+
+    #[test]
+    fn test_is_set() {
+        let mut buf = BufferVec::new();
+        for v in vec!["a", "b", "c"] {
+            buf.push(v)
+        }
+
+        let s = Set {
+            data: Arc::new(buf),
+            value: 0b101,
+        };
+
+        assert_eq!(s.is_set(0), true);
+        assert_eq!(s.is_set(1), false);
+        assert_eq!(s.is_set(2), true);
     }
 }
