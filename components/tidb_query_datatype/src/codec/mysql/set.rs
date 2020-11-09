@@ -39,7 +39,7 @@ impl ToString for Set {
         let mut buf: Vec<u8> = Vec::new();
         if self.value > 0 {
             for idx in 0..self.data.len() {
-                if self.value & (1 << idx) == 0 {
+                if !self.is_set(idx) {
                     continue;
                 }
 
