@@ -934,9 +934,6 @@ mod tests {
         // Test ImportDir::create()
         {
             let _file = dir.create(&meta, key_manager.clone()).unwrap();
-            assert!(path.temp.exists());
-            assert!(!path.save.exists());
-            assert!(!path.clone.exists());
             check_file_exists(&path.temp, key_manager.as_deref());
             check_file_not_exists(&path.save, key_manager.as_deref());
             check_file_not_exists(&path.clone, key_manager.as_deref());
@@ -947,9 +944,16 @@ mod tests {
 
         // Test ImportDir::delete()
         {
-            File::create(&path.temp).unwrap();
-            File::create(&path.save).unwrap();
-            File::create(&path.clone).unwrap();
+            if let Some(ref manager) = key_manager {
+                manager.create_file(&path.temp).unwrap();
+                manager.create_file(&path.save).unwrap();
+                manager.create_file(&path.clone).unwrap();
+            } else {
+                File::create(&path.temp).unwrap();
+                File::create(&path.save).unwrap();
+                File::create(&path.clone).unwrap();
+            }
+
             dir.delete(&meta, key_manager.as_deref()).unwrap();
             check_file_not_exists(&path.temp, key_manager.as_deref());
             check_file_not_exists(&path.save, key_manager.as_deref());
@@ -960,10 +964,7 @@ mod tests {
 
         let db_path = temp_dir.path().join("db");
         let env = get_env(key_manager.clone(), None /*base_env*/).unwrap();
-        let db =
-            new_test_engine_with_options(db_path.to_str().unwrap(), &[CF_DEFAULT], |_cf, opts| {
-                opts.set_env(env.clone())
-            });
+        let db = new_test_engine_with_env(db_path.to_str().unwrap(), &[CF_DEFAULT], env);
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
 
@@ -971,7 +972,7 @@ mod tests {
 
         for (i, &range) in cases.iter().enumerate() {
             let path = temp_dir.path().join(format!("{}.sst", i));
-            let (meta, data) = gen_sst_file_by_db(&path, range, Some(&db));
+            let (meta, data) = gen_sst_file(&path, range);
 
             let mut f = dir.create(&meta, key_manager.clone()).unwrap();
             f.append(&data).unwrap();
