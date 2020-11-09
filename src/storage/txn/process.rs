@@ -543,7 +543,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             txn_size,
             min_commit_ts,
         }) => {
-            let mut scan_mode = None;
             let rows = mutations.len();
             if rows > FORWARD_MIN_MUTATIONS_NUM {
                 mutations.sort_by(|a, b| a.key().cmp(b.key()));
@@ -561,18 +560,11 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     &right_key,
                     &mut statistics.write,
                 )? {
-                    // If there is no data in range, we could skip constraint check, and use Forward seek for CF_LOCK.
-                    // Because in most instances, there won't be more than one transaction write the same key. Seek
-                    // operation could skip nonexistent key in CF_LOCK.
+                    // If there is no data in range, we could skip constraint check.
                     skip_constraint_check = true;
-                    scan_mode = Some(ScanMode::Forward)
                 }
             }
-            let mut txn = if scan_mode.is_some() {
-                MvccTxn::for_scan(snapshot, scan_mode, start_ts, !cmd.ctx.get_not_fill_cache())
-            } else {
-                MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())
-            };
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
 
             // Set extra op here for getting the write record when check write conflict in prewrite.
             txn.extra_op = extra_op;
@@ -1103,6 +1095,61 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_prewrite_skip_too_many_tombstone() {
+        use crate::storage::kv::PerfStatisticsInstant;
+        use engine_rocks::{set_perf_level, PerfLevel};
+        let mut mutations = Vec::default();
+        let pri_key_number = 0;
+        let pri_key = &[pri_key_number];
+        for i in 0..40 {
+            mutations.push(Mutation::Insert((
+                Key::from_raw(&[i as u8]),
+                b"100".to_vec(),
+            )));
+        }
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
+        let mut statistic = Statistics::default();
+        prewrite(
+            &engine,
+            &mut statistic,
+            mutations.clone(),
+            pri_key.to_vec(),
+            100,
+        )
+        .unwrap();
+        // Rollback to make tombstones in lock-cf.
+        rollback(&engine, &mut statistic, keys.clone(), 100).unwrap();
+        // Gc rollback flags store in write-cf to make sure the next prewrite operation will skip
+        // seek write cf.
+        {
+            let ctx = Context::default();
+            let snap = engine.snapshot(&ctx).unwrap();
+            let mut txn =
+                MvccTxn::for_scan(snap, Some(ScanMode::Forward), TimeStamp::zero(), false);
+            for k in &keys {
+                txn.gc(k.clone(), 102.into()).unwrap();
+            }
+            let modifies = txn.into_modifies();
+            assert_eq!(keys.len(), modifies.len());
+            engine
+                .write(&ctx, WriteData::from_modifies(modifies))
+                .unwrap();
+        }
+
+        set_perf_level(PerfLevel::EnableTimeExceptForMutex);
+        let perf = PerfStatisticsInstant::new();
+        let mut statistic = Statistics::default();
+        while mutations.len() > FORWARD_MIN_MUTATIONS_NUM + 1 {
+            mutations.pop();
+        }
+        prewrite(&engine, &mut statistic, mutations, pri_key.to_vec(), 110).unwrap();
+        let d = perf.delta();
+        assert_eq!(1, statistic.write.seek);
+        assert_eq!(d.0.internal_delete_skipped_count, 40);
+    }
+
     fn prewrite<E: Engine>(
         engine: &E,
         statistics: &mut Statistics,
@@ -1143,6 +1190,22 @@ mod tests {
             TimeStamp::from(commit_ts),
             ctx,
         );
+        let m = DummyLockManager {};
+        let ret = process_write_impl(cmd.into(), snap, Some(m), ExtraOp::Noop, statistics, false)?;
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
+    }
+
+    fn rollback<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        keys: Vec<Key>,
+        start_ts: u64,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snap = engine.snapshot(&ctx)?;
+        let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let m = DummyLockManager {};
         let ret = process_write_impl(cmd.into(), snap, Some(m), ExtraOp::Noop, statistics, false)?;
         let ctx = Context::default();
