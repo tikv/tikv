@@ -47,8 +47,7 @@ protobuf = "2"
 fail = "0.4"
 
 [dependencies.rocksdb]
-git = "https://github.com/hicqu/rust-rocksdb.git"
-branch = "compaction-filter-context-range"
+git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
 features = ["encryption", "static_libcpp"]
 
