@@ -895,7 +895,7 @@ mod tests {
     };
     use txn_types::{Value, WriteType};
 
-    use test_util::{new_file_security_config, new_test_key_manager};
+    use test_util::new_test_key_manager;
 
     #[test]
     fn test_import_dir() {
@@ -992,15 +992,6 @@ mod tests {
         }
 
         meta.set_crc32(crc32);
-
-        {
-            let mut f =
-                ImportFile::create(meta.clone(), path.clone(), data_key_manager.clone()).unwrap();
-            f.append(data).unwrap();
-            // Invalid length.
-            assert!(f.finish().is_err());
-        }
-
         meta.set_length(data.len() as u64);
 
         {
@@ -1026,9 +1017,7 @@ mod tests {
         do_test_import_file(None);
 
         // test with tde
-        let dir = tempfile::TempDir::new().unwrap();
-        let master_key_cfg = new_file_security_config(&dir);
-        let (tmp_dir, key_manager) = new_test_key_manager(Some(dir), None, None, None);
+        let (_tmp_dir, key_manager) = new_test_key_manager(None, None, None, None);
         assert!(key_manager.is_ok());
         let data_key_manager = Some(Arc::new(key_manager.unwrap().unwrap()));
         do_test_import_file(data_key_manager);

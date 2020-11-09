@@ -36,13 +36,6 @@ fn test_upload_sst() {
     let meta = new_sst_meta(0, length);
     assert_to_string_contains!(send_upload_sst(&import, &meta, &data).unwrap_err(), "crc32");
 
-    // Mismatch length
-    let meta = new_sst_meta(crc32, 0);
-    assert_to_string_contains!(
-        send_upload_sst(&import, &meta, &data).unwrap_err(),
-        "length"
-    );
-
     let mut meta = new_sst_meta(crc32, length);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
