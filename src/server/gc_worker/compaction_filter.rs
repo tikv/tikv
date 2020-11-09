@@ -95,6 +95,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
 
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
         if safe_point == 0 {
+            debug!("skip gc in compaction filter because of no safe point");
             // Safe point has not been initialized yet.
             return std::ptr::null_mut();
         }
@@ -103,6 +104,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             &*gc_context.cfg_tracker.value(),
             &gc_context.cluster_version,
         ) {
+            debug!("skip gc in compaction filter because it's not allowed");
             return std::ptr::null_mut();
         }
 
@@ -120,6 +122,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
 
         let ratio_threshold = gc_context.cfg_tracker.value().ratio_threshold;
         if !check_need_gc(safe_point.into(), ratio_threshold, mvcc_props) {
+            debug!("skip gc in compaction filter because it's not necessary");
             return std::ptr::null_mut();
         }
 
@@ -152,9 +155,10 @@ struct WriteCompactionFilter {
 }
 
 impl WriteCompactionFilter {
-    fn new(db: Arc<DB>, safe_point: u64, _context: &CompactionFilterContext) -> Self {
+    fn new(db: Arc<DB>, safe_point: u64, context: &CompactionFilterContext) -> Self {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
+        debug!("gc in compaction filter"; "files" => ?context.file_numbers());
 
         let engine = RocksEngine::from_db(db.clone());
         let write_batch = RocksWriteBatch::with_capacity(db, DEFAULT_DELETE_BATCH_SIZE);
