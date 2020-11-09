@@ -2735,7 +2735,7 @@ mod tests {
             let got = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .push_param(pat)
-                .evaluate(ScalarFuncSig::Trim3Args)
+                .evaluate(ScalarFuncSig::Trim2Args)
                 .unwrap();
             assert_eq!(got, exp);
         }
@@ -2748,7 +2748,7 @@ mod tests {
             let got = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .push_param(pat)
-                .evaluate(ScalarFuncSig::Trim3Args)
+                .evaluate(ScalarFuncSig::Trim2Args)
                 .unwrap();
             assert_eq!(got, exp);
         }
