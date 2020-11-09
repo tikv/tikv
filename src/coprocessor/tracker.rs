@@ -234,7 +234,13 @@ impl Tracker {
                 "scan.total" => total_storage_stats.write.total_op_count(),
                 "scan.ranges" => self.req_ctx.ranges.len(),
                 "scan.range.first" => ?first_range,
-                self.total_perf_stats,
+                "perf_stats.block_cache_hit_count" => self.total_perf_stats.0.block_cache_hit_count,
+                "perf_stats.block_read_count" => self.total_perf_stats.0.block_read_count,
+                "perf_stats.block_read_byte" => self.total_perf_stats.0.block_read_byte,
+                "perf_stats.internal_key_skipped_count"
+                    => self.total_perf_stats.0.internal_key_skipped_count,
+                "perf_stats.internal_delete_skipped_count"
+                    => self.total_perf_stats.0.internal_delete_skipped_count,
             );
         }
 
