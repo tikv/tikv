@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::mem;
 
-use crate::storage::{FlowStatsReporter, Statistics};
+use crate::storage::{kv::PerfStatisticsDelta, FlowStatsReporter, Statistics};
 use kvproto::metapb;
 use raftstore::store::util::build_key_range;
 use raftstore::store::ReadStats;
@@ -240,17 +240,26 @@ make_static_metric! {
 pub struct CopLocalMetrics {
     local_scan_details: HashMap<ReqTag, Statistics>,
     local_read_stats: ReadStats,
+    local_perf_stats: HashMap<ReqTag, PerfStatisticsDelta>,
 }
 
 thread_local! {
     pub static TLS_COP_METRICS: RefCell<CopLocalMetrics> = RefCell::new(
         CopLocalMetrics {
-            local_scan_details:
-                HashMap::default(),
-            local_read_stats:
-                ReadStats::default(),
+            local_scan_details: HashMap::default(),
+            local_read_stats: ReadStats::default(),
+            local_perf_stats: HashMap::default(),
         }
     );
+}
+
+macro_rules! tls_flush_perf_stats {
+    ($tag:ident, $local_stats:ident, $stat:ident) => {
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get($tag)
+            .$stat
+            .inc_by($local_stats.0.$stat as i64);
+    };
 }
 
 impl Into<CF> for GcKeysCF {
@@ -304,6 +313,57 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
             mem::swap(&mut read_stats, &mut m.local_read_stats);
             reporter.report_read_stats(read_stats);
         }
+
+        for (req_tag, perf_stats) in m.local_perf_stats.drain() {
+            tls_flush_perf_stats!(req_tag, perf_stats, user_key_comparison_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_cache_hit_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_read_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_read_byte);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_read_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_cache_index_hit_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, index_block_read_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_cache_filter_hit_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, filter_block_read_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_checksum_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_decompress_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_read_bytes);
+            tls_flush_perf_stats!(req_tag, perf_stats, iter_read_bytes);
+            tls_flush_perf_stats!(req_tag, perf_stats, internal_key_skipped_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, internal_delete_skipped_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, internal_recent_skipped_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_snapshot_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_from_memtable_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_from_memtable_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_post_process_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_from_output_files_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_on_memtable_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_on_memtable_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, next_on_memtable_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, prev_on_memtable_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_child_seek_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_child_seek_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_min_heap_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_max_heap_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, seek_internal_seek_time);
+            tls_flush_perf_stats!(req_tag, perf_stats, db_mutex_lock_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, db_condition_wait_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, read_index_block_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, read_filter_block_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, new_table_block_iter_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, new_table_iterator_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, block_seek_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, find_table_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, bloom_memtable_hit_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, bloom_memtable_miss_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, bloom_sst_hit_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, bloom_sst_miss_count);
+            tls_flush_perf_stats!(req_tag, perf_stats, get_cpu_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, iter_next_cpu_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, iter_prev_cpu_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, iter_seek_cpu_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, encrypt_data_nanos);
+            tls_flush_perf_stats!(req_tag, perf_stats, decrypt_data_nanos);
+        }
     });
 }
 
@@ -339,5 +399,14 @@ pub fn tls_collect_qps(
         let mut m = m.borrow_mut();
         let key_range = build_key_range(start_key, end_key, reverse_scan);
         m.local_read_stats.add_qps(region_id, peer, key_range);
+    });
+}
+
+pub fn tls_collect_perf_stats(cmd: ReqTag, perf_stats: &PerfStatisticsDelta) {
+    TLS_COP_METRICS.with(|m| {
+        *(m.borrow_mut()
+            .local_perf_stats
+            .entry(cmd)
+            .or_insert_with(Default::default)) += *perf_stats;
     });
 }
