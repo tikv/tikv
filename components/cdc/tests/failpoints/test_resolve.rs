@@ -3,13 +3,10 @@ use crate::{new_event_feed, TestSuite};
 use futures::sink::Sink;
 use futures::Future;
 use grpcio::WriteFlags;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::event::{Event as Event_oneof_event, LogType as EventLogType};
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::{Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataRequest,
-};
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::*;
@@ -24,9 +21,7 @@ fn test_stale_resolver() {
 
     // Close previous connection and open a new one twice time
     let region = suite.cluster.get_region(&[]);
-    let mut req = ChangeDataRequest::default();
-    req.region_id = region.get_id();
-    req.set_region_epoch(region.get_region_epoch().clone());
+    let req = suite.new_changedata_request(region.get_id());
     let (req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
     let _req_tx = req_tx
@@ -101,7 +96,7 @@ fn test_stale_resolver() {
                 _ => panic!("{:?}", es),
             },
             Event_oneof_event::Error(e) => panic!("{:?}", e),
-            _ => panic!("unknown event"),
+            other => panic!("unknown event {:?}", other),
         }
     }
 
@@ -126,7 +121,7 @@ fn test_stale_resolver() {
                 }
             },
             Event_oneof_event::Error(e) => panic!("{:?}", e),
-            _ => panic!("unknown event"),
+            other => panic!("unknown event {:?}", other),
         }
     }
 
@@ -150,7 +145,7 @@ fn test_region_error() {
     suite.cluster.must_split(&region, b"k1");
     // Subscribe source region
     let source = suite.cluster.get_region(b"k0");
-    let mut req = ChangeDataRequest::default();
+    let mut req = suite.new_changedata_request(region.get_id());
     req.region_id = source.get_id();
     req.set_region_epoch(source.get_region_epoch().clone());
     let (source_tx, source_wrap, source_event) =
@@ -166,7 +161,7 @@ fn test_region_error() {
     let (target_tx, target_wrap, _target_event) =
         new_event_feed(suite.get_region_cdc_client(target.get_id()));
     let _target_tx = target_tx.send((req, WriteFlags::default())).wait().unwrap();
-    sleep_ms(1000);
+    sleep_ms(200);
 
     suite
         .cluster
