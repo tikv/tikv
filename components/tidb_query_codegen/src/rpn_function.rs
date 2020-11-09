@@ -134,7 +134,7 @@
 //! The supported argument type is represented as a type-level list, for example, a
 //! a function which takes two unsigned ints has an argument representation
 //! something like `Arg<UInt, Arg<UInt, Null>>`. See documentation in
-//! `components/tidb_query_vec_expr/src/types/function.rs` for more details.
+//! `components/tidb_query_expr/src/types/function.rs` for more details.
 //!
 //! The `_Fn` trait can be customised by implementing it manually.
 //! For example, you are going to implement an RPN function called `regex_match` taking two
