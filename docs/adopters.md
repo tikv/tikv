@@ -9,10 +9,10 @@ The following adopters deploy TiKV independently without TiDB.
 
 | Company | Industry | Success Story |
 | :--- | :--- | :--- |
-|[JD Cloud](https://www.crunchbase.com/organization/jd-cloud)|Cloud Computing|[English](https://pingcap.com/success-stories/lesson-learned-from-40-k-qps-and-20-billion-rows-of-data-in-a-single-scale-out-cluster/); [Chinese](https://pingcap.com/cases-cn/user-case-jingdongyun/)|
+|[JD Cloud & AI](https://www.crunchbase.com/organization/jd-cloud)|Cloud Computing|[English](https://tikv.org/blog/tikv-in-jd-cloud-ai/); [Chinese](https://pingcap.com/cases-cn/user-case-jingdongyun/)|
 |[Shopee](https://en.wikipedia.org/wiki/Shopee)|E-commerce|[English](https://www.pingcap.com/success-stories/tidb-in-shopee/); [Chinese](https://www.pingcap.com/cases-cn/user-case-shopee/)|
 |[LY.com](https://www.crunchbase.com/organization/ly-com)|Travel|[Chinese](https://www.pingcap.com/cases-cn/user-case-tongcheng/)|
-|[Zhuan Zhuan](https://www.crunchbase.com/organization/zhuan-zhuan)|Online Marketplace|[English](https://www.pingcap.com/success-stories/tidb-in-zhuanzhuan/); [Chinese](https://pingcap.com/cases-cn/user-case-zhuanzhuan/)|
+|[Zhuan Zhuan](https://www.crunchbase.com/organization/zhuan-zhuan)|Online Marketplace| English [#1](https://pingcap.com/case-studies/tidb-in-zhuanzhuan/), [#2](https://pingcap.com/case-studies/scale-out-database-powers-china-letgo-with-reduced-maintenance-costs); Chinese [#1](https://pingcap.com/cases-cn/user-case-zhuanzhuan/), [#2](https://pingcap.com/cases-cn/user-case-zhuanzhuan-2/), [#3](https://pingcap.com/cases-cn/user-case-zhuanzhuan-3/)|
 |[Meituan-Dianping](https://en.wikipedia.org/wiki/Meituan-Dianping)|Food Delivery|[English](https://www.pingcap.com/success-stories/tidb-in-meituan-dianping/); [Chinese](https://pingcap.com/cases-cn/user-case-meituan/)|
 |[Ele.me](https://en.wikipedia.org/wiki/Ele.me)|Food Delivery|
 |[Yidian Zixun](https://www.crunchbase.com/organization/yidian-zixun#section-overview)|Media and Entertainment|
@@ -24,20 +24,22 @@ The following are a list of TiKV adopters deploying TiKV with TiDB.
 | Company | Industry | Success Story |
 | :--- | :--- | :--- |
 |[Zhihu](https://en.wikipedia.org/wiki/Zhihu)|Knowledge Sharing|[English](https://pingcap.com/success-stories/lesson-learned-from-queries-over-1.3-trillion-rows-of-data-within-milliseconds-of-response-time-at-zhihu/); [Chinese](https://pingcap.com/cases-cn/user-case-zhihu/)|
-|[Mobike](https://en.wikipedia.org/wiki/Mobike)|Ridesharing|[English](https://www.pingcap.com/blog/Use-Case-TiDB-in-Mobike/); [Chinese](https://www.pingcap.com/cases-cn/user-case-mobike/)|
+|[Mobike](https://en.wikipedia.org/wiki/Mobike)|Ridesharing|[English](https://pingcap.com/case-studies/tidb-in-mobike); Chinese [#1](https://pingcap.com/cases-cn/user-case-mobike/), [#2](https://pingcap.com/cases-cn/user-case-mobike-2/)|
 |[Jinri Toutiao](https://en.wikipedia.org/wiki/Toutiao)|Mobile News Platform|[Chinese](https://www.pingcap.com/cases-cn/user-case-toutiao/)|
 |[Yiguo.com](https://www.crunchbase.com/organization/shanghai-yiguo-electron-business)|E-commerce|[English](https://www.datanami.com/2018/02/22/hybrid-database-capturing-perishable-insights-yiguo/); [Chinese](https://www.pingcap.com/cases-cn/user-case-yiguo)|
+|[Xiaohongshu](https://en.wikipedia.org/wiki/Xiaohongshu)|E-commerce|[English](https://pingcap.com/case-studies/how-we-use-a-scale-out-htap-database-for-real-time-analytics-and-complex-queries); Chinese [#1](https://pingcap.com/cases-cn/user-case-xiaohongshu/), [#2](https://pingcap.com/cases-cn/user-case-xiaohongshu-2/)|
 |[Happigo.com](https://www.crunchbase.com/organization/happigo-com)|E-commerce||
 |[Yimutian](http://www.ymt.com/)|E-commerce||
-|[Youju Tech](https://www.ujuz.cn/)|E-Commerce||
-|[Maizuo](https://www.crunchbase.com/organization/maizhuo)|E-Commerce||
-|[Mogujie](https://www.crunchbase.com/organization/mogujie)|E-Commerce||
+|[Youju Tech](https://www.ujuz.cn/)|E-commerce||
+|[Maizuo](https://www.crunchbase.com/organization/maizhuo)|E-commerce||
+|[Mogujie](https://www.crunchbase.com/organization/mogujie)|E-commerce||
 |[Xiaomi](https://en.wikipedia.org/wiki/Xiaomi)|Consumer Electronics|[Chinese](https://pingcap.com/cases-cn/user-case-xiaomi/)|
 |[Qunar.com](https://www.crunchbase.com/organization/qunar-com)|Travel|[Chinese](https://www.pingcap.com/cases-cn/user-case-qunar/)|
 |[Hulu](https://www.hulu.com)|Entertainment||
 |[VIPKID](https://www.crunchbase.com/organization/vipkid)|EdTech||
 |[Yuanfudao.com](https://www.crunchbase.com/organization/yuanfudao)|EdTech|[English](https://pingcap.com/blog/2017-08-08-tidbforyuanfudao/); [Chinese](https://pingcap.com/cases-cn/user-case-yuanfudao/)|
-|[Bank of Beijing](https://en.wikipedia.org/wiki/Bank_of_Beijing)|Banking|[Chinese](https://pingcap.com/cases-cn/user-case-beijing-bank/)|
+|[Bank of Beijing](https://en.wikipedia.org/wiki/Bank_of_Beijing)|Banking|[English](https://pingcap.com/case-studies/how-we-use-a-distributed-database-to-achieve-horizontal-scaling-without-downtime); Chinese [#1](https://pingcap.com/cases-cn/user-case-beijing-bank/), [#2](https://pingcap.com/cases-cn/user-case-beijing-bank-2/)|
+|[Bank of China](https://en.wikipedia.org/wiki/Bank_of_China)|Banking|[English](https://en.pingcap.com/case-studies/how-bank-of-china-uses-a-scale-out-database-to-support-zabbix-monitoring-at-scale); [Chinese](https://pingcap.com/cases-cn/user-case-bank-of-china/)|
 |[Industrial and Commercial Bank of China](https://en.wikipedia.org/wiki/Industrial_and_Commercial_Bank_of_China)|Banking||
 |[Yimian Data](https://www.crunchbase.com/organization/yimian-data)|Big Data|[Chinese](https://www.pingcap.com/cases-cn/user-case-yimian)|
 |[CAASDATA](https://www.caasdata.com/)|Big Data|[Chinese](https://pingcap.com/cases-cn/user-case-kasi/)|
@@ -52,8 +54,9 @@ The following are a list of TiKV adopters deploying TiKV with TiDB.
 |[Hoodinn](https://www.crunchbase.com/organization/hoodinn)|Gaming||
 |[SEA group](https://sea-group.org/?lang=en)|Gaming||
 |[Zhaopin.com](https://www.crunchbase.com/organization/zhaopin)|Recruiting||
+|[BIGO](https://www.crunchbase.com/organization/bigo-technology)|Live Streaming|[English](https://en.pingcap.com/case-studies/why-we-chose-an-htap-database-over-mysql-for-horizontal-scaling-and-complex-queries); [Chinese](https://pingcap.com/cases-cn/user-case-bigo/)|
 |[Panda.tv](https://www.crunchbase.com/organization/panda-tv)|Live Streaming||
-|[VNG](https://en.wikipedia.org/wiki/VNG_Corporation)|Mobile Payment|[English](https://pingcap.com/success-stories/tidb-at-zalopay-infrastructure-lesson-learned/)|
+|[VNG](https://en.wikipedia.org/wiki/VNG_Corporation)|Mobile Payment|English [#1](https://pingcap.com/case-studies/tidb-at-zalopay-infrastructure-lesson-learned/), [#2](https://pingcap.com/case-studies/zalopay-using-a-scale-out-mysql-alternative-to-serve-millions-of-users)|
 |[Ping++](https://www.crunchbase.com/organization/ping-5)|Mobile Payment|[Chinese](https://pingcap.com/cases-cn/user-case-ping++/)|
 |[LianLian Tech](http://www.10030.com.cn/web/)|Mobile Payment||
 |[Phoenix New Media](https://www.crunchbase.com/organization/phoenix-new-media)|Media|[Chinese](https://pingcap.com/cases-cn/user-case-ifeng/)|

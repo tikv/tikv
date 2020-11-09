@@ -89,6 +89,42 @@ impl Into<ReadableSize> for ConfigValue {
     }
 }
 
+/// This trivial type is needed, because we can't define the `From<Option<ReadableSize>>`
+/// and `Into<Option<ReadableSize>>` trait for `ConfigValue` which is needed to derive
+/// `Configuration` trait for `BlockCacheConfig`
+#[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(from = "Option<ReadableSize>")]
+#[serde(into = "Option<ReadableSize>")]
+pub struct OptionReadableSize(pub Option<ReadableSize>);
+
+impl From<Option<ReadableSize>> for OptionReadableSize {
+    fn from(s: Option<ReadableSize>) -> OptionReadableSize {
+        OptionReadableSize(s)
+    }
+}
+
+impl Into<Option<ReadableSize>> for OptionReadableSize {
+    fn into(self) -> Option<ReadableSize> {
+        self.0
+    }
+}
+
+impl From<OptionReadableSize> for ConfigValue {
+    fn from(size: OptionReadableSize) -> ConfigValue {
+        ConfigValue::OptionSize(size.0.map(|v| v.0))
+    }
+}
+
+impl Into<OptionReadableSize> for ConfigValue {
+    fn into(self) -> OptionReadableSize {
+        if let ConfigValue::OptionSize(s) = self {
+            OptionReadableSize(s.map(ReadableSize))
+        } else {
+            panic!("expect: ConfigValue::OptionSize, got: {:?}", self);
+        }
+    }
+}
+
 impl ReadableSize {
     pub const fn kb(count: u64) -> ReadableSize {
         ReadableSize(count * KB)

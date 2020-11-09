@@ -23,6 +23,7 @@ fn new_analyze_req(data: Vec<u8>, range: KeyRange, start_ts: u64) -> Request {
 
 fn new_analyze_column_req(
     table: &Table,
+    columns_info_len: usize,
     bucket_size: i64,
     fm_sketch_size: i64,
     sample_size: i64,
@@ -30,7 +31,7 @@ fn new_analyze_column_req(
     cm_sketch_width: i32,
 ) -> Request {
     let mut col_req = AnalyzeColumnsReq::default();
-    col_req.set_columns_info(table.columns_info().into());
+    col_req.set_columns_info(table.columns_info()[..columns_info_len].into());
     col_req.set_bucket_size(bucket_size);
     col_req.set_sketch_size(fm_sketch_size);
     col_req.set_sample_size(sample_size);
@@ -81,7 +82,7 @@ fn test_analyze_column_with_lock() {
     for &iso_level in &[IsolationLevel::Si, IsolationLevel::Rc] {
         let (_, endpoint) = init_data_with_commit(&product, &data, false);
 
-        let mut req = new_analyze_column_req(&product, 3, 3, 3, 4, 32);
+        let mut req = new_analyze_column_req(&product, 3, 3, 3, 3, 4, 32);
         let mut ctx = Context::default();
         ctx.set_isolation_level(iso_level);
         req.set_context(ctx);
@@ -115,7 +116,7 @@ fn test_analyze_column() {
     let product = ProductTable::new();
     let (_, endpoint) = init_data_with_commit(&product, &data, true);
 
-    let req = new_analyze_column_req(&product, 3, 3, 3, 4, 32);
+    let req = new_analyze_column_req(&product, 3, 3, 3, 3, 4, 32);
     let resp = handle_request(&endpoint, req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeColumnsResp::default();
@@ -131,6 +132,30 @@ fn test_analyze_column() {
     assert_eq!(rows.len(), 4);
     let sum: u32 = rows.first().unwrap().get_counters().iter().sum();
     assert_eq!(sum, 3);
+}
+
+#[test]
+fn test_analyze_single_primary_column() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, None, 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, endpoint) = init_data_with_commit(&product, &data, true);
+
+    let req = new_analyze_column_req(&product, 1, 3, 3, 3, 4, 32);
+    let resp = handle_request(&endpoint, req);
+    assert!(!resp.get_data().is_empty());
+    let mut analyze_resp = AnalyzeColumnsResp::default();
+    analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
+    let hist = analyze_resp.get_pk_hist();
+    assert_eq!(hist.get_buckets().len(), 2);
+    assert_eq!(hist.get_ndv(), 4);
+    let collectors = analyze_resp.get_collectors().to_vec();
+    assert_eq!(collectors.len(), 0);
 }
 
 #[test]

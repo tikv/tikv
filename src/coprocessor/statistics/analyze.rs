@@ -1,19 +1,27 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
+use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use rand::rngs::ThreadRng;
-use rand::{thread_rng, Rng};
-use tidb_query_datatype::codec::datum::{encode_value, Datum, NIL_FLAG};
+use rand::rngs::StdRng;
+use rand::Rng;
+use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
+use tidb_query_common::storage::Range;
+use tidb_query_datatype::codec::datum::{encode_value, split_datum, Datum, NIL_FLAG};
 use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
-use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::FieldTypeAccessor;
-use tidb_query_normal_executors::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
-use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
+use tidb_query_executors::{
+    interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
+};
+use tidb_query_expr::BATCH_MAX_SIZE;
+use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
+use yatp::task::future::reschedule;
 
 use super::cmsketch::CmSketch;
 use super::fmsketch::FmSketch;
@@ -57,8 +65,8 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // handle_column is used to process `AnalyzeColumnsReq`
     // it would build a histogram for the primary key(if needed) and
     // collectors for each column value.
-    fn handle_column(builder: &mut SampleBuilder<S>) -> Result<Vec<u8>> {
-        let (collectors, pk_builder) = builder.collect_columns_stats()?;
+    async fn handle_column(builder: &mut SampleBuilder<S>) -> Result<Vec<u8>> {
+        let (collectors, pk_builder) = builder.collect_columns_stats().await?;
 
         let pk_hist = pk_builder.into_proto();
         let cols: Vec<tipb::SampleCollector> =
@@ -75,25 +83,56 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
     // handle_index is used to handle `AnalyzeIndexReq`,
     // it would build a histogram and count-min sketch of index values.
-    fn handle_index(
+    async fn handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut IndexScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+        scanner: &mut RangesScanner<TiKVStorage<SnapshotStore<S>>>,
+        is_common_handle: bool,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
         let mut cms = CmSketch::new(
             req.get_cmsketch_depth() as usize,
             req.get_cmsketch_width() as usize,
         );
-        while let Some(row) = scanner.next()? {
-            let row = row.take_origin()?;
-            let (bytes, end_offsets) = row.data.get_column_values_and_end_offsets();
-            hist.append(bytes);
-            if let Some(c) = cms.as_mut() {
-                for end_offset in end_offsets {
-                    c.insert(&bytes[..end_offset])
+
+        let mut row_count = 0;
+        let mut time_slice_start = Instant::now();
+        while let Some((key, _)) = scanner.next()? {
+            row_count += 1;
+            if row_count >= BATCH_MAX_SIZE {
+                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
+                row_count = 0;
+            }
+            let mut key = &key[..];
+            if is_common_handle {
+                table::check_record_key(key)?;
+                key = &key[table::PREFIX_LEN..];
+            } else {
+                table::check_index_key(key)?;
+                key = &key[table::PREFIX_LEN + table::ID_LEN..];
+            }
+            let mut datums = key;
+            let mut data = Vec::with_capacity(key.len());
+            for i in 0..req.get_num_columns() as usize {
+                if datums.is_empty() {
+                    return Err(box_err!(
+                        "{}th column is missing in datum buffer: {}",
+                        i,
+                        hex::encode_upper(key)
+                    ));
+                }
+                let (column, remaining) = split_datum(datums, false)?;
+                datums = remaining;
+                data.extend_from_slice(column);
+                if let Some(cms) = cms.as_mut() {
+                    cms.insert(&data);
                 }
             }
+            hist.append(&data);
         }
+
         let mut res = tipb::AnalyzeIndexResp::default();
         res.set_hist(hist.into_proto());
         if let Some(c) = cms {
@@ -108,15 +147,26 @@ impl<S: Snapshot> AnalyzeContext<S> {
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
     async fn handle_request(&mut self) -> Result<Response> {
         let ret = match self.req.get_tp() {
-            AnalyzeType::TypeIndex => {
+            AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
                 let req = self.req.take_idx_req();
-                let mut scanner = ScanExecutor::index_scan_with_cols_len(
-                    EvalContext::default(),
-                    i64::from(req.get_num_columns()),
-                    mem::replace(&mut self.ranges, Vec::new()),
-                    self.storage.take().unwrap(),
-                )?;
-                let res = AnalyzeContext::handle_index(req, &mut scanner);
+                let ranges = mem::replace(&mut self.ranges, vec![]);
+                table::check_table_ranges(&ranges)?;
+                let mut scanner = RangesScanner::new(RangesScannerOptions {
+                    storage: self.storage.take().unwrap(),
+                    ranges: ranges
+                        .into_iter()
+                        .map(|r| Range::from_pb_range(r, false))
+                        .collect(),
+                    scan_backward_in_range: false,
+                    is_key_only: true,
+                    is_scanned_range_aware: false,
+                });
+                let res = AnalyzeContext::handle_index(
+                    req,
+                    &mut scanner,
+                    self.req.get_tp() == AnalyzeType::TypeCommonHandle,
+                )
+                .await;
                 scanner.collect_storage_stats(&mut self.storage_stats);
                 res
             }
@@ -126,7 +176,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let storage = self.storage.take().unwrap();
                 let ranges = mem::replace(&mut self.ranges, Vec::new());
                 let mut builder = SampleBuilder::new(col_req, storage, ranges)?;
-                let res = AnalyzeContext::handle_column(&mut builder);
+                let res = AnalyzeContext::handle_column(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
             }
@@ -153,16 +203,14 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 }
 
 struct SampleBuilder<S: Snapshot> {
-    data: TableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
-    // the number of columns need to be sampled. It equals to cols.len()
-    // if cols[0] is not pk handle, or it should be cols.len() - 1.
-    col_len: usize,
+    data: BatchTableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+
     max_bucket_size: usize,
     max_sample_size: usize,
     max_fm_sketch_size: usize,
     cm_sketch_depth: usize,
     cm_sketch_width: usize,
-    cols_info: Vec<::tipb::ColumnInfo>,
+    columns_info: Vec<tipb::ColumnInfo>,
 }
 
 /// `SampleBuilder` is used to analyze columns. It collects sample from
@@ -174,32 +222,28 @@ impl<S: Snapshot> SampleBuilder<S> {
         storage: TiKVStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
     ) -> Result<Self> {
-        let cols_info = req.take_columns_info();
-        if cols_info.is_empty() {
+        let columns_info: Vec<_> = req.take_columns_info().into();
+        if columns_info.is_empty() {
             return Err(box_err!("empty columns_info"));
         }
 
-        let mut col_len = cols_info.len();
-        let vec_cols_info = if cols_info[0].get_pk_handle() {
-            col_len -= 1;
-            cols_info.to_vec()[1..].to_vec()
-        } else {
-            cols_info.to_vec()
-        };
-
-        let mut meta = TableScan::default();
-        meta.set_columns(cols_info);
-        let table_scanner =
-            ScanExecutor::table_scan(meta, EvalContext::default(), ranges, storage, false)?;
+        let table_scanner = BatchTableScanExecutor::new(
+            storage,
+            Arc::new(EvalConfig::default()),
+            columns_info.clone(),
+            ranges,
+            req.take_primary_column_ids(),
+            false,
+            false, // Streaming mode is not supported in Analyze request, always false here
+        )?;
         Ok(Self {
             data: table_scanner,
-            col_len,
             max_bucket_size: req.get_bucket_size() as usize,
             max_fm_sketch_size: req.get_sketch_size() as usize,
             max_sample_size: req.get_sample_size() as usize,
             cm_sketch_depth: req.get_cmsketch_depth() as usize,
             cm_sketch_width: req.get_cmsketch_width() as usize,
-            cols_info: vec_cols_info,
+            columns_info,
         })
     }
 
@@ -207,8 +251,14 @@ impl<S: Snapshot> SampleBuilder<S> {
     // null count, distinct values count and count-min sketch. And it also returns the statistic
     // builder for PK which contains the histogram.
     // See https://en.wikipedia.org/wiki/Reservoir_sampling
-    fn collect_columns_stats(&mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
+    async fn collect_columns_stats(&mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
         use tidb_query_datatype::codec::collation::{match_template_collator, Collator};
+        let columns_without_handle_len =
+            self.columns_info.len() - self.columns_info[0].get_pk_handle() as usize;
+
+        // The number of columns need to be sampled is `columns_without_handle_len`.
+        // It equals to `columns_info.len()` if the first column doesn't contain a handle.
+        // Otherwise, it equals to `columns_info.len() - 1`.
         let mut pk_builder = Histogram::new(self.max_bucket_size);
         let mut collectors = vec![
             SampleCollector::new(
@@ -217,38 +267,67 @@ impl<S: Snapshot> SampleBuilder<S> {
                 self.cm_sketch_depth,
                 self.cm_sketch_width,
             );
-            self.col_len
+            columns_without_handle_len
         ];
-        while let Some(row) = self.data.next()? {
-            let row = row.take_origin()?;
-            let cols = row.get_binary_cols(&mut EvalContext::default())?;
-            let retrieve_len = cols.len();
-            let mut cols_iter = cols.into_iter();
-            if self.col_len != retrieve_len {
-                if let Some(v) = cols_iter.next() {
-                    pk_builder.append(&v);
-                }
+        let mut is_drained = false;
+        let mut time_slice_start = Instant::now();
+        while !is_drained {
+            let time_slice_elapsed = time_slice_start.elapsed();
+            if time_slice_elapsed > MAX_TIME_SLICE {
+                reschedule().await;
+                time_slice_start = Instant::now();
             }
-            for (i, (collector, val)) in collectors.iter_mut().zip(cols_iter).enumerate() {
-                if self.cols_info[i].as_accessor().is_string_like() {
-                    let sorted_val = match_template_collator! {
-                        TT, match self.cols_info[i].as_accessor().collation()? {
-                            Collation::TT => {
-                                let mut mut_val = val.as_slice();
-                                let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.cols_info[i])?;
-                                if decoded_val == Datum::Null {
-                                    val
-                                } else {
-                                    let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
-                                    encode_value(&mut EvalContext::default(), &[Datum::Bytes(decoded_sorted_val)]).unwrap()
+            let result = self.data.next_batch(BATCH_MAX_SIZE);
+            is_drained = result.is_drained?;
+
+            let mut columns_slice = result.physical_columns.as_slice();
+            let mut columns_info = &self.columns_info[..];
+            if columns_without_handle_len + 1 == columns_slice.len() {
+                for logical_row in &result.logical_rows {
+                    let mut data = vec![];
+                    columns_slice[0].encode(
+                        *logical_row,
+                        &columns_info[0],
+                        &mut EvalContext::default(),
+                        &mut data,
+                    )?;
+                    pk_builder.append(&data);
+                }
+                columns_slice = &columns_slice[1..];
+                columns_info = &columns_info[1..];
+            }
+
+            for (i, collector) in collectors.iter_mut().enumerate() {
+                for logical_row in &result.logical_rows {
+                    let mut val = vec![];
+                    columns_slice[i].encode(
+                        *logical_row,
+                        &columns_info[i],
+                        &mut EvalContext::default(),
+                        &mut val,
+                    )?;
+                    if columns_info[i].as_accessor().is_string_like() {
+                        let sorted_val = match_template_collator! {
+                            TT, match columns_info[i].as_accessor().collation()? {
+                                Collation::TT => {
+                                    let mut mut_val = &val[..];
+                                    let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &columns_info[i])?;
+                                    if decoded_val == Datum::Null {
+                                        val
+                                    } else {
+                                        // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
+                                        // So it is safe the unwrap the Ok value.
+                                        let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
+                                        encode_value(&mut EvalContext::default(), &[Datum::Bytes(decoded_sorted_val)])?
+                                    }
                                 }
                             }
-                        }
-                    };
-                    collector.collect(sorted_val);
-                    continue;
+                        };
+                        collector.collect(sorted_val);
+                        continue;
+                    }
+                    collector.collect(val);
                 }
-                collector.collect(val);
             }
         }
         Ok((collectors, pk_builder))
@@ -264,7 +343,7 @@ struct SampleCollector {
     max_sample_size: usize,
     fm_sketch: FmSketch,
     cm_sketch: Option<CmSketch>,
-    rng: ThreadRng,
+    rng: StdRng,
     total_size: u64,
 }
 
@@ -282,7 +361,7 @@ impl SampleCollector {
             max_sample_size,
             fm_sketch: FmSketch::new(max_fm_sketch_size),
             cm_sketch: CmSketch::new(cm_sketch_depth, cm_sketch_width),
-            rng: thread_rng(),
+            rng: StdRng::from_entropy(),
             total_size: 0,
         }
     }

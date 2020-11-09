@@ -30,6 +30,9 @@ pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
 // the maximum len of the old encoding of index value.
 pub const MAX_OLD_ENCODED_VALUE_LEN: usize = 9;
 
+/// Flag that indicate if the index value has common handle.
+pub const INDEX_VALUE_COMMON_HANDLE_FLAG: u8 = 127;
+
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
@@ -402,7 +405,7 @@ impl RowColsDict {
 pub fn cut_row(
     data: Vec<u8>,
     col_ids: &HashSet<i64>,
-    cols: Arc<Vec<ColumnInfo>>,
+    cols: Arc<[ColumnInfo]>,
 ) -> Result<RowColsDict> {
     if cols.is_empty() || data.is_empty() || (data.len() == 1 && data[0] == datum::NIL_FLAG) {
         return Ok(RowColsDict::new(HashMap::default(), data));
@@ -434,7 +437,7 @@ fn cut_row_v1(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
 }
 
 /// Cuts a non-empty row in row format v2 and encodes into v1 format.
-fn cut_row_v2(data: Vec<u8>, cols: Arc<Vec<ColumnInfo>>) -> Result<RowColsDict> {
+fn cut_row_v2(data: Vec<u8>, cols: Arc<[ColumnInfo]>) -> Result<RowColsDict> {
     use crate::codec::datum_codec::{ColumnIdDatumEncoder, EvaluableDatumEncoder};
     use crate::codec::row::v2::{RowSlice, V1CompatibleEncoder};
 

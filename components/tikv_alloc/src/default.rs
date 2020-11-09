@@ -20,3 +20,7 @@ pub fn activate_prof() -> ProfResult<()> {
 pub fn deactivate_prof() -> ProfResult<()> {
     Err(ProfError::MemProfilingNotEnabled)
 }
+
+pub fn add_thread_memory_accessor() {}
+
+pub fn remove_thread_memory_accessor() {}

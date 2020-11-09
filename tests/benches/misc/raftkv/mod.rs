@@ -2,29 +2,33 @@
 
 use std::sync::Arc;
 
-use crate::test;
-use tempfile::{Builder, TempDir};
-
-use kvproto::kvrpcpb::Context;
-use kvproto::metapb::Region;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
-use kvproto::raft_serverpb::RaftMessage;
-
+use crossbeam::channel::TrySendError;
 use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{ALL_CFS, CF_DEFAULT};
-use raftstore::router::RaftStoreRouter;
+use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
+use kvproto::metapb::Region;
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
+use kvproto::raft_serverpb::RaftMessage;
+use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{
-    cmd_resp, util, Callback, CasualMessage, RaftCommand, ReadResponse, RegionSnapshot,
-    SignificantMsg, WriteResponse,
+    cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand,
+    ReadResponse, RegionSnapshot, SignificantMsg, StoreMsg, StoreRouter, WriteResponse,
 };
 use raftstore::Result;
-use tikv::server::raftkv::{CmdRes, RaftKv};
+use tempfile::{Builder, TempDir};
 use tikv::storage::kv::{
     Callback as EngineCallback, CbContext, Modify, Result as EngineResult, WriteData,
 };
 use tikv::storage::Engine;
+use tikv::{
+    server::raftkv::{CmdRes, RaftKv},
+    storage::kv::SnapContext,
+};
+use tikv_util::time::ThreadReadId;
 use txn_types::Key;
+
+use crate::test;
 
 #[derive(Clone)]
 struct SyncBenchRouter {
@@ -45,13 +49,14 @@ impl SyncBenchRouter {
         match cmd.callback {
             Callback::Read(cb) => {
                 let snapshot = RocksSnapshot::new(Arc::clone(&self.db));
-                let region = self.region.to_owned();
+                let region = Arc::new(self.region.to_owned());
                 cb(ReadResponse {
                     response,
                     snapshot: Some(RegionSnapshot::from_snapshot(Arc::new(snapshot), region)),
+                    txn_extra_op: TxnExtraOp::Noop,
                 })
             }
-            Callback::Write(cb) => {
+            Callback::Write { cb, .. } => {
                 let mut resp = Response::default();
                 let cmd_type = cmd.request.get_requests()[0].get_cmd_type();
                 resp.set_cmd_type(cmd_type);
@@ -63,25 +68,56 @@ impl SyncBenchRouter {
     }
 }
 
-impl RaftStoreRouter<RocksSnapshot> for SyncBenchRouter {
+impl CasualRouter<RocksEngine> for SyncBenchRouter {
+    fn send(&self, _: u64, _: CasualMessage<RocksEngine>) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl ProposalRouter<RocksSnapshot> for SyncBenchRouter {
+    fn send(
+        &self,
+        _: RaftCommand<RocksSnapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<RocksSnapshot>>> {
+        Ok(())
+    }
+}
+impl StoreRouter<RocksEngine> for SyncBenchRouter {
+    fn send(&self, _: StoreMsg<RocksEngine>) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
+    /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, _: RaftMessage) -> Result<()> {
         Ok(())
     }
+
+    /// Sends a significant message. We should guarantee that the message can't be dropped.
+    fn significant_send(&self, _: u64, _: SignificantMsg<RocksSnapshot>) -> Result<()> {
+        Ok(())
+    }
+
+    fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) -> Result<()> {
         self.invoke(RaftCommand::new(req, cb));
         Ok(())
     }
+}
 
-    fn significant_send(&self, _: u64, _: SignificantMsg) -> Result<()> {
-        Ok(())
+impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
+    fn read(
+        &self,
+        _: Option<ThreadReadId>,
+        req: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+    ) -> Result<()> {
+        self.send_command(req, cb)
     }
 
-    fn casual_send(&self, _: u64, _: CasualMessage<RocksSnapshot>) -> Result<()> {
-        Ok(())
-    }
-
-    fn broadcast_unreachable(&self, _: u64) {}
+    fn release_snapshot_cache(&self) {}
 }
 
 fn new_engine() -> (TempDir, Arc<DB>) {
@@ -100,8 +136,9 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
         response: RaftCmdResponse::default(),
         snapshot: Some(RegionSnapshot::from_snapshot(
             Arc::new(snapshot),
-            Region::default(),
+            Arc::new(Region::default()),
         )),
+        txn_extra_op: TxnExtraOp::Noop,
     };
 
     b.iter(|| {
@@ -149,7 +186,11 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
         let on_finished: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(move |results| {
             let _ = test::black_box(results);
         });
-        kv.async_snapshot(&ctx, on_finished).unwrap();
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        kv.async_snapshot(snap_ctx, on_finished).unwrap();
     });
 }
 

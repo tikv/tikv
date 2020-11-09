@@ -3,16 +3,16 @@
 use std::path::Path;
 use std::sync::*;
 
-use futures::{future, Future, Stream};
-use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
+use futures::executor::block_on;
+use futures::{future, TryStreamExt};
+use grpcio::{Error, RpcStatusCode};
 use kvproto::coprocessor::*;
-use kvproto::debugpb::DebugClient;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::*;
-use kvproto::tikvpb::TikvClient;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::Writable;
 use engine_rocks::Compat;
 use engine_traits::Peekable;
@@ -24,37 +24,11 @@ use tempfile::Builder;
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
+use tikv::server::gc_worker::sync_gc;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
-use tikv_util::worker::{FutureWorker, Worker};
+use tikv_util::worker::{dummy_scheduler, FutureWorker};
 use tikv_util::HandyRwLock;
 use txn_types::Key;
-
-fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
-    let count = 1;
-    let mut cluster = new_server_cluster(0, count);
-    cluster.run();
-
-    let region_id = 1;
-    let leader = cluster.leader_of_region(region_id).unwrap();
-    let epoch = cluster.get_region_epoch(region_id);
-    let mut ctx = Context::default();
-    ctx.set_region_id(region_id);
-    ctx.set_peer(leader.clone());
-    ctx.set_region_epoch(epoch);
-
-    (cluster, leader, ctx)
-}
-
-fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, Context) {
-    let (cluster, leader, ctx) = must_new_cluster();
-
-    let env = Arc::new(Environment::new(1));
-    let channel =
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
-    let client = TikvClient::new(channel);
-
-    (cluster, client, ctx)
-}
 
 #[test]
 fn test_rawkv() {
@@ -100,66 +74,6 @@ fn test_rawkv() {
     let delete_resp = client.raw_delete(&delete_req).unwrap();
     assert!(!delete_resp.has_region_error());
     assert!(delete_resp.error.is_empty());
-}
-
-fn must_kv_prewrite(client: &TikvClient, ctx: Context, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
-    let mut prewrite_req = PrewriteRequest::default();
-    prewrite_req.set_context(ctx);
-    prewrite_req.set_mutations(muts.into_iter().collect());
-    prewrite_req.primary_lock = pk;
-    prewrite_req.start_version = ts;
-    prewrite_req.lock_ttl = 3000;
-    prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
-    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
-    assert!(
-        !prewrite_resp.has_region_error(),
-        "{:?}",
-        prewrite_resp.get_region_error()
-    );
-    assert!(
-        prewrite_resp.errors.is_empty(),
-        "{:?}",
-        prewrite_resp.get_errors()
-    );
-}
-
-fn must_kv_commit(
-    client: &TikvClient,
-    ctx: Context,
-    keys: Vec<Vec<u8>>,
-    start_ts: u64,
-    commit_ts: u64,
-    expect_commit_ts: u64,
-) {
-    let mut commit_req = CommitRequest::default();
-    commit_req.set_context(ctx);
-    commit_req.start_version = start_ts;
-    commit_req.set_keys(keys.into_iter().collect());
-    commit_req.commit_version = commit_ts;
-    let commit_resp = client.kv_commit(&commit_req).unwrap();
-    assert!(
-        !commit_resp.has_region_error(),
-        "{:?}",
-        commit_resp.get_region_error()
-    );
-    assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
-    assert_eq!(commit_resp.get_commit_version(), expect_commit_ts);
-}
-
-fn must_physical_scan_lock(
-    client: &TikvClient,
-    ctx: Context,
-    max_ts: u64,
-    start_key: &[u8],
-    limit: usize,
-) -> Vec<LockInfo> {
-    let mut req = PhysicalScanLockRequest::default();
-    req.set_context(ctx);
-    req.set_max_ts(max_ts);
-    req.set_start_key(start_key.to_owned());
-    req.set_limit(limit as _);
-    let mut resp = client.physical_scan_lock(&req).unwrap();
-    resp.take_locks().into()
 }
 
 #[test]
@@ -320,7 +234,7 @@ fn test_mvcc_rollback_and_cleanup() {
     rollback_req.set_context(ctx.clone());
     rollback_req.start_version = rollback_start_version;
     rollback_req.set_keys(vec![k2.clone()].into_iter().collect());
-    let rollback_resp = client.kv_batch_rollback(&rollback_req.clone()).unwrap();
+    let rollback_resp = client.kv_batch_rollback(&rollback_req).unwrap();
     assert!(!rollback_resp.has_region_error());
     assert!(!rollback_resp.has_error());
     rollback_req.set_keys(vec![k].into_iter().collect());
@@ -353,7 +267,7 @@ fn test_mvcc_rollback_and_cleanup() {
 fn test_mvcc_resolve_lock_gc_and_delete() {
     use kvproto::kvrpcpb::*;
 
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
@@ -434,13 +348,9 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 
     // GC `k` at the latest ts.
     ts += 1;
-    let gc_safe_ponit = ts;
-    let mut gc_req = GcRequest::default();
-    gc_req.set_context(ctx.clone());
-    gc_req.safe_point = gc_safe_ponit;
-    let gc_resp = client.kv_gc(&gc_req).unwrap();
-    assert!(!gc_resp.has_region_error());
-    assert!(!gc_resp.has_error());
+    let gc_safe_ponit = TimeStamp::from(ts);
+    let gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
+    sync_gc(&gc_scheduler, 0, vec![], vec![], gc_safe_ponit).unwrap();
 
     // the `k` at the old ts should be none.
     let get_version2 = commit_version + 1;
@@ -493,66 +403,6 @@ fn test_coprocessor() {
     let mut req = Request::default();
     req.set_tp(REQ_TYPE_DAG);
     client.coprocessor(&req).unwrap();
-}
-
-#[test]
-fn test_physical_scan_lock() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
-
-    // Generate kvs like k10, v10, ts=10; k11, v11, ts=11; ...
-    let kv: Vec<_> = (10..20)
-        .map(|i| (i, vec![b'k', i as u8], vec![b'v', i as u8]))
-        .collect();
-
-    for (ts, k, v) in &kv {
-        let mut mutation = Mutation::default();
-        mutation.set_op(Op::Put);
-        mutation.set_key(k.clone());
-        mutation.set_value(v.clone());
-        must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), *ts);
-    }
-
-    let all_locks: Vec<_> = kv
-        .into_iter()
-        .map(|(ts, k, _)| {
-            // Create a LockInfo that matches the prewrite request in `must_kv_prewrite`.
-            let mut lock_info = LockInfo::default();
-            lock_info.set_primary_lock(k.clone());
-            lock_info.set_lock_version(ts);
-            lock_info.set_key(k);
-            lock_info.set_lock_ttl(3000);
-            lock_info.set_lock_type(Op::Put);
-            lock_info.set_min_commit_ts(ts + 1);
-            lock_info
-        })
-        .collect();
-
-    let check_result = |got_locks: &[_], expected_locks: &[_]| {
-        for i in 0..std::cmp::max(got_locks.len(), expected_locks.len()) {
-            assert_eq!(got_locks[i], expected_locks[i], "lock {} mismatch", i);
-        }
-    };
-
-    check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 30, b"", 100),
-        &all_locks,
-    );
-    check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 15, b"", 100),
-        &all_locks[0..=5],
-    );
-    check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 10, b"", 100),
-        &all_locks[0..1],
-    );
-    check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 9, b"", 100),
-        &[],
-    );
-    check_result(
-        &must_physical_scan_lock(&client, ctx, 30, &[b'k', 13], 5),
-        &all_locks[3..8],
-    );
 }
 
 #[test]
@@ -630,17 +480,6 @@ fn test_read_index() {
     assert_eq!(last_index + 1, resp.get_read_index());
 }
 
-fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClient, u64) {
-    let (cluster, leader, _) = must_new_cluster();
-
-    let env = Arc::new(Environment::new(1));
-    let channel =
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
-    let client = DebugClient::new(channel);
-
-    (cluster, client, leader.get_store_id())
-}
-
 #[test]
 fn test_debug_get() {
     let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
@@ -657,7 +496,7 @@ fn test_debug_get() {
     req.set_cf(CF_DEFAULT.to_owned());
     req.set_db(debugpb::Db::Kv);
     req.set_key(key);
-    let mut resp = debug_client.get(&req.clone()).unwrap();
+    let mut resp = debug_client.get(&req).unwrap();
     assert_eq!(resp.take_value(), v);
 
     req.set_key(b"foo".to_vec());
@@ -765,7 +604,7 @@ fn test_debug_region_info() {
     // Debug region_info
     let mut req = debugpb::RegionInfoRequest::default();
     req.set_region_id(region_id);
-    let mut resp = debug_client.region_info(&req.clone()).unwrap();
+    let mut resp = debug_client.region_info(&req).unwrap();
     assert_eq!(resp.take_raft_local_state(), raft_state);
     assert_eq!(resp.take_raft_apply_state(), apply_state);
     assert_eq!(resp.take_region_local_state(), region_state);
@@ -894,12 +733,12 @@ fn test_debug_scan_mvcc() {
     req.set_limit(1);
 
     let receiver = debug_client.scan_mvcc(&req).unwrap();
-    let future = receiver.fold(Vec::new(), |mut keys, mut resp| {
+    let future = receiver.try_fold(Vec::new(), |mut keys, mut resp| {
         let key = resp.take_key();
         keys.push(key);
         future::ok::<_, Error>(keys)
     });
-    let keys = future.wait().unwrap();
+    let keys = block_on(future).unwrap();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0], keys::data_key(b"meta_lock_1"));
 }
@@ -917,12 +756,13 @@ fn test_double_run_node() {
     let pd_worker = FutureWorker::new("test-pd-worker");
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
-    let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), None);
+    let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
     let coprocessor_host = CoprocessorHost::new(router);
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
         Arc::new(SSTImporter::new(dir, None).unwrap())
     };
+    let (split_check_scheduler, _) = dummy_scheduler();
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
     let e = node
@@ -934,52 +774,14 @@ fn test_double_run_node() {
             store_meta,
             coprocessor_host,
             importer,
-            Worker::new("split"),
+            split_check_scheduler,
             AutoSplitController::default(),
+            ConcurrencyManager::new(1.into()),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
     drop(sim);
     cluster.shutdown();
-}
-
-fn kv_pessimistic_lock(
-    client: &TikvClient,
-    ctx: Context,
-    keys: Vec<Vec<u8>>,
-    ts: u64,
-    for_update_ts: u64,
-    return_values: bool,
-) -> PessimisticLockResponse {
-    let mut req = PessimisticLockRequest::default();
-    req.set_context(ctx);
-    let primary = keys[0].clone();
-    let mut mutations = vec![];
-    for key in keys {
-        let mut mutation = Mutation::default();
-        mutation.set_op(Op::PessimisticLock);
-        mutation.set_key(key);
-        mutations.push(mutation);
-    }
-    req.set_mutations(mutations.into());
-    req.primary_lock = primary;
-    req.start_version = ts;
-    req.for_update_ts = for_update_ts;
-    req.lock_ttl = 20;
-    req.is_first_lock = false;
-    req.return_values = return_values;
-    client.kv_pessimistic_lock(&req).unwrap()
-}
-
-fn must_kv_pessimistic_rollback(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
-    let mut req = PessimisticRollbackRequest::default();
-    req.set_context(ctx);
-    req.set_keys(vec![key].into_iter().collect());
-    req.start_version = ts;
-    req.for_update_ts = ts;
-    let resp = client.kv_pessimistic_rollback(&req).unwrap();
-    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
-    assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
 }
 
 #[test]
@@ -1037,27 +839,6 @@ fn test_pessimistic_lock() {
 
 #[test]
 fn test_check_txn_status_with_max_ts() {
-    fn must_check_txn_status(
-        client: &TikvClient,
-        ctx: Context,
-        key: &[u8],
-        lock_ts: u64,
-        caller_start_ts: u64,
-        current_ts: u64,
-    ) -> CheckTxnStatusResponse {
-        let mut req = CheckTxnStatusRequest::default();
-        req.set_context(ctx);
-        req.set_primary_key(key.to_vec());
-        req.set_lock_ts(lock_ts);
-        req.set_caller_start_ts(caller_start_ts);
-        req.set_current_ts(current_ts);
-
-        let resp = client.kv_check_txn_status(&req).unwrap();
-        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
-        assert!(resp.error.is_none(), "{:?}", resp.get_error());
-        return resp;
-    }
-
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     let lock_ts = 10;
@@ -1066,7 +847,7 @@ fn test_check_txn_status_with_max_ts() {
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.set_key(k.clone());
-    mutation.set_value(v.clone());
+    mutation.set_value(v);
     must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), lock_ts);
 
     // Should return MinCommitTsPushed even if caller_start_ts is max.

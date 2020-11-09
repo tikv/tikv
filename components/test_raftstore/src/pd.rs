@@ -2,26 +2,29 @@
 
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use std::{cmp, thread};
 
-use futures::future::{err, ok};
-use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use futures::{Future, Stream};
+use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use futures::compat::Future01CompatExt;
+use futures::executor::block_on;
+use futures::future::{err, ok, FutureExt};
+use futures::{stream, stream::StreamExt};
 use tokio_timer::timer::Handle;
 
-use kvproto::metapb::{self, Region};
+use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb;
 use kvproto::replication_modepb::{
     DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
 };
-use raft::eraftpb;
+use raft::eraftpb::ConfChangeType;
 
+use fail::fail_point;
 use keys::{self, data_key, enc_end_key, enc_start_key};
 use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
-use raftstore::store::util::check_key_in_region;
+use raftstore::store::util::{check_key_in_region, find_peer, is_learner};
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::time::UnixSecs;
@@ -103,6 +106,22 @@ enum Operator {
         policy: pdpb::CheckPolicy,
         keys: Vec<Vec<u8>>,
     },
+    LeaveJoint {
+        policy: SchedulePolicy,
+    },
+    JointConfChange {
+        add_peers: Vec<metapb::Peer>,
+        to_add_peers: Vec<metapb::Peer>,
+        remove_peers: Vec<metapb::Peer>,
+        policy: SchedulePolicy,
+    },
+}
+
+fn change_peer(change_type: ConfChangeType, peer: metapb::Peer) -> pdpb::ChangePeer {
+    let mut cp = pdpb::ChangePeer::default();
+    cp.set_change_type(change_type);
+    cp.set_peer(peer);
+    cp
 }
 
 impl Operator {
@@ -114,10 +133,10 @@ impl Operator {
         match *self {
             Operator::AddPeer { ref peer, .. } => {
                 if let Either::Left(ref peer) = *peer {
-                    let conf_change_type = if peer.get_is_learner() {
-                        eraftpb::ConfChangeType::AddLearnerNode
+                    let conf_change_type = if is_learner(&peer) {
+                        ConfChangeType::AddLearnerNode
                     } else {
-                        eraftpb::ConfChangeType::AddNode
+                        ConfChangeType::AddNode
                     };
                     new_pd_change_peer(conf_change_type, peer.clone())
                 } else {
@@ -125,7 +144,7 @@ impl Operator {
                 }
             }
             Operator::RemovePeer { ref peer, .. } => {
-                new_pd_change_peer(eraftpb::ConfChangeType::RemoveNode, peer.clone())
+                new_pd_change_peer(ConfChangeType::RemoveNode, peer.clone())
             }
             Operator::TransferLeader { ref peer, .. } => new_pd_transfer_leader(peer.clone()),
             Operator::MergeRegion {
@@ -156,6 +175,26 @@ impl Operator {
             Operator::SplitRegion {
                 policy, ref keys, ..
             } => new_split_region(policy, keys.clone()),
+            Operator::LeaveJoint { .. } => new_pd_change_peer_v2(vec![]),
+            Operator::JointConfChange {
+                ref to_add_peers,
+                ref remove_peers,
+                ..
+            } => {
+                let mut cps = Vec::with_capacity(to_add_peers.len() + remove_peers.len());
+                for peer in to_add_peers.iter() {
+                    let conf_change_type = if is_learner(&peer) {
+                        ConfChangeType::AddLearnerNode
+                    } else {
+                        ConfChangeType::AddNode
+                    };
+                    cps.push(change_peer(conf_change_type, peer.clone()));
+                }
+                for peer in remove_peers.iter() {
+                    cps.push(change_peer(ConfChangeType::RemoveNode, peer.clone()));
+                }
+                new_pd_change_peer_v2(cps)
+            }
         }
     }
 
@@ -216,6 +255,28 @@ impl Operator {
                 } else {
                     !policy.write().unwrap().schedule()
                 }
+            }
+            Operator::LeaveJoint { ref mut policy } => {
+                region.get_peers().iter().all(|p| {
+                    p.get_role() != PeerRole::IncomingVoter
+                        && p.get_role() != PeerRole::DemotingVoter
+                }) || !policy.schedule()
+            }
+            Operator::JointConfChange {
+                ref add_peers,
+                ref remove_peers,
+                ref mut policy,
+                ..
+            } => {
+                let add = add_peers
+                    .iter()
+                    .all(|peer| region.get_peers().iter().any(|p| p == peer));
+
+                let remove = remove_peers
+                    .iter()
+                    .all(|peer| region.get_peers().iter().all(|p| p != peer));
+
+                add && remove || !policy.schedule()
             }
         }
     }
@@ -412,118 +473,65 @@ impl Cluster {
         assert!(self.region_id_keys.remove(&region.get_id()).is_some());
     }
 
-    fn handle_heartbeat_version(&mut self, region: metapb::Region) -> Result<()> {
-        // For split, we should handle heartbeat carefully.
-        // E.g, for region 1 [a, c) -> 1 [a, b) + 2 [b, c).
-        // after split, region 1 and 2 will do heartbeat independently.
-        let start_key = enc_start_key(&region);
-        let end_key = enc_end_key(&region);
-        assert!(end_key > start_key);
-
-        let version = region.get_region_epoch().get_version();
-
-        loop {
-            let search_key = data_key(region.get_start_key());
-            let search_region = match self.get_region(search_key) {
-                None => {
-                    // Find no range after start key, insert directly.
-                    self.add_region(&region);
-                    return Ok(());
-                }
-                Some(search_region) => search_region,
-            };
-
-            let search_start_key = enc_start_key(&search_region);
-            let search_end_key = enc_end_key(&search_region);
-
-            let search_version = search_region.get_region_epoch().get_version();
-
-            if start_key == search_start_key && end_key == search_end_key {
-                // we are the same, must check epoch here.
-                check_stale_region(&search_region, &region)?;
-                if search_region.get_region_epoch().get_version()
-                    < region.get_region_epoch().get_version()
-                {
-                    self.remove_region(&search_region);
-                    self.add_region(&region);
-                }
-                return Ok(());
-            }
-
-            if search_start_key >= end_key {
-                // No range covers [start, end) now, insert directly.
-                self.add_region(&region);
-                return Ok(());
-            } else {
-                // overlap, remove old, insert new.
-                // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c), either new 1 or 2 reports, the region
-                // is overlapped with origin [a, c).
-                if version <= search_version {
-                    return Err(box_err!("epoch {:?} is stale.", region.get_region_epoch()));
-                }
-
-                self.remove_region(&search_region);
-            }
-        }
+    fn get_overlap(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Vec<metapb::Region> {
+        self.regions
+            .range((Excluded(start_key), Unbounded))
+            .map(|(_, r)| r.clone())
+            .take_while(|exist_region| end_key > enc_start_key(exist_region))
+            .collect()
     }
 
-    fn handle_heartbeat_conf_ver(
+    fn check_put_region(&mut self, region: metapb::Region) -> Result<Vec<metapb::Region>> {
+        let (start_key, end_key, incoming_epoch) = (
+            enc_start_key(&region),
+            enc_end_key(&region),
+            region.get_region_epoch().clone(),
+        );
+        assert!(end_key > start_key);
+        let overlaps = self.get_overlap(start_key, end_key);
+        for r in overlaps.iter() {
+            if incoming_epoch.get_version() < r.get_region_epoch().get_version() {
+                return Err(box_err!("epoch {:?} is stale.", incoming_epoch));
+            }
+        }
+        if let Some(o) = self.get_region_by_id(region.get_id())? {
+            let exist_epoch = o.get_region_epoch();
+            if incoming_epoch.get_version() < exist_epoch.get_version()
+                || incoming_epoch.get_conf_ver() < exist_epoch.get_conf_ver()
+            {
+                return Err(box_err!("epoch {:?} is stale.", incoming_epoch));
+            }
+        }
+        Ok(overlaps)
+    }
+
+    fn handle_heartbeat(
         &mut self,
         mut region: metapb::Region,
         leader: metapb::Peer,
     ) -> Result<pdpb::RegionHeartbeatResponse> {
-        let conf_ver = region.get_region_epoch().get_conf_ver();
-        let end_key = enc_end_key(&region);
-
-        // it can pass handle_heartbeat_version means it must exist.
-        let cur_region = self.get_region_by_id(region.get_id()).unwrap().unwrap();
-
-        let cur_conf_ver = cur_region.get_region_epoch().get_conf_ver();
-        check_stale_region(&cur_region, &region)?;
-
-        let region_peer_len = region.get_peers().len();
-        let cur_region_peer_len = cur_region.get_peers().len();
-
-        if conf_ver > cur_conf_ver {
-            match cur_region_peer_len.cmp(&region_peer_len) {
-                cmp::Ordering::Equal => {
-                    // For promote learner to voter.
-                    let get_learners =
-                        |r: &Region| r.get_peers().iter().filter(|p| p.get_is_learner()).count();
-                    let region_learner_len = get_learners(&region);
-                    let cur_region_learner_len = get_learners(&cur_region);
-                    assert_eq!(cur_region_learner_len, region_learner_len + 1);
-                }
-                cmp::Ordering::Greater => {
-                    // If ConfVer changed, TiKV has added/removed one peer already.
-                    // So pd and TiKV can't have same peer count and can only have
-                    // only one different peer.
-                    // E.g, we can't meet following cases:
-                    // 1) pd is (1, 2, 3), TiKV is (1)
-                    // 2) pd is (1), TiKV is (1, 2, 3)
-                    // 3) pd is (1, 2), TiKV is (3)
-                    // 4) pd id (1), TiKV is (2, 3)
-                    // must pd is (1, 2), TiKV is (1)
-                    assert_eq!(cur_region_peer_len - region_peer_len, 1);
-                    let peers = setdiff_peers(&cur_region, &region);
-                    assert_eq!(peers.len(), 1);
-                    assert!(setdiff_peers(&region, &cur_region).is_empty());
-                }
-                cmp::Ordering::Less => {
-                    // must pd is (1), TiKV is (1, 2)
-                    assert_eq!(region_peer_len - cur_region_peer_len, 1);
-                    let peers = setdiff_peers(&region, &cur_region);
-                    assert_eq!(peers.len(), 1);
-                    assert!(setdiff_peers(&cur_region, &region).is_empty());
-                }
+        let overlaps = self.check_put_region(region.clone())?;
+        let same_region = {
+            let (ver, conf_ver) = (
+                region.get_region_epoch().get_version(),
+                region.get_region_epoch().get_conf_ver(),
+            );
+            overlaps.len() == 1
+                && overlaps[0].get_id() == region.get_id()
+                && overlaps[0].get_region_epoch().get_version() == ver
+                && overlaps[0].get_region_epoch().get_conf_ver() == conf_ver
+        };
+        if !same_region {
+            // remove overlap regions
+            for r in overlaps {
+                self.remove_region(&r);
             }
-
-            // update the region.
-            assert!(self.regions.insert(end_key, region.clone()).is_some());
-        } else {
-            must_same_peers(&cur_region, &region);
+            // remove stale region that have same id but different key range
+            if let Some(o) = self.get_region_by_id(region.get_id())? {
+                self.remove_region(&o);
+            }
+            self.add_region(&region);
         }
-
         let resp = self
             .poll_heartbeat_responses(region.clone(), leader.clone())
             .unwrap_or_else(|| {
@@ -657,8 +665,7 @@ impl Cluster {
             self.region_replication_status.insert(region.id, status);
         }
 
-        self.handle_heartbeat_version(region.clone())?;
-        self.handle_heartbeat_conf_ver(region, leader)
+        self.handle_heartbeat(region, leader)
     }
 
     fn set_gc_safe_point(&mut self, safe_point: u64) {
@@ -673,40 +680,17 @@ impl Cluster {
 fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) -> Result<()> {
     let epoch = region.get_region_epoch();
     let check_epoch = check_region.get_region_epoch();
-    if check_epoch.get_conf_ver() >= epoch.get_conf_ver()
-        && check_epoch.get_version() >= epoch.get_version()
+
+    if check_epoch.get_version() < epoch.get_version()
+        || check_epoch.get_conf_ver() < epoch.get_conf_ver()
     {
-        return Ok(());
+        return Err(box_err!(
+            "epoch not match {:?}, we are now {:?}",
+            check_epoch,
+            epoch
+        ));
     }
-
-    Err(box_err!(
-        "epoch not match {:?}, we are now {:?}",
-        check_epoch,
-        epoch
-    ))
-}
-
-fn must_same_peers(left: &metapb::Region, right: &metapb::Region) {
-    assert_eq!(left.get_peers().len(), right.get_peers().len());
-    for peer in left.get_peers() {
-        let p = find_peer(right, peer.get_store_id()).unwrap();
-        assert_eq!(p, peer);
-    }
-}
-
-// Left - Right, left (1, 2, 3), right (1, 2), left - right = (3)
-fn setdiff_peers(left: &metapb::Region, right: &metapb::Region) -> Vec<metapb::Peer> {
-    let mut peers = vec![];
-    for peer in left.get_peers() {
-        if let Some(p) = find_peer(right, peer.get_store_id()) {
-            assert_eq!(p.get_id(), peer.get_id());
-            continue;
-        }
-
-        peers.push(peer.clone())
-    }
-
-    peers
+    Ok(())
 }
 
 // For test when a node is already bootstraped the cluster with the first region
@@ -729,7 +713,7 @@ pub struct TestPdClient {
     cluster: Arc<RwLock<Cluster>>,
     timer: Handle,
     is_incompatible: bool,
-    tso: AtomicUsize,
+    tso: AtomicU64,
     trigger_tso_failure: AtomicBool,
 }
 
@@ -740,7 +724,7 @@ impl TestPdClient {
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
             timer: GLOBAL_TIMER_HANDLE.clone(),
             is_incompatible,
-            tso: AtomicUsize::new(1),
+            tso: AtomicU64::new(1),
             trigger_tso_failure: AtomicBool::new(false),
         }
     }
@@ -781,8 +765,7 @@ impl TestPdClient {
     }
 
     pub fn get_region_epoch(&self, region_id: u64) -> metapb::RegionEpoch {
-        self.get_region_by_id(region_id)
-            .wait()
+        block_on(self.get_region_by_id(region_id))
             .unwrap()
             .unwrap()
             .take_region_epoch()
@@ -803,7 +786,7 @@ impl TestPdClient {
     pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 1..500 {
             sleep_ms(10);
-            let region = match self.get_region_by_id(region_id).wait().unwrap() {
+            let region = match block_on(self.get_region_by_id(region_id)).unwrap() {
                 Some(region) => region,
                 None => continue,
             };
@@ -814,14 +797,14 @@ impl TestPdClient {
                 }
             }
         }
-        let region = self.get_region_by_id(region_id).wait().unwrap();
+        let region = block_on(self.get_region_by_id(region_id)).unwrap();
         panic!("region {:?} has no peer {:?}", region, peer);
     }
 
     pub fn must_none_peer(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 1..500 {
             sleep_ms(10);
-            let region = match self.get_region_by_id(region_id).wait().unwrap() {
+            let region = match block_on(self.get_region_by_id(region_id)).unwrap() {
                 Some(region) => region,
                 None => continue,
             };
@@ -831,7 +814,7 @@ impl TestPdClient {
                 _ => continue,
             }
         }
-        let region = self.get_region_by_id(region_id).wait().unwrap();
+        let region = block_on(self.get_region_by_id(region_id)).unwrap();
         panic!("region {:?} has peer {:?}", region, peer);
     }
 
@@ -844,6 +827,53 @@ impl TestPdClient {
             return;
         }
         panic!("peer {:?} shouldn't be pending any more", peer);
+    }
+
+    pub fn must_finish_joint_confchange(
+        &self,
+        region_id: u64,
+        add_peers: Vec<metapb::Peer>,
+        remove_peers: Vec<metapb::Peer>,
+    ) {
+        for _ in 1..500 {
+            sleep_ms(10);
+            let region = match block_on(self.get_region_by_id(region_id)).unwrap() {
+                Some(region) => region,
+                None => continue,
+            };
+            let add = add_peers
+                .iter()
+                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(false, |p| p == peer));
+            let remove = remove_peers
+                .iter()
+                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(true, |p| p != peer));
+            if add && remove {
+                return;
+            }
+        }
+        let region = block_on(self.get_region_by_id(region_id)).unwrap();
+        panic!(
+            "region {:?} did not apply joint confchange, add peers: {:?}, remove peers: {:?}",
+            region, add_peers, remove_peers
+        );
+    }
+
+    pub fn must_not_in_joint(&self, region_id: u64) {
+        for _ in 1..500 {
+            sleep_ms(10);
+            let region = match block_on(self.get_region_by_id(region_id)).unwrap() {
+                Some(region) => region,
+                None => continue,
+            };
+            let in_joint = region.get_peers().iter().any(|p| {
+                p.get_role() == PeerRole::IncomingVoter || p.get_role() == PeerRole::DemotingVoter
+            });
+            if !in_joint {
+                return;
+            }
+        }
+        let region = block_on(self.get_region_by_id(region_id)).unwrap();
+        panic!("region {:?} failed to leave joint", region);
     }
 
     pub fn add_region(&self, region: &metapb::Region) {
@@ -872,6 +902,77 @@ impl TestPdClient {
             policy: SchedulePolicy::TillSuccess,
         };
         self.schedule_operator(region_id, op);
+    }
+
+    pub fn joint_confchange(
+        &self,
+        region_id: u64,
+        mut changes: Vec<(ConfChangeType, metapb::Peer)>,
+    ) -> (Vec<metapb::Peer>, Vec<metapb::Peer>) {
+        let region = block_on(self.get_region_by_id(region_id)).unwrap().unwrap();
+        let (mut add_peers, mut remove_peers) = (Vec::new(), Vec::new());
+
+        let to_add_peers = changes
+            .iter()
+            .filter(|(c, _)| *c != ConfChangeType::RemoveNode)
+            .map(|(_, p)| p)
+            .cloned()
+            .collect();
+
+        // Simple confchange
+        if changes.len() == 1 {
+            match changes.pop().unwrap() {
+                (ConfChangeType::RemoveNode, p) => remove_peers.push(p),
+                (_, p) => add_peers.push(p),
+            }
+        } else {
+            // Joint confchange
+            for (change, mut peer) in changes {
+                match (
+                    find_peer(&region, peer.get_store_id()).map(|p| p.get_role()),
+                    change,
+                ) {
+                    (None, ConfChangeType::AddNode) => {
+                        peer.set_role(PeerRole::IncomingVoter);
+                        add_peers.push(peer);
+                    }
+                    (Some(PeerRole::Voter), ConfChangeType::AddLearnerNode) => {
+                        peer.set_role(PeerRole::DemotingVoter);
+                        add_peers.push(peer);
+                    }
+                    (Some(PeerRole::Learner), ConfChangeType::AddNode) => {
+                        peer.set_role(PeerRole::IncomingVoter);
+                        add_peers.push(peer);
+                    }
+                    (_, ConfChangeType::RemoveNode) => remove_peers.push(peer),
+                    _ => add_peers.push(peer),
+                }
+            }
+        }
+        let op = Operator::JointConfChange {
+            add_peers: add_peers.clone(),
+            to_add_peers,
+            remove_peers: remove_peers.clone(),
+            policy: SchedulePolicy::TillSuccess,
+        };
+        self.schedule_operator(region_id, op);
+        (add_peers, remove_peers)
+    }
+
+    pub fn leave_joint(&self, region_id: u64) {
+        let op = Operator::LeaveJoint {
+            policy: SchedulePolicy::TillSuccess,
+        };
+        self.schedule_operator(region_id, op);
+    }
+
+    pub fn is_in_joint(&self, region_id: u64) -> bool {
+        let region = block_on(self.get_region_by_id(region_id))
+            .unwrap()
+            .expect("region not exist");
+        region.get_peers().iter().any(|p| {
+            p.get_role() == PeerRole::IncomingVoter || p.get_role() == PeerRole::DemotingVoter
+        })
     }
 
     pub fn split_region(
@@ -920,6 +1021,20 @@ impl TestPdClient {
         self.must_none_peer(region_id, peer);
     }
 
+    pub fn must_joint_confchange(
+        &self,
+        region_id: u64,
+        changes: Vec<(ConfChangeType, metapb::Peer)>,
+    ) {
+        let (add, remove) = self.joint_confchange(region_id, changes);
+        self.must_finish_joint_confchange(region_id, add, remove);
+    }
+
+    pub fn must_leave_joint(&self, region_id: u64) {
+        self.leave_joint(region_id);
+        self.must_not_in_joint(region_id);
+    }
+
     pub fn merge_region(&self, from: u64, target: u64) {
         let op = Operator::MergeRegion {
             source_region_id: from,
@@ -937,13 +1052,13 @@ impl TestPdClient {
     }
 
     pub fn check_merged(&self, from: u64) -> bool {
-        self.get_region_by_id(from).wait().unwrap().is_none()
+        block_on(self.get_region_by_id(from)).unwrap().is_none()
     }
 
     pub fn check_merged_timeout(&self, from: u64, duration: Duration) {
         let timer = Instant::now();
         loop {
-            let region = self.get_region_by_id(from).wait().unwrap();
+            let region = block_on(self.get_region_by_id(from)).unwrap();
             if let Some(r) = region {
                 if timer.elapsed() > duration {
                     panic!("region {:?} is still not merged.", r);
@@ -1083,6 +1198,16 @@ impl TestPdClient {
     pub fn ignore_merge_target_integrity(&self) {
         self.cluster.wl().check_merge_target_integrity = false;
     }
+
+    pub fn set_tso(&self, ts: TimeStamp) {
+        let old = self.tso.swap(ts.into_inner(), Ordering::SeqCst);
+        if old > ts.into_inner() {
+            panic!(
+                "cannot decrease tso. current tso: {}; trying to set to: {}",
+                old, ts
+            );
+        }
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -1152,11 +1277,28 @@ impl PdClient for TestPdClient {
 
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
         match self.cluster.rl().get_region_by_id(region_id) {
-            Ok(resp) => Box::new(ok(resp)),
-            Err(e) => Box::new(err(e)),
+            Ok(resp) => Box::pin(ok(resp)),
+            Err(e) => Box::pin(err(e)),
+        }
+    }
+
+    fn get_region_leader_by_id(
+        &self,
+        region_id: u64,
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::pin(err(e));
+        }
+        let cluster = self.cluster.rl();
+        match cluster.get_region_by_id(region_id) {
+            Ok(resp) => {
+                let leader = cluster.leaders.get(&region_id).cloned().unwrap_or_default();
+                Box::pin(ok(resp.map(|r| (r, leader))))
+            }
+            Err(e) => Box::pin(err(e)),
         }
     }
 
@@ -1174,7 +1316,7 @@ impl PdClient for TestPdClient {
         replication_status: Option<RegionReplicationStatus>,
     ) -> PdFuture<()> {
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
         let resp = self.cluster.wl().region_heartbeat(
             term,
@@ -1189,9 +1331,9 @@ impl PdClient for TestPdClient {
                 if let Some(store) = self.cluster.wl().stores.get(&store_id) {
                     store.sender.unbounded_send(resp).unwrap();
                 }
-                Box::new(ok(()))
+                Box::pin(ok(()))
             }
-            Err(e) => Box::new(err(e)),
+            Err(e) => Box::pin(err(e)),
         }
     }
 
@@ -1200,7 +1342,6 @@ impl PdClient for TestPdClient {
         Self: Sized,
         F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
     {
-        use futures::stream;
         let cluster1 = Arc::clone(&self.cluster);
         let timer = self.timer.clone();
         let mut cluster = self.cluster.wl();
@@ -1209,31 +1350,36 @@ impl PdClient for TestPdClient {
             .entry(store_id)
             .or_insert_with(Store::default);
         let rx = store.receiver.take().unwrap();
-        Box::new(
-            rx.map(|resp| vec![resp])
-                .select(
-                    stream::unfold(timer, |timer| {
-                        let interval = timer.delay(Instant::now() + Duration::from_millis(500));
-                        Some(interval.then(|_| Ok(((), timer))))
-                    })
-                    .map(move |_| {
-                        let mut cluster = cluster1.wl();
-                        cluster.poll_heartbeat_responses_for(store_id)
-                    }),
-                )
-                .map_err(|e| box_err!("failed to receive next heartbeat response: {:?}", e))
+        let st1 = rx.map(|resp| vec![resp]);
+        let st2 = stream::unfold(
+            (timer, cluster1, store_id),
+            |(timer, cluster1, store_id)| async move {
+                timer
+                    .delay(Instant::now() + Duration::from_millis(500))
+                    .compat()
+                    .await
+                    .unwrap();
+                let mut cluster = cluster1.wl();
+                let resps = cluster.poll_heartbeat_responses_for(store_id);
+                drop(cluster);
+                Some((resps, (timer, cluster1, store_id)))
+            },
+        );
+        Box::pin(
+            stream::select(st1, st2)
                 .for_each(move |resps| {
                     for resp in resps {
                         f(resp);
                     }
-                    Ok(())
-                }),
+                    futures::future::ready(())
+                })
+                .map(|_| Ok(())),
         )
     }
 
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
 
         // Must ConfVer and Version be same?
@@ -1244,7 +1390,7 @@ impl PdClient for TestPdClient {
             .unwrap()
             .unwrap();
         if let Err(e) = check_stale_region(&cur_region, &region) {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
 
         let mut resp = pdpb::AskSplitResponse::default();
@@ -1255,7 +1401,7 @@ impl PdClient for TestPdClient {
         }
         resp.set_new_peer_ids(peer_ids);
 
-        Box::new(ok(resp))
+        Box::pin(ok(resp))
     }
 
     fn ask_batch_split(
@@ -1264,11 +1410,11 @@ impl PdClient for TestPdClient {
         count: usize,
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
         if self.is_incompatible {
-            return Box::new(err(Error::Incompatible));
+            return Box::pin(err(Error::Incompatible));
         }
 
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
 
         // Must ConfVer and Version be same?
@@ -1279,7 +1425,7 @@ impl PdClient for TestPdClient {
             .unwrap()
             .unwrap();
         if let Err(e) = check_stale_region(&cur_region, &region) {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
 
         let mut resp = pdpb::AskBatchSplitResponse::default();
@@ -1292,12 +1438,12 @@ impl PdClient for TestPdClient {
             resp.mut_ids().push(id);
         }
 
-        Box::new(ok(resp))
+        Box::pin(ok(resp))
     }
 
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
 
         // Cache it directly now.
@@ -1309,25 +1455,25 @@ impl PdClient for TestPdClient {
         if let Some(ref status) = cluster.replication_status {
             resp.set_replication_status(status.clone());
         }
-        Box::new(ok(resp))
+        Box::pin(ok(resp))
     }
 
     fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {
         // pd just uses this for history show, so here we just count it.
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
         self.cluster.wl().split_count += regions.len() - 1;
-        Box::new(ok(()))
+        Box::pin(ok(()))
     }
 
     fn get_gc_safe_point(&self) -> PdFuture<u64> {
         if let Err(e) = self.check_bootstrap() {
-            return Box::new(err(e));
+            return Box::pin(err(e));
         }
 
         let safe_point = self.cluster.rl().get_gc_safe_point();
-        Box::new(ok(safe_point))
+        Box::pin(ok(safe_point))
     }
 
     fn get_store_stats(&self, store_id: u64) -> Result<pdpb::StoreStats> {
@@ -1349,15 +1495,25 @@ impl PdClient for TestPdClient {
     }
 
     fn get_tso(&self) -> PdFuture<TimeStamp> {
+        fail_point!("test_raftstore_get_tso", |t| {
+            let duration = Duration::from_millis(t.map_or(1000, |t| t.parse().unwrap()));
+            Box::pin(async move {
+                let _ = GLOBAL_TIMER_HANDLE
+                    .delay(Instant::now() + duration)
+                    .compat()
+                    .await;
+                Err(box_err!("get tso fail"))
+            })
+        });
         if self.trigger_tso_failure.swap(false, Ordering::SeqCst) {
-            return Box::new(futures::future::result(Err(
-                pd_client::errors::Error::Grpc(grpcio::Error::RpcFailure(grpcio::RpcStatus::new(
+            return Box::pin(err(pd_client::errors::Error::Grpc(
+                grpcio::Error::RpcFailure(grpcio::RpcStatus::new(
                     grpcio::RpcStatusCode::UNKNOWN,
                     Some("tso error".to_owned()),
-                ))),
+                )),
             )));
         }
         let tso = self.tso.fetch_add(1, Ordering::SeqCst);
-        Box::new(futures::future::result(Ok(TimeStamp::new(tso as _))))
+        Box::pin(ok(TimeStamp::new(tso)))
     }
 }

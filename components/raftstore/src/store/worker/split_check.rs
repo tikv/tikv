@@ -5,7 +5,6 @@ use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
@@ -162,20 +161,22 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<S> {
-    engine: RocksEngine,
+pub struct Runner<E, S>
+where
+    E: KvEngine,
+{
+    engine: E,
     router: S,
-    coprocessor: CoprocessorHost<RocksEngine>,
+    coprocessor: CoprocessorHost<E>,
     cfg: Config,
 }
 
-impl<S: CasualRouter<RocksSnapshot>> Runner<S> {
-    pub fn new(
-        engine: RocksEngine,
-        router: S,
-        coprocessor: CoprocessorHost<RocksEngine>,
-        cfg: Config,
-    ) -> Runner<S> {
+impl<E, S> Runner<E, S>
+where
+    E: KvEngine,
+    S: CasualRouter<E>,
+{
+    pub fn new(engine: E, router: S, coprocessor: CoprocessorHost<E>, cfg: Config) -> Runner<E, S> {
         Runner {
             engine,
             router,
@@ -192,8 +193,8 @@ impl<S: CasualRouter<RocksSnapshot>> Runner<S> {
         debug!(
             "executing task";
             "region_id" => region_id,
-            "start_key" => log_wrappers::Key(&start_key),
-            "end_key" => log_wrappers::Key(&end_key),
+            "start_key" => log_wrappers::Value::key(&start_key),
+            "end_key" => log_wrappers::Value::key(&end_key),
         );
         CHECK_SPILT_COUNTER.all.inc();
 
@@ -214,7 +215,7 @@ impl<S: CasualRouter<RocksSnapshot>> Runner<S> {
                 match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                     Ok(keys) => keys,
                     Err(e) => {
-                        error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
+                        error!(%e; "failed to scan split key"; "region_id" => region_id,);
                         return;
                     }
                 }
@@ -225,15 +226,14 @@ impl<S: CasualRouter<RocksSnapshot>> Runner<S> {
                     .map(|k| keys::origin_key(&k).to_vec())
                     .collect(),
                 Err(e) => {
-                    error!(
+                    error!(%e;
                         "failed to get approximate split key, try scan way";
                         "region_id" => region_id,
-                        "err" => %e,
                     );
                     match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                         Ok(keys) => keys,
                         Err(e) => {
-                            error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
+                            error!(%e; "failed to scan split key"; "region_id" => region_id,);
                             return;
                         }
                     }
@@ -244,7 +244,7 @@ impl<S: CasualRouter<RocksSnapshot>> Runner<S> {
 
         if !split_keys.is_empty() {
             let region_epoch = region.get_region_epoch().clone();
-            let msg = new_split_region(region_epoch, split_keys);
+            let msg = new_split_region(region_epoch, split_keys, "split checker");
             let res = self.router.send(region_id, msg);
             if let Err(e) = res {
                 warn!("failed to send check result"; "region_id" => region_id, "err" => %e);
@@ -264,13 +264,13 @@ impl<S: CasualRouter<RocksSnapshot>> Runner<S> {
     /// Gets the split keys by scanning the range.
     fn scan_split_keys(
         &self,
-        host: &mut SplitCheckerHost<'_, RocksEngine>,
+        host: &mut SplitCheckerHost<'_, E>,
         region: &Region,
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<Vec<Vec<u8>>> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-        MergedIterator::<<RocksEngine as Iterable>::Iterator>::new(
+        MergedIterator::<<E as Iterable>::Iterator>::new(
             &self.engine,
             LARGE_CFS,
             start_key,
@@ -318,7 +318,13 @@ impl<S: CasualRouter<RocksSnapshot>> Runner<S> {
     }
 }
 
-impl<S: CasualRouter<RocksSnapshot>> Runnable<Task> for Runner<S> {
+impl<E, S> Runnable for Runner<E, S>
+where
+    E: KvEngine,
+    S: CasualRouter<E>,
+{
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::SplitCheckTask {
@@ -333,13 +339,18 @@ impl<S: CasualRouter<RocksSnapshot>> Runnable<Task> for Runner<S> {
     }
 }
 
-fn new_split_region(
+fn new_split_region<E>(
     region_epoch: RegionEpoch,
     split_keys: Vec<Vec<u8>>,
-) -> CasualMessage<RocksSnapshot> {
+    source: &'static str,
+) -> CasualMessage<E>
+where
+    E: KvEngine,
+{
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,
         callback: Callback::None,
+        source: source.into(),
     }
 }

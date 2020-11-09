@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use keys::origin_key;
+use std::cmp::Ordering::*;
 use std::fmt::{self, Debug, Display};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -9,12 +10,12 @@ use txn_types::Key;
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_LOCK};
 use kvproto::kvrpcpb::LockInfo;
-use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
+use kvproto::raft_cmdpb::CmdType;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
 
 use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
 use raftstore::coprocessor::{
-    ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, Coprocessor,
+    ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, Cmd, Coprocessor,
     CoprocessorHost, ObserverContext, QueryObserver,
 };
 
@@ -32,6 +33,28 @@ struct LockObserverState {
     /// specified max_ts) are monitored and collected. If there are too many stale locks or any
     /// error happens, `is_clean` must be set to `false`.
     is_clean: AtomicBool,
+}
+
+impl LockObserverState {
+    fn load_max_ts(&self) -> TimeStamp {
+        self.max_ts.load(Ordering::Acquire).into()
+    }
+
+    fn store_max_ts(&self, max_ts: TimeStamp) {
+        self.max_ts.store(max_ts.into_inner(), Ordering::Release)
+    }
+
+    fn is_clean(&self) -> bool {
+        self.is_clean.load(Ordering::Acquire)
+    }
+
+    fn mark_clean(&self) {
+        self.is_clean.store(true, Ordering::Release);
+    }
+
+    fn mark_dirty(&self) {
+        self.is_clean.store(false, Ordering::Release);
+    }
 }
 
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -108,50 +131,52 @@ impl LockObserver {
     }
 
     fn send(&self, locks: Vec<(Key, Lock)>) {
-        match self
+        let res = &mut self
             .sender
-            .schedule(LockCollectorTask::ObservedLocks(locks))
+            .schedule(LockCollectorTask::ObservedLocks(locks));
+        // Wrap the fail point in a closure, so we can modify local variables without return.
+        #[cfg(feature = "failpoints")]
         {
+            let mut send_fp = || {
+                fail_point!("lock_observer_send", |_| {
+                    *res = Err(ScheduleError::Full(LockCollectorTask::ObservedLocks(
+                        vec![],
+                    )));
+                })
+            };
+            send_fp();
+        }
+
+        match res {
             Ok(()) => (),
             Err(ScheduleError::Stopped(_)) => {
                 error!("lock observer failed to send locks because collector is stopped");
             }
             Err(ScheduleError::Full(_)) => {
-                self.mark_dirty();
+                self.state.mark_dirty();
                 warn!("cannot collect all applied lock because channel is full");
             }
         }
-    }
-
-    fn mark_dirty(&self) {
-        self.state.is_clean.store(false, Ordering::Release);
-    }
-
-    fn is_clean(&self) -> bool {
-        self.state.is_clean.load(Ordering::Acquire)
-    }
-
-    fn load_max_ts(&self) -> TimeStamp {
-        self.state.max_ts.load(Ordering::Acquire).into()
     }
 }
 
 impl Coprocessor for LockObserver {}
 
 impl QueryObserver for LockObserver {
-    fn pre_apply_query(&self, _: &mut ObserverContext<'_>, requests: &[RaftRequest]) {
-        if !self.is_clean() {
+    fn post_apply_query(&self, _: &mut ObserverContext<'_>, cmd: &mut Cmd) {
+        fail_point!("notify_lock_observer_query");
+        let max_ts = self.state.load_max_ts();
+        if max_ts.is_zero() {
             return;
         }
 
-        let max_ts = self.load_max_ts();
-        if max_ts.is_zero() {
+        if !self.state.is_clean() {
             return;
         }
 
         let mut locks = vec![];
         // For each put in CF_LOCK, collect it if its ts <= max_ts.
-        for req in requests {
+        for req in cmd.request.get_requests() {
             if req.get_cmd_type() != CmdType::Put {
                 continue;
             }
@@ -163,12 +188,11 @@ impl QueryObserver for LockObserver {
             let lock = match Lock::parse(put_request.get_value()) {
                 Ok(l) => l,
                 Err(e) => {
-                    error!(
+                    error!(?e;
                         "cannot parse lock";
                         "value" => hex::encode_upper(put_request.get_value()),
-                        "err" => ?e
                     );
-                    self.mark_dirty();
+                    self.state.mark_dirty();
                     return;
                 }
             };
@@ -185,22 +209,23 @@ impl QueryObserver for LockObserver {
 }
 
 impl ApplySnapshotObserver for LockObserver {
-    fn pre_apply_plain_kvs(
+    fn apply_plain_kvs(
         &self,
         _: &mut ObserverContext<'_>,
         cf: CfName,
         kv_pairs: &[(Vec<u8>, Vec<u8>)],
     ) {
+        fail_point!("notify_lock_observer_snapshot");
         if cf != CF_LOCK {
             return;
         }
 
-        if !self.is_clean() {
+        let max_ts = self.state.load_max_ts();
+        if max_ts.is_zero() {
             return;
         }
 
-        let max_ts = self.load_max_ts();
-        if max_ts.is_zero() {
+        if !self.state.is_clean() {
             return;
         }
 
@@ -213,7 +238,7 @@ impl ApplySnapshotObserver for LockObserver {
             })
             .filter(|result| result.is_err() || result.as_ref().unwrap().1.ts <= max_ts)
             .map(|result| {
-                // `pre_apply_plain_keys` will be invoked with the data_key in RocksDB layer. So we
+                // `apply_plain_keys` will be invoked with the data_key in RocksDB layer. So we
                 // need to remove the `z` prefix.
                 result.map(|(key, lock)| (Key::from_encoded_slice(origin_key(key)), lock))
             })
@@ -221,20 +246,17 @@ impl ApplySnapshotObserver for LockObserver {
 
         match locks {
             Err(e) => {
-                error!(
-                    "cannot parse lock";
-                    "err" => ?e
-                );
-                self.mark_dirty()
+                error!(?e; "cannot parse lock");
+                self.state.mark_dirty()
             }
             Ok(l) => self.send(l),
         }
     }
 
-    fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, cf: CfName, _path: &str) {
+    fn apply_sst(&self, _: &mut ObserverContext<'_>, cf: CfName, _path: &str) {
         if cf == CF_LOCK {
             error!("cannot collect all applied lock: snapshot of lock cf applied from sst file");
-            self.mark_dirty();
+            self.state.mark_dirty();
         }
     }
 }
@@ -259,7 +281,7 @@ impl LockCollectorRunner {
         }
 
         if locks.len() + self.collected_locks.len() >= MAX_COLLECT_SIZE {
-            self.observer_state.is_clean.store(false, Ordering::Release);
+            self.observer_state.mark_dirty();
             info!("lock collector marked dirty because received too many locks");
             locks.truncate(MAX_COLLECT_SIZE - self.collected_locks.len());
         }
@@ -267,25 +289,31 @@ impl LockCollectorRunner {
     }
 
     fn start_collecting(&mut self, max_ts: TimeStamp) -> Result<()> {
-        if self.observer_state.max_ts.load(Ordering::Acquire) >= max_ts.into_inner() {
-            // Stale request. Ignore it.
-            return Ok(());
+        let curr_max_ts = self.observer_state.load_max_ts();
+        match max_ts.cmp(&curr_max_ts) {
+            Less => Err(box_err!(
+                "collecting locks with a greater max_ts: {}",
+                curr_max_ts
+            )),
+            Equal => {
+                // Stale request. Ignore it.
+                Ok(())
+            }
+            Greater => {
+                info!("start collecting locks"; "max_ts" => max_ts);
+                self.collected_locks.clear();
+                // TODO: `is_clean` may be unexpectedly set to false here, if any error happens on a
+                // previous observing. It need to be solved, although it's very unlikely to happen and
+                // doesn't affect correctness of data.
+                self.observer_state.mark_clean();
+                self.observer_state.store_max_ts(max_ts);
+                Ok(())
+            }
         }
-        info!("start collecting locks"; "max_ts" => max_ts);
-        self.collected_locks.clear();
-        // TODO: `is_clean` may be unexpectedly set to false here, if any error happens on a
-        // previous observing. It need to be solved, although it's very unlikely to happen and
-        // doesn't affect correctness of data.
-        self.observer_state.is_clean.store(true, Ordering::Release);
-        self.observer_state
-            .max_ts
-            .store(max_ts.into_inner(), Ordering::Release);
-        Ok(())
     }
 
     fn get_collected_locks(&mut self, max_ts: TimeStamp) -> Result<(Vec<LockInfo>, bool)> {
-        let curr_max_ts = self.observer_state.max_ts.load(Ordering::Acquire);
-        let curr_max_ts = TimeStamp::new(curr_max_ts);
+        let curr_max_ts = self.observer_state.load_max_ts();
         if curr_max_ts != max_ts {
             warn!(
                 "trying to fetch collected locks but now collecting with another max_ts";
@@ -307,8 +335,7 @@ impl LockCollectorRunner {
             })
             .collect();
 
-        let is_clean = self.observer_state.is_clean.load(Ordering::Acquire);
-        Ok((locks?, is_clean))
+        Ok((locks?, self.observer_state.is_clean()))
     }
 
     fn stop_collecting(&mut self, max_ts: TimeStamp) -> Result<()> {
@@ -333,7 +360,9 @@ impl LockCollectorRunner {
     }
 }
 
-impl Runnable<LockCollectorTask> for LockCollectorRunner {
+impl Runnable for LockCollectorRunner {
+    type Task = LockCollectorTask;
+
     fn run(&mut self, task: LockCollectorTask) {
         match task {
             LockCollectorTask::ObservedLocks(locks) => self.handle_observed_locks(locks),
@@ -351,7 +380,7 @@ impl Runnable<LockCollectorTask> for LockCollectorRunner {
 }
 
 pub struct AppliedLockCollector {
-    worker: Mutex<Worker<LockCollectorTask>>,
+    worker: Mutex<Worker>,
     scheduler: Scheduler<LockCollectorTask>,
 }
 
@@ -359,30 +388,20 @@ impl AppliedLockCollector {
     pub fn new(coprocessor_host: &mut CoprocessorHost<RocksEngine>) -> Result<Self> {
         let worker = Mutex::new(WorkerBuilder::new("lock-collector").create());
 
-        let scheduler = worker.lock().unwrap().scheduler();
-
         let state = Arc::new(LockObserverState::default());
         let runner = LockCollectorRunner::new(Arc::clone(&state));
+        let scheduler = worker.lock().unwrap().start("lock-collector", runner);
         let observer = LockObserver::new(state, scheduler.clone());
 
         observer.register(coprocessor_host);
 
         // Start the worker
-        worker.lock().unwrap().start(runner)?;
 
         Ok(Self { worker, scheduler })
     }
 
-    pub fn stop(&self) -> Result<()> {
-        if let Some(h) = self.worker.lock().unwrap().stop() {
-            if let Err(e) = h.join() {
-                return Err(box_err!(
-                    "failed to join applied_lock_collector handle, err: {:?}",
-                    e
-                ));
-            }
-        }
-        Ok(())
+    pub fn stop(&self) {
+        self.worker.lock().unwrap().stop();
     }
 
     /// Starts collecting applied locks whose `start_ts` <= `max_ts`. Only one `max_ts` is valid
@@ -419,10 +438,7 @@ impl AppliedLockCollector {
 
 impl Drop for AppliedLockCollector {
     fn drop(&mut self) {
-        let r = self.stop();
-        if let Err(e) = r {
-            error!("Failed to stop applied_lock_collector"; "err" => ?e);
-        }
+        self.stop();
     }
 }
 
@@ -432,7 +448,9 @@ mod tests {
     use engine_traits::CF_DEFAULT;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{PutRequest, RaftCmdRequest};
+    use kvproto::raft_cmdpb::{
+        PutRequest, RaftCmdRequest, RaftCmdResponse, Request as RaftRequest,
+    };
     use std::sync::mpsc::channel;
     use txn_types::LockType;
 
@@ -475,10 +493,10 @@ mod tests {
         req
     }
 
-    fn make_raft_cmd_req(requests: Vec<RaftRequest>) -> RaftCmdRequest {
-        let mut res = RaftCmdRequest::default();
-        res.set_requests(requests.into());
-        res
+    fn make_raft_cmd(requests: Vec<RaftRequest>) -> Cmd {
+        let mut req = RaftCmdRequest::default();
+        req.set_requests(requests.into());
+        Cmd::new(0, req, RaftCmdResponse::default())
     }
 
     fn new_test_collector() -> (AppliedLockCollector, CoprocessorHost<RocksEngine>) {
@@ -532,9 +550,12 @@ mod tests {
         get_collected_locks(&c, 3).unwrap_err();
         get_collected_locks(&c, 4).unwrap();
         // Do not allow aborting previous observing with a smaller max_ts.
-        start_collecting(&c, 3).unwrap();
+        start_collecting(&c, 3).unwrap_err();
         get_collected_locks(&c, 3).unwrap_err();
         get_collected_locks(&c, 4).unwrap();
+        // Do not allow stoping observing with a different max_ts.
+        stop_collecting(&c, 3).unwrap_err();
+        stop_collecting(&c, 5).unwrap_err();
         stop_collecting(&c, 4).unwrap();
     }
 
@@ -580,8 +601,15 @@ mod tests {
             make_apply_request(b"1".to_vec(), b"1".to_vec(), CF_DEFAULT, CmdType::Put),
             make_apply_request(b"2".to_vec(), b"2".to_vec(), CF_LOCK, CmdType::Delete),
         ];
-        coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(req));
+        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(req));
         expected_result.push(locks[0].clone());
+        assert_eq!(
+            get_collected_locks(&c, 100).unwrap(),
+            (expected_result.clone(), true)
+        );
+
+        // When start collecting with the same max_ts again, shouldn't clean up the observer state.
+        start_collecting(&c, 100).unwrap();
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_result.clone(), true)
@@ -598,7 +626,7 @@ mod tests {
                 .filter(|l| l.get_lock_version() <= 100)
                 .cloned(),
         );
-        coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(req.clone()));
+        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(req.clone()));
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_result, true)
@@ -608,7 +636,7 @@ mod tests {
         // dropped.
         start_collecting(&c, 110).unwrap();
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
-        coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(req));
+        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(req));
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks, true));
     }
 
@@ -642,7 +670,7 @@ mod tests {
         start_collecting(&c, 100).unwrap();
 
         // Apply plain file to other CFs. Nothing happens.
-        coprocessor_host.pre_apply_plain_kvs_from_snapshot(
+        coprocessor_host.post_apply_plain_kvs_from_snapshot(
             &Region::default(),
             CF_DEFAULT,
             &lock_kvs,
@@ -655,7 +683,7 @@ mod tests {
             .filter(|l| l.get_lock_version() <= 100)
             .cloned()
             .collect();
-        coprocessor_host.pre_apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
+        coprocessor_host.post_apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_locks.clone(), true)
@@ -673,7 +701,7 @@ mod tests {
             get_collected_locks(&c, 100).unwrap(),
             (expected_locks.clone(), true)
         );
-        start_collecting(&c, 90).unwrap();
+        start_collecting(&c, 90).unwrap_err();
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_locks, true)
@@ -683,16 +711,16 @@ mod tests {
         // dropped.
         start_collecting(&c, 110).unwrap();
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
-        coprocessor_host.pre_apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
+        coprocessor_host.post_apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks.clone(), true));
 
         // Apply SST file to other cfs. Nothing happens.
-        coprocessor_host.pre_apply_sst_from_snapshot(&Region::default(), CF_DEFAULT, "");
+        coprocessor_host.post_apply_sst_from_snapshot(&Region::default(), CF_DEFAULT, "");
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks.clone(), true));
 
         // Apply SST file to lock cf is not supported. This will cause error and therefore
         // `is_clean` will be set to false.
-        coprocessor_host.pre_apply_sst_from_snapshot(&Region::default(), CF_LOCK, "");
+        coprocessor_host.post_apply_sst_from_snapshot(&Region::default(), CF_LOCK, "");
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks, false));
     }
 
@@ -704,13 +732,13 @@ mod tests {
         // The value is not a valid lock.
         let (k, v) = (Key::from_raw(b"k1").into_encoded(), b"v1".to_vec());
         let req = make_apply_request(k.clone(), v.clone(), CF_LOCK, CmdType::Put);
-        coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(vec![req]));
+        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(vec![req]));
         assert_eq!(get_collected_locks(&c, 1).unwrap(), (vec![], false));
 
         // `is_clean` should be reset after invoking `start_collecting`.
         start_collecting(&c, 2).unwrap();
         assert_eq!(get_collected_locks(&c, 2).unwrap(), (vec![], true));
-        coprocessor_host.pre_apply_plain_kvs_from_snapshot(
+        coprocessor_host.post_apply_plain_kvs_from_snapshot(
             &Region::default(),
             CF_LOCK,
             &[(keys::data_key(&k), v)],
@@ -730,8 +758,8 @@ mod tests {
         let batch_generate_locks = |count| {
             let (k, v) = lock_info_to_kv(lock.clone());
             let req = make_apply_request(k, v, CF_LOCK, CmdType::Put);
-            let raft_cmd_req = make_raft_cmd_req(vec![req; count]);
-            coprocessor_host.pre_apply(&Region::default(), &raft_cmd_req);
+            let mut raft_cmd = make_raft_cmd(vec![req; count]);
+            coprocessor_host.post_apply(&Region::default(), &mut raft_cmd);
         };
 
         batch_generate_locks(MAX_COLLECT_SIZE - 1);

@@ -80,7 +80,7 @@ impl AsMySQLBool for ScalarValue {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match_template_evaluable! {
             TT, match self {
-                ScalarValue::TT(v) => v.as_mysql_bool(context),
+                ScalarValue::TT(v) => v.as_ref().as_mysql_bool(context),
             }
         }
     }

@@ -3,20 +3,19 @@
 use crate::engine::KvEngine;
 use crate::errors::Result;
 use crate::options::WriteOptions;
+use crate::raft_engine::RaftEngine;
 
 #[derive(Clone, Debug)]
-pub struct KvEngines<K, R> {
+pub struct Engines<K, R> {
     pub kv: K,
     pub raft: R,
-    pub shared_block_cache: bool,
 }
 
-impl<K: KvEngine, R: KvEngine> KvEngines<K, R> {
-    pub fn new(kv_engine: K, raft_engine: R, shared_block_cache: bool) -> Self {
-        KvEngines {
+impl<K: KvEngine, R: RaftEngine> Engines<K, R> {
+    pub fn new(kv_engine: K, raft_engine: R) -> Self {
+        Engines {
             kv: kv_engine,
             raft: raft_engine,
-            shared_block_cache,
         }
     }
 
@@ -30,17 +29,5 @@ impl<K: KvEngine, R: KvEngine> KvEngines<K, R> {
 
     pub fn sync_kv(&self) -> Result<()> {
         self.kv.sync()
-    }
-
-    pub fn write_raft(&self, wb: &R::WriteBatch) -> Result<()> {
-        self.raft.write(wb)
-    }
-
-    pub fn write_raft_opt(&self, wb: &R::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.raft.write_opt(wb, opts)
-    }
-
-    pub fn sync_raft(&self) -> Result<()> {
-        self.raft.sync()
     }
 }

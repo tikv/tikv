@@ -251,7 +251,7 @@
 //! - "Plain old data" types in `engine` can be moved directly into
 //!   `engine_traits` and reexported from `engine` to ease the transition.
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
-
+#![feature(min_specialization)]
 #![recursion_limit = "200"]
 
 #[macro_use]
@@ -267,8 +267,6 @@ extern crate slog_global;
 //
 // Many of these define "extension" traits, that end in `Ext`.
 
-mod cf_handle;
-pub use crate::cf_handle::*;
 mod cf_names;
 pub use crate::cf_names::*;
 mod cf_options;
@@ -297,6 +295,12 @@ mod encryption;
 pub use crate::encryption::*;
 mod properties;
 pub use crate::properties::*;
+mod mvcc_properties;
+mod sst_partitioner;
+pub use crate::sst_partitioner::*;
+mod range_properties;
+pub use crate::mvcc_properties::*;
+pub use crate::range_properties::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -321,6 +325,8 @@ mod options;
 pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
+mod raft_engine;
+pub use raft_engine::{CacheStats, RaftEngine, RaftLogBatch};
 
 // These modules need further scrutiny
 

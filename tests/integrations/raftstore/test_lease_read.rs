@@ -7,13 +7,14 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::*;
 use std::{mem, thread};
 
+use kvproto::metapb;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
-use engine_rocks::Compat;
+use engine_rocks::{Compat, RocksSnapshot};
 use engine_traits::Peekable;
 use pd_client::PdClient;
-use raftstore::store::Callback;
+use raftstore::store::{Callback, RegionSnapshot};
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
@@ -265,6 +266,118 @@ fn test_node_lease_unsafe_during_leader_transfers() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
     test_lease_unsafe_during_leader_transfers(&mut cluster);
+}
+
+#[test]
+fn test_node_batch_id_in_lease() {
+    let count = 3;
+    let mut cluster = new_node_cluster(0, count);
+    test_batch_id_in_lease(&mut cluster);
+}
+
+fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+
+    // Avoid triggering the log compaction in this test case.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 100;
+
+    // Increase the Raft tick interval to make this test case running reliably.
+    let election_timeout = configure_for_lease_read(cluster, Some(100), None);
+    cluster.run();
+
+    let (split_key1, split_key2) = (b"k22", b"k44");
+    let keys = vec![b"k11", b"k33", b"k55"];
+    let _ = keys.iter().map(|key| {
+        cluster.must_put(*key, b"v1");
+    });
+
+    let region = pd_client.get_region(keys[0]).unwrap();
+    cluster.must_split(&region, split_key1);
+    let region = pd_client.get_region(keys[1]).unwrap();
+    cluster.must_split(&region, split_key2);
+    let mut peers = vec![];
+
+    // Transfer leader together to batch snapshot
+    for i in 0..3 {
+        let r = pd_client.get_region(keys[i]).unwrap();
+        let peer = cluster.leader_of_region(r.get_id()).unwrap();
+        if peer.get_store_id() != 1 {
+            for p in r.get_peers() {
+                if p.get_store_id() == 1 {
+                    cluster.must_transfer_leader(r.get_id(), p.clone());
+                    let peer = cluster.leader_of_region(r.get_id()).unwrap();
+                    assert_eq!(peer.get_store_id(), 1);
+                    peers.push(peer);
+                    break;
+                }
+            }
+        } else {
+            peers.push(peer.clone());
+        }
+    }
+    // Sleep to make sure lease expired
+    thread::sleep(election_timeout + Duration::from_millis(200));
+
+    // Send request to region 0 and 1 to renew their lease.
+    cluster.must_put(b"k11", b"v2");
+    cluster.must_put(b"k33", b"v2");
+    assert_eq!(b"v2".to_vec(), cluster.must_get(b"k33").unwrap());
+    assert_eq!(b"v2".to_vec(), cluster.must_get(b"k11").unwrap());
+
+    let regions: Vec<_> = keys
+        .into_iter()
+        .map(|key| pd_client.get_region(key).unwrap())
+        .collect();
+
+    let requests: Vec<(metapb::Peer, metapb::Region)> = peers
+        .iter()
+        .zip(regions)
+        .map(|(p, r)| (p.clone(), r))
+        .collect();
+    let responses = batch_read_on_peer(cluster, &requests);
+    let snaps: Vec<RegionSnapshot<RocksSnapshot>> = responses
+        .into_iter()
+        .map(|response| {
+            assert!(!response.response.get_header().has_error());
+            response.snapshot.unwrap()
+        })
+        .collect();
+
+    // Snapshot 0 and 1 will use one RocksSnapshot because we have renew their lease.
+    assert!(std::ptr::eq(
+        snaps[0].get_snapshot(),
+        snaps[1].get_snapshot()
+    ));
+    assert!(!std::ptr::eq(
+        snaps[0].get_snapshot(),
+        snaps[2].get_snapshot()
+    ));
+
+    // make sure that region 2 could renew lease.
+    cluster.must_put(b"k55", b"v2");
+    let responses = batch_read_on_peer(cluster, &requests);
+    let snaps2: Vec<RegionSnapshot<RocksSnapshot>> = responses
+        .into_iter()
+        .map(|response| {
+            assert!(!response.response.get_header().has_error());
+            response.snapshot.unwrap()
+        })
+        .collect();
+    assert_eq!(3, snaps2.len());
+    assert!(!std::ptr::eq(
+        snaps[0].get_snapshot(),
+        snaps2[0].get_snapshot()
+    ));
+    assert!(std::ptr::eq(
+        snaps2[0].get_snapshot(),
+        snaps2[1].get_snapshot()
+    ));
+    assert!(std::ptr::eq(
+        snaps2[0].get_snapshot(),
+        snaps2[2].get_snapshot()
+    ));
 }
 
 /// test whether the read index callback will be handled when a region is destroyed.

@@ -2,19 +2,21 @@
 
 //! Multi-version concurrency control functionality.
 
-mod metrics;
+mod consistency_check;
+pub(super) mod metrics;
 mod reader;
-mod txn;
+pub(super) mod txn;
 
+pub use self::consistency_check::{Mvcc as MvccConsistencyCheckObserver, MvccInfoIterator};
 pub use self::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 pub use self::reader::*;
-pub use self::txn::{MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE};
-pub use crate::new_txn;
+pub use self::txn::{GcInfo, MvccTxn, ReleasedLock, SecondaryLockStatus, MAX_TXN_WRITE_SIZE};
 pub use txn_types::{
     Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
     SHORT_VALUE_MAX_LEN,
 };
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use std::error;
 use std::fmt;
 use std::io;
@@ -81,6 +83,9 @@ quick_error! {
         KeyVersion { display("bad format key(version)") }
         PessimisticLockNotFound { start_ts: TimeStamp, key: Vec<u8> } {
             display("pessimistic lock not found, start_ts:{}, key:{}", start_ts, hex::encode_upper(key))
+        }
+        CommitTsTooLarge { start_ts: TimeStamp, min_commit_ts: TimeStamp, max_commit_ts: TimeStamp } {
+            display("min_commit_ts {} is larger than max_commit_ts {}, start_ts: {}", min_commit_ts, max_commit_ts, start_ts)
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
@@ -174,6 +179,15 @@ impl ErrorInner {
                     key: key.to_owned(),
                 })
             }
+            ErrorInner::CommitTsTooLarge {
+                start_ts,
+                min_commit_ts,
+                max_commit_ts,
+            } => Some(ErrorInner::CommitTsTooLarge {
+                start_ts: *start_ts,
+                min_commit_ts: *min_commit_ts,
+                max_commit_ts: *max_commit_ts,
+            }),
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -226,6 +240,12 @@ impl From<codec::Error> for ErrorInner {
     }
 }
 
+impl From<::pd_client::Error> for ErrorInner {
+    fn from(err: ::pd_client::Error) -> Self {
+        box_err!("{}", err)
+    }
+}
+
 impl From<txn_types::Error> for ErrorInner {
     fn from(err: txn_types::Error) -> Self {
         match err {
@@ -244,6 +264,36 @@ impl From<txn_types::Error> for ErrorInner {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Engine(e) => e.error_code(),
+            ErrorInner::Io(_) => error_code::storage::IO,
+            ErrorInner::Codec(e) => e.error_code(),
+            ErrorInner::KeyIsLocked(_) => error_code::storage::KEY_IS_LOCKED,
+            ErrorInner::BadFormat(e) => e.error_code(),
+            ErrorInner::Committed { .. } => error_code::storage::COMMITTED,
+            ErrorInner::PessimisticLockRolledBack { .. } => {
+                error_code::storage::PESSIMISTIC_LOCK_ROLLED_BACK
+            }
+            ErrorInner::TxnLockNotFound { .. } => error_code::storage::TXN_LOCK_NOT_FOUND,
+            ErrorInner::TxnNotFound { .. } => error_code::storage::TXN_NOT_FOUND,
+            ErrorInner::LockTypeNotMatch { .. } => error_code::storage::LOCK_TYPE_NOT_MATCH,
+            ErrorInner::WriteConflict { .. } => error_code::storage::WRITE_CONFLICT,
+            ErrorInner::Deadlock { .. } => error_code::storage::DEADLOCK,
+            ErrorInner::AlreadyExist { .. } => error_code::storage::ALREADY_EXIST,
+            ErrorInner::DefaultNotFound { .. } => error_code::storage::DEFAULT_NOT_FOUND,
+            ErrorInner::CommitTsExpired { .. } => error_code::storage::COMMIT_TS_EXPIRED,
+            ErrorInner::KeyVersion => error_code::storage::KEY_VERSION,
+            ErrorInner::PessimisticLockNotFound { .. } => {
+                error_code::storage::PESSIMISTIC_LOCK_NOT_FOUND
+            }
+            ErrorInner::CommitTsTooLarge { .. } => error_code::storage::COMMIT_TS_TOO_LARGE,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
+        }
+    }
+}
+
 /// Generates `DefaultNotFound` error or panic directly based on config.
 #[inline(never)]
 pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
@@ -260,7 +310,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
     } else {
         error!(
             "default value not found";
-            "key" => log_wrappers::Key(&key),
+            "key" => log_wrappers::Value::key(&key),
             "hint" => hint,
         );
         Error::from(ErrorInner::DefaultNotFound { key })
@@ -269,13 +319,13 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 
 pub mod tests {
     use super::*;
-    use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot, WriteData};
-    use crate::storage::types::TxnStatus;
+    use crate::storage::kv::{Engine, Modify, ScanMode, SnapContext, Snapshot, WriteData};
+    use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use txn_types::Key;
 
-    fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
+    pub fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
         if !modifies.is_empty() {
             engine
                 .write(ctx, WriteData::from_modifies(modifies))
@@ -284,8 +334,8 @@ pub mod tests {
     }
 
     pub fn must_get<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let ctx = SnapContext::default();
+        let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         assert_eq!(
             reader
@@ -297,8 +347,8 @@ pub mod tests {
     }
 
     pub fn must_get_rc<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let ctx = SnapContext::default();
+        let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Rc);
         assert_eq!(
             reader
@@ -310,8 +360,8 @@ pub mod tests {
     }
 
     pub fn must_get_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let ctx = SnapContext::default();
+        let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         assert!(reader
             .get(&Key::from_raw(key), ts.into(), false)
@@ -320,797 +370,34 @@ pub mod tests {
     }
 
     pub fn must_get_err<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let ctx = SnapContext::default();
+        let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         assert!(reader.get(&Key::from_raw(key), ts.into(), false).is_err());
     }
 
-    // Insert has a constraint that key should not exist
-    pub fn try_prewrite_insert<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-    ) -> Result<()> {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        txn.prewrite(
-            Mutation::Insert((Key::from_raw(key), value.to_vec())),
-            pk,
-            false,
-            0,
-            0,
-            TimeStamp::default(),
-        )?;
-        write(engine, &ctx, txn.into_modifies());
-        Ok(())
-    }
-
-    pub fn try_prewrite_check_not_exists<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-    ) -> Result<()> {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        txn.prewrite(
-            Mutation::CheckNotExists(Key::from_raw(key)),
-            pk,
-            false,
-            0,
-            0,
-            TimeStamp::default(),
-        )?;
-        Ok(())
-    }
-
-    pub fn try_pessimistic_prewrite_check_not_exists<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-    ) -> Result<()> {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        txn.pessimistic_prewrite(
-            Mutation::CheckNotExists(Key::from_raw(key)),
-            pk,
-            false,
-            0,
-            TimeStamp::default(),
-            0,
-            TimeStamp::default(),
-            false,
-        )?;
-        Ok(())
-    }
-
-    pub fn must_prewrite_put_impl<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        is_pessimistic_lock: bool,
-        lock_ttl: u64,
-        for_update_ts: TimeStamp,
-        txn_size: u64,
-        min_commit_ts: TimeStamp,
-        pipelined_pessimistic_lock: bool,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
-        if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, false, lock_ttl, txn_size, min_commit_ts)
-                .unwrap();
-        } else {
-            txn.pessimistic_prewrite(
-                mutation,
-                pk,
-                is_pessimistic_lock,
-                lock_ttl,
-                for_update_ts,
-                txn_size,
-                min_commit_ts,
-                pipelined_pessimistic_lock,
-            )
-            .unwrap();
-        }
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    pub fn must_prewrite_put<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-    ) {
-        must_prewrite_put_impl(
-            engine,
-            key,
-            value,
-            pk,
-            ts,
-            false,
-            0,
-            TimeStamp::default(),
-            0,
-            TimeStamp::default(),
-            false,
-        );
-    }
-
-    pub fn must_pessimistic_prewrite_put<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        is_pessimistic_lock: bool,
-    ) {
-        must_prewrite_put_impl(
-            engine,
-            key,
-            value,
-            pk,
-            ts,
-            is_pessimistic_lock,
-            0,
-            for_update_ts.into(),
-            0,
-            TimeStamp::default(),
-            false,
-        );
-    }
-
-    pub fn must_pipelined_pessimistic_prewrite_put<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        is_pessimistic_lock: bool,
-    ) {
-        must_prewrite_put_impl(
-            engine,
-            key,
-            value,
-            pk,
-            ts,
-            is_pessimistic_lock,
-            0,
-            for_update_ts.into(),
-            0,
-            TimeStamp::default(),
-            true,
-        );
-    }
-
-    pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        is_pessimistic_lock: bool,
-        lock_ttl: u64,
-    ) {
-        must_prewrite_put_impl(
-            engine,
-            key,
-            value,
-            pk,
-            ts,
-            is_pessimistic_lock,
-            lock_ttl,
-            for_update_ts.into(),
-            0,
-            TimeStamp::default(),
-            false,
-        );
-    }
-
-    pub fn must_prewrite_put_for_large_txn<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        ttl: u64,
-        for_update_ts: impl Into<TimeStamp>,
-    ) {
-        let lock_ttl = ttl;
-        let ts = ts.into();
-        let min_commit_ts = (ts.into_inner() + 1).into();
-        let for_update_ts = for_update_ts.into();
-        must_prewrite_put_impl(
-            engine,
-            key,
-            value,
-            pk,
-            ts,
-            !for_update_ts.is_zero(),
-            lock_ttl,
-            for_update_ts,
-            0,
-            min_commit_ts,
-            false,
-        );
-    }
-
-    fn must_prewrite_put_err_impl<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        is_pessimistic_lock: bool,
-        pipelined_pessimistic_lock: bool,
-    ) -> Error {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
-        let for_update_ts = for_update_ts.into();
-        if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
-                .unwrap_err()
-        } else {
-            txn.pessimistic_prewrite(
-                mutation,
-                pk,
-                is_pessimistic_lock,
-                0,
-                for_update_ts,
-                0,
-                TimeStamp::default(),
-                pipelined_pessimistic_lock,
-            )
-            .unwrap_err()
-        }
-    }
-
-    pub fn must_prewrite_put_err<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-    ) -> Error {
-        must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false, false)
-    }
-
-    pub fn must_pessimistic_prewrite_put_err<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        is_pessimistic_lock: bool,
-    ) -> Error {
-        must_prewrite_put_err_impl(
-            engine,
-            key,
-            value,
-            pk,
-            ts,
-            for_update_ts,
-            is_pessimistic_lock,
-            false,
-        )
-    }
-
-    pub fn must_pipelined_pessimistic_prewrite_put_err<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        is_pessimistic_lock: bool,
-    ) -> Error {
-        must_prewrite_put_err_impl(
-            engine,
-            key,
-            value,
-            pk,
-            ts,
-            for_update_ts,
-            is_pessimistic_lock,
-            true,
-        )
-    }
-
-    fn must_prewrite_delete_impl<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        is_pessimistic_lock: bool,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        let mutation = Mutation::Delete(Key::from_raw(key));
-        let for_update_ts = for_update_ts.into();
-        if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
-                .unwrap();
-        } else {
-            txn.pessimistic_prewrite(
-                mutation,
-                pk,
-                is_pessimistic_lock,
-                0,
-                for_update_ts,
-                0,
-                TimeStamp::default(),
-                false,
-            )
-            .unwrap();
-        }
-        engine
-            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
-            .unwrap();
-    }
-
-    pub fn must_prewrite_delete<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-    ) {
-        must_prewrite_delete_impl(engine, key, pk, ts, TimeStamp::zero(), false);
-    }
-
-    pub fn must_pessimistic_prewrite_delete<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        is_pessimistic_lock: bool,
-    ) {
-        must_prewrite_delete_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
-    }
-
-    fn must_prewrite_lock_impl<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        is_pessimistic_lock: bool,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        let for_update_ts = for_update_ts.into();
-        let mutation = Mutation::Lock(Key::from_raw(key));
-        if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
-                .unwrap();
-        } else {
-            txn.pessimistic_prewrite(
-                mutation,
-                pk,
-                is_pessimistic_lock,
-                0,
-                for_update_ts,
-                0,
-                TimeStamp::default(),
-                false,
-            )
-            .unwrap();
-        }
-        engine
-            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
-            .unwrap();
-    }
-
-    pub fn must_prewrite_lock<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-    ) {
-        must_prewrite_lock_impl(engine, key, pk, ts, TimeStamp::zero(), false);
-    }
-
-    pub fn must_prewrite_lock_err<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        assert!(txn
-            .prewrite(
-                Mutation::Lock(Key::from_raw(key)),
-                pk,
-                false,
-                0,
-                0,
-                TimeStamp::default()
-            )
-            .is_err());
-    }
-
-    pub fn must_pessimistic_prewrite_lock<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        is_pessimistic_lock: bool,
-    ) {
-        must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
-    }
-
-    pub fn must_acquire_pessimistic_lock_impl<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        lock_ttl: u64,
-        for_update_ts: impl Into<TimeStamp>,
-        need_value: bool,
-        min_commit_ts: impl Into<TimeStamp>,
-    ) -> Option<Value> {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        let res = txn
-            .acquire_pessimistic_lock(
-                Key::from_raw(key),
-                pk,
-                false,
-                lock_ttl,
-                for_update_ts.into(),
-                need_value,
-                min_commit_ts.into(),
-            )
-            .unwrap();
-        let modifies = txn.into_modifies();
-        if !modifies.is_empty() {
-            engine
-                .write(&ctx, WriteData::from_modifies(modifies))
-                .unwrap();
-        }
-        res
-    }
-
-    pub fn must_acquire_pessimistic_lock<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-    ) {
-        must_acquire_pessimistic_lock_with_ttl(engine, key, pk, start_ts, for_update_ts, 0);
-    }
-
-    pub fn must_acquire_pessimistic_lock_return_value<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-    ) -> Option<Value> {
-        must_acquire_pessimistic_lock_impl(
-            engine,
-            key,
-            pk,
-            start_ts,
-            0,
-            for_update_ts.into(),
-            true,
-            TimeStamp::zero(),
-        )
-    }
-
-    pub fn must_acquire_pessimistic_lock_with_ttl<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        ttl: u64,
-    ) {
-        assert!(must_acquire_pessimistic_lock_impl(
-            engine,
-            key,
-            pk,
-            start_ts,
-            ttl,
-            for_update_ts.into(),
-            false,
-            TimeStamp::zero(),
-        )
-        .is_none());
-    }
-
-    pub fn must_acquire_pessimistic_lock_for_large_txn<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        lock_ttl: u64,
-    ) {
-        let for_update_ts = for_update_ts.into();
-        let min_commit_ts = for_update_ts.next();
-        must_acquire_pessimistic_lock_impl(
-            engine,
-            key,
-            pk,
-            start_ts,
-            lock_ttl,
-            for_update_ts,
-            false,
-            min_commit_ts,
-        );
-    }
-
-    pub fn must_acquire_pessimistic_lock_err<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-    ) -> Error {
-        must_acquire_pessimistic_lock_err_impl(
-            engine,
-            key,
-            pk,
-            start_ts,
-            for_update_ts,
-            false,
-            TimeStamp::zero(),
-        )
-    }
-
-    pub fn must_acquire_pessimistic_lock_return_value_err<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-    ) -> Error {
-        must_acquire_pessimistic_lock_err_impl(
-            engine,
-            key,
-            pk,
-            start_ts,
-            for_update_ts,
-            true,
-            TimeStamp::zero(),
-        )
-    }
-
-    pub fn must_acquire_pessimistic_lock_err_impl<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        need_value: bool,
-        min_commit_ts: impl Into<TimeStamp>,
-    ) -> Error {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.acquire_pessimistic_lock(
-            Key::from_raw(key),
-            pk,
-            false,
-            0,
-            for_update_ts.into(),
-            need_value,
-            min_commit_ts.into(),
-        )
-        .unwrap_err()
-    }
-
-    pub fn must_pessimistic_rollback<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.pessimistic_rollback(Key::from_raw(key), for_update_ts.into())
-            .unwrap();
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    pub fn must_commit<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        commit_ts: impl Into<TimeStamp>,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.commit(Key::from_raw(key), commit_ts.into()).unwrap();
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    pub fn must_commit_err<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        commit_ts: impl Into<TimeStamp>,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        assert!(txn.commit(Key::from_raw(key), commit_ts.into()).is_err());
-    }
-
-    pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.collapse_rollback(false);
-        txn.rollback(Key::from_raw(key)).unwrap();
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    pub fn must_rollback_collapsed<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        start_ts: impl Into<TimeStamp>,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.rollback(Key::from_raw(key)).unwrap();
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        assert!(txn.rollback(Key::from_raw(key)).is_err());
-    }
-
-    pub fn must_cleanup<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        current_ts: impl Into<TimeStamp>,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.cleanup(Key::from_raw(key), current_ts.into(), true)
-            .unwrap();
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    pub fn must_cleanup_err<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        current_ts: impl Into<TimeStamp>,
-    ) -> Error {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.cleanup(Key::from_raw(key), current_ts.into(), true)
-            .unwrap_err()
-    }
-
-    pub fn must_txn_heart_beat<E: Engine>(
-        engine: &E,
-        primary_key: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        advise_ttl: u64,
-        expect_ttl: u64,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        let ttl = txn
-            .txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
-            .unwrap();
-        write(engine, &ctx, txn.into_modifies());
-        assert_eq!(ttl, expect_ttl);
-    }
-
-    pub fn must_txn_heart_beat_err<E: Engine>(
-        engine: &E,
-        primary_key: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        advise_ttl: u64,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
-            .unwrap_err();
-    }
-
-    pub fn must_check_txn_status<E: Engine>(
-        engine: &E,
-        primary_key: &[u8],
-        lock_ts: impl Into<TimeStamp>,
-        caller_start_ts: impl Into<TimeStamp>,
-        current_ts: impl Into<TimeStamp>,
-        rollback_if_not_exist: bool,
-        expect_status: TxnStatus,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, lock_ts.into(), true);
-        let (txn_status, _) = txn
-            .check_txn_status(
-                Key::from_raw(primary_key),
-                caller_start_ts.into(),
-                current_ts.into(),
-                rollback_if_not_exist,
-            )
-            .unwrap();
-        assert_eq!(txn_status, expect_status);
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    pub fn must_check_txn_status_err<E: Engine>(
-        engine: &E,
-        primary_key: &[u8],
-        lock_ts: impl Into<TimeStamp>,
-        caller_start_ts: impl Into<TimeStamp>,
-        current_ts: impl Into<TimeStamp>,
-        rollback_if_not_exist: bool,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, lock_ts.into(), true);
-        txn.check_txn_status(
-            Key::from_raw(primary_key),
-            caller_start_ts.into(),
-            current_ts.into(),
-            rollback_if_not_exist,
-        )
-        .unwrap_err();
-    }
-
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::for_scan(snapshot, Some(ScanMode::Forward), TimeStamp::zero(), true);
+        let ctx = SnapContext::default();
+        let snapshot = engine.snapshot(ctx).unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+        let mut txn = MvccTxn::for_scan(
+            snapshot,
+            Some(ScanMode::Forward),
+            TimeStamp::zero(),
+            true,
+            cm,
+        );
         txn.gc(Key::from_raw(key), safe_point.into()).unwrap();
-        write(engine, &ctx, txn.into_modifies());
+        write(engine, &Context::default(), txn.into_modifies());
     }
 
-    pub fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+    pub fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) -> Lock {
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
         assert_ne!(lock.lock_type, LockType::Pessimistic);
+        lock
     }
 
     pub fn must_locked_with_ttl<E: Engine>(
@@ -1119,7 +406,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         ttl: u64,
     ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
@@ -1135,7 +422,7 @@ pub mod tests {
         min_commit_ts: impl Into<TimeStamp>,
         is_pessimistic: bool,
     ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
@@ -1148,22 +435,8 @@ pub mod tests {
         }
     }
 
-    pub fn must_pessimistic_locked<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-    ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
-        let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
-        assert_eq!(lock.ts, start_ts.into());
-        assert_eq!(lock.for_update_ts, for_update_ts.into());
-        assert_eq!(lock.lock_type, LockType::Pessimistic);
-    }
-
     pub fn must_unlocked<E: Engine>(engine: &E, key: &[u8]) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         assert!(reader.load_lock(&Key::from_raw(key)).unwrap().is_none());
     }
@@ -1174,17 +447,18 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
         tp: WriteType,
-    ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+    ) -> Write {
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let k = Key::from_raw(key).append_ts(commit_ts.into());
         let v = snapshot.get_cf(CF_WRITE, &k).unwrap().unwrap();
         let write = WriteRef::parse(&v).unwrap();
         assert_eq!(write.start_ts, start_ts.into());
         assert_eq!(write.write_type, tp);
+        write.to_owned()
     }
 
     pub fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         assert!(reader
             .seek_write(&Key::from_raw(key), ts.into())
@@ -1200,7 +474,7 @@ pub mod tests {
         commit_ts: impl Into<TimeStamp>,
         write_type: WriteType,
     ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         let (t, write) = reader
             .seek_write(&Key::from_raw(key), ts.into())
@@ -1217,11 +491,12 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         let (ts, write_type) = reader
-            .get_txn_commit_info(&Key::from_raw(key), start_ts.into())
+            .get_txn_commit_record(&Key::from_raw(key), start_ts.into())
             .unwrap()
+            .info()
             .unwrap();
         assert_ne!(write_type, WriteType::Rollback);
         assert_eq!(ts, commit_ts.into());
@@ -1232,12 +507,12 @@ pub mod tests {
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
     ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
 
-        let ret = reader.get_txn_commit_info(&Key::from_raw(key), start_ts.into());
+        let ret = reader.get_txn_commit_record(&Key::from_raw(key), start_ts.into());
         assert!(ret.is_ok());
-        match ret.unwrap() {
+        match ret.unwrap().info() {
             None => {}
             Some((_, write_type)) => {
                 assert_eq!(write_type, WriteType::Rollback);
@@ -1246,13 +521,14 @@ pub mod tests {
     }
 
     pub fn must_get_rollback_ts<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
 
         let start_ts = start_ts.into();
         let (ts, write_type) = reader
-            .get_txn_commit_info(&Key::from_raw(key), start_ts)
+            .get_txn_commit_record(&Key::from_raw(key), start_ts)
             .unwrap()
+            .info()
             .unwrap();
         assert_eq!(ts, start_ts);
         assert_eq!(write_type, WriteType::Rollback);
@@ -1263,12 +539,13 @@ pub mod tests {
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
     ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
 
         let ret = reader
-            .get_txn_commit_info(&Key::from_raw(key), start_ts.into())
-            .unwrap();
+            .get_txn_commit_record(&Key::from_raw(key), start_ts.into())
+            .unwrap()
+            .info();
         assert_eq!(ret, None);
     }
 
@@ -1278,7 +555,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         protected: bool,
     ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
 
         let start_ts = start_ts.into();
@@ -1289,6 +566,28 @@ pub mod tests {
         assert_eq!(ts, start_ts);
         assert_eq!(write.write_type, WriteType::Rollback);
         assert_eq!(write.as_ref().is_protected(), protected);
+    }
+
+    pub fn must_get_overlapped_rollback<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        overlapped_start_ts: impl Into<TimeStamp>,
+        overlapped_write_type: WriteType,
+    ) {
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+
+        let start_ts = start_ts.into();
+        let overlapped_start_ts = overlapped_start_ts.into();
+        let (ts, write) = reader
+            .seek_write(&Key::from_raw(key), start_ts)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ts, start_ts);
+        assert!(write.has_overlapped_rollback);
+        assert_eq!(write.start_ts, overlapped_start_ts);
+        assert_eq!(write.write_type, overlapped_write_type);
     }
 
     pub fn must_scan_keys<E: Engine>(
@@ -1302,7 +601,7 @@ pub mod tests {
             keys.into_iter().map(Key::from_raw).collect(),
             next_start.map(|x| Key::from_raw(x).append_ts(TimeStamp::zero())),
         );
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader =
             MvccReader::new(snapshot, Some(ScanMode::Mixed), false, IsolationLevel::Si);
         assert_eq!(

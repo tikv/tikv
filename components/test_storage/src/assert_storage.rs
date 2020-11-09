@@ -82,7 +82,7 @@ impl AssertionStorage<SimulateEngine> {
         let ts = ts.into();
         for _ in 0..3 {
             let res = self.store.get(self.ctx.clone(), &Key::from_raw(key), ts);
-            if let Ok(data) = res {
+            if let Ok((data, _, _)) = res {
                 return data;
             }
             self.expect_not_leader_or_stale_command(res.unwrap_err());
@@ -197,7 +197,7 @@ impl<E: Engine> AssertionStorage<E> {
     pub fn get_none(&self, key: &[u8], ts: impl Into<TimeStamp>) {
         let key = Key::from_raw(key);
         assert_eq!(
-            self.store.get(self.ctx.clone(), &key, ts.into()).unwrap(),
+            self.store.get(self.ctx.clone(), &key, ts.into()).unwrap().0,
             None
         );
     }
@@ -213,6 +213,7 @@ impl<E: Engine> AssertionStorage<E> {
             self.store
                 .get(self.ctx.clone(), &key, ts.into())
                 .unwrap()
+                .0
                 .unwrap(),
             expect
         );
@@ -224,10 +225,26 @@ impl<E: Engine> AssertionStorage<E> {
             .store
             .batch_get(self.ctx.clone(), &keys, ts.into())
             .unwrap()
+            .0
             .into_iter()
             .map(|x| x.unwrap().1)
             .collect();
         let expect: Vec<Vec<u8>> = expect.into_iter().map(|x| x.to_vec()).collect();
+        assert_eq!(result, expect);
+    }
+
+    pub fn batch_get_command_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
+        let result: Vec<Option<Vec<u8>>> = self
+            .store
+            .batch_get_command(self.ctx.clone(), &keys, ts)
+            .unwrap()
+            .into_iter()
+            .map(|(x, _, _)| x)
+            .collect();
+        let expect: Vec<Option<Vec<u8>>> = expect
+            .into_iter()
+            .map(|x| if x.is_empty() { None } else { Some(x.to_vec()) })
+            .collect();
         assert_eq!(result, expect);
     }
 
@@ -443,6 +460,7 @@ impl<E: Engine> AssertionStorage<E> {
             )
             .unwrap();
         let locks: Vec<(&[u8], &[u8], TimeStamp)> = res
+            .locks
             .iter()
             .filter_map(|x| {
                 if let Err(StorageError(box StorageErrorInner::Txn(TxnError(

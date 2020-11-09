@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod gc_worker;
 mod kv_service;
 mod lock_manager;
 mod raft_client;
@@ -9,7 +10,7 @@ mod status_server;
 use std::sync::Arc;
 
 use ::security::{SecurityConfig, SecurityManager};
-use futures::Future;
+use futures::future::FutureExt;
 use grpcio::RpcStatusCode;
 use grpcio::*;
 use kvproto::coprocessor::*;
@@ -23,7 +24,7 @@ macro_rules! unary_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: $req_name, sink: UnarySink<$resp_name>) {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
-            ctx.spawn(sink.fail(status).map_err(|_| ()));
+            ctx.spawn(sink.fail(status).map(|_| ()));
         }
     };
 }
@@ -37,7 +38,7 @@ macro_rules! sstream_call {
             sink: ServerStreamingSink<$resp_name>,
         ) {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
-            ctx.spawn(sink.fail(status).map_err(|_| ()));
+            ctx.spawn(sink.fail(status).map(|_| ()));
         }
     };
 }
@@ -51,7 +52,7 @@ macro_rules! cstream_call {
             sink: ClientStreamingSink<$resp_name>,
         ) {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
-            ctx.spawn(sink.fail(status).map_err(|_| ()));
+            ctx.spawn(sink.fail(status).map(|_| ()));
         }
     };
 }
@@ -65,7 +66,7 @@ macro_rules! bstream_call {
             sink: DuplexSink<$resp_name>,
         ) {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
-            ctx.spawn(sink.fail(status).map_err(|_| ()));
+            ctx.spawn(sink.fail(status).map(|_| ()));
         }
     };
 }
@@ -148,6 +149,11 @@ trait MockKvService {
         kv_check_txn_status,
         CheckTxnStatusRequest,
         CheckTxnStatusResponse
+    );
+    unary_call!(
+        kv_check_secondary_locks,
+        CheckSecondaryLocksRequest,
+        CheckSecondaryLocksResponse
     );
     unary_call!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);
@@ -250,6 +256,11 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
         kv_check_txn_status,
         CheckTxnStatusRequest,
         CheckTxnStatusResponse
+    );
+    unary_call_dispatch!(
+        kv_check_secondary_locks,
+        CheckSecondaryLocksRequest,
+        CheckSecondaryLocksResponse
     );
     unary_call_dispatch!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call_dispatch!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);

@@ -26,6 +26,6 @@ macro_rules! send_rpc_response {
                 $sink.fail(make_rpc_error(e))
             }
         };
-        res.map_err(|e| warn!("send rpc response"; "err" => %e))
+        let _ = res.map_err(|e| warn!("send rpc response"; "err" => %e)).await;
     }};
 }

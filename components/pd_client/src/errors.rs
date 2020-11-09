@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use std::error;
 use std::result;
 
@@ -40,3 +41,18 @@ quick_error! {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::Io(_) => error_code::pd::IO,
+            Error::ClusterBootstrapped(_) => error_code::pd::CLUSTER_BOOTSTRAPPED,
+            Error::ClusterNotBootstrapped(_) => error_code::pd::CLUSTER_NOT_BOOTSTRAPPED,
+            Error::Incompatible => error_code::pd::INCOMPATIBLE,
+            Error::Grpc(_) => error_code::pd::GRPC,
+            Error::RegionNotFound(_) => error_code::pd::REGION_NOT_FOUND,
+            Error::StoreTombstone(_) => error_code::pd::STORE_TOMBSTONE,
+            Error::Other(_) => error_code::pd::UNKNOWN,
+        }
+    }
+}

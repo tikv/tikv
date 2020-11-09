@@ -28,6 +28,10 @@ Each RocksDB instance and column family is configurable. Below explains the deta
 
 - The maximum number of concurrent background jobs (compactions and flushes)
 
+#### max-background-flushes
+
+- The maximum number of concurrent background memtable flush jobs
+
 #### max-sub-compactions
 
 - The maximum number of threads that will concurrently perform a compaction job by breaking the job into multiple smaller ones that run simultaneously
@@ -276,7 +280,7 @@ enable-pipelined-write = true
 bytes-per-sync = "0MB"
 wal-bytes-per-sync = "0KB"
 info-log-max-size = "1GB"
-info-log-roll-time = "0"
+info-log-roll-time = "0s"
 info-log-keep-log-file-num = 10
 info-log-dir = ""
 
@@ -356,7 +360,7 @@ allow-concurrent-memtable-write = false
 bytes-per-sync = "0MB"
 wal-bytes-per-sync = "0KB"
 info-log-max-size = "1GB"
-info-log-roll-time = "0"
+info-log-roll-time = "0s"
 info-log-keep-log-file-num = 10
 info-log-dir = ""
 

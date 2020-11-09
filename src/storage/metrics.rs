@@ -111,6 +111,7 @@ make_auto_flush_static_metric! {
         pessimistic_rollback,
         txn_heart_beat,
         check_txn_status,
+        check_secondary_locks,
         scan_lock,
         resolve_lock,
         resolve_lock_lite,
@@ -146,6 +147,8 @@ make_auto_flush_static_metric! {
         error,
         pipelined_write,
         pipelined_write_finish,
+        async_apply_prewrite,
+        async_apply_prewrite_finish,
     }
 
     pub label_enum CommandPriority {
@@ -161,14 +164,17 @@ make_auto_flush_static_metric! {
     }
 
     pub label_enum GcKeysDetail {
-        total,
-        processed,
+        processed_keys,
         get,
         next,
         prev,
         seek,
         seek_for_prev,
         over_seek_bound,
+        next_tombstone,
+        prev_tombstone,
+        seek_tombstone,
+        seek_for_prev_tombstone,
     }
 
     pub struct CommandScanDetails: LocalIntCounter {
@@ -228,14 +234,17 @@ impl Into<GcKeysCF> for ServerGcKeysCF {
 impl Into<GcKeysDetail> for ServerGcKeysDetail {
     fn into(self) -> GcKeysDetail {
         match self {
-            ServerGcKeysDetail::total => GcKeysDetail::total,
-            ServerGcKeysDetail::processed => GcKeysDetail::processed,
+            ServerGcKeysDetail::processed_keys => GcKeysDetail::processed_keys,
             ServerGcKeysDetail::get => GcKeysDetail::get,
             ServerGcKeysDetail::next => GcKeysDetail::next,
             ServerGcKeysDetail::prev => GcKeysDetail::prev,
             ServerGcKeysDetail::seek => GcKeysDetail::seek,
             ServerGcKeysDetail::seek_for_prev => GcKeysDetail::seek_for_prev,
             ServerGcKeysDetail::over_seek_bound => GcKeysDetail::over_seek_bound,
+            ServerGcKeysDetail::next_tombstone => GcKeysDetail::next_tombstone,
+            ServerGcKeysDetail::prev_tombstone => GcKeysDetail::prev_tombstone,
+            ServerGcKeysDetail::seek_tombstone => GcKeysDetail::seek_tombstone,
+            ServerGcKeysDetail::seek_for_prev_tombstone => GcKeysDetail::seek_for_prev_tombstone,
         }
     }
 }

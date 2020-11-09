@@ -9,5 +9,8 @@ protobuf-codec = ["fuzz-targets/protobuf-codec"]
 prost-codec = ["fuzz-targets/prost-codec"]
 
 [dependencies]
-afl = "0.6"
 fuzz-targets = { path = "../targets", default-features = false }
+
+# AFL only works for x86 targets
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+afl = "0.6"

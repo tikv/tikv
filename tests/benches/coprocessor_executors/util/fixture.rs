@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::str::FromStr;
-use std::sync::Arc;
 
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -10,19 +9,15 @@ use rand_xorshift::XorShiftRng;
 use criterion::measurement::Measurement;
 
 use test_coprocessor::*;
-use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
-use tikv_util::collections::HashMap;
-use tipb::ColumnInfo;
+use tidb_query_datatype::FieldTypeTp;
 use tipb::FieldType;
 
 use tidb_query_common::storage::IntervalRange;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::data_type::Decimal;
 use tidb_query_datatype::codec::datum::{Datum, DatumEncoder};
-use tidb_query_datatype::codec::table::RowColsDict;
 use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
-use tidb_query_normal_executors::{Executor, Row};
-use tidb_query_vec_executors::interface::*;
+use tidb_query_executors::interface::*;
 use tikv::storage::{RocksEngine, Statistics};
 
 use crate::util::bencher::Bencher;
@@ -271,55 +266,6 @@ impl FixtureBuilder {
             columns,
         }
     }
-
-    pub fn build_normal_fixture_executor(self) -> NormalFixtureExecutor {
-        assert!(!self.columns.is_empty());
-        let columns_info: Vec<_> = self
-            .field_types
-            .into_iter()
-            .enumerate()
-            .map(|(index, ft)| {
-                let mut ci = ColumnInfo::default();
-                ci.set_column_id(index as i64);
-                let ft = ft.as_accessor();
-                ci.as_mut_accessor()
-                    .set_tp(ft.tp())
-                    .set_flag(ft.flag())
-                    .set_flen(ft.flen())
-                    .set_decimal(ft.decimal())
-                    .set_collation(ft.collation().unwrap());
-                ci
-            })
-            .collect();
-        let columns_info = Arc::new(columns_info);
-
-        let rows_len = self.columns[0].len();
-        let mut rows = Vec::with_capacity(rows_len);
-        let mut ctx = EvalContext::default();
-        for row_index in 0..rows_len {
-            let mut data = RowColsDict::new(HashMap::default(), Vec::new());
-            for col_index in 0..self.columns.len() {
-                let mut v = vec![];
-                v.write_datum(
-                    &mut ctx,
-                    &[self.columns[col_index][row_index].clone()],
-                    false,
-                )
-                .unwrap();
-                data.append(col_index as i64, &mut v);
-            }
-            rows.push(Row::origin(
-                row_index as i64,
-                data,
-                Arc::clone(&columns_info),
-            ));
-        }
-
-        NormalFixtureExecutor {
-            rows: rows.into_iter(),
-            columns: self.columns.len(),
-        }
-    }
 }
 
 pub struct BatchFixtureExecutor {
@@ -381,51 +327,6 @@ impl BatchExecutor for BatchFixtureExecutor {
     }
 }
 
-pub struct NormalFixtureExecutor {
-    columns: usize,
-    rows: ::std::vec::IntoIter<Row>,
-}
-
-impl Executor for NormalFixtureExecutor {
-    type StorageStats = Statistics;
-
-    #[inline]
-    fn next(&mut self) -> tidb_query_common::Result<Option<Row>> {
-        Ok(self.rows.next())
-    }
-
-    #[inline]
-    fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {
-        // Do nothing
-    }
-
-    #[inline]
-    fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
-        // Do nothing
-    }
-
-    #[inline]
-    fn get_len_of_columns(&self) -> usize {
-        self.columns
-    }
-
-    #[inline]
-    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
-        // Do nothing
-        None
-    }
-
-    #[inline]
-    fn take_scanned_range(&mut self) -> IntervalRange {
-        unreachable!()
-    }
-
-    #[inline]
-    fn can_be_cached(&self) -> bool {
-        unreachable!()
-    }
-}
-
 /// Benches the performance of the batch fixture executor itself. When using it as the source
 /// executor in other benchmarks, we need to take out these costs.
 fn bench_util_batch_fixture_executor_next_1024<M>(b: &mut criterion::Bencher<M>)
@@ -440,18 +341,6 @@ where
     .bench(b);
 }
 
-fn bench_util_normal_fixture_executor_next_1024<M>(b: &mut criterion::Bencher<M>)
-where
-    M: Measurement,
-{
-    super::bencher::NormalNext1024Bencher::new(|| {
-        FixtureBuilder::new(5000)
-            .push_column_i64_random()
-            .build_normal_fixture_executor()
-    })
-    .bench(b);
-}
-
 /// Checks whether our test utilities themselves are fast enough.
 pub fn bench<M>(c: &mut criterion::Criterion<M>)
 where
@@ -461,10 +350,6 @@ where
         c.bench_function(
             "util_batch_fixture_executor_next_1024",
             bench_util_batch_fixture_executor_next_1024::<M>,
-        );
-        c.bench_function(
-            "util_normal_fixture_executor_next_1024",
-            bench_util_normal_fixture_executor_next_1024::<M>,
         );
     }
 }

@@ -1,16 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+#![feature(min_specialization)]
 
-extern crate futures;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use]
-extern crate slog_global;
 extern crate hex;
 extern crate kvproto;
+#[macro_use(fail_point)]
+extern crate fail;
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
@@ -23,7 +23,7 @@ mod util;
 
 mod config;
 pub mod errors;
-pub use self::client::RpcClient;
+pub use self::client::{DummyPdClient, RpcClient};
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
 pub use self::util::validate_endpoints;
@@ -32,7 +32,7 @@ pub use self::util::RECONNECT_INTERVAL_SEC;
 use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 
-use futures::Future;
+use futures::future::BoxFuture;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
@@ -41,7 +41,7 @@ use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;
 
 pub type Key = Vec<u8>;
-pub type PdFuture<T> = Box<dyn Future<Item = T, Error = Error> + Send>;
+pub type PdFuture<T> = BoxFuture<'static, Result<T>>;
 
 #[derive(Default, Clone)]
 pub struct RegionStat {
@@ -163,6 +163,14 @@ pub trait PdClient: Send + Sync {
 
     /// Gets Region by Region id.
     fn get_region_by_id(&self, _region_id: u64) -> PdFuture<Option<metapb::Region>> {
+        unimplemented!();
+    }
+
+    /// Gets Region and its leader by Region id.
+    fn get_region_leader_by_id(
+        &self,
+        _region_id: u64,
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
         unimplemented!();
     }
 

@@ -1,60 +1,169 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crossbeam::atomic::AtomicCell;
 use crossbeam::TrySendError;
 use kvproto::errorpb;
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
+use kvproto::raft_cmdpb::{
+    CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
+};
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
-use crate::store::fsm::RaftRouter;
 use crate::store::util::{self, LeaseState, RemoteLease};
 use crate::store::{
-    cmd_resp, Peer, ProposalRouter, RaftCommand, ReadExecutor, ReadResponse, RequestInspector,
-    RequestPolicy,
+    cmd_resp, Callback, Peer, ProposalRouter, RaftCommand, ReadResponse, RegionSnapshot,
+    RequestInspector, RequestPolicy,
 };
 use crate::Result;
-use engine_traits::KvEngine;
+
+use engine_traits::{KvEngine, RaftEngine};
 use tikv_util::collections::HashMap;
-use tikv_util::time::Instant;
+use tikv_util::time::monotonic_raw_now;
+use tikv_util::time::{Instant, ThreadReadId};
 
 use super::metrics::*;
 use crate::store::fsm::store::StoreMeta;
 
+pub trait ReadExecutor<E: KvEngine> {
+    fn get_engine(&self) -> &E;
+    fn get_snapshot(&mut self, ts: Option<ThreadReadId>) -> Arc<E::Snapshot>;
+    fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
+        let key = req.get_get().get_key();
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, region)?;
+
+        let engine = self.get_engine();
+        let mut resp = Response::default();
+        let res = if !req.get_get().get_cf().is_empty() {
+            let cf = req.get_get().get_cf();
+            engine
+                .get_value_cf(cf, &keys::data_key(key))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "[region {}] failed to get {} with cf {}: {:?}",
+                        region.get_id(),
+                        log_wrappers::Value::key(key),
+                        cf,
+                        e
+                    )
+                })
+        } else {
+            engine.get_value(&keys::data_key(key)).unwrap_or_else(|e| {
+                panic!(
+                    "[region {}] failed to get {}: {:?}",
+                    region.get_id(),
+                    log_wrappers::Value::key(key),
+                    e
+                )
+            })
+        };
+        if let Some(res) = res {
+            resp.mut_get().set_value(res.to_vec());
+        }
+
+        Ok(resp)
+    }
+
+    fn execute(
+        &mut self,
+        msg: &RaftCmdRequest,
+        region: &Arc<metapb::Region>,
+        read_index: Option<u64>,
+        mut ts: Option<ThreadReadId>,
+    ) -> ReadResponse<E::Snapshot> {
+        let requests = msg.get_requests();
+        let mut response = ReadResponse {
+            response: RaftCmdResponse::default(),
+            snapshot: None,
+            txn_extra_op: TxnExtraOp::Noop,
+        };
+        let mut responses = Vec::with_capacity(requests.len());
+        for req in requests {
+            let cmd_type = req.get_cmd_type();
+            let mut resp = match cmd_type {
+                CmdType::Get => match self.get_value(req, region.as_ref()) {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        error!(?e;
+                            "failed to execute get command";
+                            "region_id" => region.get_id(),
+                        );
+                        response.response = cmd_resp::new_error(e);
+                        return response;
+                    }
+                },
+                CmdType::Snap => {
+                    let snapshot =
+                        RegionSnapshot::from_snapshot(self.get_snapshot(ts.take()), region.clone());
+                    response.snapshot = Some(snapshot);
+                    Response::default()
+                }
+                CmdType::ReadIndex => {
+                    let mut resp = Response::default();
+                    if let Some(read_index) = read_index {
+                        let mut res = ReadIndexResponse::default();
+                        res.set_read_index(read_index);
+                        resp.set_read_index(res);
+                    } else {
+                        panic!("[region {}] can not get readindex", region.get_id());
+                    }
+                    resp
+                }
+                CmdType::Prewrite
+                | CmdType::Put
+                | CmdType::Delete
+                | CmdType::DeleteRange
+                | CmdType::IngestSst
+                | CmdType::Invalid => unreachable!(),
+            };
+            resp.set_cmd_type(cmd_type);
+            responses.push(resp);
+        }
+        response.response.set_responses(responses.into());
+        response
+    }
+}
+
 /// A read only delegate of `Peer`.
 #[derive(Clone, Debug)]
 pub struct ReadDelegate {
-    region: metapb::Region,
+    region: Arc<metapb::Region>,
     peer_id: u64,
     term: u64,
     applied_index_term: u64,
     leader_lease: Option<RemoteLease>,
-    last_valid_ts: RefCell<Timespec>,
+    last_valid_ts: Timespec,
 
     tag: String,
     invalid: Arc<AtomicBool>,
+    pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    max_ts_sync_status: Arc<AtomicU64>,
 }
 
 impl ReadDelegate {
-    pub fn from_peer(peer: &Peer) -> ReadDelegate {
+    pub fn from_peer<EK: KvEngine, ER: RaftEngine>(peer: &Peer<EK, ER>) -> ReadDelegate {
         let region = peer.region().clone();
         let region_id = region.get_id();
         let peer_id = peer.peer.get_id();
         ReadDelegate {
-            region,
+            region: Arc::new(region),
             peer_id,
             term: peer.term(),
             applied_index_term: peer.get_store().applied_index_term(),
             leader_lease: None,
-            last_valid_ts: RefCell::new(Timespec::new(0, 0)),
+            last_valid_ts: Timespec::new(0, 0),
             tag: format!("[region {}] {}", region_id, peer_id),
             invalid: Arc::new(AtomicBool::new(false)),
+            txn_extra_op: peer.txn_extra_op.clone(),
+            max_ts_sync_status: peer.max_ts_sync_status.clone(),
         }
     }
 
@@ -62,10 +171,15 @@ impl ReadDelegate {
         self.invalid.store(true, Ordering::Release);
     }
 
+    pub fn fresh_valid_ts(&mut self) {
+        self.last_valid_ts = monotonic_raw_now();
+    }
+
     pub fn update(&mut self, progress: Progress) {
+        self.fresh_valid_ts();
         match progress {
             Progress::Region(region) => {
-                self.region = region;
+                self.region = Arc::new(region);
             }
             Progress::Term(term) => {
                 self.term = term;
@@ -79,27 +193,12 @@ impl ReadDelegate {
         }
     }
 
-    // TODO: return ReadResponse once we remove batch snapshot.
-    fn handle_read<E: KvEngine>(
-        &self,
-        req: &RaftCmdRequest,
-        executor: &mut ReadExecutor<E>,
-        metrics: &mut ReadMetrics,
-    ) -> Option<ReadResponse<E::Snapshot>> {
+    fn is_in_leader_lease(&self, ts: Timespec, metrics: &mut ReadMetrics) -> bool {
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
             if term == self.term {
-                let snapshot_time = executor.snapshot_time().unwrap();
-                let mut last_valid_ts = self.last_valid_ts.borrow_mut();
-                if *last_valid_ts == snapshot_time /* quick path for lease checking. */
-                    || lease.inspect(Some(snapshot_time)) == LeaseState::Valid
-                {
-                    // Cache snapshot_time for remaining requests in the same batch.
-                    *last_valid_ts = snapshot_time;
-                    let mut resp = executor.execute(req, &self.region, None);
-                    // Leader can read local if and only if it is in lease.
-                    cmd_resp::bind_term(&mut resp.response, term);
-                    return Some(resp);
+                if lease.inspect(Some(ts)) == LeaseState::Valid {
+                    return true;
                 } else {
                     metrics.rejected_by_lease_expire += 1;
                     debug!("rejected by lease expire"; "tag" => &self.tag);
@@ -110,7 +209,7 @@ impl ReadDelegate {
             }
         }
 
-        None
+        false
     }
 }
 
@@ -163,29 +262,39 @@ where
     store_id: Cell<Option<u64>>,
     store_meta: Arc<Mutex<StoreMeta>>,
     kv_engine: E,
-    metrics: RefCell<ReadMetrics>,
+    metrics: ReadMetrics,
     // region id -> ReadDelegate
-    delegates: RefCell<HashMap<u64, Option<ReadDelegate>>>,
+    delegates: HashMap<u64, Option<ReadDelegate>>,
+    snap_cache: Option<Arc<E::Snapshot>>,
+    cache_read_id: ThreadReadId,
     // A channel to raftstore.
     router: C,
-    tag: String,
 }
 
-impl<E: KvEngine> LocalReader<RaftRouter<E::Snapshot>, E> {
-    pub fn new(
-        kv_engine: E,
-        store_meta: Arc<Mutex<StoreMeta>>,
-        router: RaftRouter<E::Snapshot>,
-    ) -> Self {
-        LocalReader {
-            store_meta,
-            kv_engine,
-            router,
-            store_id: Cell::new(None),
-            metrics: Default::default(),
-            delegates: RefCell::new(HashMap::default()),
-            tag: "[local_reader]".to_string(),
+impl<C, E> ReadExecutor<E> for LocalReader<C, E>
+where
+    C: ProposalRouter<E::Snapshot>,
+    E: KvEngine,
+{
+    fn get_engine(&self) -> &E {
+        &self.kv_engine
+    }
+
+    fn get_snapshot(&mut self, create_time: Option<ThreadReadId>) -> Arc<E::Snapshot> {
+        self.metrics.local_executed_requests += 1;
+        if let Some(ts) = create_time {
+            if ts == self.cache_read_id {
+                if let Some(snap) = self.snap_cache.as_ref() {
+                    self.metrics.local_executed_snapshot_cache_hit += 1;
+                    return snap.clone();
+                }
+            }
+            let snap = Arc::new(self.kv_engine.snapshot());
+            self.cache_read_id = ts;
+            self.snap_cache = Some(snap.clone());
+            return snap;
         }
+        Arc::new(self.kv_engine.snapshot())
     }
 }
 
@@ -194,21 +303,35 @@ where
     C: ProposalRouter<E::Snapshot>,
     E: KvEngine,
 {
-    fn redirect(&self, mut cmd: RaftCommand<E::Snapshot>) {
-        debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
+    pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
+        let cache_read_id = ThreadReadId::new();
+        LocalReader {
+            store_meta,
+            kv_engine,
+            router,
+            snap_cache: None,
+            cache_read_id,
+            store_id: Cell::new(None),
+            metrics: Default::default(),
+            delegates: HashMap::default(),
+        }
+    }
+
+    fn redirect(&mut self, mut cmd: RaftCommand<E::Snapshot>) {
+        debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
         match self.router.send(cmd) {
             Ok(()) => return,
             Err(TrySendError::Full(c)) => {
-                self.metrics.borrow_mut().rejected_by_channel_full += 1;
+                self.metrics.rejected_by_channel_full += 1;
                 err.set_message(RAFTSTORE_IS_BUSY.to_owned());
                 err.mut_server_is_busy()
                     .set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 cmd = c;
             }
             Err(TrySendError::Disconnected(c)) => {
-                self.metrics.borrow_mut().rejected_by_no_region += 1;
+                self.metrics.rejected_by_no_region += 1;
                 err.set_message(format!("region {} is missing", region_id));
                 err.mut_region_not_found().set_region_id(region_id);
                 cmd = c;
@@ -220,12 +343,13 @@ where
         let read_resp = ReadResponse {
             response: resp,
             snapshot: None,
+            txn_extra_op: TxnExtraOp::Noop,
         };
 
         cmd.callback.invoke_read(read_resp);
     }
 
-    fn pre_propose_raft_command(&self, req: &RaftCmdRequest) -> Result<Option<ReadDelegate>> {
+    fn pre_propose_raft_command(&mut self, req: &RaftCmdRequest) -> Result<Option<ReadDelegate>> {
         // Check store id.
         if self.store_id.get().is_none() {
             let store_id = self.store_meta.lock().unwrap().store_id;
@@ -234,36 +358,35 @@ where
         let store_id = self.store_id.get().unwrap();
 
         if let Err(e) = util::check_store_id(req, store_id) {
-            self.metrics.borrow_mut().rejected_by_store_id_mismatch += 1;
+            self.metrics.rejected_by_store_id_mismatch += 1;
             debug!("rejected by store id not match"; "err" => %e);
             return Err(e);
         }
 
         // Check region id.
         let region_id = req.get_header().get_region_id();
-        let delegate = match self.delegates.borrow_mut().get_mut(&region_id) {
-            Some(delegate) => {
-                fail_point!("localreader_on_find_delegate");
-                match delegate.take() {
-                    Some(d) => d,
-                    None => return Ok(None),
-                }
-            }
+        let delegate = match self.delegates.get_mut(&region_id) {
+            Some(delegate) => match delegate.take() {
+                Some(d) => d,
+                None => return Ok(None),
+            },
             None => {
-                self.metrics.borrow_mut().rejected_by_cache_miss += 1;
+                self.metrics.rejected_by_cache_miss += 1;
                 debug!("rejected by cache miss"; "region_id" => region_id);
                 return Ok(None);
             }
         };
 
         if delegate.invalid.load(Ordering::Acquire) {
-            self.delegates.borrow_mut().remove(&region_id);
+            self.delegates.remove(&region_id);
             return Ok(None);
         }
 
+        fail_point!("localreader_on_find_delegate");
+
         // Check peer id.
         if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
-            self.metrics.borrow_mut().rejected_by_peer_id_mismatch += 1;
+            self.metrics.rejected_by_peer_id_mismatch += 1;
             return Err(e);
         }
 
@@ -274,13 +397,13 @@ where
                 "delegate_term" => delegate.term,
                 "header_term" => req.get_header().get_term(),
             );
-            self.metrics.borrow_mut().rejected_by_term_mismatch += 1;
+            self.metrics.rejected_by_term_mismatch += 1;
             return Err(e);
         }
 
         // Check region epoch.
         if util::check_region_epoch(req, &delegate.region, false).is_err() {
-            self.metrics.borrow_mut().rejected_by_epoch += 1;
+            self.metrics.rejected_by_epoch += 1;
             // Stale epoch, redirect it to raftstore to get the latest region.
             debug!("rejected by epoch not match"; "tag" => &delegate.tag);
             return Ok(None);
@@ -288,7 +411,7 @@ where
 
         let mut inspector = Inspector {
             delegate: &delegate,
-            metrics: &mut *self.metrics.borrow_mut(),
+            metrics: &mut self.metrics,
         };
         match inspector.inspect(req) {
             Ok(RequestPolicy::ReadLocal) => Ok(Some(delegate)),
@@ -298,43 +421,54 @@ where
         }
     }
 
-    // It can only handle read command.
-    pub fn propose_raft_command(&self, cmd: RaftCommand<E::Snapshot>) {
-        let region_id = cmd.request.get_header().get_region_id();
-        let mut executor = ReadExecutor::new(
-            self.kv_engine.clone(),
-            false, /* dont check region epoch */
-            true,  /* we need snapshot time */
-        );
-
+    pub fn propose_raft_command(
+        &mut self,
+        mut read_id: Option<ThreadReadId>,
+        req: RaftCmdRequest,
+        cb: Callback<E::Snapshot>,
+    ) {
+        let region_id = req.get_header().get_region_id();
         loop {
-            match self.pre_propose_raft_command(&cmd.request) {
+            match self.pre_propose_raft_command(&req) {
                 Ok(Some(delegate)) => {
-                    let mut metrics = self.metrics.borrow_mut();
-                    if let Some(resp) =
-                        delegate.handle_read(&cmd.request, &mut executor, &mut *metrics)
-                    {
-                        cmd.callback.invoke_read(resp);
-                        self.delegates
-                            .borrow_mut()
-                            .insert(region_id, Some(delegate));
-                        metrics.local_executed_requests += 1;
+                    let snapshot_ts = match read_id.as_mut() {
+                        // If this peer became Leader not long ago and just after the cached
+                        // snapshot was created, this snapshot can not see all data of the peer.
+                        Some(id) => {
+                            if id.create_time <= delegate.last_valid_ts {
+                                id.create_time = monotonic_raw_now();
+                            }
+                            id.create_time
+                        }
+                        None => monotonic_raw_now(),
+                    };
+                    if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
+                        // Cache snapshot_time for remaining requests in the same batch.
+                        let mut response = self.execute(&req, &delegate.region, None, read_id);
+                        // Leader can read local if and only if it is in lease.
+                        cmd_resp::bind_term(&mut response.response, delegate.term);
+                        if let Some(snap) = response.snapshot.as_mut() {
+                            snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
+                        }
+                        response.txn_extra_op = delegate.txn_extra_op.load();
+                        cb.invoke_read(response);
+                        self.delegates.insert(region_id, Some(delegate));
                         return;
                     }
                     break;
                 }
                 // It can not handle the request, forwards to raftstore.
                 Ok(None) => {
-                    if self.delegates.borrow().get(&region_id).is_some() {
+                    if self.delegates.get(&region_id).is_some() {
                         break;
                     }
                     let meta = self.store_meta.lock().unwrap();
                     match meta.readers.get(&region_id).cloned() {
                         Some(reader) => {
-                            self.delegates.borrow_mut().insert(region_id, Some(reader));
+                            self.delegates.insert(region_id, Some(reader));
                         }
                         None => {
-                            self.metrics.borrow_mut().rejected_by_no_region += 1;
+                            self.metrics.rejected_by_no_region += 1;
                             debug!("rejected by no region"; "region_id" => region_id);
                             break;
                         }
@@ -342,52 +476,44 @@ where
                 }
                 Err(e) => {
                     let mut response = cmd_resp::new_error(e);
-                    if let Some(Some(ref delegate)) = self.delegates.borrow().get(&region_id) {
+                    if let Some(Some(ref delegate)) = self.delegates.get(&region_id) {
                         cmd_resp::bind_term(&mut response, delegate.term);
                     }
-                    cmd.callback.invoke_read(ReadResponse {
+                    cb.invoke_read(ReadResponse {
                         response,
                         snapshot: None,
+                        txn_extra_op: TxnExtraOp::Noop,
                     });
-                    self.delegates.borrow_mut().remove(&region_id);
+                    self.delegates.remove(&region_id);
                     return;
                 }
             }
         }
         // Remove delegate for updating it by next cmd execution.
-        self.delegates.borrow_mut().remove(&region_id);
+        self.delegates.remove(&region_id);
         // Forward to raftstore.
+        let cmd = RaftCommand::new(req, cb);
         self.redirect(cmd);
     }
 
+    /// If read requests are received at the same RPC request, we can create one snapshot for all
+    /// of them and check whether the time when the snapshot was created is in lease. We use
+    /// ThreadReadId to figure out whether this RaftCommand comes from the same RPC request with
+    /// the last RaftCommand which left a snapshot cached in LocalReader. ThreadReadId is composed
+    /// by thread_id and a thread_local incremental sequence.
     #[inline]
-    pub fn execute_raft_command(&self, cmd: RaftCommand<E::Snapshot>) {
-        self.propose_raft_command(cmd);
-        self.metrics.borrow_mut().maybe_flush();
+    pub fn read(
+        &mut self,
+        read_id: Option<ThreadReadId>,
+        req: RaftCmdRequest,
+        cb: Callback<E::Snapshot>,
+    ) {
+        self.propose_raft_command(read_id, req, cb);
+        self.metrics.maybe_flush();
     }
 
-    /// Task accepts `RaftCmdRequest`s that contain Get/Snap requests.
-    /// Returns `true`, it can be safely sent to localreader,
-    /// Returns `false`, it must not be sent to localreader.
-    #[inline]
-    pub fn acceptable(request: &RaftCmdRequest) -> bool {
-        if request.has_admin_request() || request.has_status_request() {
-            false
-        } else {
-            for r in request.get_requests() {
-                match r.get_cmd_type() {
-                    CmdType::Get | CmdType::Snap => (),
-                    CmdType::Delete
-                    | CmdType::Put
-                    | CmdType::DeleteRange
-                    | CmdType::Prewrite
-                    | CmdType::IngestSst
-                    | CmdType::ReadIndex
-                    | CmdType::Invalid => return false,
-                }
-            }
-            true
-        }
+    pub fn release_snapshot_cache(&mut self) {
+        self.snap_cache.take();
     }
 }
 
@@ -403,8 +529,9 @@ where
             router: self.router.clone(),
             store_id: self.store_id.clone(),
             metrics: Default::default(),
-            delegates: RefCell::new(HashMap::default()),
-            tag: self.tag.clone(),
+            delegates: HashMap::default(),
+            snap_cache: self.snap_cache.clone(),
+            cache_read_id: self.cache_read_id.clone(),
         }
     }
 }
@@ -425,6 +552,8 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
                 "applied_index_term" => self.delegate.applied_index_term,
                 "delegate_term" => ?self.delegate.term,
             );
+
+            // only for metric.
             self.metrics.rejected_by_appiled_term += 1;
             false
         }
@@ -448,6 +577,7 @@ const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 #[derive(Clone)]
 struct ReadMetrics {
     local_executed_requests: i64,
+    local_executed_snapshot_cache_hit: i64,
     // TODO: record rejected_by_read_quorum.
     rejected_by_store_id_mismatch: i64,
     rejected_by_peer_id_mismatch: i64,
@@ -467,6 +597,7 @@ impl Default for ReadMetrics {
     fn default() -> ReadMetrics {
         ReadMetrics {
             local_executed_requests: 0,
+            local_executed_snapshot_cache_hit: 0,
             rejected_by_store_id_mismatch: 0,
             rejected_by_peer_id_mismatch: 0,
             rejected_by_term_mismatch: 0,
@@ -541,6 +672,10 @@ impl ReadMetrics {
                 .inc_by(self.rejected_by_channel_full);
             self.rejected_by_channel_full = 0;
         }
+        if self.local_executed_snapshot_cache_hit > 0 {
+            LOCAL_READ_EXECUTED_CACHE_REQUESTS.inc_by(self.local_executed_snapshot_cache_hit);
+            self.local_executed_snapshot_cache_hit = 0;
+        }
         if self.local_executed_requests > 0 {
             LOCAL_READ_EXECUTED_REQUESTS.inc_by(self.local_executed_requests);
             self.local_executed_requests = 0;
@@ -559,7 +694,7 @@ mod tests {
 
     use crate::store::util::Lease;
     use crate::store::Callback;
-    use engine_rocks::{RocksEngine, RocksSnapshot};
+    use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_traits::ALL_CFS;
     use tikv_util::time::monotonic_raw_now;
 
@@ -572,23 +707,15 @@ mod tests {
         store_meta: Arc<Mutex<StoreMeta>>,
     ) -> (
         TempDir,
-        LocalReader<SyncSender<RaftCommand<RocksSnapshot>>, RocksEngine>,
-        Receiver<RaftCommand<RocksSnapshot>>,
+        LocalReader<SyncSender<RaftCommand<KvTestSnapshot>>, KvTestEngine>,
+        Receiver<RaftCommand<KvTestSnapshot>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
-        let db =
-            engine_rocks::raw_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
-                .unwrap();
+        let db = engine_test::kv::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+            .unwrap();
         let (ch, rx) = sync_channel(1);
-        let reader = LocalReader {
-            store_meta,
-            store_id: Cell::new(Some(store_id)),
-            router: ch,
-            kv_engine: RocksEngine::from_db(Arc::new(db)),
-            delegates: RefCell::new(HashMap::default()),
-            metrics: Default::default(),
-            tag: "foo".to_owned(),
-        };
+        let mut reader = LocalReader::new(db, store_meta, ch);
+        reader.store_id = Cell::new(Some(store_id));
         (path, reader, rx)
     }
 
@@ -605,17 +732,17 @@ mod tests {
     }
 
     fn must_redirect(
-        reader: &mut LocalReader<SyncSender<RaftCommand<RocksSnapshot>>, RocksEngine>,
-        rx: &Receiver<RaftCommand<RocksSnapshot>>,
+        reader: &mut LocalReader<SyncSender<RaftCommand<KvTestSnapshot>>, KvTestEngine>,
+        rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         cmd: RaftCmdRequest,
     ) {
-        let task = RaftCommand::new(
+        reader.propose_raft_command(
+            None,
             cmd.clone(),
             Callback::Read(Box::new(|resp| {
                 panic!("unexpected invoke, {:?}", resp);
             })),
         );
-        reader.propose_raft_command(task);
         assert_eq!(
             rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
                 .unwrap()
@@ -625,11 +752,11 @@ mod tests {
     }
 
     fn must_not_redirect(
-        reader: &mut LocalReader<SyncSender<RaftCommand<RocksSnapshot>>, RocksEngine>,
-        rx: &Receiver<RaftCommand<RocksSnapshot>>,
-        task: RaftCommand<RocksSnapshot>,
+        reader: &mut LocalReader<SyncSender<RaftCommand<KvTestSnapshot>>, KvTestEngine>,
+        rx: &Receiver<RaftCommand<KvTestSnapshot>>,
+        task: RaftCommand<KvTestSnapshot>,
     ) {
-        reader.propose_raft_command(task);
+        reader.propose_raft_command(None, task.request, task.callback);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     }
 
@@ -673,8 +800,8 @@ mod tests {
 
         // The region is not register yet.
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.borrow().rejected_by_no_region, 1);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 1);
+        assert_eq!(reader.metrics.rejected_by_no_region, 1);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 1);
 
         // Register region 1
         lease.renew(monotonic_raw_now());
@@ -684,22 +811,24 @@ mod tests {
             let mut meta = store_meta.lock().unwrap();
             let read_delegate = ReadDelegate {
                 tag: String::new(),
-                region: region1.clone(),
+                region: Arc::new(region1.clone()),
                 peer_id: leader2.get_id(),
                 term: term6,
                 applied_index_term: term6 - 1,
                 leader_lease: Some(remote),
-                last_valid_ts: RefCell::new(Timespec::new(0, 0)),
+                last_valid_ts: Timespec::new(0, 0),
                 invalid: Arc::new(AtomicBool::new(false)),
+                txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
+                max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             };
             meta.readers.insert(1, read_delegate);
         }
 
         // The applied_index_term is stale
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 2);
-        assert_eq!(reader.metrics.borrow().rejected_by_appiled_term, 1);
-        assert!(reader.delegates.borrow().get(&1).is_none());
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 2);
+        assert_eq!(reader.metrics.rejected_by_appiled_term, 1);
+        assert!(reader.delegates.get(&1).is_none());
 
         // Make the applied_index_term matches current term.
         let pg = Progress::applied_index_term(term6);
@@ -708,15 +837,15 @@ mod tests {
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
         let task =
-            RaftCommand::<RocksSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
+            RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 3);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
 
         // Let's read.
         let region = region1;
-        let task = RaftCommand::<RocksSnapshot>::new(
+        let task = RaftCommand::<KvTestSnapshot>::new(
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let snap = resp.snapshot.unwrap();
                 assert_eq!(snap.get_region(), &region);
             })),
@@ -726,7 +855,7 @@ mod tests {
         // Wait for expiration.
         thread::sleep(Duration::seconds(1).to_std().unwrap());
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.borrow().rejected_by_lease_expire, 1);
+        assert_eq!(reader.metrics.rejected_by_lease_expire, 1);
 
         // Renew lease.
         lease.renew(monotonic_raw_now());
@@ -737,17 +866,17 @@ mod tests {
             .mut_header()
             .mut_peer()
             .set_store_id(store_id + 1);
-        let task = RaftCommand::<RocksSnapshot>::new(
+        reader.propose_raft_command(
+            None,
             cmd_store_id,
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_store_not_match());
                 assert!(resp.snapshot.is_none());
             })),
         );
-        reader.propose_raft_command(task);
-        assert_eq!(reader.metrics.borrow().rejected_by_store_id_mismatch, 1);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 3);
+        assert_eq!(reader.metrics.rejected_by_store_id_mismatch, 1);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
 
         // metapb::Peer id mismatch.
         let mut cmd_peer_id = cmd.clone();
@@ -755,9 +884,10 @@ mod tests {
             .mut_header()
             .mut_peer()
             .set_id(leader2.get_id() + 1);
-        let task = RaftCommand::<RocksSnapshot>::new(
+        reader.propose_raft_command(
+            None,
             cmd_peer_id,
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 assert!(
                     resp.response.get_header().has_error(),
                     "{:?}",
@@ -766,30 +896,29 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        reader.propose_raft_command(task);
-        assert_eq!(reader.metrics.borrow().rejected_by_peer_id_mismatch, 1);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 4);
+        assert_eq!(reader.metrics.rejected_by_peer_id_mismatch, 1);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 4);
 
         // Read quorum.
         let mut cmd_read_quorum = cmd.clone();
         cmd_read_quorum.mut_header().set_read_quorum(true);
         must_redirect(&mut reader, &rx, cmd_read_quorum);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 5);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
 
         // Term mismatch.
         let mut cmd_term = cmd.clone();
         cmd_term.mut_header().set_term(term6 - 2);
-        let task = RaftCommand::<RocksSnapshot>::new(
+        reader.propose_raft_command(
+            None,
             cmd_term,
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_stale_command(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());
             })),
         );
-        reader.propose_raft_command(task);
-        assert_eq!(reader.metrics.borrow().rejected_by_term_mismatch, 1);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 6);
+        assert_eq!(reader.metrics.rejected_by_term_mismatch, 1);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 6);
 
         // Stale epoch.
         let mut epoch12 = epoch13;
@@ -797,46 +926,39 @@ mod tests {
         let mut cmd_epoch = cmd.clone();
         cmd_epoch.mut_header().set_region_epoch(epoch12);
         must_redirect(&mut reader, &rx, cmd_epoch);
-        assert_eq!(reader.metrics.borrow().rejected_by_epoch, 1);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 7);
+        assert_eq!(reader.metrics.rejected_by_epoch, 1);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 7);
 
         // Expire lease manually, and it can not be renewed.
-        let previous_lease_rejection = reader.metrics.borrow().rejected_by_lease_expire;
+        let previous_lease_rejection = reader.metrics.rejected_by_lease_expire;
         lease.expire();
         lease.renew(monotonic_raw_now());
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(
-            reader.metrics.borrow().rejected_by_lease_expire,
+            reader.metrics.rejected_by_lease_expire,
             previous_lease_rejection + 1
         );
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 8);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 8);
 
         // Channel full.
-        let task1 = RaftCommand::<RocksSnapshot>::new(cmd.clone(), Callback::None);
-        let task_full = RaftCommand::<RocksSnapshot>::new(
+        reader.propose_raft_command(None, cmd.clone(), Callback::None);
+        reader.propose_raft_command(
+            None,
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_server_is_busy(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());
             })),
         );
-        reader.propose_raft_command(task1);
-        reader.propose_raft_command(task_full);
         rx.try_recv().unwrap();
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
-        assert_eq!(reader.metrics.borrow().rejected_by_channel_full, 1);
+        assert_eq!(reader.metrics.rejected_by_channel_full, 1);
 
         // Reject by term mismatch in lease.
-        let previous_term_rejection = reader.metrics.borrow().rejected_by_term_mismatch;
+        let previous_term_rejection = reader.metrics.rejected_by_term_mismatch;
         let mut cmd9 = cmd;
         cmd9.mut_header().set_term(term6 + 3);
-        let task = RaftCommand::<RocksSnapshot>::new(
-            cmd9.clone(),
-            Callback::Read(Box::new(|resp| {
-                panic!("unexpected invoke, {:?}", resp);
-            })),
-        );
         {
             let mut meta = store_meta.lock().unwrap();
             meta.readers
@@ -848,7 +970,13 @@ mod tests {
                 .unwrap()
                 .update(Progress::applied_index_term(term6 + 3));
         }
-        reader.propose_raft_command(task);
+        reader.propose_raft_command(
+            None,
+            cmd9.clone(),
+            Callback::Read(Box::new(|resp| {
+                panic!("unexpected invoke, {:?}", resp);
+            })),
+        );
         assert_eq!(
             rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
                 .unwrap()
@@ -856,7 +984,7 @@ mod tests {
             cmd9
         );
         assert_eq!(
-            reader.metrics.borrow().rejected_by_term_mismatch,
+            reader.metrics.rejected_by_term_mismatch,
             previous_term_rejection + 1,
         );
     }

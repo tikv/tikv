@@ -3,6 +3,7 @@
 use std::io::Error as IoError;
 use std::{error, result};
 
+use engine_traits::Error as EngineTraitsError;
 use kvproto::errorpb::Error as ErrorHeader;
 use tikv::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
@@ -26,6 +27,8 @@ pub enum Error {
     Mvcc(MvccError),
     #[fail(display = "Request error {:?}", _0)]
     Request(ErrorHeader),
+    #[fail(display = "Engine traits error {}", _0)]
+    EngineTraits(EngineTraitsError),
 }
 
 macro_rules! impl_from {
@@ -48,6 +51,7 @@ impl_from! {
     TxnError => Txn,
     MvccError => Mvcc,
     TxnTypesError => Mvcc,
+    EngineTraitsError => EngineTraits,
 }
 
 pub type Result<T> = result::Result<T, Error>;

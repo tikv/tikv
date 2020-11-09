@@ -34,6 +34,7 @@ pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
 pub use checksum::checksum_crc64_xor;
 
+use crate::storage::mvcc::TimeStamp;
 use crate::storage::Statistics;
 use async_trait::async_trait;
 use kvproto::{coprocessor as coppb, kvrpcpb};
@@ -76,7 +77,7 @@ pub trait RequestHandler: Send {
 }
 
 type RequestHandlerBuilder<Snap> =
-    Box<dyn for<'a> FnOnce(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
+    Box<dyn for<'a> FnOnce(Snap, &ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
 
 /// Encapsulate the `kvrpcpb::Context` to provide some extra properties.
 #[derive(Debug, Clone)]
@@ -87,11 +88,8 @@ pub struct ReqContext {
     /// The rpc context carried in the request
     pub context: kvrpcpb::Context,
 
-    /// The first range of the request
-    pub first_range: Option<coppb::KeyRange>,
-
-    /// The length of the range
-    pub ranges_len: usize,
+    /// Scan ranges of this request
+    pub ranges: Vec<coppb::KeyRange>,
 
     /// The deadline of the request
     pub deadline: Deadline,
@@ -103,7 +101,7 @@ pub struct ReqContext {
     pub is_desc_scan: Option<bool>,
 
     /// The transaction start_ts of the request
-    pub txn_start_ts: Option<u64>,
+    pub txn_start_ts: TimeStamp,
 
     /// The set of timestamps of locks that can be bypassed during the reading.
     pub bypass_locks: TsSet,
@@ -125,11 +123,11 @@ impl ReqContext {
     pub fn new(
         tag: ReqTag,
         mut context: kvrpcpb::Context,
-        ranges: &[coppb::KeyRange],
+        ranges: Vec<coppb::KeyRange>,
         max_handle_duration: Duration,
         peer: Option<String>,
         is_desc_scan: Option<bool>,
-        txn_start_ts: Option<u64>,
+        txn_start_ts: TimeStamp,
         cache_match_version: Option<u64>,
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
@@ -149,8 +147,7 @@ impl ReqContext {
             peer,
             is_desc_scan,
             txn_start_ts,
-            first_range: ranges.first().cloned(),
-            ranges_len: ranges.len(),
+            ranges,
             bypass_locks,
             cache_match_version,
             lower_bound,
@@ -162,12 +159,12 @@ impl ReqContext {
     pub fn default_for_test() -> Self {
         Self::new(
             ReqTag::test,
-            kvrpcpb::Context::default(),
-            &[],
+            Default::default(),
+            Vec::new(),
             Duration::from_secs(100),
             None,
             None,
-            None,
+            TimeStamp::max(),
             None,
         )
     }
@@ -176,9 +173,9 @@ impl ReqContext {
         const ID_SHIFT: u32 = 16;
         const MASK: u64 = u64::max_value() >> ID_SHIFT;
         const MAX_TS: u64 = u64::max_value();
-        let base = match self.txn_start_ts {
-            Some(0) | Some(MAX_TS) | None => thread_rng().next_u64(),
-            Some(start_ts) => start_ts,
+        let base = match self.txn_start_ts.into_inner() {
+            0 | MAX_TS => thread_rng().next_u64(),
+            start_ts => start_ts,
         };
         let task_id: u64 = self.context.get_task_id();
         if task_id > 0 {
@@ -202,7 +199,7 @@ mod tests {
     fn test_build_task_id() {
         let mut ctx = ReqContext::default_for_test();
         let start_ts: u64 = 0x05C6_1BFA_2648_324A;
-        ctx.txn_start_ts = Some(start_ts);
+        ctx.txn_start_ts = start_ts.into();
         ctx.context.set_task_id(1);
         assert_eq!(ctx.build_task_id(), 0x0001_1BFA_2648_324A);
 

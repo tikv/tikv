@@ -3,7 +3,7 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksEngine;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::config::{Config, RaftstoreConfigManager};
@@ -14,11 +14,12 @@ use raftstore::Result;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 
-use engine_traits::{KvEngines, ALL_CFS};
+use concurrency_manager::ConcurrencyManager;
+use engine_traits::{Engines, ALL_CFS};
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{FutureWorker, Worker};
+use tikv_util::worker::{dummy_scheduler, FutureWorker, Worker};
 
 #[derive(Clone)]
 struct MockTransport;
@@ -31,7 +32,7 @@ impl Transport for MockTransport {
     }
 }
 
-fn create_tmp_engine(dir: &TempDir) -> KvEngines<RocksEngine, RocksEngine> {
+fn create_tmp_engine(dir: &TempDir) -> Engines<RocksEngine, RocksEngine> {
     let db = Arc::new(
         engine_rocks::raw_util::new_engine(
             dir.path().join("db").to_str().unwrap(),
@@ -50,12 +51,7 @@ fn create_tmp_engine(dir: &TempDir) -> KvEngines<RocksEngine, RocksEngine> {
         )
         .unwrap(),
     );
-    let shared_block_cache = false;
-    KvEngines::new(
-        RocksEngine::from_db(db),
-        RocksEngine::from_db(raft_db),
-        shared_block_cache,
-    )
+    Engines::new(RocksEngine::from_db(db), RocksEngine::from_db(raft_db))
 }
 
 fn start_raftstore(
@@ -63,9 +59,9 @@ fn start_raftstore(
     dir: &TempDir,
 ) -> (
     ConfigController,
-    RaftRouter<RocksSnapshot>,
-    ApplyRouter,
-    RaftBatchSystem,
+    RaftRouter<RocksEngine, RocksEngine>,
+    ApplyRouter<RocksEngine>,
+    RaftBatchSystem<RocksEngine, RocksEngine>,
 ) {
     let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
     let engines = create_tmp_engine(dir);
@@ -86,7 +82,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        SnapManager::new(p, Some(raft_router.clone()))
+        SnapManager::new(p)
     };
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
@@ -96,6 +92,7 @@ fn start_raftstore(
         Box::new(RaftstoreConfigManager(cfg_track.clone())),
     );
     let pd_worker = FutureWorker::new("store-config");
+    let (split_check_scheduler, _) = dummy_scheduler();
 
     system
         .spawn(
@@ -109,15 +106,17 @@ fn start_raftstore(
             store_meta,
             host,
             importer,
+            split_check_scheduler,
             Worker::new("split"),
             AutoSplitController::default(),
             Arc::default(),
+            ConcurrencyManager::new(1.into()),
         )
         .unwrap();
     (cfg_controller, raft_router, system.apply_router(), system)
 }
 
-fn validate_store<F>(router: &RaftRouter<RocksSnapshot>, f: F)
+fn validate_store<F>(router: &RaftRouter<RocksEngine, RocksEngine>, f: F)
 where
     F: FnOnce(&Config) + Send + 'static,
 {
@@ -128,24 +127,6 @@ where
             tx.send(()).unwrap();
         })))
         .unwrap();
-    rx.recv_timeout(Duration::from_secs(3)).unwrap();
-}
-
-fn validate_apply<F>(router: &ApplyRouter, region_id: u64, validate: F)
-where
-    F: FnOnce(bool) + Send + 'static,
-{
-    let (tx, rx) = mpsc::channel();
-    router.schedule_task(
-        region_id,
-        ApplyTask::Validate(
-            region_id,
-            Box::new(move |(_, sync_log): (_, bool)| {
-                validate(sync_log);
-                tx.send(()).unwrap();
-            }),
-        ),
-    );
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 }
 
@@ -173,43 +154,6 @@ fn test_update_raftstore_config() {
     raft_store.raft_log_gc_threshold = 54321;
     validate_store(&router, move |cfg: &Config| {
         assert_eq!(cfg, &raft_store);
-    });
-
-    system.shutdown();
-}
-
-#[test]
-fn test_update_apply_store_config() {
-    let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
-    config.raft_store.sync_log = true;
-    config.validate().unwrap();
-    let (cfg_controller, raft_router, apply_router, mut system) =
-        start_raftstore(config.clone(), &_dir);
-
-    // register region
-    let region_id = 1;
-    let mut reg = Registration::default();
-    reg.region.set_id(region_id);
-    apply_router.schedule_task(region_id, ApplyTask::Registration(reg));
-
-    validate_store(&raft_router, move |cfg: &Config| {
-        assert_eq!(cfg.sync_log, true);
-    });
-    validate_apply(&apply_router, region_id, |sync_log| {
-        assert_eq!(sync_log, true);
-    });
-
-    // dispatch updated config
-    cfg_controller
-        .update_config("raftstore.sync-log", "false")
-        .unwrap();
-
-    // both configs should be updated
-    validate_store(&raft_router, move |cfg: &Config| {
-        assert_eq!(cfg.sync_log, false);
-    });
-    validate_apply(&apply_router, region_id, |sync_log| {
-        assert_eq!(sync_log, false);
     });
 
     system.shutdown();

@@ -4,11 +4,12 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use engine_traits::Snapshot;
+use engine_rocks::RocksEngine;
 use kvproto::metapb;
 use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
-use raftstore::store::{GlobalReplicationState, RaftRouter};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::GlobalReplicationState;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -43,14 +44,22 @@ struct StoreAddr {
 }
 
 /// A runner for resolving store addresses.
-struct Runner<T: PdClient, S: Snapshot> {
+struct Runner<T, RR>
+where
+    T: PdClient,
+    RR: RaftStoreRouter<RocksEngine>,
+{
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
     state: Arc<Mutex<GlobalReplicationState>>,
-    router: Option<RaftRouter<S>>,
+    router: RR,
 }
 
-impl<T: PdClient, S: Snapshot> Runner<T, S> {
+impl<T, RR> Runner<T, RR>
+where
+    T: PdClient,
+    RR: RaftStoreRouter<RocksEngine>,
+{
     fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
@@ -85,8 +94,8 @@ impl<T: PdClient, S: Snapshot> Runner<T, S> {
             state.group.backup_store_labels(&mut s);
         }
         drop(state);
-        if let (Some(group_id), Some(router)) = (group_id, &self.router) {
-            router.report_resolved(store_id, group_id);
+        if let Some(group_id) = group_id {
+            self.router.report_resolved(store_id, group_id);
         }
         if s.get_state() == metapb::StoreState::Tombstone {
             RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
@@ -103,7 +112,12 @@ impl<T: PdClient, S: Snapshot> Runner<T, S> {
     }
 }
 
-impl<T: PdClient, S: Snapshot> Runnable<Task> for Runner<T, S> {
+impl<T, RR> Runnable for Runner<T, RR>
+where
+    T: PdClient,
+    RR: RaftStoreRouter<RocksEngine>,
+{
+    type Task = Task;
     fn run(&mut self, task: Task) {
         let store_id = task.store_id;
         let resp = self.resolve(store_id);
@@ -124,29 +138,25 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T, S>(
+pub fn new_resolver<T, RR: 'static>(
     pd_client: Arc<T>,
-    router: RaftRouter<S>,
-) -> Result<(
-    Worker<Task>,
-    PdStoreAddrResolver,
-    Arc<Mutex<GlobalReplicationState>>,
-)>
+    worker: &Worker,
+    router: RR,
+) -> (PdStoreAddrResolver, Arc<Mutex<GlobalReplicationState>>)
 where
     T: PdClient + 'static,
-    S: Snapshot,
+    RR: RaftStoreRouter<RocksEngine>,
 {
-    let mut worker = Worker::new("addr-resolver");
     let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
     let runner = Runner {
         pd_client,
         store_addrs: HashMap::default(),
         state: state.clone(),
-        router: Some(router),
+        router,
     };
-    box_try!(worker.start(runner));
-    let resolver = PdStoreAddrResolver::new(worker.scheduler());
-    Ok((worker, resolver, state))
+    let scheduler = worker.start("addr-resolver", runner);
+    let resolver = PdStoreAddrResolver::new(scheduler);
+    (resolver, state)
 }
 
 impl StoreAddrResolver for PdStoreAddrResolver {
@@ -167,9 +177,9 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use engine_rocks::RocksSnapshot;
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
+    use raftstore::router::RaftStoreBlackHole;
     use tikv_util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
@@ -198,7 +208,7 @@ mod tests {
         store
     }
 
-    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RocksSnapshot> {
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RaftStoreBlackHole> {
         let client = MockPdClient {
             start: Instant::now(),
             store,
@@ -207,7 +217,7 @@ mod tests {
             pd_client: Arc::new(client),
             store_addrs: HashMap::default(),
             state: Default::default(),
-            router: None,
+            router: RaftStoreBlackHole,
         }
     }
 

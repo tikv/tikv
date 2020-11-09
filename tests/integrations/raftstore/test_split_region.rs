@@ -132,7 +132,7 @@ fn test_server_split_region_twice() {
         assert_eq!(region2.get_end_key(), right.get_end_key());
         tx.send(right).unwrap();
     });
-    cluster.split_region(&region, split_key, Callback::Write(c));
+    cluster.split_region(&region, split_key, Callback::write(c));
     let region3 = rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     cluster.must_put(split_key, b"v2");
@@ -144,7 +144,7 @@ fn test_server_split_region_twice() {
         assert!(!write_resp.response.has_admin_response());
         tx1.send(()).unwrap();
     });
-    cluster.split_region(&region3, split_key, Callback::Write(c));
+    cluster.split_region(&region3, split_key, Callback::write(c));
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
@@ -847,10 +847,12 @@ fn test_node_split_update_region_right_derive() {
 #[test]
 fn test_split_with_epoch_not_match() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.run();
-    cluster.must_transfer_leader(1, new_peer(1, 1));
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // Remove a peer to make conf version become 2.
     pd_client.must_remove_peer(1, new_peer(2, 2));

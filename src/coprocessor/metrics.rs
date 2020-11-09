@@ -30,15 +30,23 @@ make_auto_flush_static_metric! {
         write,
     }
 
-    pub label_enum StatDetail {
+    pub label_enum ScanKeysKind {
+        processed_keys,
         total,
-        processed,
+    }
+
+    pub label_enum ScanKind {
+        processed_keys,
         get,
         next,
         prev,
         seek,
         seek_for_prev,
         over_seek_bound,
+        next_tombstone,
+        prev_tombstone,
+        seek_tombstone,
+        seek_for_prev_tombstone,
     }
 
     pub label_enum WaitType {
@@ -71,10 +79,15 @@ make_auto_flush_static_metric! {
         "metric" => PerfMetric,
     }
 
+    pub struct CoprScanKeysHistogram: LocalHistogram {
+        "req" => ReqTag,
+        "kind" => ScanKeysKind,
+    }
+
     pub struct CoprScanDetails : LocalIntCounter {
         "req" => ReqTag,
         "cf" => CF,
-        "tag" => StatDetail,
+        "tag" => ScanKind,
     }
 }
 
@@ -124,12 +137,12 @@ lazy_static! {
     pub static ref COPR_SCAN_KEYS: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_scan_keys",
         "Bucketed histogram of coprocessor per request scan keys",
-        &["req"],
+        &["req", "kind"],
         exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref COPR_SCAN_KEYS_STATIC: CoprReqHistogram =
-        auto_flush_from!(COPR_SCAN_KEYS, CoprReqHistogram);
+    pub static ref COPR_SCAN_KEYS_STATIC: CoprScanKeysHistogram =
+        auto_flush_from!(COPR_SCAN_KEYS, CoprScanKeysHistogram);
     pub static ref COPR_SCAN_DETAILS: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_scan_details",
         "Bucketed counter of coprocessor scan details for each CF",
@@ -209,17 +222,20 @@ impl Into<CF> for GcKeysCF {
     }
 }
 
-impl Into<StatDetail> for GcKeysDetail {
-    fn into(self) -> StatDetail {
+impl Into<ScanKind> for GcKeysDetail {
+    fn into(self) -> ScanKind {
         match self {
-            GcKeysDetail::total => StatDetail::total,
-            GcKeysDetail::processed => StatDetail::processed,
-            GcKeysDetail::get => StatDetail::get,
-            GcKeysDetail::next => StatDetail::next,
-            GcKeysDetail::prev => StatDetail::prev,
-            GcKeysDetail::seek => StatDetail::seek,
-            GcKeysDetail::seek_for_prev => StatDetail::seek_for_prev,
-            GcKeysDetail::over_seek_bound => StatDetail::over_seek_bound,
+            GcKeysDetail::processed_keys => ScanKind::processed_keys,
+            GcKeysDetail::get => ScanKind::get,
+            GcKeysDetail::next => ScanKind::next,
+            GcKeysDetail::prev => ScanKind::prev,
+            GcKeysDetail::seek => ScanKind::seek,
+            GcKeysDetail::seek_for_prev => ScanKind::seek_for_prev,
+            GcKeysDetail::over_seek_bound => ScanKind::over_seek_bound,
+            GcKeysDetail::next_tombstone => ScanKind::next_tombstone,
+            GcKeysDetail::prev_tombstone => ScanKind::prev_tombstone,
+            GcKeysDetail::seek_tombstone => ScanKind::seek_tombstone,
+            GcKeysDetail::seek_for_prev_tombstone => ScanKind::seek_for_prev_tombstone,
         }
     }
 }

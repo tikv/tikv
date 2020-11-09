@@ -1,8 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::Context;
-use kvproto::metapb;
-use log_wrappers::DisplayValue;
 use pd_client::ClusterVersion;
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -160,16 +157,6 @@ impl GcManagerContext {
     }
 }
 
-/// Composites a `kvproto::Context` with the given `region` and `peer`.
-fn make_context(mut region: metapb::Region, peer: metapb::Peer) -> Context {
-    let mut ctx = Context::default();
-    ctx.set_region_id(region.get_id());
-    ctx.set_region_epoch(region.take_region_epoch());
-    ctx.set_peer(peer);
-    ctx.set_not_fill_cache(true);
-    ctx
-}
-
 /// Used to represent the state of `GcManager`.
 #[derive(PartialEq)]
 enum GcManagerState {
@@ -287,7 +274,9 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         let res: Result<_> = ThreadBuilder::new()
             .name(thd_name!("gc-manager"))
             .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
                 self.run();
+                tikv_alloc::remove_thread_memory_accessor();
             })
             .map_err(|e| box_err!("failed to start gc manager: {:?}", e));
         res.map(|join_handle| GcManagerHandle {
@@ -360,7 +349,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             Ok(res) => res,
             // Return false directly so we will check it a while later.
             Err(e) => {
-                error!("failed to get safe point from pd"; "err" => ?e);
+                error!(?e; "failed to get safe point from pd");
                 return false;
             }
         };
@@ -538,27 +527,28 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         processed_regions: &mut usize,
     ) -> GcManagerResult<Option<Key>> {
         // Get the information of the next region to do GC.
-        let (ctx, next_key) = self.get_next_gc_context(from_key);
-        if ctx.is_none() {
-            // No more regions.
-            return Ok(None);
-        }
-        let ctx = ctx.unwrap();
+        let (range, next_key) = self.get_next_gc_context(from_key);
+        let (region_id, start, end) = match range {
+            Some((r, s, e)) => (r, s, e),
+            None => return Ok(None),
+        };
 
-        // Do GC.
-        // Ignore the error and continue, since it's useless to retry this.
-        // TODO: Find a better way to handle errors. Maybe we should retry.
-        debug!(
-            "trying gc"; "region_id" => ctx.get_region_id(), "region_epoch" => ?ctx.region_epoch.as_ref(),
-            "end_key" => next_key.as_ref().map(DisplayValue)
-        );
-        if let Err(e) = sync_gc(&self.worker_scheduler, ctx.clone(), self.curr_safe_point()) {
-            error!(
-                "failed gc"; "region_id" => ctx.get_region_id(), "region_epoch" => ?ctx.region_epoch.as_ref(),
-                "end_key" => next_key.as_ref().map(DisplayValue),
-                "err" => ?e
-            );
+        let hex_start = hex::encode_upper(&start);
+        let hex_end = hex::encode_upper(&end);
+        debug!("trying gc"; "start_key" => &hex_start, "end_key" => &hex_end);
+
+        if let Err(e) = sync_gc(
+            &self.worker_scheduler,
+            region_id,
+            start,
+            end,
+            self.curr_safe_point(),
+        ) {
+            // Ignore the error and continue, since it's useless to retry this.
+            // TODO: Find a better way to handle errors. Maybe we should retry.
+            warn!("failed gc"; "start_key" => &hex_start, "end_key" => &hex_end, "err" => ?e);
         }
+
         *processed_regions += 1;
         AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
             .with_label_values(&[PROCESS_TYPE_GC])
@@ -567,11 +557,12 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         Ok(next_key)
     }
 
-    /// Gets the next region with end_key greater than given key, and the current TiKV is its
-    /// leader, so we can do GC on it.
-    /// Returns context to call GC and end_key of the region. The returned end_key will be none if
-    /// the region's end_key is empty.
-    fn get_next_gc_context(&mut self, key: Key) -> (Option<Context>, Option<Key>) {
+    /// Gets the next region with end_key greater than given key.
+    /// Returns a tuple with 2 fields:
+    /// the first is the next region can be sent to GC worker;
+    /// the second is the next key which can be passed into this method later.
+    #[allow(clippy::type_complexity)]
+    fn get_next_gc_context(&mut self, key: Key) -> (Option<(u64, Vec<u8>, Vec<u8>)>, Option<Key>) {
         let (tx, rx) = mpsc::channel();
         let store_id = self.cfg.self_store_id;
 
@@ -591,9 +582,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         );
 
         if let Err(e) = res {
-            error!(
-                "gc_worker: failed to get next region information"; "err" => ?e
-            );
+            error!(?e; "gc_worker: failed to get next region information");
             return (None, None);
         };
 
@@ -606,14 +595,14 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
 
         match seek_region_res {
             Ok(Some(mut region)) => {
-                let peer = find_peer(&region, store_id).unwrap().clone();
-                let end_key = region.take_end_key();
-                let next_key = if end_key.is_empty() {
+                let r = region.get_id();
+                let (s, e) = (region.take_start_key(), region.take_end_key());
+                let next_key = if e.is_empty() {
                     None
                 } else {
-                    Some(Key::from_encoded(end_key))
+                    Some(Key::from_encoded_slice(&e))
                 };
-                (Some(make_context(region, peer)), next_key)
+                (Some((r, s, e)), next_key)
             }
             Ok(None) => (None, None),
             Err(e) => {
@@ -637,7 +626,6 @@ mod tests {
     use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
     use tikv_util::worker::{FutureRunnable, FutureWorker};
-    use tokio_core::reactor::Handle;
 
     fn take_callback(t: &mut GcTask) -> Callback<()> {
         let callback = match t {
@@ -684,7 +672,7 @@ mod tests {
     }
 
     impl FutureRunnable<GcTask> for MockGcRunner {
-        fn run(&mut self, mut t: GcTask, _handle: &Handle) {
+        fn run(&mut self, mut t: GcTask) {
             let cb = take_callback(&mut t);
             self.tx.send(t).unwrap();
             cb(Ok(()));
@@ -789,8 +777,10 @@ mod tests {
             .iter()
             .map(|task| match task {
                 GcTask::Gc {
-                    ctx, safe_point, ..
-                } => (ctx.get_region_id(), *safe_point),
+                    region_id,
+                    safe_point,
+                    ..
+                } => (*region_id, *safe_point),
                 _ => unreachable!(),
             })
             .collect();
@@ -803,25 +793,6 @@ mod tests {
             },
         );
         assert!(all_passed);
-    }
-
-    #[test]
-    fn test_make_context() {
-        let mut peer = metapb::Peer::default();
-        peer.set_id(233);
-        peer.set_store_id(2333);
-
-        let mut epoch = metapb::RegionEpoch::default();
-        epoch.set_conf_ver(123);
-        epoch.set_version(456);
-        let mut region = metapb::Region::default();
-        region.set_region_epoch(epoch.clone());
-        region.set_id(789);
-
-        let ctx = make_context(region.clone(), peer.clone());
-        assert_eq!(ctx.get_region_id(), region.get_id());
-        assert_eq!(ctx.get_peer(), &peer);
-        assert_eq!(ctx.get_region_epoch(), &epoch);
     }
 
     #[test]

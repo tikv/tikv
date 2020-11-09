@@ -43,7 +43,7 @@ pub enum SeekKey<'a> {
 /// Iterators are implemented for `KvEngine`s and for `Snapshot`s. They see a
 /// consistent view of the database; an iterator created by an engine behaves as
 /// if a snapshot was created first, and the iterator created from the snapshot.
-pub trait Iterator {
+pub trait Iterator: Send {
     fn seek(&mut self, key: SeekKey) -> Result<bool>;
 
     fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool>;

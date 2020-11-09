@@ -5,10 +5,13 @@ use std::path::Path;
 
 use crate::properties::{RangeProperties, UserCollectedPropertiesDecoder};
 use crate::raw::EventListener;
+use engine_traits::CompactedEvent;
 use engine_traits::CompactionJobInfo;
 use rocksdb::{
     CompactionJobInfo as RawCompactionJobInfo, CompactionReason, TablePropertiesCollectionView,
 };
+use std::collections::BTreeMap;
+use std::collections::Bound::{Excluded, Included, Unbounded};
 use tikv_util::collections::hash_set_with_capacity;
 
 pub struct RocksCompactionJobInfo<'a>(&'a RawCompactionJobInfo);
@@ -88,7 +91,7 @@ impl CompactionJobInfo for RocksCompactionJobInfo<'_> {
     }
 }
 
-pub struct CompactedEvent {
+pub struct RocksCompactedEvent {
     pub cf: String,
     pub output_level: i32,
     pub total_input_bytes: u64,
@@ -99,15 +102,15 @@ pub struct CompactedEvent {
     pub output_props: Vec<RangeProperties>,
 }
 
-impl CompactedEvent {
+impl RocksCompactedEvent {
     pub fn new(
         info: &RocksCompactionJobInfo,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         input_props: Vec<RangeProperties>,
         output_props: Vec<RangeProperties>,
-    ) -> CompactedEvent {
-        CompactedEvent {
+    ) -> RocksCompactedEvent {
+        RocksCompactedEvent {
             cf: info.cf_name().to_owned(),
             output_level: info.output_level(),
             total_input_bytes: info.total_input_bytes(),
@@ -120,16 +123,81 @@ impl CompactedEvent {
     }
 }
 
+impl CompactedEvent for RocksCompactedEvent {
+    fn total_bytes_declined(&self) -> u64 {
+        if self.total_input_bytes > self.total_output_bytes {
+            self.total_input_bytes - self.total_output_bytes
+        } else {
+            0
+        }
+    }
+
+    fn is_size_declining_trivial(&self, split_check_diff: u64) -> bool {
+        let total_bytes_declined = self.total_bytes_declined();
+        total_bytes_declined < split_check_diff
+            || total_bytes_declined * 10 < self.total_input_bytes
+    }
+
+    fn output_level_label(&self) -> String {
+        self.output_level.to_string()
+    }
+
+    fn calc_ranges_declined_bytes(
+        self,
+        ranges: &BTreeMap<Vec<u8>, u64>,
+        bytes_threshold: u64,
+    ) -> Vec<(u64, u64)> {
+        // Calculate influenced regions.
+        let mut influenced_regions = vec![];
+        for (end_key, region_id) in
+            ranges.range((Excluded(self.start_key), Included(self.end_key.clone())))
+        {
+            influenced_regions.push((region_id, end_key.clone()));
+        }
+        if let Some((end_key, region_id)) = ranges.range((Included(self.end_key), Unbounded)).next()
+        {
+            influenced_regions.push((region_id, end_key.clone()));
+        }
+
+        // Calculate declined bytes for each region.
+        // `end_key` in influenced_regions are in incremental order.
+        let mut region_declined_bytes = vec![];
+        let mut last_end_key: Vec<u8> = vec![];
+        for (region_id, end_key) in influenced_regions {
+            let mut old_size = 0;
+            for prop in &self.input_props {
+                old_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+            }
+            let mut new_size = 0;
+            for prop in &self.output_props {
+                new_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+            }
+            last_end_key = end_key;
+
+            // Filter some trivial declines for better performance.
+            if old_size > new_size && old_size - new_size > bytes_threshold {
+                region_declined_bytes.push((*region_id, old_size - new_size));
+            }
+        }
+
+        region_declined_bytes
+    }
+
+    fn cf(&self) -> &str {
+        &*self.cf
+    }
+}
+
 pub type Filter = fn(&RocksCompactionJobInfo) -> bool;
 
 pub struct CompactionListener {
-    ch: Box<dyn Fn(CompactedEvent) + Send + Sync>,
+    ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
     filter: Option<Filter>,
 }
 
 impl CompactionListener {
     pub fn new(
-        ch: Box<dyn Fn(CompactedEvent) + Send + Sync>,
+        ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
         filter: Option<Filter>,
     ) -> CompactionListener {
         CompactionListener { ch, filter }
@@ -205,7 +273,7 @@ impl EventListener for CompactionListener {
             return;
         }
 
-        (self.ch)(CompactedEvent::new(
+        (self.ch)(RocksCompactedEvent::new(
             info,
             smallest_key.unwrap(),
             largest_key.unwrap(),

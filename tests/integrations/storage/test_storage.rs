@@ -39,6 +39,18 @@ fn test_txn_store_get_with_type_lock() {
 }
 
 #[test]
+fn test_txn_store_batch_get_command() {
+    let store = AssertionStorage::default();
+    // not exist
+    store.get_none(b"a", 10);
+    store.get_none(b"b", 10);
+    // after put
+    store.put_ok(b"a", b"x", 5, 10);
+    store.put_ok(b"b", b"x", 5, 10);
+    store.batch_get_command_ok(&[b"a", b"b", b"c"], 10, vec![b"x", b"x", b""]);
+}
+
+#[test]
 fn test_txn_store_delete() {
     let store = AssertionStorage::default();
     store.put_ok(b"x", b"x5-10", 5, 10);
@@ -656,7 +668,7 @@ pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) 
 
 pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String) {
     let (mut cluster, mut store) =
-        AssertionStorage::new_raft_storage_with_store_count(3, prefix.clone().as_str());
+        AssertionStorage::new_raft_storage_with_store_count(3, prefix.as_str());
     let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
     for k in &keys {
         store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v1", 5, 10);
@@ -854,8 +866,8 @@ fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Re
     for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
         let number: i32 = match store.get(Context::default(), &key_address, start_ts) {
-            Ok(Some(x)) => String::from_utf8(x).unwrap().parse().unwrap(),
-            Ok(None) => 0,
+            Ok((Some(x), _, _)) => String::from_utf8(x).unwrap().parse().unwrap(),
+            Ok((None, _, _)) => 0,
             Err(_) => {
                 backoff(i);
                 continue;
@@ -937,8 +949,8 @@ fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -
         let mut mutations = vec![];
         for key in keys.iter().take(n) {
             let number = match store.get(Context::default(), key, start_ts) {
-                Ok(Some(n)) => String::from_utf8(n).unwrap().parse().unwrap(),
-                Ok(None) => 0,
+                Ok((Some(n), _, _)) => String::from_utf8(n).unwrap().parse().unwrap(),
+                Ok((None, _, _)) => 0,
                 Err(_) => {
                     backoff(i);
                     continue 'retry;

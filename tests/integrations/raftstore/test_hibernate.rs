@@ -4,7 +4,7 @@ use std::sync::*;
 use std::thread;
 use std::time::*;
 
-use futures::Future;
+use futures::executor::block_on;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
@@ -29,10 +29,7 @@ fn test_proposal_prevent_sleep() {
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 1).direction(Direction::Send),
     ));
-    let region = cluster
-        .pd_client
-        .get_region_by_id(1)
-        .wait()
+    let region = block_on(cluster.pd_client.get_region_by_id(1))
         .unwrap()
         .unwrap();
 

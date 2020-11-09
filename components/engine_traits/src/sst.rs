@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::cf_defs::CfName;
 use crate::errors::Result;
 use crate::iterable::Iterable;
 use std::path::PathBuf;
@@ -20,7 +19,7 @@ pub trait SstReader: Iterable + Sized {
 }
 
 /// SstWriter is used to create sst files that can be added to database later.
-pub trait SstWriter {
+pub trait SstWriter: Send {
     type ExternalSstFileInfo: ExternalSstFileInfo;
     type ExternalSstFileReader: std::io::Read;
 
@@ -42,6 +41,14 @@ pub trait SstWriter {
     fn finish_read(self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)>;
 }
 
+// compression type used for write sst file
+#[derive(Copy, Clone)]
+pub enum SstCompressionType {
+    Lz4,
+    Snappy,
+    Zstd,
+}
+
 /// A builder builds a SstWriter.
 pub trait SstWriterBuilder<E>
 where
@@ -54,10 +61,15 @@ where
     fn set_db(self, db: &E) -> Self;
 
     /// Set CF for the builder. The builder may need some config from the CF.
-    fn set_cf(self, cf: CfName) -> Self;
+    fn set_cf(self, cf: &str) -> Self;
 
     /// Set it to true, the builder builds a in-memory SST builder.
     fn set_in_memory(self, in_memory: bool) -> Self;
+
+    /// set other config specified by writer
+    fn set_compression_type(self, compression: Option<SstCompressionType>) -> Self;
+
+    fn set_compression_level(self, level: i32) -> Self;
 
     /// Builder a SstWriter.
     fn build(self, path: &str) -> Result<E::SstWriter>;

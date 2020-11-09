@@ -7,9 +7,9 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder, JoinHandle};
 
-use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::Stream;
-use tokio_core::reactor::{Core, Handle};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::stream::StreamExt;
+use tokio::task::LocalSet;
 
 use super::metrics::*;
 
@@ -34,13 +34,13 @@ impl<T> From<Stopped<T>> for Box<dyn Error + Sync + Send + 'static> {
 }
 
 pub trait Runnable<T: Display> {
-    fn run(&mut self, t: T, handle: &Handle);
+    fn run(&mut self, t: T);
     fn shutdown(&mut self) {}
 }
 
 /// Scheduler provides interface to schedule task to underlying workers.
 pub struct Scheduler<T> {
-    name: Arc<String>,
+    name: Arc<str>,
     sender: UnboundedSender<Option<T>>,
     metrics_pending_task_count: IntGauge,
 }
@@ -51,11 +51,11 @@ pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
 }
 
 impl<T: Display> Scheduler<T> {
-    fn new<S: Into<String>>(name: S, sender: UnboundedSender<Option<T>>) -> Scheduler<T> {
+    fn new<S: Into<Arc<str>>>(name: S, sender: UnboundedSender<Option<T>>) -> Scheduler<T> {
         let name = name.into();
         Scheduler {
             metrics_pending_task_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
-            name: Arc::new(name),
+            name,
             sender,
         }
     }
@@ -91,34 +91,44 @@ pub struct Worker<T: Display> {
 }
 
 // TODO: add metrics.
-fn poll<R, T>(mut runner: R, rx: UnboundedReceiver<Option<T>>)
+fn poll<R, T>(mut runner: R, mut rx: UnboundedReceiver<Option<T>>)
 where
     R: Runnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
+    tikv_alloc::add_thread_memory_accessor();
     let current_thread = thread::current();
     let name = current_thread.name().unwrap();
     let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[name]);
     let metrics_handled_task_count = WORKER_HANDLED_TASK_VEC.with_label_values(&[name]);
 
-    let mut core = Core::new().unwrap();
-    let handle = core.handle();
+    let handle = LocalSet::new();
     {
-        let f = rx.take_while(|t| Ok(t.is_some())).for_each(|t| {
-            runner.run(t.unwrap(), &handle);
-            metrics_pending_task_count.dec();
-            metrics_handled_task_count.inc();
-            Ok(())
-        });
+        let task = async {
+            while let Some(msg) = rx.next().await {
+                if let Some(t) = msg {
+                    runner.run(t);
+                    metrics_pending_task_count.dec();
+                    metrics_handled_task_count.inc();
+                } else {
+                    break;
+                }
+            }
+        };
         // `UnboundedReceiver` never returns an error.
-        core.run(f).unwrap();
+        tokio::runtime::Builder::new()
+            .basic_scheduler()
+            .build()
+            .unwrap()
+            .block_on(handle.run_until(task));
     }
     runner.shutdown();
+    tikv_alloc::remove_thread_memory_accessor();
 }
 
 impl<T: Display + Send + 'static> Worker<T> {
     /// Creates a worker.
-    pub fn new<S: Into<String>>(name: S) -> Worker<T> {
+    pub fn new<S: Into<Arc<str>>>(name: S) -> Worker<T> {
         let (tx, rx) = unbounded();
         Worker {
             scheduler: Scheduler::new(name, tx),
@@ -166,7 +176,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     }
 
     pub fn name(&self) -> &str {
-        self.scheduler.name.as_str()
+        &self.scheduler.name
     }
 
     /// Stops the worker thread.
@@ -177,20 +187,20 @@ impl<T: Display + Send + 'static> Worker<T> {
         if let Err(e) = self.scheduler.sender.unbounded_send(None) {
             warn!("failed to stop worker thread"; "err" => ?e);
         }
+
         Some(handle)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-    use std::sync::mpsc::*;
+    use std::sync::mpsc::{self, Sender};
     use std::time::Duration;
     use std::time::Instant;
 
     use crate::timer::GLOBAL_TIMER_HANDLE;
-    use futures::Future;
-    use tokio_core::reactor::Handle;
+    use futures::compat::Future01CompatExt;
+    use tokio::task::spawn_local;
     use tokio_timer::timer;
 
     use super::*;
@@ -201,13 +211,13 @@ mod tests {
     }
 
     impl Runnable<u64> for StepRunner {
-        fn run(&mut self, step: u64, handle: &Handle) {
+        fn run(&mut self, step: u64) {
             self.ch.send(step).unwrap();
             let f = self
                 .timer
                 .delay(Instant::now() + Duration::from_millis(step))
-                .map_err(|_| ());
-            handle.spawn(f);
+                .compat();
+            spawn_local(f);
         }
 
         fn shutdown(&mut self) {
@@ -241,5 +251,22 @@ mod tests {
         assert!(worker.is_busy());
         // when shutdown, StepRunner should send back a 0.
         assert_eq!(0, rx.recv().unwrap());
+    }
+
+    #[test]
+    fn test_block_on_inside_worker() {
+        struct BlockingRunner;
+
+        impl Runnable<bool> for BlockingRunner {
+            fn run(&mut self, _: bool) {
+                futures::executor::block_on(async {});
+            }
+        }
+
+        let mut worker = Worker::new("test-block-on-worker");
+        worker.start(BlockingRunner).unwrap();
+        worker.schedule(true).unwrap();
+        worker.schedule(false).unwrap();
+        worker.stop().unwrap().join().unwrap();
     }
 }

@@ -325,3 +325,14 @@ groups:
       value: '{{ $value }}'
       summary: TiKV approximate region size is more than 1GB
 
+  - alert: TiKV_node_restart
+    expr: changes(process_start_time_seconds{job="tikv"}[5m]) > 0
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr:  changes(process_start_time_seconds{job="tikv"}[5m]) > 0
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV server has been restarted

@@ -7,7 +7,8 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
-use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_rocks::RocksEngine;
+use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
@@ -16,6 +17,8 @@ use crate::storage::kv::{
     ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, ScanMode, Snapshot,
     WriteData,
 };
+
+use super::SnapContext;
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
@@ -69,6 +72,19 @@ impl Default for BTreeEngine {
 
 impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
+    type Local = RocksEngine;
+
+    fn kv_engine(&self) -> RocksEngine {
+        unimplemented!();
+    }
+
+    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> EngineResult<Self::Snap> {
+        unimplemented!();
+    }
+
+    fn modify_on_kv_engine(&self, _: Vec<Modify>) -> EngineResult<()> {
+        unimplemented!();
+    }
 
     fn async_write(
         &self,
@@ -83,8 +99,13 @@ impl Engine for BTreeEngine {
 
         Ok(())
     }
+
     /// warning: It returns a fake snapshot whose content will be affected by the later modifies!
-    fn async_snapshot(&self, _ctx: &Context, cb: EngineCallback<Self::Snap>) -> EngineResult<()> {
+    fn async_snapshot(
+        &self,
+        _ctx: SnapContext<'_>,
+        cb: EngineCallback<Self::Snap>,
+    ) -> EngineResult<()> {
         cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(&self))));
         Ok(())
     }
@@ -219,6 +240,9 @@ impl Snapshot for BTreeEngineSnapshot {
             Some(v) => Ok(Some(v.clone())),
         }
     }
+    fn get_cf_opt(&self, _: ReadOptions, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
+        self.get_cf(cf, key)
+    }
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
         self.iter_cf(CF_DEFAULT, iter_opt, mode)
     }
@@ -230,8 +254,12 @@ impl Snapshot for BTreeEngineSnapshot {
         mode: ScanMode,
     ) -> EngineResult<Cursor<Self::Iter>> {
         let tree = self.inner_engine.get_cf(cf);
-
-        Ok(Cursor::new(BTreeEngineIterator::new(tree, iter_opt), mode))
+        let prefix_seek = iter_opt.prefix_seek_used();
+        Ok(Cursor::new(
+            BTreeEngineIterator::new(tree, iter_opt),
+            mode,
+            prefix_seek,
+        ))
     }
 }
 
@@ -302,7 +330,7 @@ pub mod tests {
         for (k, v) in &test_data {
             must_put(&engine, k.as_slice(), v.as_slice());
         }
-        let snap = engine.snapshot(&Context::default()).unwrap();
+        let snap = engine.snapshot(Default::default()).unwrap();
         let mut statistics = CfStatistics::default();
 
         // lower bound > upper bound, seek() returns false.

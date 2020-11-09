@@ -158,10 +158,7 @@ mod parser {
         let (rest, _) = anysep(rest)?;
         let (rest, _) = digit1(rest)?;
 
-        let has_datetime_sep = match rest.chars().next() {
-            Some(c) if c == 'T' || c == ' ' => true,
-            _ => false,
-        };
+        let has_datetime_sep = matches!(rest.chars().next(), Some(c) if c == 'T' || c == ' ');
 
         if !has_datetime_sep {
             return Err(nom::Err::Error(()));

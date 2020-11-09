@@ -1,8 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod not_chunked_vec;
+mod bit_vec;
+mod chunked_vec_bytes;
+mod chunked_vec_common;
+mod chunked_vec_json;
+mod chunked_vec_sized;
+mod logical_rows;
 mod scalar;
 mod vector;
+pub use logical_rows::{LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS};
 
 // Concrete eval types without a nullable wrapper.
 pub type Int = i64;
@@ -10,6 +16,10 @@ pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub type BytesRef<'a> = &'a [u8];
 pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
+pub use bit_vec::{BitAndIterator, BitVec};
+pub use chunked_vec_bytes::{BytesGuard, BytesWriter, ChunkedVecBytes, PartialBytesWriter};
+pub use chunked_vec_json::ChunkedVecJson;
+pub use chunked_vec_sized::ChunkedVecSized;
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
@@ -42,17 +52,56 @@ impl AsMySQLBool for Real {
     }
 }
 
+impl<'a, T: AsMySQLBool> AsMySQLBool for &'a T {
+    #[inline]
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        (&**self).as_mysql_bool(context)
+    }
+}
+
 impl AsMySQLBool for Bytes {
+    #[inline]
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        self.as_slice().as_mysql_bool(context)
+    }
+}
+
+impl<'a> AsMySQLBool for BytesRef<'a> {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty() && ConvertTo::<f64>::convert(self, context)? != 0f64)
     }
 }
 
-impl<T> AsMySQLBool for Option<T>
+impl<'a, T> AsMySQLBool for Option<&'a T>
 where
     T: AsMySQLBool,
 {
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        match self {
+            None => Ok(false),
+            Some(ref v) => v.as_mysql_bool(context),
+        }
+    }
+}
+
+impl<'a> AsMySQLBool for JsonRef<'a> {
+    fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
+        // TODO: This logic is not correct. See pingcap/tidb#9593
+        Ok(false)
+    }
+}
+
+impl<'a> AsMySQLBool for Option<BytesRef<'a>> {
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        match self {
+            None => Ok(false),
+            Some(ref v) => v.as_mysql_bool(context),
+        }
+    }
+}
+
+impl<'a> AsMySQLBool for Option<JsonRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -70,6 +119,19 @@ pub macro match_template_evaluable($t:tt, $($tail:tt)*) {
 
 pub trait ChunkRef<'a, T: EvaluableRef<'a>>: Copy + Clone + std::fmt::Debug + Send + Sync {
     fn get_option_ref(self, idx: usize) -> Option<T>;
+
+    fn get_bit_vec(self) -> &'a BitVec;
+
+    fn phantom_data(self) -> Option<T>;
+}
+
+pub trait UnsafeRefInto<T> {
+    /// # Safety
+    ///
+    /// This function uses `std::mem::transmute`.
+    /// The only place that copr uses this function is in
+    /// `tidb_query_aggr`, together with a set of `update` macros.
+    unsafe fn unsafe_into(self) -> T;
 }
 
 /// A trait of all types that can be used during evaluation (eval type).
@@ -86,15 +148,34 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
 
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
     /// panics if the varient mismatches.
-    fn borrow_vector_value(v: &VectorValue) -> &Vec<Option<Self>>;
+    fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecSized<Self>;
 }
 
 pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
     const EVAL_TYPE: EvalType;
-
+    type ChunkedType: ChunkedVec<Self>;
     /// Converts a vector of this concrete type into a `VectorValue` in the same type;
     /// panics if the varient mismatches.
-    fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue;
+    fn into_vector_value(vec: Self::ChunkedType) -> VectorValue;
+}
+
+/// # Notes
+///
+/// Make sure operating `bitmap` and `value` together, so while `bitmap` is 0 and the
+/// corresponding value is None.
+///
+/// With this guaranty, we can avoid the following issue:
+///
+/// For Data [Some(1), Some(2), None], we could have different stored representation:
+///
+/// Bitmap: 110, Value: 1, 2, 0
+/// Bitmap: 110, Value: 1, 2, 1
+/// Bitmap: 110, Value: 1, 2, 3
+///
+/// `PartialEq` between `Value`'s result could be wrong.
+pub trait ChunkedVec<T> {
+    fn chunked_with_capacity(capacity: usize) -> Self;
+    fn chunked_push(&mut self, value: Option<T>);
 }
 
 macro_rules! impl_evaluable_type {
@@ -119,7 +200,7 @@ macro_rules! impl_evaluable_type {
             }
 
             #[inline]
-            fn borrow_vector_value(v: &VectorValue) -> &Vec<Option<$ty>> {
+            fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecSized<$ty> {
                 match v {
                     VectorValue::$ty(x) => x,
                     _ => unimplemented!(),
@@ -136,30 +217,31 @@ impl_evaluable_type! { DateTime }
 impl_evaluable_type! { Duration }
 
 macro_rules! impl_evaluable_ret {
-    ($ty:tt) => {
+    ($ty:tt, $chunk:ty) => {
         impl EvaluableRet for $ty {
             const EVAL_TYPE: EvalType = EvalType::$ty;
+            type ChunkedType = $chunk;
 
             #[inline]
-            fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue {
+            fn into_vector_value(vec: $chunk) -> VectorValue {
                 VectorValue::from(vec)
             }
         }
     };
 }
 
-impl_evaluable_ret! { Int }
-impl_evaluable_ret! { Real }
-impl_evaluable_ret! { Decimal }
-impl_evaluable_ret! { Bytes }
-impl_evaluable_ret! { DateTime }
-impl_evaluable_ret! { Duration }
-impl_evaluable_ret! { Json }
+impl_evaluable_ret! { Int, ChunkedVecSized<Self> }
+impl_evaluable_ret! { Real, ChunkedVecSized<Self> }
+impl_evaluable_ret! { Decimal, ChunkedVecSized<Self> }
+impl_evaluable_ret! { Bytes, ChunkedVecBytes }
+impl_evaluable_ret! { DateTime, ChunkedVecSized<Self> }
+impl_evaluable_ret! { Duration, ChunkedVecSized<Self> }
+impl_evaluable_ret! { Json, ChunkedVecJson }
 
 pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     const EVAL_TYPE: EvalType;
-    type ChunkedType: ChunkRef<'a, Self>;
-    type EvaluableType;
+    type ChunkedType: ChunkRef<'a, Self> + 'a;
+    type EvaluableType: EvaluableRet;
 
     /// Borrows this concrete type from a `ScalarValue` in the same type;
     /// panics if the varient mismatches.
@@ -172,11 +254,16 @@ pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
     /// panics if the varient mismatches.
     fn borrow_vector_value(v: &'a VectorValue) -> Self::ChunkedType;
+
+    /// Convert this reference to owned type
+    fn to_owned_value(self) -> Self::EvaluableType;
+
+    fn from_owned_value(value: &'a Self::EvaluableType) -> Self;
 }
 
-impl<'a, T: Evaluable> EvaluableRef<'a> for &'a T {
-    const EVAL_TYPE: EvalType = T::EVAL_TYPE;
-    type ChunkedType = &'a Vec<Option<T>>;
+impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
+    const EVAL_TYPE: EvalType = <T as Evaluable>::EVAL_TYPE;
+    type ChunkedType = &'a ChunkedVecSized<T>;
     type EvaluableType = T;
 
     #[inline]
@@ -190,15 +277,37 @@ impl<'a, T: Evaluable> EvaluableRef<'a> for &'a T {
     }
 
     #[inline]
-    fn borrow_vector_value(v: &'a VectorValue) -> &'a Vec<Option<T>> {
+    fn borrow_vector_value(v: &'a VectorValue) -> &'a ChunkedVecSized<T> {
         Evaluable::borrow_vector_value(v)
+    }
+
+    #[inline]
+    fn to_owned_value(self) -> Self::EvaluableType {
+        self.clone()
+    }
+
+    #[inline]
+    fn from_owned_value(value: &'a T) -> Self {
+        &value
+    }
+}
+
+impl<'a, A: UnsafeRefInto<B>, B> UnsafeRefInto<Option<B>> for Option<A> {
+    unsafe fn unsafe_into(self) -> Option<B> {
+        self.map(|x| x.unsafe_into())
+    }
+}
+
+impl<'a, T: Evaluable + EvaluableRet> UnsafeRefInto<&'static T> for &'a T {
+    unsafe fn unsafe_into(self) -> &'static T {
+        std::mem::transmute(self)
     }
 }
 
 impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     const EVAL_TYPE: EvalType = EvalType::Bytes;
     type EvaluableType = Bytes;
-    type ChunkedType = &'a Vec<Option<Bytes>>;
+    type ChunkedType = &'a ChunkedVecBytes;
 
     #[inline]
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
@@ -217,18 +326,40 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     }
 
     #[inline]
-    fn borrow_vector_value(v: &'a VectorValue) -> &'a Vec<Option<Bytes>> {
+    fn borrow_vector_value(v: &'a VectorValue) -> &'a ChunkedVecBytes {
         match v {
             VectorValue::Bytes(x) => x,
             _ => unimplemented!(),
         }
+    }
+
+    #[inline]
+    fn to_owned_value(self) -> Self::EvaluableType {
+        self.to_vec()
+    }
+
+    #[inline]
+    fn from_owned_value(value: &'a Bytes) -> Self {
+        value.as_slice()
+    }
+}
+
+impl<'a> UnsafeRefInto<BytesRef<'static>> for BytesRef<'a> {
+    unsafe fn unsafe_into(self) -> BytesRef<'static> {
+        std::mem::transmute(self)
+    }
+}
+
+impl<'a> UnsafeRefInto<JsonRef<'static>> for JsonRef<'a> {
+    unsafe fn unsafe_into(self) -> JsonRef<'static> {
+        std::mem::transmute(self)
     }
 }
 
 impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     const EVAL_TYPE: EvalType = EvalType::Json;
     type EvaluableType = Json;
-    type ChunkedType = &'a Vec<Option<Json>>;
+    type ChunkedType = &'a ChunkedVecJson;
 
     #[inline]
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
@@ -247,44 +378,21 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     }
 
     #[inline]
-    fn borrow_vector_value(v: &VectorValue) -> &Vec<Option<Json>> {
+    fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecJson {
         match v {
             VectorValue::Json(x) => x,
             _ => unimplemented!(),
         }
     }
-}
 
-pub trait IntoEvaluableRef<T>: Sized {
-    /// Performs the conversion.
-    fn into_evaluable_ref(self) -> T;
-}
-
-macro_rules! impl_into_evaluable_ref {
-    ($ty:tt) => {
-        impl<'a> IntoEvaluableRef<Option<&'a $ty>> for Option<&'a $ty> {
-            fn into_evaluable_ref(self) -> Option<&'a $ty> {
-                self
-            }
-        }
-    };
-}
-
-impl_into_evaluable_ref! { Int }
-impl_into_evaluable_ref! { Real }
-impl_into_evaluable_ref! { Decimal }
-impl_into_evaluable_ref! { DateTime }
-impl_into_evaluable_ref! { Duration }
-
-impl<'a> IntoEvaluableRef<Option<BytesRef<'a>>> for Option<&'a Bytes> {
-    fn into_evaluable_ref(self) -> Option<BytesRef<'a>> {
-        self.map(|x| x.as_slice())
+    #[inline]
+    fn to_owned_value(self) -> Self::EvaluableType {
+        self.to_owned()
     }
-}
 
-impl<'a> IntoEvaluableRef<Option<JsonRef<'a>>> for Option<&'a Json> {
-    fn into_evaluable_ref(self) -> Option<JsonRef<'a>> {
-        self.map(|x| x.as_ref())
+    #[inline]
+    fn from_owned_value(value: &'a Json) -> Self {
+        value.as_ref()
     }
 }
 

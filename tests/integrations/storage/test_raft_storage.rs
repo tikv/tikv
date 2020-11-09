@@ -29,7 +29,7 @@ fn new_raft_storage() -> (
 fn test_raft_storage() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
     let key = Key::from_raw(b"key");
-    assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap(), None);
+    assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap().0, None);
     storage
         .prewrite(
             ctx.clone(),
@@ -42,7 +42,7 @@ fn test_raft_storage() {
         .commit(ctx.clone(), vec![key.clone()], 10, 15)
         .unwrap();
     assert_eq!(
-        storage.get(ctx.clone(), &key, 20).unwrap().unwrap(),
+        storage.get(ctx.clone(), &key, 20).unwrap().0.unwrap(),
         b"value".to_vec()
     );
 
@@ -116,7 +116,7 @@ fn test_raft_storage_store_not_match() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
 
     let key = Key::from_raw(b"key");
-    assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap(), None);
+    assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap().0, None);
     storage
         .prewrite(
             ctx.clone(),
@@ -129,7 +129,7 @@ fn test_raft_storage_store_not_match() {
         .commit(ctx.clone(), vec![key.clone()], 10, 15)
         .unwrap();
     assert_eq!(
-        storage.get(ctx.clone(), &key, 20).unwrap().unwrap(),
+        storage.get(ctx.clone(), &key, 20).unwrap().0.unwrap(),
         b"value".to_vec()
     );
 
@@ -207,6 +207,7 @@ fn write_test_data<E: Engine>(
                 ts,
             )
             .unwrap()
+            .locks
             .into_iter()
             .for_each(|res| res.unwrap());
         storage
@@ -235,7 +236,8 @@ fn check_data<E: Engine>(
 
         let value = storages[&leader_id]
             .get(ctx, &Key::from_raw(k), ts)
-            .unwrap();
+            .unwrap()
+            .0;
         if expect_success {
             assert_eq!(value.unwrap().as_slice(), v.as_slice());
         } else {

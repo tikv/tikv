@@ -5,11 +5,11 @@ use std::io::Error as IoError;
 use std::net::AddrParseError;
 use std::result;
 
+use futures::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
 use hyper::Error as HttpError;
 use openssl::error::ErrorStack as OpenSSLError;
 use protobuf::ProtobufError;
-use tokio_sync::oneshot::error::RecvError;
 
 use super::snap::Task as SnapTask;
 use crate::storage::kv::Error as EngineError;
@@ -86,7 +86,7 @@ quick_error! {
         Sink {
             display("failed to poll from mpsc receiver")
         }
-        RecvError(err: RecvError) {
+        RecvError(err: Canceled) {
             from()
             cause(err)
             display("{:?}", err)

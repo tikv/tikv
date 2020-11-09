@@ -215,10 +215,8 @@ impl GCSStorage {
         if !endpoint.is_empty() {
             let url = req.uri().to_string();
             for hardcoded in HARDCODED_ENDPOINTS {
-                if url.starts_with(hardcoded) {
-                    *req.uri_mut() = [endpoint.trim_end_matches('/'), &url[hardcoded.len()..]]
-                        .concat()
-                        .parse()?;
+                if let Some(res) = url.strip_prefix(hardcoded) {
+                    *req.uri_mut() = [endpoint.trim_end_matches('/'), res].concat().parse()?;
                     break;
                 }
             }
@@ -240,17 +238,31 @@ impl GCSStorage {
     }
 }
 
-// FIXME: `impl Copy for PredefinedAcl` and get rid of this silly function.
-fn copy_predefined_acl(acl: &Option<PredefinedAcl>) -> Option<PredefinedAcl> {
-    match acl {
-        None => None,
-        Some(PredefinedAcl::AuthenticatedRead) => Some(PredefinedAcl::AuthenticatedRead),
-        Some(PredefinedAcl::BucketOwnerFullControl) => Some(PredefinedAcl::BucketOwnerFullControl),
-        Some(PredefinedAcl::BucketOwnerRead) => Some(PredefinedAcl::BucketOwnerRead),
-        Some(PredefinedAcl::Private) => Some(PredefinedAcl::Private),
-        Some(PredefinedAcl::ProjectPrivate) => Some(PredefinedAcl::ProjectPrivate),
-        Some(PredefinedAcl::PublicRead) => Some(PredefinedAcl::PublicRead),
-    }
+// Convert manually since they don't implement FromStr.
+fn parse_storage_class(sc: &str) -> Result<Option<StorageClass>, &str> {
+    Ok(Some(match sc {
+        "" => return Ok(None),
+        "STANDARD" => StorageClass::Standard,
+        "NEARLINE" => StorageClass::Nearline,
+        "COLDLINE" => StorageClass::Coldline,
+        "DURABLE_REDUCED_AVAILABILITY" => StorageClass::DurableReducedAvailability,
+        "REGIONAL" => StorageClass::Regional,
+        "MULTI_REGIONAL" => StorageClass::MultiRegional,
+        _ => return Err(sc),
+    }))
+}
+
+fn parse_predefined_acl(acl: &str) -> Result<Option<PredefinedAcl>, &str> {
+    Ok(Some(match acl {
+        "" => return Ok(None),
+        "authenticatedRead" => PredefinedAcl::AuthenticatedRead,
+        "bucketOwnerFullControl" => PredefinedAcl::BucketOwnerFullControl,
+        "bucketOwnerRead" => PredefinedAcl::BucketOwnerRead,
+        "private" => PredefinedAcl::Private,
+        "projectPrivate" => PredefinedAcl::ProjectPrivate,
+        "publicRead" => PredefinedAcl::PublicRead,
+        _ => return Err(acl),
+    }))
 }
 
 impl ExternalStorage for GCSStorage {
@@ -266,32 +278,12 @@ impl ExternalStorage for GCSStorage {
         debug!("save file to GCS storage"; "key" => %key);
         let bucket = BucketName::try_from(self.config.bucket.clone())
             .or_invalid_input(format_args!("invalid bucket {}", self.config.bucket))?;
-        let storage_class: Option<StorageClass> = if self.config.storage_class.is_empty() {
-            None
-        } else {
-            Some(
-                serde_json::from_str(&self.config.storage_class).or_invalid_input(format_args!(
-                    "invalid storage_class {}",
-                    self.config.storage_class
-                ))?,
-            )
-        };
-        // Convert manually since PredefinedAcl doesn't implement Deserialize.
-        let predefined_acl = match self.config.predefined_acl.as_ref() {
-            "" => None,
-            "authenticatedRead" => Some(PredefinedAcl::AuthenticatedRead),
-            "bucketOwnerFullControl" => Some(PredefinedAcl::BucketOwnerFullControl),
-            "bucketOwnerRead" => Some(PredefinedAcl::BucketOwnerRead),
-            "private" => Some(PredefinedAcl::Private),
-            "projectPrivate" => Some(PredefinedAcl::ProjectPrivate),
-            "publicRead" => Some(PredefinedAcl::PublicRead),
-            _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("invalid predefined_acl {}", self.config.predefined_acl),
-                ));
-            }
-        };
+
+        let storage_class = parse_storage_class(&self.config.storage_class)
+            .or_invalid_input("invalid storage_class")?;
+        let predefined_acl = parse_predefined_acl(&self.config.predefined_acl)
+            .or_invalid_input("invalid predefined_acl")?;
+
         let metadata = Metadata {
             name: Some(key),
             storage_class,
@@ -311,7 +303,7 @@ impl ExternalStorage for GCSStorage {
                     content_length,
                     &metadata,
                     Some(InsertObjectOptional {
-                        predefined_acl: copy_predefined_acl(&predefined_acl),
+                        predefined_acl,
                         ..Default::default()
                     }),
                 )?
@@ -355,5 +347,35 @@ impl ExternalStorage for GCSStorage {
                 .boxed() // this `.boxed()` pin the stream.
                 .into_async_read(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use matches::assert_matches;
+
+    #[test]
+    fn test_parse_storage_class() {
+        assert_matches!(
+            parse_storage_class("STANDARD"),
+            Ok(Some(StorageClass::Standard))
+        );
+        assert_matches!(parse_storage_class(""), Ok(None));
+        assert_matches!(
+            parse_storage_class("NOT_A_STORAGE_CLASS"),
+            Err("NOT_A_STORAGE_CLASS")
+        );
+    }
+
+    #[test]
+    fn test_parse_acl() {
+        // can't use assert_matches!(), PredefinedAcl doesn't even implement Debug.
+        assert!(matches!(
+            parse_predefined_acl("private"),
+            Ok(Some(PredefinedAcl::Private))
+        ));
+        assert!(matches!(parse_predefined_acl(""), Ok(None)));
+        assert!(matches!(parse_predefined_acl("notAnACL"), Err("notAnACL")));
     }
 }

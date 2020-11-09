@@ -12,76 +12,36 @@ use kvproto::tikvpb::TikvClient;
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
 
-fn acquire_pessimistic_lock(
-    client: &TikvClient,
-    ctx: Context,
-    key: Vec<u8>,
-    ts: u64,
-) -> PessimisticLockResponse {
-    let mut req = PessimisticLockRequest::default();
-    req.set_context(ctx);
-    let mut mutation = Mutation::default();
-    mutation.set_op(Op::PessimisticLock);
-    mutation.set_key(key.clone());
-    mutation.set_value(key.clone());
-    req.set_mutations(vec![mutation].into_iter().collect());
-    req.primary_lock = key;
-    req.start_version = ts;
-    req.for_update_ts = ts;
-    req.lock_ttl = 20;
-    req.is_first_lock = false;
-    client.kv_pessimistic_lock(&req).unwrap()
-}
-
-fn must_acquire_pessimistic_lock(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
-    let resp = acquire_pessimistic_lock(client, ctx, key, ts);
-    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
-    assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
-}
-
-fn delete_pessimistic_lock(
-    client: &TikvClient,
-    ctx: Context,
-    key: Vec<u8>,
-    ts: u64,
-) -> PessimisticRollbackResponse {
-    let mut req = PessimisticRollbackRequest::default();
-    req.set_context(ctx);
-    req.set_keys(vec![key].into_iter().collect());
-    req.start_version = ts;
-    req.for_update_ts = ts;
-    client.kv_pessimistic_rollback(&req).unwrap()
-}
-
-fn must_delete_pessimistic_lock(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
-    let resp = delete_pessimistic_lock(client, ctx, key, ts);
-    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
-    assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
-}
-
 fn must_deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) {
     let key1 = key1.to_vec();
     let mut key2 = key1.clone();
     key2.push(0);
-    must_acquire_pessimistic_lock(client, ctx.clone(), key1.clone(), ts);
-    must_acquire_pessimistic_lock(client, ctx.clone(), key2.clone(), ts + 1);
+    must_kv_pessimistic_lock(client, ctx.clone(), key1.clone(), ts);
+    must_kv_pessimistic_lock(client, ctx.clone(), key2.clone(), ts + 1);
 
     let (client_clone, ctx_clone, key1_clone) = (client.clone(), ctx.clone(), key1.clone());
     let (tx, rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
-        let _ = acquire_pessimistic_lock(&client_clone, ctx_clone, key1_clone, ts + 1);
+        let _ = kv_pessimistic_lock(
+            &client_clone,
+            ctx_clone,
+            vec![key1_clone],
+            ts + 1,
+            ts + 1,
+            false,
+        );
         tx.send(1).unwrap();
     });
     // Sleep to make sure txn(ts+1) is waiting for txn(ts)
     thread::sleep(Duration::from_millis(500));
-    let resp = acquire_pessimistic_lock(client, ctx.clone(), key2.clone(), ts);
+    let resp = kv_pessimistic_lock(client, ctx.clone(), vec![key2.clone()], ts, ts, false);
     assert_eq!(resp.errors.len(), 1);
     assert!(resp.errors[0].has_deadlock(), "{:?}", resp.get_errors());
     rx.recv().unwrap();
 
     // Clean up
-    must_delete_pessimistic_lock(client, ctx.clone(), key1, ts);
-    must_delete_pessimistic_lock(client, ctx, key2, ts);
+    must_kv_pessimistic_rollback(client, ctx.clone(), key1, ts);
+    must_kv_pessimistic_rollback(client, ctx, key2, ts);
 }
 
 fn build_leader_client(cluster: &mut Cluster<ServerCluster>, key: &[u8]) -> (TikvClient, Context) {
@@ -91,7 +51,7 @@ fn build_leader_client(cluster: &mut Cluster<ServerCluster>, key: &[u8]) -> (Tik
 
     let env = Arc::new(Environment::new(1));
     let channel =
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
     let client = TikvClient::new(channel);
 
     let mut ctx = Context::default();
@@ -188,6 +148,7 @@ fn new_cluster_for_deadlock_test(count: usize) -> Cluster<ServerCluster> {
     let region_id = cluster.run_conf_change();
     pd_client.must_add_peer(region_id, new_peer(2, 2));
     pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
     deadlock_detector_leader_must_be(&mut cluster, 1);
     must_detect_deadlock(&mut cluster, b"k", 10);
     cluster

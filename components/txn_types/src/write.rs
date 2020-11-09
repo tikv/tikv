@@ -20,6 +20,8 @@ const FLAG_DELETE: u8 = b'D';
 const FLAG_LOCK: u8 = b'L';
 const FLAG_ROLLBACK: u8 = b'R';
 
+const FLAG_OVERLAPPED_ROLLBACK: u8 = b'R';
+
 /// The short value for rollback records which are protected from being collapsed.
 const PROTECTED_ROLLBACK_SHORT_VALUE: &[u8] = b"p";
 
@@ -58,6 +60,14 @@ pub struct Write {
     pub write_type: WriteType,
     pub start_ts: TimeStamp,
     pub short_value: Option<Value>,
+    /// The `commit_ts` of transactions can be non-globally-unique. But since we store Rollback
+    /// records in the same CF where Commit records is, and Rollback records are saved with
+    /// `user_key{start_ts}` as the internal key, the collision between Commit and Rollback
+    /// records can't be avoided. In this case, we keep the Commit record, and set the
+    /// `has_overlapped_rollback` flag to indicate that there's also a Rollback record.
+    /// Also note that `has_overlapped_rollback` field is only necessary when the Rollback record
+    /// should be protected.
+    pub has_overlapped_rollback: bool,
 }
 
 impl std::fmt::Debug for Write {
@@ -70,9 +80,10 @@ impl std::fmt::Debug for Write {
                 &self
                     .short_value
                     .as_ref()
-                    .map(|v| hex::encode_upper(v))
+                    .map(hex::encode_upper)
                     .unwrap_or_else(|| "None".to_owned()),
             )
+            .field("has_overlapped_rollback", &self.has_overlapped_rollback)
             .finish()
     }
 }
@@ -85,6 +96,7 @@ impl Write {
             write_type,
             start_ts,
             short_value,
+            has_overlapped_rollback: false,
         }
     }
 
@@ -100,7 +112,14 @@ impl Write {
             write_type: WriteType::Rollback,
             start_ts,
             short_value,
+            has_overlapped_rollback: false,
         }
+    }
+
+    #[inline]
+    pub fn set_overlapped_rollback(mut self, has_overlapped_rollback: bool) -> Self {
+        self.has_overlapped_rollback = has_overlapped_rollback;
+        self
     }
 
     #[inline]
@@ -117,6 +136,7 @@ impl Write {
             write_type: self.write_type,
             start_ts: self.start_ts,
             short_value: self.short_value.as_deref(),
+            has_overlapped_rollback: self.has_overlapped_rollback,
         }
     }
 }
@@ -126,6 +146,14 @@ pub struct WriteRef<'a> {
     pub write_type: WriteType,
     pub start_ts: TimeStamp,
     pub short_value: Option<&'a [u8]>,
+    /// The `commit_ts` of transactions can be non-globally-unique. But since we store Rollback
+    /// records in the same CF where Commit records is, and Rollback records are saved with
+    /// `user_key{start_ts}` as the internal key, the collision between Commit and Rollback
+    /// records can't be avoided. In this case, we keep the Commit record, and set the
+    /// `has_overlapped_rollback` flag to indicate that there's also a Rollback record.
+    /// Also note that `has_overlapped_rollback` field is only necessary when the Rollback record
+    /// should be protected.
+    pub has_overlapped_rollback: bool,
 }
 
 impl WriteRef<'_> {
@@ -139,45 +167,55 @@ impl WriteRef<'_> {
             .read_var_u64()
             .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?
             .into();
-        if b.is_empty() {
-            return Ok(WriteRef {
-                write_type,
-                start_ts,
-                short_value: None,
-            });
-        }
 
-        let flag = b
-            .read_u8()
-            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
-        assert_eq!(flag, SHORT_VALUE_PREFIX, "invalid flag [{}] in write", flag);
+        let mut short_value = None;
+        let mut has_overlapped_rollback = false;
 
-        let len = b
-            .read_u8()
-            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
-        if len as usize != b.len() {
-            panic!(
-                "short value len [{}] not equal to content len [{}]",
-                len,
-                b.len()
-            );
+        while !b.is_empty() {
+            match b
+                .read_u8()
+                .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?
+            {
+                SHORT_VALUE_PREFIX => {
+                    let len = b
+                        .read_u8()
+                        .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
+                    if b.len() < len as usize {
+                        panic!(
+                            "content len [{}] shorter than short value len [{}]",
+                            b.len(),
+                            len,
+                        );
+                    }
+                    short_value = Some(&b[..len as usize]);
+                    b = &b[len as usize..];
+                }
+                FLAG_OVERLAPPED_ROLLBACK => {
+                    has_overlapped_rollback = true;
+                }
+                flag => panic!("invalid flag [{}] in write", flag),
+            }
         }
 
         Ok(WriteRef {
             write_type,
             start_ts,
-            short_value: Some(b),
+            short_value,
+            has_overlapped_rollback,
         })
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2);
+        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2 + 1);
         b.push(self.write_type.to_u8());
         b.encode_var_u64(self.start_ts.into_inner()).unwrap();
         if let Some(v) = self.short_value {
             b.push(SHORT_VALUE_PREFIX);
             b.push(v.len() as u8);
             b.extend_from_slice(v);
+        }
+        if self.has_overlapped_rollback {
+            b.push(FLAG_OVERLAPPED_ROLLBACK);
         }
         b
     }
@@ -199,6 +237,7 @@ impl WriteRef<'_> {
             self.start_ts,
             self.short_value.map(|v| v.to_owned()),
         )
+        .set_overlapped_rollback(self.has_overlapped_rollback)
     }
 }
 
@@ -246,6 +285,9 @@ mod tests {
             Write::new(WriteType::Delete, (1 << 20).into(), None),
             Write::new_rollback((1 << 40).into(), true),
             Write::new(WriteType::Rollback, (1 << 41).into(), None),
+            Write::new(WriteType::Put, 123.into(), None).set_overlapped_rollback(true),
+            Write::new(WriteType::Put, 456.into(), Some(b"short_value".to_vec()))
+                .set_overlapped_rollback(true),
         ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.as_ref().to_bytes();

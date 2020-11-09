@@ -17,11 +17,13 @@ pub trait KvEngine:
     + WriteBatchExt
     + DBOptionsExt
     + CFNamesExt
-    + CFHandleExt
+    + CFOptionsExt
     + ImportExt
     + SstExt
     + TablePropertiesExt
     + CompactExt
+    + RangePropertiesExt
+    + MvccPropertiesExt
     + MiscExt
     + Send
     + Sync
@@ -41,9 +43,7 @@ pub trait KvEngine:
     /// Flush metrics to prometheus
     ///
     /// `instance` is the label of the metric to flush.
-    ///
-    /// TODO: remove `shared_block_cache`.
-    fn flush_metrics(&self, _instance: &str, _shared_block_cache: bool) {}
+    fn flush_metrics(&self, _instance: &str) {}
 
     /// Reset internal statistics
     fn reset_statistics(&self) {}
@@ -53,9 +53,4 @@ pub trait KvEngine:
     /// This only exists as a temporary hack during refactoring.
     /// It cannot be used forever.
     fn bad_downcast<T: 'static>(&self) -> &T;
-}
-
-pub trait WriteBatchVecExt<E: KvEngine> {
-    fn write_batch_vec(e: &E, vec_size: usize, cap: usize) -> Self;
-    fn write_to_engine(&self, e: &E, opts: &WriteOptions) -> Result<()>;
 }

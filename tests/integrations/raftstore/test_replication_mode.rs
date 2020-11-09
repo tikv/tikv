@@ -114,7 +114,7 @@ fn test_check_conf_change() {
         res.get_header()
             .get_error()
             .get_message()
-            .contains("unsafe to perform conf change peer"),
+            .contains("unsafe to perform conf change"),
         "{:?}",
         res
     );

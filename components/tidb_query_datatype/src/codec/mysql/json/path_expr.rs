@@ -39,7 +39,7 @@ const PATH_EXPR_LEG_RE_STR: &str =
 pub enum PathLeg {
     /// `Key` indicates the path leg  with '.key'.
     Key(String),
-    /// `Index` indicates the path leg with form '[number]'.
+    /// `Index` indicates the path leg with form 'number'.
     Index(i32),
     /// `DoubleAsterisk` indicates the path leg with form '**'.
     DoubleAsterisk,

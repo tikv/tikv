@@ -6,32 +6,43 @@ pub mod commands;
 pub mod sched_pool;
 pub mod scheduler;
 
+mod actions;
+
+pub use actions::{
+    acquire_pessimistic_lock::acquire_pessimistic_lock, cleanup::cleanup, commit::commit,
+    pessimistic_prewrite::pessimistic_prewrite, prewrite::prewrite,
+};
+
 mod latch;
-mod process;
 mod store;
 
 use crate::storage::{
-    types::{MvccInfo, PessimisticLockRes, TxnStatus},
+    types::{MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, TxnStatus},
     Error as StorageError, Result as StorageResult,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb::LockInfo;
 use std::error;
 use std::fmt;
 use std::io::Error as IoError;
 use txn_types::{Key, TimeStamp};
 
-pub use self::commands::Command;
-pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
-pub use self::scheduler::{Msg, Scheduler};
-pub use self::store::{EntryBatch, TxnEntry, TxnEntryScanner, TxnEntryStore};
-pub use self::store::{FixtureStore, FixtureStoreScanner};
-pub use self::store::{Scanner, SnapshotStore, Store};
+pub use self::commands::{Command, RESOLVE_LOCK_BATCH_SIZE};
+pub use self::scheduler::Scheduler;
+pub use self::store::{
+    EntryBatch, FixtureStore, FixtureStoreScanner, Scanner, SnapshotStore, Store, TxnEntry,
+    TxnEntryScanner, TxnEntryStore,
+};
 
 /// Process result of a command.
+#[derive(Debug)]
 pub enum ProcessResult {
     Res,
     MultiRes {
         results: Vec<StorageResult<()>>,
+    },
+    PrewriteResult {
+        result: PrewriteResult,
     },
     MvccKey {
         mvcc: MvccInfo,
@@ -53,6 +64,9 @@ pub enum ProcessResult {
     },
     PessimisticLockRes {
         res: StorageResult<PessimisticLockRes>,
+    },
+    SecondaryLocksStatus {
+        status: SecondaryLocksStatus,
     },
 }
 
@@ -115,6 +129,11 @@ quick_error! {
                         lower_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
                         upper_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()))
         }
+        MaxTimestampNotSynced { region_id: u64, start_ts: TimeStamp } {
+            display("Prewrite for async commit fails due to potentially stale max timestamp, start_ts: {}, region_id: {}",
+                        start_ts,
+                        region_id)
+        }
     }
 }
 
@@ -141,6 +160,13 @@ impl ErrorInner {
                 end: end.clone(),
                 lower_bound: lower_bound.clone(),
                 upper_bound: upper_bound.clone(),
+            }),
+            ErrorInner::MaxTimestampNotSynced {
+                region_id,
+                start_ts,
+            } => Some(ErrorInner::MaxTimestampNotSynced {
+                region_id,
+                start_ts,
             }),
             ErrorInner::Other(_) | ErrorInner::ProtoBuf(_) | ErrorInner::Io(_) => None,
         }
@@ -189,3 +215,39 @@ impl<T: Into<ErrorInner>> From<T> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Engine(e) => e.error_code(),
+            ErrorInner::Codec(e) => e.error_code(),
+            ErrorInner::ProtoBuf(_) => error_code::storage::PROTOBUF,
+            ErrorInner::Mvcc(e) => e.error_code(),
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
+            ErrorInner::Io(_) => error_code::storage::IO,
+            ErrorInner::InvalidTxnTso { .. } => error_code::storage::INVALID_TXN_TSO,
+            ErrorInner::InvalidReqRange { .. } => error_code::storage::INVALID_REQ_RANGE,
+            ErrorInner::MaxTimestampNotSynced { .. } => {
+                error_code::storage::MAX_TIMESTAMP_NOT_SYNCED
+            }
+        }
+    }
+}
+
+pub mod tests {
+    use super::*;
+    pub use actions::acquire_pessimistic_lock::tests::{
+        must_err as must_acquire_pessimistic_lock_err,
+        must_err_return_value as must_acquire_pessimistic_lock_return_value_err,
+        must_pessimistic_locked, must_succeed as must_acquire_pessimistic_lock,
+        must_succeed_for_large_txn as must_acquire_pessimistic_lock_for_large_txn,
+        must_succeed_impl as must_acquire_pessimistic_lock_impl,
+        must_succeed_return_value as must_acquire_pessimistic_lock_return_value,
+        must_succeed_with_ttl as must_acquire_pessimistic_lock_with_ttl,
+    };
+    pub use actions::cleanup::tests::{must_err as must_cleanup_err, must_succeed as must_cleanup};
+    pub use actions::commit::tests::{must_err as must_commit_err, must_succeed as must_commit};
+    pub use actions::pessimistic_prewrite::tests::try_pessimistic_prewrite_check_not_exists;
+    pub use actions::prewrite::tests::{try_prewrite_check_not_exists, try_prewrite_insert};
+    pub use actions::tests::*;
+}

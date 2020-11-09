@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
-use tidb_query_datatype::codec::table;
 use tikv_util::codec::bytes::{self, encode_bytes};
 
 use crate::store::util;
@@ -23,32 +22,20 @@ impl SplitObserver {
             return Err("key is empty".to_owned());
         }
 
-        let mut key = match bytes::decode_bytes(&mut key.as_slice(), false) {
+        let key = match bytes::decode_bytes(&mut key.as_slice(), false) {
             Ok(x) => x,
             // It's a raw key, skip it.
             Err(_) => return Ok(key),
         };
-
-        // format of a key is TABLE_PREFIX + table_id + RECORD_PREFIX_SEP + handle + column_id
-        // + version or TABLE_PREFIX + table_id + INDEX_PREFIX_SEP + index_id + values + version
-        // or meta_key + version
-        // The length of TABLE_PREFIX + table_id is TABLE_PREFIX_KEY_LEN.
-        if key.starts_with(table::TABLE_PREFIX)
-            && key.len() > table::TABLE_PREFIX_KEY_LEN
-            && key[table::TABLE_PREFIX_KEY_LEN..].starts_with(table::RECORD_PREFIX_SEP)
-        {
-            // row key, truncate to handle
-            key.truncate(table::PREFIX_LEN + table::ID_LEN);
-        }
 
         let key = encode_bytes(&key);
         match util::check_key_in_region_exclusive(&key, region) {
             Ok(()) => Ok(key),
             Err(_) => Err(format!(
                 "key {} should be in ({}, {})",
-                hex::encode_upper(&key),
-                hex::encode_upper(region.get_start_key()),
-                hex::encode_upper(region.get_end_key()),
+                log_wrappers::Value::key(&key),
+                log_wrappers::Value::key(&region.get_start_key()),
+                log_wrappers::Value::key(&region.get_end_key()),
             )),
         }
     }
@@ -73,8 +60,8 @@ impl SplitObserver {
                             warn!(
                                 "key is not larger than previous, skip.";
                                 "region_id" => region_id,
-                                "key" => log_wrappers::Key(&key),
-                                "previous" => log_wrappers::Key(last_valid_key.as_ref().unwrap()),
+                                "key" => log_wrappers::Value::key(&key),
+                                "previous" => log_wrappers::Value::key(last_valid_key.as_ref().unwrap()),
                                 "index" => k,
                             );
                             continue;
