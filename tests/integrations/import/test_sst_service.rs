@@ -4,11 +4,13 @@ use futures::executor::block_on;
 use tempfile::Builder;
 
 use kvproto::import_sstpb::*;
-
-use pd_client::PdClient;
-use test_sst_importer::*;
+use kvproto::kvrpcpb::*;
+use kvproto::tikvpb::*;
 
 use super::util::*;
+use pd_client::PdClient;
+
+use test_sst_importer::*;
 
 macro_rules! assert_to_string_contains {
     ($e:expr, $substr:expr) => {{
@@ -53,10 +55,7 @@ fn test_upload_sst() {
     );
 }
 
-#[test]
-fn test_write_sst() {
-    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
-
+fn run_test_write_sst(ctx: Context, tikv: TikvClient, import: ImportSstClient) {
     let mut meta = new_sst_meta(0, 0);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
@@ -78,6 +77,19 @@ fn test_write_sst() {
         assert!(!resp.has_error());
     }
     check_ingested_txn_kvs(&tikv, &ctx, sst_range, 2);
+}
+
+#[test]
+fn test_write_sst() {
+    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+
+    run_test_write_sst(ctx, tikv, import);
+}
+
+#[test]
+fn test_write_and_ingest_with_tde() {
+    let (_tmp_dir, _cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client_tde();
+    run_test_write_sst(ctx, tikv, import);
 }
 
 #[test]
