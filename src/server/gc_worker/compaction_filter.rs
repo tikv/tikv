@@ -26,6 +26,7 @@ use txn_types::{Key, WriteRef, WriteType};
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 const NEAR_SEEK_LIMIT: usize = 16;
+const SINGLE_SST_RATIO_THRESHOLD_ADJUST: f64 = 0.2;
 
 // The default version that can enable compaction filter for GC. This is necessary because after
 // compaction filter is enabled, it's impossible to fallback to ealier version which modifications
@@ -108,7 +109,8 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             return std::ptr::null_mut();
         }
 
-        let mut mvcc_props = MvccProperties::new();
+        let ratio_threshold = gc_context.cfg_tracker.value().ratio_threshold;
+        let (mut needs_gc, mut mvcc_props) = (false, MvccProperties::new());
         for i in 0..context.file_numbers().len() {
             let table_props = context.table_properties(i);
             let user_props = unsafe {
@@ -117,11 +119,14 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             };
             if let Ok(props) = RocksMvccProperties::decode(user_props) {
                 mvcc_props.add(&props);
+                let sst_ratio = ratio_threshold + SINGLE_SST_RATIO_THRESHOLD_ADJUST;
+                if check_need_gc(safe_point.into(), sst_ratio, &props) {
+                    needs_gc = true;
+                    break;
+                }
             }
         }
-
-        let ratio_threshold = gc_context.cfg_tracker.value().ratio_threshold;
-        if !check_need_gc(safe_point.into(), ratio_threshold, mvcc_props) {
+        if !needs_gc && !check_need_gc(safe_point.into(), ratio_threshold, &mvcc_props) {
             debug!("skip gc in compaction filter because it's not necessary");
             return std::ptr::null_mut();
         }
