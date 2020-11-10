@@ -235,14 +235,15 @@ impl Simulator for ServerCluster {
         let engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
         let mut gc_worker = GcWorker::new(cfg.gc.clone(), Default::default());
-        let auto_gc_cfg = AutoGcConfig::new(
-            self.pd_client.clone(),
-            region_info_accessor.clone(),
-            node_id,
-        );
-
+        let auto_gc_cfg = AutoGcConfig::new(node_id);
         gc_worker
-            .start_auto_gc(auto_gc_cfg, engine.clone(), sim_router.clone())
+            .start_auto_gc(
+                auto_gc_cfg,
+                self.pd_client.clone(),
+                region_info_accessor.clone(),
+                engine.clone(),
+                sim_router.clone(),
+            )
             .unwrap();
         gc_worker
             .start_observe_lock_apply(&mut coprocessor_host)

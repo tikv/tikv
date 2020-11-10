@@ -420,20 +420,19 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_gc_worker(&mut self) -> GcWorker {
-        let mut gc_controller =
-            GcWorker::new(self.config.gc.clone(), self.pd_client.cluster_version());
-        gc_controller
+        let mut gc_worker = GcWorker::new(self.config.gc.clone(), self.pd_client.cluster_version());
+        gc_worker
             .start_observe_lock_apply(self.coprocessor_host.as_mut().unwrap())
             .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
 
-        gc_controller
+        gc_worker
     }
 
-    fn init_servers(&mut self, gc_controller: &GcWorker) -> Arc<ServerConfig> {
+    fn init_servers(&mut self, gc_worker: &GcWorker) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Gc,
-            Box::new(gc_controller.get_config_manager()),
+            Box::new(gc_worker.get_config_manager()),
         );
 
         // Create cdc.
@@ -550,7 +549,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
-            gc_controller.clone(),
+            gc_worker.clone(),
             unified_read_pool,
             debug_thread_pool,
         )
@@ -619,14 +618,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         initial_metric(&self.config.metric);
 
         // Start auto gc
-        let auto_gc_config = AutoGcConfig::new(
+        let auto_gc_config = AutoGcConfig::new(node.id());
+
+        let safe_point = match gc_worker.start_auto_gc(
+            auto_gc_config,
             self.pd_client.clone(),
             self.region_info_accessor.clone(),
-            node.id(),
-        );
-
-        let safe_point = match gc_controller.start_auto_gc(
-            auto_gc_config,
             engines.engine.clone(),
             self.router.clone(),
         ) {

@@ -4,9 +4,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use engine_rocks::RocksEngine;
-use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use pd_client::{ClusterVersion, PdClient};
+use pd_client::ClusterVersion;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use raftstore::router::RaftStoreRouter;
 use tikv_util::config::VersionTrack;
@@ -18,24 +17,10 @@ use crate::storage::kv::Engine;
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::config::{GcConfig, GcWorkerConfigManager};
-use super::gc_manager::{AutoGcConfig, GcManager};
-use super::gc_runner::{GcRunner, GcTask};
+use super::gc_runner::{AutoGcConfig, GcExecutor, GcRunner, GcSafePointProvider, GcTask};
 use super::{Callback, CompactionFilterInitializer, Error, ErrorInner, Result};
 
 pub const GC_MAX_EXECUTING_TASKS: usize = 10;
-
-/// Provides safe point.
-pub trait GcSafePointProvider: Send + 'static {
-    fn get_safe_point(&self) -> Result<TimeStamp>;
-}
-
-impl<T: PdClient + 'static> GcSafePointProvider for Arc<T> {
-    fn get_safe_point(&self) -> Result<TimeStamp> {
-        block_on(self.get_gc_safe_point())
-            .map(Into::into)
-            .map_err(|e| box_err!("failed to get safe point from PD: {:?}", e))
-    }
-}
 
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
 fn handle_gc_task_schedule_error(e: ScheduleError<GcTask>) -> Result<()> {
@@ -111,7 +96,9 @@ impl GcWorker {
 
     pub fn start_auto_gc<E, S, R, RR>(
         &self,
-        cfg: AutoGcConfig<S, R>,
+        cfg: AutoGcConfig,
+        safe_point_provider: S,
+        region_info_provider: R,
         engine: E,
         raft_store_router: RR,
     ) -> Result<Arc<AtomicU64>>
@@ -128,19 +115,21 @@ impl GcWorker {
         let cluster_version = self.cluster_version.clone();
         kvdb.init_compaction_filter(safe_point.clone(), cfg_mgr, cluster_version);
 
-        let runner = GcRunner::new(
+        let executor = GcExecutor::new(
             engine,
             raft_store_router,
             self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.config_manager.value().clone(),
         );
-        let mut mgr = GcManager::new(
+        let mut mgr = GcRunner::new(
             cfg,
+            safe_point_provider,
+            region_info_provider,
             safe_point.clone(),
             self.config_manager.clone(),
             self.cluster_version.clone(),
             self.stop.clone(),
-            Box::new(runner),
+            Box::new(executor),
         );
         mgr.start();
         self.worker.lock().unwrap().start_with_timer(mgr);
@@ -301,7 +290,8 @@ mod tests {
     use tikv_util::future::paired_future_callback;
     use txn_types::Mutation;
 
-    use crate::server::gc_worker::gc_manager::tests::make_mock_auto_gc_cfg;
+    use crate::server::gc_worker::gc_runner::make_mock_auto_gc_cfg;
+    use crate::server::gc_worker::gc_runner::{MockRegionInfoProvider, MockSafePointProvider};
     use crate::storage::kv::{
         self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
         SnapContext, TestEngineBuilder, WriteData,
@@ -454,9 +444,15 @@ mod tests {
             GcConfig::default(),
             ClusterVersion::new(semver::Version::new(5, 0, 0)),
         );
-        let cfg = make_mock_auto_gc_cfg();
+        let (cfg, provider) = make_mock_auto_gc_cfg();
         gc_worker
-            .start_auto_gc(cfg, engine, RaftStoreBlackHole)
+            .start_auto_gc(
+                cfg,
+                provider,
+                MockRegionInfoProvider::default(),
+                engine,
+                RaftStoreBlackHole,
+            )
             .unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -618,9 +614,15 @@ mod tests {
         .unwrap();
         let gc_worker = GcWorker::new(GcConfig::default(), ClusterVersion::default());
 
-        let cfg = make_mock_auto_gc_cfg();
+        let (cfg, provider) = make_mock_auto_gc_cfg();
         gc_worker
-            .start_auto_gc(cfg, prefixed_engine, RaftStoreBlackHole)
+            .start_auto_gc(
+                cfg,
+                provider,
+                MockRegionInfoProvider::default(),
+                prefixed_engine,
+                RaftStoreBlackHole,
+            )
             .unwrap();
 
         let physical_scan_lock = |max_ts: u64, start_key, limit| {

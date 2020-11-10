@@ -24,7 +24,7 @@ use tempfile::Builder;
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
-use tikv::server::gc_worker::sync_gc;
+use tikv::server::gc_worker::GcTask;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
 use tikv_util::worker::{dummy_scheduler, FutureWorker};
 use tikv_util::HandyRwLock;
@@ -350,7 +350,22 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     ts += 1;
     let gc_safe_ponit = TimeStamp::from(ts);
     let gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
-    sync_gc(&gc_scheduler, 0, vec![], vec![], gc_safe_ponit).unwrap();
+    let (tx, rx) = mpsc::channel();
+    let cb = Box::new(move |res| {
+        // we don't care error actually.
+        let _ = tx.send(res);
+    });
+
+    gc_scheduler
+        .schedule(GcTask::Gc {
+            region_id: 0,
+            start_key: vec![],
+            end_key: vec![],
+            safe_point: gc_safe_ponit,
+            callback: Some(cb),
+        })
+        .unwrap();
+    let _ = rx.recv();
 
     // the `k` at the old ts should be none.
     let get_version2 = commit_version + 1;

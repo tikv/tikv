@@ -80,10 +80,18 @@ pub struct SyncTestStorage<E: Engine> {
 impl<E: Engine> SyncTestStorage<E> {
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider>(
         &mut self,
-        cfg: AutoGcConfig<S, R>,
+        cfg: AutoGcConfig,
+        safe_point_provider: S,
+        region_info_provider: R,
     ) {
         self.gc_worker
-            .start_auto_gc(cfg, self.get_engine(), RaftStoreBlackHole)
+            .start_auto_gc(
+                cfg,
+                safe_point_provider,
+                region_info_provider,
+                self.get_engine(),
+                RaftStoreBlackHole,
+            )
             .unwrap();
     }
 
