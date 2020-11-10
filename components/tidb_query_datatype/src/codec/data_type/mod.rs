@@ -447,7 +447,7 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
 }
 
 impl<'a> EvaluableRef<'a> for EnumRef<'a> {
-    const EVAL_TYPE: EvalType = EvalType::Enum;
+    const EVAL_TYPE: EvalType = EvalType::Int;
     type EvaluableType = Enum;
     type ChunkedType = &'a ChunkedVecEnum;
 
@@ -473,7 +473,7 @@ impl<'a> EvaluableRef<'a> for EnumRef<'a> {
 }
 
 impl<'a> EvaluableRef<'a> for SetRef<'a> {
-    const EVAL_TYPE: EvalType = EvalType::Set;
+    const EVAL_TYPE: EvalType = EvalType::Int;
     type EvaluableType = Set;
     type ChunkedType = &'a ChunkedVecSet;
 
