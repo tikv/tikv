@@ -32,7 +32,6 @@ use grpcio::{
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
@@ -764,109 +763,21 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     fn read_index(
         &mut self,
         ctx: RpcContext<'_>,
-        mut req: ReadIndexRequest,
+        req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
-        let begin_instant = Instant::now_coarse();
-
         let region_id = req.get_context().get_region_id();
-        let mut cmd = RaftCmdRequest::default();
-        let mut header = RaftRequestHeader::default();
-        let mut inner_req = RaftRequest::default();
-        inner_req.set_cmd_type(CmdType::ReadIndex);
-        header.set_region_id(req.get_context().get_region_id());
-        header.set_peer(req.get_context().get_peer().clone());
-        header.set_region_epoch(req.get_context().get_region_epoch().clone());
-        if req.get_context().get_term() != 0 {
-            header.set_term(req.get_context().get_term());
-        }
-        header.set_sync_log(req.get_context().get_sync_log());
-        header.set_read_quorum(true);
-        cmd.set_header(header);
-        cmd.set_requests(vec![inner_req].into());
-
-        let (cb, f) = paired_future_callback();
-
-        // We must deal with all requests which acquire read-quorum in raftstore-thread,
-        // so just send it as an command.
-        if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
-            // Retrun region error instead a gRPC error.
-            let mut resp = ReadIndexResponse::default();
-            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
-            ctx.spawn(
-                async move {
-                    sink.success(resp).await?;
-                    ServerResult::Ok(())
-                }
-                .map_err(|_| ())
-                .map(|_| ()),
-            );
-            return;
-        }
-
-        let check_memory_locks_fut = self.storage.check_memory_locks_in_ranges(
-            req.take_context(),
-            req.get_start_ts().into(),
-            req.take_ranges().into(),
-        );
-
-        let task = async move {
-            let mut res = f.await?;
-            let mut resp = ReadIndexResponse::default();
-            if res.response.get_header().has_error() {
-                resp.set_region_error(res.response.mut_header().take_error());
-            } else {
-                let raft_resps = res.response.get_responses();
-                if raft_resps.len() != 1 {
-                    error!(
-                        "invalid read index response";
-                        "region_id" => region_id,
-                        "response" => ?raft_resps
-                    );
-                    resp.mut_region_error().set_message(format!(
-                        "Internal Error: invalid response: {:?}",
-                        raft_resps
-                    ));
-                } else {
-                    // Update max_read_ts and check memory locks after read index command finishes.
-                    // It reduces the chance of encountering locks if we check it as late as possibile.
-                    match check_memory_locks_fut.await {
-                        Ok(Some(lock)) => {
-                            resp.set_locked(lock);
-                        }
-                        Ok(None) => {
-                            let read_index = raft_resps[0].get_read_index().get_read_index();
-                            resp.set_read_index(read_index);
-                        }
-                        res => {
-                            if let Some(err) = extract_region_error(&res) {
-                                resp.set_region_error(err);
-                            } else {
-                                warn!("unknown error: {:?}", res);
-                            }
-                        }
-                    }
-                }
+        let mut resp = ReadIndexResponse::default();
+        resp.set_region_error(RaftStoreError::RegionNotFound(region_id).into());
+        ctx.spawn(
+            async move {
+                sink.success(resp).await?;
+                ServerResult::Ok(())
             }
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .read_index
-                .observe(begin_instant.elapsed_secs());
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "read_index",
-                "err" => ?e
-            );
-            GRPC_MSG_FAIL_COUNTER.read_index.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
+            .map_err(|_| ())
+            .map(|_| ()),
+        );
+        return;
     }
 
     fn batch_commands(

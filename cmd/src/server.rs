@@ -76,9 +76,10 @@ use tokio::runtime::Builder;
 use crate::setup::*;
 
 use raftstore::tiflash_ffi::{
-    get_tiflash_server_helper, TiFlashRaftProxy, TiFlashRaftProxyHelper, TiFlashStatus,
+    get_tiflash_server_helper, RaftProxyStatus, ReadIndexClient, TiFlashRaftProxy,
+    TiFlashRaftProxyHelper, TiFlashStatus,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8};
 use std::time::Duration;
 use tikv_util::worker::LazyWorker;
 
@@ -109,9 +110,12 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
             tikv.init_fs();
             tikv.init_yatp();
             tikv.init_encryption();
-            let proxy = TiFlashRaftProxy {
-                stopped: AtomicBool::default(),
+            let mut proxy = TiFlashRaftProxy {
+                status: AtomicU8::new(RaftProxyStatus::Idle as u8),
                 key_manager: tikv.encryption_key_manager.clone(),
+                read_index_client: Box::new(ReadIndexClient {
+                    router: tikv.router.clone(),
+                }),
             };
 
             let proxy_helper = TiFlashRaftProxyHelper::new(&proxy);
@@ -140,6 +144,8 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
             tikv.run_server(server_config);
             tikv.run_status_server();
 
+            proxy.set_status(RaftProxyStatus::Running);
+
             {
                 let _ = tikv.engines.take().unwrap().engines;
                 loop {
@@ -154,7 +160,7 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
 
             tikv.stop();
 
-            proxy.stopped.store(true, Ordering::SeqCst);
+            proxy.set_status(RaftProxyStatus::Stop);
 
             info!("all services in tiflash proxy are stopped");
 
@@ -657,8 +663,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.concurrency_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
-
-        initial_metric(&self.config.metric);
 
         self.servers = Some(Servers {
             lock_mgr,

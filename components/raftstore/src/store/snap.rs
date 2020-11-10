@@ -360,14 +360,7 @@ pub struct PreHandledSnapshot {
     pub empty: bool,
     pub index: u64,
     pub term: u64,
-    pub inner: *const u8,
-}
-
-impl Drop for PreHandledSnapshot {
-    fn drop(&mut self) {
-        tiflash_ffi::get_tiflash_server_helper().gc_pre_handled_snapshot(self.inner);
-        self.inner = std::ptr::null();
-    }
+    pub inner: tiflash_ffi::RawCppPtr,
 }
 
 unsafe impl Send for PreHandledSnapshot {}
@@ -440,24 +433,6 @@ impl Snap {
             snapshot_helper.add_cf_snap(cf_type, snap_kv);
         }
         snapshot_helper
-    }
-
-    pub fn apply_to_tiflash(
-        &self,
-        region: &kvproto::metapb::Region,
-        peer_id: u64,
-        idx: u64,
-        term: u64,
-    ) {
-        let mut snapshot_helper = self.gen_snapshot_helper(region);
-
-        tiflash_ffi::get_tiflash_server_helper().handle_apply_snapshot(
-            &region,
-            peer_id,
-            &mut snapshot_helper,
-            idx,
-            term,
-        );
     }
 
     pub fn pre_handle_snapshot(
