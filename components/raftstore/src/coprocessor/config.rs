@@ -70,7 +70,7 @@ impl Default for Config {
             region_split_keys: SPLIT_KEYS,
             region_max_keys: SPLIT_KEYS / 2 * 3,
             consistency_check_method: ConsistencyCheckMethod::Mvcc,
-            perf_level: PerfLevel::EnableTime,
+            perf_level: PerfLevel::EnableCount,
         }
     }
 }

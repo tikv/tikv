@@ -172,6 +172,7 @@ impl ReqContext {
             None,
             TimeStamp::max(),
             None,
+            PerfLevel::EnableCount,
         )
     }
 
