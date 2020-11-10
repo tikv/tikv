@@ -18761,7 +18761,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"$db\"}",
+              "expr": "sum(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"$db\"}) by (cf)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
