@@ -446,6 +446,58 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     }
 }
 
+impl<'a> EvaluableRef<'a> for EnumRef<'a> {
+    const EVAL_TYPE: EvalType = EvalType::Enum;
+    type EvaluableType = Enum;
+    type ChunkedType = &'a ChunkedVecEnum;
+
+    fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
+        unimplemented!()
+    }
+
+    fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
+        unimplemented!()
+    }
+
+    fn borrow_vector_value(v: &'a VectorValue) -> Self::ChunkedType {
+        unimplemented!()
+    }
+
+    fn to_owned_value(self) -> Self::EvaluableType {
+        unimplemented!()
+    }
+
+    fn from_owned_value(value: &'a Self::EvaluableType) -> Self {
+        unimplemented!()
+    }
+}
+
+impl<'a> EvaluableRef<'a> for SetRef<'a> {
+    const EVAL_TYPE: EvalType = EvalType::Set;
+    type EvaluableType = Set;
+    type ChunkedType = &'a ChunkedVecSet;
+
+    fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
+        unimplemented!()
+    }
+
+    fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
+        unimplemented!()
+    }
+
+    fn borrow_vector_value(v: &'a VectorValue) -> Self::ChunkedType {
+        unimplemented!()
+    }
+
+    fn to_owned_value(self) -> Self::EvaluableType {
+        unimplemented!()
+    }
+
+    fn from_owned_value(value: &'a Self::EvaluableType) -> Self {
+        unimplemented!()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
