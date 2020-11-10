@@ -18,19 +18,13 @@ lazy_static! {
 pub struct CompactionGuardGeneratorFactory {
     accessor: RegionInfoAccessor,
     min_output_file_size: u64,
-    max_output_file_size: u64,
 }
 
 impl CompactionGuardGeneratorFactory {
-    pub fn new(
-        accessor: RegionInfoAccessor,
-        min_output_file_size: u64,
-        max_output_file_size: u64,
-    ) -> Self {
+    pub fn new(accessor: RegionInfoAccessor, min_output_file_size: u64) -> Self {
         CompactionGuardGeneratorFactory {
             accessor,
             min_output_file_size,
-            max_output_file_size,
         }
     }
 }
@@ -60,7 +54,6 @@ impl SstPartitionerFactory for CompactionGuardGeneratorFactory {
                 Some(CompactionGuardGenerator {
                     boundaries,
                     min_output_file_size: self.min_output_file_size,
-                    max_output_file_size: self.max_output_file_size,
                     pos: Cell::new(0),
                 })
             }
@@ -76,7 +69,6 @@ pub struct CompactionGuardGenerator {
     // The boundary keys are exclusive.
     boundaries: Vec<Vec<u8>>,
     min_output_file_size: u64,
-    max_output_file_size: u64,
     pos: Cell<usize>,
 }
 
@@ -98,9 +90,8 @@ impl SstPartitioner for CompactionGuardGenerator {
         }
         self.pos.set(pos);
         if (req.current_output_file_size >= self.min_output_file_size)
-            && ((req.current_output_file_size >= self.max_output_file_size)
-                || ((pos < self.boundaries.len())
-                    && (self.boundaries[pos].as_slice() <= req.current_user_key)))
+            && ((pos < self.boundaries.len())
+                && (self.boundaries[pos].as_slice() <= req.current_user_key))
         {
             SstPartitionerResult::Required
         } else {
@@ -122,8 +113,7 @@ mod tests {
     fn test_compaction_guard_should_partition() {
         let guard = CompactionGuardGenerator {
             boundaries: vec![b"bbb".to_vec(), b"ccc".to_vec()],
-            min_output_file_size: 8 << 20,   // 8MB
-            max_output_file_size: 128 << 20, // 128MB
+            min_output_file_size: 8 << 20, // 8MB
             pos: Cell::new(0),
         };
         // Crossing region boundary.
@@ -156,14 +146,6 @@ mod tests {
             SstPartitionerResult::NotRequired
         );
         assert_eq!(guard.pos.get(), 0);
-        // Output file size too large.
-        req = SstPartitionerRequest {
-            prev_user_key: b"bba",
-            current_user_key: b"bbz",
-            current_output_file_size: 256 << 20,
-        };
-        assert_eq!(guard.should_partition(&req), SstPartitionerResult::Required);
-        assert_eq!(guard.pos.get(), 0);
         // Move position
         req = SstPartitionerRequest {
             prev_user_key: b"cca",
@@ -195,8 +177,7 @@ mod tests {
                 b"aaa14".to_vec(),
                 b"aaa15".to_vec(),
             ],
-            min_output_file_size: 8 << 20,   // 8MB
-            max_output_file_size: 128 << 20, // 128MB
+            min_output_file_size: 8 << 20, // 8MB
             pos: Cell::new(0),
         };
         // Binary search meet exact match.
