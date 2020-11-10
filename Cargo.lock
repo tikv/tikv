@@ -4241,6 +4241,7 @@ name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
  "concurrency_manager",
+ "engine_rocks",
  "futures 0.3.7",
  "kvproto",
  "protobuf",
