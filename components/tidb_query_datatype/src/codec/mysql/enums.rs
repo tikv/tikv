@@ -17,6 +17,12 @@ impl Enum {
     pub fn value(&self) -> usize {
         self.value
     }
+    pub fn as_ref(&self) -> EnumRef<'_> {
+        EnumRef {
+            data: &self.data,
+            value: self.value,
+        }
+    }
 }
 
 impl ToString for Enum {
@@ -72,6 +78,9 @@ impl<'a> EnumRef<'a> {
     pub fn new(data: &'a BufferVec, value: usize) -> Self {
         Self { data, value }
     }
+    pub fn is_empty(&self) -> bool {
+        self.value == 0
+    }
 }
 
 impl<'a> Eq for EnumRef<'a> {}
@@ -115,5 +124,27 @@ mod tests {
 
             assert_eq!(e.to_string(), expect.to_string())
         }
+    }
+
+    #[test]
+    fn test_is_empty() {
+        let mut buf = BufferVec::new();
+        for v in vec!["a", "b", "c"] {
+            buf.push(v)
+        }
+
+        let s = Enum {
+            data: Arc::new(buf),
+            value: 1,
+        };
+
+        assert_eq!(s.as_ref().is_empty(), false);
+
+        let s = Enum {
+            data: s.data.clone(),
+            value: 0,
+        };
+
+        assert_eq!(s.as_ref().is_empty(), true);
     }
 }

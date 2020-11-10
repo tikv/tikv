@@ -29,8 +29,11 @@ impl Set {
     pub fn value(&self) -> usize {
         self.value
     }
-    pub fn is_set(&self, idx: usize) -> bool {
-        self.value & (1 << idx) != 0
+    pub fn as_ref(&self) -> SetRef<'_> {
+        SetRef {
+            data: &self.data,
+            value: self.value,
+        }
     }
 }
 
@@ -39,7 +42,7 @@ impl ToString for Set {
         let mut buf: Vec<u8> = Vec::new();
         if self.value > 0 {
             for idx in 0..self.data.len() {
-                if !self.is_set(idx) {
+                if !self.as_ref().is_set(idx) {
                     continue;
                 }
 
@@ -94,6 +97,12 @@ pub struct SetRef<'a> {
 impl<'a> SetRef<'a> {
     pub fn new(data: &'a BufferVec, value: usize) -> Self {
         Self { data, value }
+    }
+    pub fn is_set(&self, idx: usize) -> bool {
+        self.value & (1 << idx) != 0
+    }
+    pub fn is_empty(&self) -> bool {
+        self.value == 0
     }
 }
 
@@ -157,8 +166,30 @@ mod tests {
             value: 0b101,
         };
 
-        assert_eq!(s.is_set(0), true);
-        assert_eq!(s.is_set(1), false);
-        assert_eq!(s.is_set(2), true);
+        assert_eq!(s.as_ref().is_set(0), true);
+        assert_eq!(s.as_ref().is_set(1), false);
+        assert_eq!(s.as_ref().is_set(2), true);
+    }
+
+    #[test]
+    fn test_is_empty() {
+        let mut buf = BufferVec::new();
+        for v in vec!["a", "b", "c"] {
+            buf.push(v)
+        }
+
+        let s = Set {
+            data: Arc::new(buf),
+            value: 0b101,
+        };
+
+        assert_eq!(s.as_ref().is_empty(), false);
+
+        let s = Set {
+            data: s.data.clone(),
+            value: 0b000,
+        };
+
+        assert_eq!(s.as_ref().is_empty(), true);
     }
 }
