@@ -102,13 +102,13 @@ impl<'a> AsMySQLBool for JsonRef<'a> {
 
 impl<'a> AsMySQLBool for EnumRef<'a> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
-        Ok(self.is_empty())
+        Ok(!self.is_empty())
     }
 }
 
 impl<'a> AsMySQLBool for SetRef<'a> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
-        Ok(self.is_empty())
+        Ok(!self.is_empty())
     }
 }
 
