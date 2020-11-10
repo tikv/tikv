@@ -15,9 +15,15 @@ use engine_traits::SstWriterBuilder;
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
+<<<<<<< HEAD
 use engine::rocks::util::{new_engine, CFOptions};
 use engine::rocks::{
     ColumnFamilyOptions, DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory,
+=======
+use engine_rocks::raw::{
+    ColumnFamilyOptions, DBEntryType, DBOptions, Env, TablePropertiesCollector,
+    TablePropertiesCollectorFactory,
+>>>>>>> bc8937099... importer: add TDE support for upload sst (#9000)
 };
 use std::sync::Arc;
 
@@ -26,10 +32,36 @@ pub use engine_rocks::RocksEngine as TestEngine;
 pub const PROP_TEST_MARKER_CF_NAME: &[u8] = b"tikv.test_marker_cf_name";
 
 pub fn new_test_engine(path: &str, cfs: &[&str]) -> RocksEngine {
+<<<<<<< HEAD
+=======
+    new_test_engine_with_options(path, cfs, |_, _| {})
+}
+
+pub fn new_test_engine_with_env(path: &str, cfs: &[&str], env: Arc<Env>) -> RocksEngine {
+    new_test_engine_with_options_and_env(path, cfs, |_, _| {}, Some(env))
+}
+
+pub fn new_test_engine_with_options_and_env<F>(
+    path: &str,
+    cfs: &[&str],
+    mut apply: F,
+    env: Option<Arc<Env>>,
+) -> RocksEngine
+where
+    F: FnMut(&str, &mut ColumnFamilyOptions),
+{
+>>>>>>> bc8937099... importer: add TDE support for upload sst (#9000)
     let cf_opts = cfs
         .iter()
         .map(|cf| {
             let mut opt = ColumnFamilyOptions::new();
+<<<<<<< HEAD
+=======
+            if let Some(ref env) = env {
+                opt.set_env(env.clone());
+            }
+            apply(*cf, &mut opt);
+>>>>>>> bc8937099... importer: add TDE support for upload sst (#9000)
             opt.add_table_properties_collector_factory(
                 "tikv.test_properties",
                 Box::new(TestPropertiesCollectorFactory::new(*cf)),
@@ -37,8 +69,21 @@ pub fn new_test_engine(path: &str, cfs: &[&str]) -> RocksEngine {
             CFOptions::new(*cf, opt)
         })
         .collect();
-    let db = new_engine(path, None, cfs, Some(cf_opts)).expect("rocks test engine");
+
+    let db_opts = env.map(|e| {
+        let mut opts = DBOptions::default();
+        opts.set_env(e);
+        opts
+    });
+    let db = new_engine(path, db_opts, cfs, Some(cf_opts)).expect("rocks test engine");
     RocksEngine::from_db(Arc::new(db))
+}
+
+pub fn new_test_engine_with_options<F>(path: &str, cfs: &[&str], apply: F) -> RocksEngine
+where
+    F: FnMut(&str, &mut ColumnFamilyOptions),
+{
+    new_test_engine_with_options_and_env(path, cfs, apply, None)
 }
 
 pub fn new_sst_reader(path: &str) -> RocksSstReader {
@@ -67,10 +112,16 @@ where
     }
 }
 
-pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
-    let mut w = RocksSstWriterBuilder::new()
-        .build(path.as_ref().to_str().unwrap())
-        .unwrap();
+pub fn gen_sst_file_by_db<P: AsRef<Path>>(
+    path: P,
+    range: (u8, u8),
+    db: Option<&RocksEngine>,
+) -> (SstMeta, Vec<u8>) {
+    let mut builder = RocksSstWriterBuilder::new();
+    if let Some(db) = db {
+        builder = builder.set_db(db);
+    }
+    let mut w = builder.build(path.as_ref().to_str().unwrap()).unwrap();
     for i in range.0..range.1 {
         let k = keys::data_key(&[i]);
         w.put(&k, &[i]).unwrap();
@@ -78,6 +129,10 @@ pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u
     w.finish().unwrap();
 
     read_sst_file(path, range)
+}
+
+pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
+    gen_sst_file_by_db(path, range, None)
 }
 
 pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
