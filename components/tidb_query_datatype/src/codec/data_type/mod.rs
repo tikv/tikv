@@ -451,15 +451,15 @@ impl<'a> EvaluableRef<'a> for EnumRef<'a> {
     type EvaluableType = Int;
     type ChunkedType = &'a ChunkedVecEnum;
 
-    fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
+    fn borrow_scalar_value(_v: &'a ScalarValue) -> Option<Self> {
         unimplemented!()
     }
 
-    fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
+    fn borrow_scalar_value_ref(_v: ScalarValueRef<'a>) -> Option<Self> {
         unimplemented!()
     }
 
-    fn borrow_vector_value(v: &'a VectorValue) -> Self::ChunkedType {
+    fn borrow_vector_value(_v: &'a VectorValue) -> Self::ChunkedType {
         unimplemented!()
     }
 
@@ -467,7 +467,7 @@ impl<'a> EvaluableRef<'a> for EnumRef<'a> {
         unimplemented!()
     }
 
-    fn from_owned_value(value: &'a Self::EvaluableType) -> Self {
+    fn from_owned_value(_value: &'a Self::EvaluableType) -> Self {
         unimplemented!()
     }
 }
@@ -477,15 +477,15 @@ impl<'a> EvaluableRef<'a> for SetRef<'a> {
     type EvaluableType = Int;
     type ChunkedType = &'a ChunkedVecSet;
 
-    fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
+    fn borrow_scalar_value(_v: &'a ScalarValue) -> Option<Self> {
         unimplemented!()
     }
 
-    fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
+    fn borrow_scalar_value_ref(_v: ScalarValueRef<'a>) -> Option<Self> {
         unimplemented!()
     }
 
-    fn borrow_vector_value(v: &'a VectorValue) -> Self::ChunkedType {
+    fn borrow_vector_value(_v: &'a VectorValue) -> Self::ChunkedType {
         unimplemented!()
     }
 
@@ -493,7 +493,7 @@ impl<'a> EvaluableRef<'a> for SetRef<'a> {
         unimplemented!()
     }
 
-    fn from_owned_value(value: &'a Self::EvaluableType) -> Self {
+    fn from_owned_value(_value: &'a Self::EvaluableType) -> Self {
         unimplemented!()
     }
 }
