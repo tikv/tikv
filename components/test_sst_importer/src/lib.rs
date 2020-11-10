@@ -15,15 +15,10 @@ use engine_traits::SstWriterBuilder;
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
-<<<<<<< HEAD
 use engine::rocks::util::{new_engine, CFOptions};
 use engine::rocks::{
-    ColumnFamilyOptions, DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory,
-=======
-use engine_rocks::raw::{
     ColumnFamilyOptions, DBEntryType, DBOptions, Env, TablePropertiesCollector,
     TablePropertiesCollectorFactory,
->>>>>>> bc8937099... importer: add TDE support for upload sst (#9000)
 };
 use std::sync::Arc;
 
@@ -32,8 +27,6 @@ pub use engine_rocks::RocksEngine as TestEngine;
 pub const PROP_TEST_MARKER_CF_NAME: &[u8] = b"tikv.test_marker_cf_name";
 
 pub fn new_test_engine(path: &str, cfs: &[&str]) -> RocksEngine {
-<<<<<<< HEAD
-=======
     new_test_engine_with_options(path, cfs, |_, _| {})
 }
 
@@ -50,18 +43,14 @@ pub fn new_test_engine_with_options_and_env<F>(
 where
     F: FnMut(&str, &mut ColumnFamilyOptions),
 {
->>>>>>> bc8937099... importer: add TDE support for upload sst (#9000)
     let cf_opts = cfs
         .iter()
         .map(|cf| {
             let mut opt = ColumnFamilyOptions::new();
-<<<<<<< HEAD
-=======
             if let Some(ref env) = env {
                 opt.set_env(env.clone());
             }
             apply(*cf, &mut opt);
->>>>>>> bc8937099... importer: add TDE support for upload sst (#9000)
             opt.add_table_properties_collector_factory(
                 "tikv.test_properties",
                 Box::new(TestPropertiesCollectorFactory::new(*cf)),
