@@ -644,13 +644,17 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
         fail_point!("raft_before_save");
         if !self.poll_ctx.kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
+            write_opts.set_sync(false);
             self.poll_ctx
                 .engines
                 .kv
                 .write_opt(&self.poll_ctx.kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
+                });
+            self.poll_ctx.engines.kv.sync()
+                .unwrap_or_else(|e| {
+                    panic!("{} failed to sync kv db result: {:?}", self.tag, e);
                 });
             let data_size = self.poll_ctx.kv_wb.data_size();
             if data_size > KV_WB_SHRINK_SIZE {
