@@ -448,7 +448,7 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
 
 impl<'a> EvaluableRef<'a> for EnumRef<'a> {
     const EVAL_TYPE: EvalType = EvalType::Int;
-    type EvaluableType = Enum;
+    type EvaluableType = Int;
     type ChunkedType = &'a ChunkedVecEnum;
 
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
@@ -474,7 +474,7 @@ impl<'a> EvaluableRef<'a> for EnumRef<'a> {
 
 impl<'a> EvaluableRef<'a> for SetRef<'a> {
     const EVAL_TYPE: EvalType = EvalType::Int;
-    type EvaluableType = Set;
+    type EvaluableType = Int;
     type ChunkedType = &'a ChunkedVecSet;
 
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
