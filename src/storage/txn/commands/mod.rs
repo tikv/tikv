@@ -47,9 +47,10 @@ pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::iter::{self, FromIterator};
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use kvproto::kvrpcpb::*;
-use txn_types::{Key, TimeStamp, Value, Write};
+use txn_types::{Key, TimeStamp, Value, Write, WriteType, SHORT_VALUE_MAX_LEN};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
@@ -63,6 +64,8 @@ use crate::storage::types::{
 use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use tikv_util::collections::HashMap;
+
+use rand::{self, RngCore};
 
 /// Store Transaction scheduler commands.
 ///
@@ -393,6 +396,8 @@ impl ReleasedLocks {
     }
 }
 
+static ONCE_MVCC: AtomicBool = AtomicBool::new(false);
+
 type LockWritesVals = (
     Option<MvccLock>,
     Vec<(TimeStamp, Write)>,
@@ -404,23 +409,53 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
     key: &Key,
     mut ts: TimeStamp,
 ) -> Result<LockWritesVals> {
+    // let mut writes = vec![];
+    // let mut values = vec![];
+    // let lock = reader.load_lock(key)?;
+    // loop {
+    // let opt = reader.seek_write(key, ts)?;
+    // match opt {
+    // Some((commit_ts, write)) => {
+    // ts = commit_ts.prev();
+    // writes.push((commit_ts, write));
+    // }
+    // None => break,
+    // };
+    // }
+    // for (ts, v) in reader.scan_values_in_default(key)? {
+    // values.push((ts, v));
+    // }
+    // Ok((lock, writes, values))
+    //
+    #[inline]
+    fn gen_rand_str(len: usize) -> Vec<u8> {
+        let mut rand_str = vec![0; len];
+        rand::thread_rng().fill_bytes(&mut rand_str);
+        rand_str
+    }
+
+    let expected_size = 6 * 1024 * 1024 * 1024;
+    let mut current_size = 0;
     let mut writes = vec![];
-    let mut values = vec![];
-    let lock = reader.load_lock(key)?;
-    loop {
-        let opt = reader.seek_write(key, ts)?;
-        match opt {
-            Some((commit_ts, write)) => {
-                ts = commit_ts.prev();
-                writes.push((commit_ts, write));
-            }
-            None => break,
-        };
+    if !ONCE_MVCC.load(Ordering::Relaxed) {
+        while current_size < expected_size {
+            writes.push((
+                TimeStamp::new(current_size),
+                Write::new(
+                    WriteType::Put,
+                    TimeStamp::new(if current_size == 0 {
+                        current_size
+                    } else {
+                        current_size - 1
+                    }),
+                    Some(gen_rand_str(SHORT_VALUE_MAX_LEN)),
+                ),
+            ));
+            current_size += 255;
+        }
+        ONCE_MVCC.store(true, Ordering::Relaxed);
     }
-    for (ts, v) in reader.scan_values_in_default(key)? {
-        values.push((ts, v));
-    }
-    Ok((lock, writes, values))
+    Ok((None, writes, vec![]))
 }
 
 pub trait CommandExt: Display {
