@@ -21,7 +21,7 @@ use tokio::runtime::Builder as TokioBuilder;
 use super::*;
 use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
@@ -294,6 +294,7 @@ impl Simulator for ServerCluster {
             &server_cfg,
             cop_read_pool.handle(),
             concurrency_manager.clone(),
+            PerfLevel::EnableCount,
         );
         let mut server = None;
         // Create Debug service.
