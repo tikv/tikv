@@ -479,7 +479,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> RunnableWithTimer for GcMana
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
+    use super::super::Result;
     use super::*;
     use crate::storage::Callback;
     use kvproto::metapb;
@@ -490,24 +491,24 @@ mod tests {
     use std::collections::BTreeMap;
     use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
-    use tikv_util::worker::{FutureRunnable, FutureWorker};
+    use std::thread::Builder as ThreadBuilder;
 
-    fn take_callback(t: &mut GcTask) -> Callback<()> {
+    fn take_callback(t: &mut GcTask) -> Option<Callback<()>> {
         let callback = match t {
             GcTask::Gc {
                 ref mut callback, ..
-            } => callback,
+            } => return callback.take(),
             GcTask::UnsafeDestroyRange {
                 ref mut callback, ..
             } => callback,
             GcTask::PhysicalScanLock { .. } => unreachable!(),
             GcTask::Validate(_) => unreachable!(),
         };
-        mem::replace(callback, Box::new(|_| {}))
+        Some(mem::replace(callback, Box::new(|_| {})))
     }
 
-    struct MockSafePointProvider {
-        rx: Receiver<TimeStamp>,
+    pub struct MockSafePointProvider {
+        pub rx: Receiver<TimeStamp>,
     }
 
     impl GcSafePointProvider for MockSafePointProvider {
@@ -518,10 +519,10 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
-    struct MockRegionInfoProvider {
+    #[derive(Clone, Default)]
+    pub struct MockRegionInfoProvider {
         // start_key -> (region_id, end_key)
-        regions: BTreeMap<Vec<u8>, RegionInfo>,
+        pub regions: BTreeMap<Vec<u8>, RegionInfo>,
     }
 
     impl RegionInfoProvider for MockRegionInfoProvider {
@@ -536,11 +537,28 @@ mod tests {
         tx: Sender<GcTask>,
     }
 
-    impl FutureRunnable<GcTask> for MockGcRunner {
+    pub fn make_mock_auto_gc_cfg() -> AutoGcConfig<MockSafePointProvider, MockRegionInfoProvider> {
+        let (_, safe_point_receiver) = channel();
+
+        let mut cfg = AutoGcConfig::new(
+            MockSafePointProvider {
+                rx: safe_point_receiver,
+            },
+            MockRegionInfoProvider::default(),
+            1,
+        );
+        cfg.poll_safe_point_interval = Duration::from_millis(100);
+        cfg.always_check_safe_point = true;
+        cfg
+    }
+
+    impl GcRunnable for MockGcRunner {
         fn run(&mut self, mut t: GcTask) {
             let cb = take_callback(&mut t);
             self.tx.send(t).unwrap();
-            cb(Ok(()));
+            if let Some(cb) = cb {
+                cb(Ok(()));
+            }
         }
     }
 
@@ -548,16 +566,13 @@ mod tests {
     /// The safe_point polling interval is set to 100 ms.
     struct GcManagerTestUtil {
         gc_manager: Option<GcManager<MockSafePointProvider, MockRegionInfoProvider>>,
-        worker: FutureWorker<GcTask>,
         safe_point_sender: Sender<TimeStamp>,
         gc_task_receiver: Receiver<GcTask>,
     }
 
     impl GcManagerTestUtil {
         pub fn new(regions: BTreeMap<Vec<u8>, RegionInfo>) -> Self {
-            let mut worker = FutureWorker::new("test-gc-worker");
             let (gc_task_sender, gc_task_receiver) = channel();
-            worker.start(MockGcRunner { tx: gc_task_sender }).unwrap();
 
             let (safe_point_sender, safe_point_receiver) = channel();
 
@@ -571,15 +586,17 @@ mod tests {
             cfg.poll_safe_point_interval = Duration::from_millis(100);
             cfg.always_check_safe_point = true;
 
+            let stop = Arc::new(AtomicBool::new(false));
             let gc_manager = GcManager::new(
                 cfg,
                 Arc::new(AtomicU64::new(0)),
                 GcWorkerConfigManager::default(),
                 Default::default(),
+                stop.clone(),
+                Box::new(MockGcRunner { tx: gc_task_sender }),
             );
             Self {
                 gc_manager: Some(gc_manager),
-                worker,
                 safe_point_sender,
                 gc_task_receiver,
             }
@@ -594,9 +611,7 @@ mod tests {
             self.safe_point_sender.send(safe_point.into()).unwrap();
         }
 
-        pub fn stop(&mut self) {
-            self.worker.stop().unwrap().join().unwrap();
-        }
+        pub fn stop(&mut self) {}
     }
 
     /// Run a round of auto GC and check if it correctly GC regions as expected.
@@ -631,9 +646,8 @@ mod tests {
         for safe_point in &safe_points {
             test_util.add_next_safe_point(*safe_point);
         }
-        test_util.gc_manager.as_mut().unwrap().initialize();
 
-        test_util.gc_manager.as_mut().unwrap().gc_a_round().unwrap();
+        test_util.gc_manager.as_mut().unwrap().gc_a_round();
         test_util.stop();
 
         let gc_tasks: Vec<_> = test_util
@@ -671,7 +685,10 @@ mod tests {
         let (tx, rx) = channel();
         ThreadBuilder::new()
             .spawn(move || {
-                let safe_point = gc_manager.wait_for_next_safe_point().unwrap();
+                while !gc_manager.try_update_safe_point() {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                let safe_point = gc_manager.curr_safe_point();
                 tx.send(safe_point).unwrap();
             })
             .unwrap();
@@ -690,7 +707,7 @@ mod tests {
         assert_eq!(gc_manager.curr_safe_point(), TimeStamp::zero());
         test_util.add_next_safe_point(0);
         test_util.add_next_safe_point(5);
-        gc_manager.initialize();
+        gc_manager.start();
         assert_eq!(gc_manager.curr_safe_point(), TimeStamp::zero());
         assert!(gc_manager.try_update_safe_point());
         assert_eq!(gc_manager.curr_safe_point(), 5.into());

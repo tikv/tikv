@@ -59,13 +59,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
-        let mut gc_worker = GcWorker::new(
-            self.engine,
-            RaftStoreBlackHole,
-            self.gc_config.unwrap_or_default(),
-            Default::default(),
-        );
-        gc_worker.start()?;
+        let gc_worker = GcWorker::new(self.gc_config.unwrap_or_default(), Default::default());
 
         Ok(SyncTestStorage {
             store: builder.build()?,
@@ -79,7 +73,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 /// Only used for test purpose.
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine> {
-    gc_worker: GcWorker<E, RaftStoreBlackHole>,
+    gc_worker: GcWorker,
     store: Storage<E, DummyLockManager>,
 }
 
@@ -88,7 +82,9 @@ impl<E: Engine> SyncTestStorage<E> {
         &mut self,
         cfg: AutoGcConfig<S, R>,
     ) {
-        self.gc_worker.start_auto_gc(cfg).unwrap();
+        self.gc_worker
+            .start_auto_gc(cfg, self.get_engine(), RaftStoreBlackHole)
+            .unwrap();
     }
 
     pub fn get_storage(&self) -> Storage<E, DummyLockManager> {

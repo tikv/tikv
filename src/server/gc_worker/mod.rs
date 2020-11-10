@@ -14,7 +14,7 @@ use compaction_filter::{is_compaction_filter_allowd, CompactionFilterInitializer
 pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
 pub use gc_manager::AutoGcConfig;
 pub use gc_runner::GcTask;
-pub use gc_worker::{GcController, GcSafePointProvider, GC_MAX_EXECUTING_TASKS};
+pub use gc_worker::{GcSafePointProvider, GcWorker, GC_MAX_EXECUTING_TASKS};
 
 #[cfg(test)]
 pub use compaction_filter::tests::gc_by_compact;

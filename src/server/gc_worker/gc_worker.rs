@@ -44,7 +44,7 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GcTask>) -> Result<()> {
 }
 
 /// Used to schedule GC operations.
-pub struct GcController {
+pub struct GcWorker {
     config_manager: GcWorkerConfigManager,
     /// How many requests are scheduled from outside and unfinished.
     scheduled_tasks: Arc<AtomicUsize>,
@@ -59,7 +59,7 @@ pub struct GcController {
     cluster_version: ClusterVersion,
 }
 
-impl Clone for GcController {
+impl Clone for GcWorker {
     #[inline]
     fn clone(&self) -> Self {
         self.refs.fetch_add(1, Ordering::SeqCst);
@@ -77,7 +77,7 @@ impl Clone for GcController {
     }
 }
 
-impl Drop for GcController {
+impl Drop for GcWorker {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, Ordering::SeqCst);
@@ -93,11 +93,11 @@ impl Drop for GcController {
     }
 }
 
-impl GcController {
-    pub fn new(cfg: GcConfig, cluster_version: ClusterVersion) -> GcController {
+impl GcWorker {
+    pub fn new(cfg: GcConfig, cluster_version: ClusterVersion) -> GcWorker {
         let worker = LazyWorker::new("gc-worker");
         let worker_scheduler = worker.scheduler();
-        GcController {
+        GcWorker {
             config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             scheduled_tasks: Arc::new(AtomicUsize::new(0)),
             refs: Arc::new(AtomicUsize::new(1)),
@@ -301,6 +301,7 @@ mod tests {
     use tikv_util::future::paired_future_callback;
     use txn_types::Mutation;
 
+    use crate::server::gc_worker::gc_manager::tests::make_mock_auto_gc_cfg;
     use crate::storage::kv::{
         self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
         SnapContext, TestEngineBuilder, WriteData,
@@ -448,13 +449,15 @@ mod tests {
             TestStorageBuilder::from_engine_and_lock_mgr(engine.clone(), DummyLockManager {})
                 .build()
                 .unwrap();
-        let mut gc_worker = GcWorker::new(
-            engine,
-            RaftStoreBlackHole,
+
+        let gc_worker = GcWorker::new(
             GcConfig::default(),
             ClusterVersion::new(semver::Version::new(5, 0, 0)),
         );
-        gc_worker.start().unwrap();
+        let cfg = make_mock_auto_gc_cfg();
+        gc_worker
+            .start_auto_gc(cfg, engine, RaftStoreBlackHole)
+            .unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
             .iter()
@@ -613,13 +616,12 @@ mod tests {
         )
         .build()
         .unwrap();
-        let mut gc_worker = GcWorker::new(
-            prefixed_engine,
-            RaftStoreBlackHole,
-            GcConfig::default(),
-            ClusterVersion::default(),
-        );
-        gc_worker.start().unwrap();
+        let gc_worker = GcWorker::new(GcConfig::default(), ClusterVersion::default());
+
+        let cfg = make_mock_auto_gc_cfg();
+        gc_worker
+            .start_auto_gc(cfg, prefixed_engine, RaftStoreBlackHole)
+            .unwrap();
 
         let physical_scan_lock = |max_ts: u64, start_key, limit| {
             let (cb, f) = paired_future_callback();

@@ -40,7 +40,7 @@ use tikv::config::{ConfigController, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::read_pool::ReadPool;
-use tikv::server::gc_worker::GcWorker;
+use tikv::server::gc_worker::{AutoGcConfig, GcWorker};
 use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve::{self, StoreAddrResolver};
 use tikv::server::service::DebugService;
@@ -103,7 +103,7 @@ struct ServerMeta {
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
-    gc_worker: GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport>,
+    gc_worker: GcWorker,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -172,10 +172,7 @@ impl ServerCluster {
     }
 
     /// To trigger GC manually.
-    pub fn get_gc_worker(
-        &self,
-        node_id: u64,
-    ) -> &GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport> {
+    pub fn get_gc_worker(&self, node_id: u64) -> &GcWorker {
         &self.metas.get(&node_id).unwrap().gc_worker
     }
 
@@ -237,13 +234,16 @@ impl Simulator for ServerCluster {
 
         let engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
-        let mut gc_worker = GcWorker::new(
-            engine.clone(),
-            sim_router.clone(),
-            cfg.gc.clone(),
-            Default::default(),
+        let mut gc_worker = GcWorker::new(cfg.gc.clone(), Default::default());
+        let auto_gc_cfg = AutoGcConfig::new(
+            self.pd_client.clone(),
+            region_info_accessor.clone(),
+            node_id,
         );
-        gc_worker.start().unwrap();
+
+        gc_worker
+            .start_auto_gc(auto_gc_cfg, engine.clone(), sim_router.clone())
+            .unwrap();
         gc_worker
             .start_observe_lock_apply(&mut coprocessor_host)
             .unwrap();

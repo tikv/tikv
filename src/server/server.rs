@@ -16,7 +16,7 @@ use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
-use crate::server::gc_worker::GcController;
+use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
 use engine_rocks::RocksEngine;
@@ -79,7 +79,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        gc_worker: GcController,
+        gc_worker: GcWorker,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
     ) -> Result<Self> {
@@ -422,7 +422,7 @@ mod tests {
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
         let router = TestRaftStoreRouter::new(tx, significant_msg_sender);
 
-        let mut gc_worker = GcController::new(Default::default(), Default::default());
+        let gc_worker = GcWorker::new(Default::default(), Default::default());
 
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(cfg);
