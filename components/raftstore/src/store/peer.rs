@@ -1333,18 +1333,15 @@ where
             && !self.is_merging()
     }
 
-    fn ready_to_handle_unsafe_replica_read<S: Snapshot>(&self, read: &ReadIndexRequest<S>) -> bool {
+    fn ready_to_handle_unsafe_replica_read(&self, read_index: u64) -> bool {
         // Wait until the follower applies all values before the read. There is still a
         // problem if the leader applies fewer values than the follower, the follower read
         // could get a newer value, and after that, the leader may read a stale value,
         // which violates linearizability.
-        self.get_store().applied_index() >= read.read_index.unwrap()
+        self.get_store().applied_index() >= read_index
             // a peer which is applying snapshot will clean up its data and ingest a snapshot file,
             // during between the two operations a replica read could read empty data.
             && !self.is_applying_snapshot()
-            // addition_request indicates an ongoing lock checking. We must wait until lock checking
-            // finished.
-            && read.addition_request.is_none()
     }
 
     #[inline]
@@ -1843,6 +1840,12 @@ where
     /// Responses to the ready read index request on the replica, the replica is not a leader.
     fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<EK, ER, T, C>) {
         while let Some(mut read) = self.pending_reads.pop_front() {
+            // addition_request indicates an ongoing lock checking. We must wait until lock checking finished.
+            if read.addition_request.is_some() {
+                self.pending_reads.push_front(read);
+                break;
+            }
+
             assert!(read.read_index.is_some());
             let is_read_index_request = read.cmds.len() == 1
                 && read.cmds[0].0.get_requests().len() == 1
@@ -1850,7 +1853,7 @@ where
 
             if is_read_index_request {
                 self.response_read(&mut read, ctx, false);
-            } else if self.ready_to_handle_unsafe_replica_read(&read) {
+            } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
                 self.response_read(&mut read, ctx, true);
             } else {
                 // TODO: `ReadIndex` requests could be blocked.
