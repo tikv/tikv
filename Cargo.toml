@@ -150,10 +150,9 @@ tempfile = "3.0"
 match_template = { path = "components/match_template" }
 tidb_query_datatype = { path = "components/tidb_query_datatype" }
 tidb_query_common = { path = "components/tidb_query_common" }
-tidb_query_shared_expr = { path = "components/tidb_query_shared_expr" }
-tidb_query_vec_expr = { path = "components/tidb_query_vec_expr" }
-tidb_query_vec_aggr = { path = "components/tidb_query_vec_aggr" }
-tidb_query_vec_executors = { path = "components/tidb_query_vec_executors" }
+tidb_query_expr = { path = "components/tidb_query_expr" }
+tidb_query_aggr = { path = "components/tidb_query_aggr" }
+tidb_query_executors = { path = "components/tidb_query_executors" }
 tikv_alloc = { path = "components/tikv_alloc" }
 tikv_util = { path = "components/tikv_util" }
 time = "0.1"
@@ -200,9 +199,9 @@ members = [
   "components/tidb_query_datatype",
   "components/tidb_query_common",
   "components/tidb_query_codegen",
-  "components/tidb_query_vec_expr",
-  "components/tidb_query_vec_aggr",
-  "components/tidb_query_vec_executors",
+  "components/tidb_query_expr",
+  "components/tidb_query_aggr",
+  "components/tidb_query_executors",
   "components/pd_client",
   "components/external_storage",
   "components/keys",

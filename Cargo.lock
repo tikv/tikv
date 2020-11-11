@@ -4068,6 +4068,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tidb_query_aggr"
+version = "0.0.1"
+dependencies = [
+ "match_template",
+ "panic_hook",
+ "tidb_query_codegen",
+ "tidb_query_common",
+ "tidb_query_datatype",
+ "tidb_query_expr",
+ "tikv_util",
+ "tipb",
+ "tipb_helper",
+]
+
+[[package]]
 name = "tidb_query_codegen"
 version = "0.0.1"
 dependencies = [
@@ -4131,32 +4146,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tidb_query_shared_expr"
-version = "0.0.1"
-dependencies = [
- "rand",
- "safemem",
- "tidb_query_datatype",
- "time 0.1.42",
-]
-
-[[package]]
-name = "tidb_query_vec_aggr"
-version = "0.0.1"
-dependencies = [
- "match_template",
- "panic_hook",
- "tidb_query_codegen",
- "tidb_query_common",
- "tidb_query_datatype",
- "tidb_query_vec_expr",
- "tikv_util",
- "tipb",
- "tipb_helper",
-]
-
-[[package]]
-name = "tidb_query_vec_executors"
+name = "tidb_query_executors"
 version = "0.0.1"
 dependencies = [
  "codec",
@@ -4169,11 +4159,11 @@ dependencies = [
  "slog",
  "slog-global",
  "smallvec",
+ "tidb_query_aggr",
  "tidb_query_codegen",
  "tidb_query_common",
  "tidb_query_datatype",
- "tidb_query_vec_aggr",
- "tidb_query_vec_expr",
+ "tidb_query_expr",
  "tikv_util",
  "tipb",
  "tipb_helper",
@@ -4181,7 +4171,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tidb_query_vec_expr"
+name = "tidb_query_expr"
 version = "0.0.1"
 dependencies = [
  "base64 0.12.0",
@@ -4197,12 +4187,14 @@ dependencies = [
  "panic_hook",
  "profiler",
  "protobuf",
+ "rand",
+ "safemem",
  "static_assertions",
  "tidb_query_codegen",
  "tidb_query_common",
  "tidb_query_datatype",
- "tidb_query_shared_expr",
  "tikv_util",
+ "time 0.1.42",
  "tipb",
  "tipb_helper",
  "twoway",
@@ -4300,12 +4292,11 @@ dependencies = [
  "sst_importer",
  "sysinfo",
  "tempfile",
+ "tidb_query_aggr",
  "tidb_query_common",
  "tidb_query_datatype",
- "tidb_query_shared_expr",
- "tidb_query_vec_aggr",
- "tidb_query_vec_executors",
- "tidb_query_vec_expr",
+ "tidb_query_executors",
+ "tidb_query_expr",
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
