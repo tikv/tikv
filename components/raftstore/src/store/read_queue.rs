@@ -221,13 +221,15 @@ where
                     raw_offset, self.reads[offset].id, uuid
                 );
                 self.reads[offset].in_contexts = false;
+                // clear addition_request to indicate lock checking has finished
+                self.reads[offset].addition_request = None;
+                self.reads[offset].locked = locked.map(Box::new);
                 if let Some(occur_index) = self.reads[offset].read_index {
                     if occur_index < index {
                         continue;
                     }
                 }
                 self.reads[offset].read_index = Some(index);
-                self.reads[offset].locked = locked.map(Box::new);
                 min_changed_offset = cmp::min(min_changed_offset, offset);
                 max_changed_offset = cmp::max(max_changed_offset, offset);
                 continue;
