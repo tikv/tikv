@@ -166,9 +166,9 @@ mod tests {
             value: 0b101,
         };
 
-        assert_eq!(s.as_ref().is_set(0), true);
-        assert_eq!(s.as_ref().is_set(1), false);
-        assert_eq!(s.as_ref().is_set(2), true);
+        assert!(s.as_ref().is_set(0));
+        assert!(!s.as_ref().is_set(1));
+        assert!(s.as_ref().is_set(2));
     }
 
     #[test]
