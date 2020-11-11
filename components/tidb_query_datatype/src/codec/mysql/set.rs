@@ -19,14 +19,14 @@ pub struct Set {
 
     // TIDB makes sure there will be no more than 64 bits
     // https://github.com/pingcap/tidb/blob/master/types/set.go
-    value: usize,
+    value: u64,
 }
 
 impl Set {
-    pub fn new(data: Arc<BufferVec>, value: usize) -> Self {
+    pub fn new(data: Arc<BufferVec>, value: u64) -> Self {
         Self { data, value }
     }
-    pub fn value(&self) -> usize {
+    pub fn value(&self) -> u64 {
         self.value
     }
     pub fn as_ref(&self) -> SetRef<'_> {
@@ -91,11 +91,11 @@ impl crate::codec::data_type::AsMySQLBool for Set {
 #[derive(Clone, Copy, Debug)]
 pub struct SetRef<'a> {
     data: &'a BufferVec,
-    value: usize,
+    value: u64,
 }
 
 impl<'a> SetRef<'a> {
-    pub fn new(data: &'a BufferVec, value: usize) -> Self {
+    pub fn new(data: &'a BufferVec, value: u64) -> Self {
         Self { data, value }
     }
     pub fn is_set(&self, idx: usize) -> bool {

@@ -23,7 +23,7 @@ use tikv_util::buffer_vec::BufferVec;
 pub struct ChunkedVecSet {
     data: Arc<BufferVec>,
     bitmap: BitVec,
-    value: Vec<usize>,
+    value: Vec<u64>,
 }
 
 impl ChunkedVecSet {
