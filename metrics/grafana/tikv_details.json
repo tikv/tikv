@@ -58,7 +58,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1605066069047,
+  "iteration": 1605066069053,
   "links": [],
   "panels": [
     {
@@ -15470,7 +15470,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 52
+            "y": 100
           },
           "id": 138,
           "legend": {
@@ -15604,7 +15604,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 52
+            "y": 100
           },
           "id": 82,
           "legend": {
@@ -15728,7 +15728,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 60
+            "y": 108
           },
           "id": 129,
           "legend": {
@@ -15874,7 +15874,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 60
+            "y": 108
           },
           "id": 125,
           "legend": {
@@ -15998,7 +15998,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 68
+            "y": 116
           },
           "id": 139,
           "legend": {
@@ -16114,7 +16114,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 68
+            "y": 116
           },
           "id": 126,
           "legend": {
@@ -16238,7 +16238,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 76
+            "y": 124
           },
           "id": 134,
           "legend": {
@@ -16363,7 +16363,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 76
+            "y": 124
           },
           "id": 130,
           "legend": {
@@ -16487,7 +16487,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 84
+            "y": 132
           },
           "id": 137,
           "legend": {
@@ -16588,7 +16588,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 84
+            "y": 132
           },
           "id": 135,
           "legend": {
@@ -16713,7 +16713,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 92
+            "y": 140
           },
           "height": "",
           "id": 86,
@@ -16824,7 +16824,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 92
+            "y": 140
           },
           "height": "",
           "id": 132,
@@ -16947,7 +16947,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 100
+            "y": 148
           },
           "id": 2452,
           "legend": {
@@ -17049,7 +17049,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 100
+            "y": 148
           },
           "id": 87,
           "legend": {
@@ -17177,7 +17177,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 108
+            "y": 156
           },
           "id": 128,
           "legend": {
@@ -17278,7 +17278,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 108
+            "y": 156
           },
           "id": 127,
           "legend": {
@@ -17380,7 +17380,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 116
+            "y": 164
           },
           "id": 90,
           "legend": {
@@ -17498,7 +17498,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 116
+            "y": 164
           },
           "id": 2451,
           "legend": {
@@ -17599,7 +17599,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 124
+            "y": 172
           },
           "id": 4982,
           "legend": {
@@ -17697,7 +17697,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 124
+            "y": 172
           },
           "id": 136,
           "legend": {
@@ -17815,13 +17815,110 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed when ingesting SST files",
+          "description": "The target level of ingesting SST files",
           "fill": 1,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 132
+            "y": 180
+          },
+          "id": 4983,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": false,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": true,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_engine_event_total{instance=~\"$instance\", db=\"$db\", type=\"ingestion\"}[1m])) by (cf, level)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{cf}}, level-{{level}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Ingestion picked levels",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The time consumed when ingesting SST files",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 180
           },
           "id": 2003,
           "legend": {
@@ -17920,103 +18017,6 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The target level of ingesting SST files",
-          "fill": 1,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 132
-          },
-          "id": 4983,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": false,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": true,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "db": {
-              "selected": false,
-              "text": "kv",
-              "value": "kv"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(rate(tikv_engine_event_total{instance=~\"$instance\", db=\"$db\", type=\"ingestion\"}[1m])) by (cf, level)",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "{{cf}}, level-{{level}}",
-              "refId": "A"
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Ingestion picked levels",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The hit rate of memtable",
           "fill": 0,
@@ -18024,7 +18024,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 140
+            "y": 188
           },
           "id": 88,
           "legend": {
@@ -18124,7 +18124,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 140
+            "y": 188
           },
           "id": 103,
           "legend": {
@@ -18224,7 +18224,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 148
+            "y": 196
           },
           "id": 102,
           "legend": {
@@ -18324,7 +18324,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 148
+            "y": 196
           },
           "id": 80,
           "legend": {
@@ -18462,7 +18462,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 156
+            "y": 204
           },
           "id": 468,
           "legend": {
@@ -18599,7 +18599,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 156
+            "y": 204
           },
           "height": "",
           "id": 467,
@@ -18767,7 +18767,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 164
+            "y": 212
           },
           "height": "",
           "id": 85,
@@ -18880,7 +18880,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 164
+            "y": 212
           },
           "id": 133,
           "legend": {
@@ -19004,7 +19004,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 172
+            "y": 220
           },
           "id": 2002,
           "legend": {
@@ -19102,7 +19102,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 172
+            "y": 220
           },
           "id": 140,
           "legend": {
@@ -19229,7 +19229,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 180
+            "y": 228
           },
           "id": 4984,
           "legend": {
@@ -19326,7 +19326,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 180
+            "y": 228
           },
           "id": 5314,
           "legend": {
@@ -19424,7 +19424,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 188
+            "y": 236
           },
           "id": 863,
           "legend": {
@@ -19526,7 +19526,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 188
+            "y": 236
           },
           "id": 131,
           "legend": {
@@ -19628,7 +19628,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 196
+            "y": 244
           },
           "id": 516,
           "legend": {
@@ -19730,7 +19730,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 196
+            "y": 244
           },
           "id": 517,
           "legend": {
@@ -19832,7 +19832,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 204
+            "y": 252
           },
           "id": 518,
           "legend": {
