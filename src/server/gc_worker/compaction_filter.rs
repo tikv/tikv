@@ -163,7 +163,10 @@ impl WriteCompactionFilter {
     fn new(db: Arc<DB>, safe_point: u64, context: &CompactionFilterContext) -> Self {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
-        debug!("gc in compaction filter"; "files" => ?context.file_numbers());
+        debug!(
+            "gc in compaction filter";
+            "safe_point" => safe_point, "files" => ?context.file_numbers(),
+        );
 
         let engine = RocksEngine::from_db(db.clone());
         let write_batch = RocksWriteBatch::with_capacity(db, DEFAULT_DELETE_BATCH_SIZE);
