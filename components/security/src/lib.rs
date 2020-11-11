@@ -28,6 +28,7 @@ pub struct SecurityConfig {
     #[serde(skip)]
     pub override_ssl_target: String,
     pub cert_allowed_cn: HashSet<String>,
+    pub redact_info_log: Option<bool>,
     pub encryption: EncryptionConfig,
 }
 
@@ -39,6 +40,7 @@ impl Default for SecurityConfig {
             key_path: String::new(),
             override_ssl_target: String::new(),
             cert_allowed_cn: HashSet::default(),
+            redact_info_log: None,
             encryption: EncryptionConfig::default(),
         }
     }

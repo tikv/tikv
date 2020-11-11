@@ -5,14 +5,14 @@ pub use self::imp::wait_for_signal;
 #[cfg(unix)]
 mod imp {
     use engine_rocks::RocksEngine;
-    use engine_traits::{Engines, MiscExt};
+    use engine_traits::{Engines, MiscExt, RaftEngine};
     use libc::c_int;
     use nix::sys::signal::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
     use signal::trap::Trap;
     use tikv_util::metrics;
 
     #[allow(dead_code)]
-    pub fn wait_for_signal(engines: Option<Engines<RocksEngine, RocksEngine>>) {
+    pub fn wait_for_signal<ER: RaftEngine>(engines: Option<Engines<RocksEngine, ER>>) {
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
         for sig in trap {
             match sig {
@@ -24,8 +24,8 @@ mod imp {
                     // Use SIGUSR1 to log metrics.
                     info!("{}", metrics::dump());
                     if let Some(ref engines) = engines {
-                        info!("{:?}", engines.kv.dump_stats());
-                        info!("{:?}", engines.raft.dump_stats());
+                        info!("{:?}", MiscExt::dump_stats(&engines.kv));
+                        info!("{:?}", RaftEngine::dump_stats(&engines.raft));
                     }
                 }
                 // TODO: handle more signal

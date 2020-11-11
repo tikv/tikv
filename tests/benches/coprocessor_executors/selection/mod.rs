@@ -104,7 +104,7 @@ where
         rows_options.push(1);
     }
     let bencher_options: Vec<Box<dyn util::SelectionBencher<M>>> =
-        vec![Box::new(util::NormalBencher), Box::new(util::BatchBencher)];
+        vec![Box::new(util::BatchBencher)];
 
     for rows in &rows_options {
         for bencher in &bencher_options {

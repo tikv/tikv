@@ -8,6 +8,7 @@ mod test_compact_log;
 mod test_conf_change;
 mod test_early_apply;
 mod test_hibernate;
+mod test_joint_consensus;
 mod test_lease_read;
 mod test_merge;
 mod test_multi;

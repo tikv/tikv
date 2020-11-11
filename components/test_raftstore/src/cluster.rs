@@ -5,7 +5,7 @@ use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::*;
 use std::{result, thread};
 
-use futures03::executor::block_on;
+use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
@@ -23,7 +23,7 @@ use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
 };
 use pd_client::PdClient;
-use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
@@ -162,6 +162,11 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    // To destroy temp dir later.
+    pub fn take_path(&mut self) -> Vec<TempDir> {
+        std::mem::replace(&mut self.paths, vec![])
+    }
+
     pub fn id(&self) -> u64 {
         self.cfg.server.cluster_id
     }
@@ -213,7 +218,7 @@ impl<T: Simulator> Cluster<T> {
 
             let engines = self.dbs.last().unwrap().clone();
             let key_mgr = self.key_managers.last().unwrap().clone();
-            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
 
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
@@ -269,7 +274,7 @@ impl<T: Simulator> Cluster<T> {
         if let Some(labels) = self.labels.get(&node_id) {
             cfg.server.labels = labels.to_owned();
         }
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         self.store_metas.insert(node_id, store_meta.clone());
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
@@ -528,7 +533,7 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
-            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
@@ -561,7 +566,7 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
-            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
@@ -675,27 +680,32 @@ impl<T: Simulator> Cluster<T> {
     }
 
     // If the resp is "not leader error", get the real leader.
-    // Sometimes, we may still can't get leader even in "not leader error",
-    // returns a INVALID_PEER for this.
+    // Otherwise reset or refresh leader if needed.
+    // Returns if the request should retry.
     fn refresh_leader_if_needed(&mut self, resp: &RaftCmdResponse, region_id: u64) -> bool {
         if !is_error_response(resp) {
             return false;
         }
 
         let err = resp.get_header().get_error();
-        if err.has_stale_command() {
-            // command got truncated, leadership may have changed.
+        if err
+            .get_message()
+            .contains("peer has not applied to current term")
+        {
+            // leader peer has not applied to current term
+            return true;
+        }
+
+        // If command is stale, leadership may have changed.
+        // Or epoch not match, it can be introduced by wrong leader.
+        if err.has_stale_command() || err.has_epoch_not_match() {
             self.reset_leader_of_region(region_id);
             return true;
         }
-        // Not match epoch can be introduced by wrong leader.
-        if err.has_epoch_not_match() {
-            self.reset_leader_of_region(region_id);
-        }
+
         if !err.has_not_leader() {
             return false;
         }
-
         let err = err.get_not_leader();
         if !err.has_leader() {
             self.reset_leader_of_region(region_id);
@@ -1112,11 +1122,19 @@ impl<T: Simulator> Cluster<T> {
         let timer = Instant::now();
         loop {
             self.reset_leader_of_region(region_id);
-            if self.leader_of_region(region_id) == Some(leader.clone()) {
-                return;
+            let cur_leader = self.leader_of_region(region_id);
+            if let Some(ref cur_leader) = cur_leader {
+                if cur_leader.get_id() == leader.get_id()
+                    && cur_leader.get_store_id() == leader.get_store_id()
+                {
+                    return;
+                }
             }
             if timer.elapsed() > Duration::from_secs(5) {
-                panic!("failed to transfer leader to [{}] {:?}", region_id, leader);
+                panic!(
+                    "failed to transfer leader to [{}] {:?}, current leader: {:?}",
+                    region_id, leader, cur_leader
+                );
             }
             self.transfer_leader(region_id, leader.clone());
         }
@@ -1152,6 +1170,7 @@ impl<T: Simulator> Cluster<T> {
                 region_epoch: region.get_region_epoch().clone(),
                 split_keys: vec![split_key],
                 callback: cb,
+                source: "test".into(),
             },
         )
         .unwrap();
@@ -1174,7 +1193,7 @@ impl<T: Simulator> Cluster<T> {
                             || error.has_stale_command()
                             || error
                                 .get_message()
-                                .contains("peer is not applied to current term")
+                                .contains("peer has not applied to current term")
                         {
                             warn!("fail to split: {:?}, ignore.", error);
                             return;
@@ -1188,7 +1207,7 @@ impl<T: Simulator> Cluster<T> {
                     assert_eq!(regions[0].get_end_key(), key.as_slice());
                     assert_eq!(regions[0].get_end_key(), regions[1].get_start_key());
                 });
-                self.split_region(region, split_key, Callback::Write(check));
+                self.split_region(region, split_key, Callback::write(check));
             }
 
             if self.pd_client.check_split(region, split_key)
@@ -1255,12 +1274,26 @@ impl<T: Simulator> Cluster<T> {
             .unwrap()
             .unwrap();
         let prepare_merge = new_prepare_merge(region);
-        let source = block_on(self.pd_client.get_region_by_id(source))
+        let source_region = block_on(self.pd_client.get_region_by_id(source))
             .unwrap()
             .unwrap();
-        let req = new_admin_request(source.get_id(), source.get_region_epoch(), prepare_merge);
-        self.call_command_on_leader(req, Duration::from_secs(3))
+        let req = new_admin_request(
+            source_region.get_id(),
+            source_region.get_region_epoch(),
+            prepare_merge,
+        );
+        self.call_command_on_leader(req, Duration::from_secs(5))
             .unwrap()
+    }
+
+    pub fn must_try_merge(&mut self, source: u64, target: u64) {
+        let resp = self.try_merge(source, target);
+        if is_error_response(&resp) {
+            panic!(
+                "{} failed to try merge to {}, resp {:?}",
+                source, target, resp
+            );
+        }
     }
 
     /// Make sure region exists on that store.

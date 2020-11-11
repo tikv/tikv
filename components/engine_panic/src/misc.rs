@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::PanicEngine;
-use engine_traits::{MiscExt, Range, Result};
+use engine_traits::{DeleteStrategy, MiscExt, Range, Result};
 
 impl MiscExt for PanicEngine {
     fn flush(&self, sync: bool) -> Result<()> {
@@ -12,13 +12,7 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn delete_files_in_range_cf(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        include_end: bool,
-    ) -> Result<()> {
+    fn delete_ranges_cf(&self, cf: &str, strategy: DeleteStrategy, ranges: &[Range]) -> Result<()> {
         panic!()
     }
 
@@ -59,6 +53,23 @@ impl MiscExt for PanicEngine {
     }
 
     fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
+        panic!()
+    }
+
+    fn get_total_sst_files_size_cf(&self, cf: &str) -> Result<Option<u64>> {
+        panic!()
+    }
+
+    fn get_range_entries_and_versions(
+        &self,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Option<(u64, u64)>> {
+        panic!()
+    }
+
+    fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> Result<Option<u64>> {
         panic!()
     }
 }

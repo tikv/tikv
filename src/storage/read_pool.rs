@@ -4,7 +4,18 @@ use crate::config::StorageReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 use crate::storage::metrics;
 use std::sync::{Arc, Mutex};
-use tikv_util::future_pool::{Builder, Config, FuturePool};
+use tikv_util::yatp_pool::{Config, DefaultTicker, FuturePool, PoolTicker, YatpPoolBuilder};
+
+#[derive(Clone)]
+struct FuturePoolTicker<R: FlowStatsReporter> {
+    pub reporter: R,
+}
+
+impl<R: FlowStatsReporter> PoolTicker for FuturePoolTicker<R> {
+    fn on_tick(&mut self) {
+        metrics::tls_flush(&self.reporter);
+    }
+}
 
 pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &StorageReadPoolConfig,
@@ -12,7 +23,7 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
     engine: E,
 ) -> Vec<FuturePool> {
     let names = vec!["store-read-low", "store-read-normal", "store-read-high"];
-    let configs: Vec<Config> = config.to_future_pool_configs();
+    let configs: Vec<Config> = config.to_yatp_pool_configs();
     assert_eq!(configs.len(), 3);
 
     configs
@@ -20,20 +31,16 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
         .zip(names)
         .map(|(config, name)| {
             let reporter = reporter.clone();
-            let reporter2 = reporter.clone();
             let engine = Arc::new(Mutex::new(engine.clone()));
-            Builder::from_config(config)
+            YatpPoolBuilder::new(FuturePoolTicker { reporter })
                 .name_prefix(name)
-                .on_tick(move || metrics::tls_flush(&reporter))
+                .config(config)
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                .before_stop(move || {
+                .before_stop(move || unsafe {
                     // Safety: we call `set_` and `destroy_` with the same engine type.
-                    unsafe {
-                        destroy_tls_engine::<E>();
-                    }
-                    metrics::tls_flush(&reporter2)
+                    destroy_tls_engine::<E>();
                 })
-                .build()
+                .build_future_pool()
         })
         .collect()
 }
@@ -43,7 +50,7 @@ pub fn build_read_pool_for_test<E: Engine>(
     engine: E,
 ) -> Vec<FuturePool> {
     let names = vec!["store-read-low", "store-read-normal", "store-read-high"];
-    let configs: Vec<Config> = config.to_future_pool_configs();
+    let configs: Vec<Config> = config.to_yatp_pool_configs();
     assert_eq!(configs.len(), 3);
 
     configs
@@ -51,12 +58,13 @@ pub fn build_read_pool_for_test<E: Engine>(
         .zip(names)
         .map(|(config, name)| {
             let engine = Arc::new(Mutex::new(engine.clone()));
-            Builder::from_config(config)
+            YatpPoolBuilder::new(DefaultTicker::default())
+                .config(config)
                 .name_prefix(name)
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                 // Safety: we call `set_` and `destroy_` with the same engine type.
                 .before_stop(|| unsafe { destroy_tls_engine::<E>() })
-                .build()
+                .build_future_pool()
         })
         .collect()
 }

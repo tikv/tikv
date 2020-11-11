@@ -9,6 +9,7 @@ use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
+use tikv::storage::kv::SnapContext;
 use tikv_util::config::*;
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -187,10 +188,13 @@ fn test_sync_max_ts_after_leader_transfer() {
         let epoch = cluster.get_region_epoch(region_id);
         let mut ctx = Context::default();
         ctx.set_region_id(region_id);
-        ctx.set_peer(leader.clone());
+        ctx.set_peer(leader);
         ctx.set_region_epoch(epoch);
-
-        let snapshot = storage.snapshot(&ctx).unwrap();
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = storage.snapshot(snap_ctx).unwrap();
         let max_ts_sync_status = snapshot.max_ts_sync_status.clone().unwrap();
         for retry in 0..10 {
             if max_ts_sync_status.load(Ordering::SeqCst) & 1 == 1 {
@@ -203,7 +207,7 @@ fn test_sync_max_ts_after_leader_transfer() {
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
     wait_for_synced(&mut cluster);
-    let max_ts = cm.max_read_ts();
+    let max_ts = cm.max_ts();
 
     cluster.pd_client.trigger_tso_failure();
     // Transfer the leader out and back
@@ -211,6 +215,6 @@ fn test_sync_max_ts_after_leader_transfer() {
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
     wait_for_synced(&mut cluster);
-    let new_max_ts = cm.max_read_ts();
+    let new_max_ts = cm.max_ts();
     assert!(new_max_ts > max_ts);
 }

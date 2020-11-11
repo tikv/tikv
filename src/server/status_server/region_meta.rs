@@ -105,11 +105,12 @@ impl<'a> From<raft::Status<'a>> for RaftStatus {
         let mut voters = HashMap::new();
         let mut learners = HashMap::new();
         if let Some(progress) = status.progress {
-            for (id, voter) in progress.voters() {
-                voters.insert(*id, RaftProgress::new(voter));
-            }
-            for (id, learner) in progress.learners() {
-                learners.insert(*id, RaftProgress::new(learner));
+            for (id, pr) in progress.iter() {
+                if progress.conf().voters().contains(*id) {
+                    voters.insert(*id, RaftProgress::new(pr));
+                } else {
+                    learners.insert(*id, RaftProgress::new(pr));
+                }
             }
         }
         Self {

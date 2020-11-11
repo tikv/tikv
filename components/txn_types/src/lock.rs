@@ -320,7 +320,7 @@ impl Lock {
 
         let raw_key = key.to_raw()?;
 
-        if ts == TimeStamp::max() && raw_key == lock.primary {
+        if ts == TimeStamp::max() && raw_key == lock.primary && !lock.use_async_commit {
             // When `ts == TimeStamp::max()` (which means to get latest committed version for
             // primary key), and current key is the primary key, we ignore this lock.
             return Ok(());
@@ -630,6 +630,16 @@ mod tests {
         lock.lock_type = LockType::Put;
         lock.primary = b"foo".to_vec();
         Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, TimeStamp::max(), &empty).unwrap();
+
+        // Should not ignore the primary lock of an async commit transaction even if setting u64::MAX as ts
+        let async_commit_lock = lock.clone().use_async_commit(vec![]);
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&async_commit_lock),
+            &key,
+            TimeStamp::max(),
+            &empty,
+        )
+        .unwrap_err();
 
         // Should not ignore the secondary lock even though reading the latest version
         lock.primary = b"bar".to_vec();

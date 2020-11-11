@@ -6,6 +6,6 @@ publish = false
 
 [dependencies]
 async-trait = "0.1"
-rusoto_core = "0.44.0"
-rusoto_credential = "0.44.0"
-rusoto_sts = "0.44.0"
+rusoto_core = "0.45.0"
+rusoto_credential = "0.45.0"
+rusoto_sts = "0.45.0"

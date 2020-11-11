@@ -6,7 +6,8 @@ use crate::storage::mvcc::{
     txn::make_rollback, LockType, MvccTxn, SecondaryLockStatus, TimeStamp, TxnCommitRecord,
 };
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+    WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::types::SecondaryLocksStatus;
@@ -42,6 +43,10 @@ impl CommandExt for CheckSecondaryLocks {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
+        // to prevent this case from happening.
+        context.concurrency_manager.update_max_ts(self.start_ts);
+
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
@@ -146,6 +151,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             pr,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }
@@ -157,6 +163,7 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::WriteCommand;
+    use crate::storage::txn::tests::*;
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
@@ -168,7 +175,7 @@ pub mod tests {
         expect_status: SecondaryLocksStatus,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let lock_ts = lock_ts.into();
         let cm = ConcurrencyManager::new(lock_ts);
         let command = crate::storage::txn::commands::CheckSecondaryLocks {
@@ -184,8 +191,7 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
-                    enable_async_commit: true,
+                    async_apply_prewrite: false,
                 },
             )
             .unwrap();
@@ -204,7 +210,7 @@ pub mod tests {
         let cm = ConcurrencyManager::new(1.into());
 
         let check_secondary = |key, ts| {
-            let snapshot = engine.snapshot(&ctx).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             let key = Key::from_raw(key);
             let ts = TimeStamp::new(ts);
             let command = crate::storage::txn::commands::CheckSecondaryLocks {
@@ -220,8 +226,7 @@ pub mod tests {
                         concurrency_manager: cm.clone(),
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
-                        pipelined_pessimistic_lock: false,
-                        enable_async_commit: true,
+                        async_apply_prewrite: false,
                     },
                 )
                 .unwrap();

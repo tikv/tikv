@@ -7222,7 +7222,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "avg(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"$db\"}) by (instance, cf)",
+              "expr": "tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"$db\"}",
               "format": "time_series",
               "instant": false,
               "intervalFactor": 1,

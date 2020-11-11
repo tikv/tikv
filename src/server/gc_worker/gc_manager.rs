@@ -349,7 +349,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             Ok(res) => res,
             // Return false directly so we will check it a while later.
             Err(e) => {
-                error!("failed to get safe point from pd"; "err" => ?e);
+                error!(?e; "failed to get safe point from pd");
                 return false;
             }
         };
@@ -582,9 +582,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         );
 
         if let Err(e) = res {
-            error!(
-                "gc_worker: failed to get next region information"; "err" => ?e
-            );
+            error!(?e; "gc_worker: failed to get next region information");
             return (None, None);
         };
 
@@ -628,7 +626,6 @@ mod tests {
     use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
     use tikv_util::worker::{FutureRunnable, FutureWorker};
-    use tokio_core::reactor::Handle;
 
     fn take_callback(t: &mut GcTask) -> Callback<()> {
         let callback = match t {
@@ -675,7 +672,7 @@ mod tests {
     }
 
     impl FutureRunnable<GcTask> for MockGcRunner {
-        fn run(&mut self, mut t: GcTask, _handle: &Handle) {
+        fn run(&mut self, mut t: GcTask) {
             let cb = take_callback(&mut t);
             self.tx.send(t).unwrap();
             cb(Ok(()));

@@ -27,6 +27,7 @@
 #![feature(shrink_to)]
 #![feature(drain_filter)]
 #![feature(clamp)]
+#![feature(negative_impls)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -38,8 +39,6 @@ extern crate quick_error;
 extern crate serde_derive;
 #[macro_use]
 extern crate slog_derive;
-#[macro_use]
-extern crate slog_global;
 #[macro_use]
 extern crate derive_more;
 #[macro_use]
@@ -64,7 +63,7 @@ pub mod server;
 pub mod storage;
 
 /// Returns the tikv version information.
-pub fn tikv_version_info() -> String {
+pub fn tikv_version_info(build_time: Option<&str>) -> String {
     let fallback = "Unknown (env var does not exist when building)";
     format!(
         "\nRelease Version:   {}\
@@ -79,7 +78,7 @@ pub fn tikv_version_info() -> String {
         option_env!("TIKV_EDITION").unwrap_or("Community"),
         option_env!("TIKV_BUILD_GIT_HASH").unwrap_or(fallback),
         option_env!("TIKV_BUILD_GIT_BRANCH").unwrap_or(fallback),
-        option_env!("TIKV_BUILD_TIME").unwrap_or(fallback),
+        build_time.unwrap_or(fallback),
         option_env!("TIKV_BUILD_RUSTC_VERSION").unwrap_or(fallback),
         option_env!("TIKV_ENABLE_FEATURES")
             .unwrap_or(fallback)
@@ -89,9 +88,12 @@ pub fn tikv_version_info() -> String {
 }
 
 /// Prints the tikv version information to the standard output.
-pub fn log_tikv_info() {
+pub fn log_tikv_info(build_time: Option<&str>) {
     info!("Welcome to TiKV");
-    for line in tikv_version_info().lines().filter(|s| !s.is_empty()) {
+    for line in tikv_version_info(build_time)
+        .lines()
+        .filter(|s| !s.is_empty())
+    {
         info!("{}", line);
     }
 }

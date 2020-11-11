@@ -6,9 +6,10 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::MvccTxn;
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+    WriteResult,
 };
-use crate::storage::txn::{Error, ErrorInner, Result};
+use crate::storage::txn::{commit, Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
 
 command! {
@@ -55,7 +56,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         // Pessimistic txn needs key_hashes to wake up waiters
         let mut released_locks = ReleasedLocks::new(self.lock_ts, self.commit_ts);
         for k in self.keys {
-            released_locks.push(txn.commit(k, self.commit_ts)?);
+            released_locks.push(commit(&mut txn, k, self.commit_ts)?);
         }
         released_locks.wake_up(context.lock_mgr);
 
@@ -71,6 +72,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
             pr,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }

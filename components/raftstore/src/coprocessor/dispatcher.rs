@@ -1,18 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CfName, KvEngine};
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::RaftCmdRequest;
 use std::marker::PhantomData;
-use txn_types::TxnExtra;
-
 use std::mem;
 use std::ops::Deref;
 
-use crate::store::CasualRouter;
+use engine_traits::{CfName, KvEngine};
+use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
+use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
 
 use super::*;
+use crate::store::CasualRouter;
 
 struct Entry<T> {
     priority: u32,
@@ -81,8 +79,8 @@ macro_rules! impl_box_observer {
 // This is the same as impl_box_observer_g except $ob has a typaram
 macro_rules! impl_box_observer_g {
     ($name:ident, $ob: ident, $wrapper: ident) => {
-        pub struct $name<E>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
-        impl<E: 'static + Send> $name<E> {
+        pub struct $name<E: KvEngine>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
+        impl<E: KvEngine + 'static + Send> $name<E> {
             pub fn new<T: 'static + $ob<E> + Clone>(observer: T) -> $name<E> {
                 $name(Box::new($wrapper {
                     inner: observer,
@@ -90,12 +88,12 @@ macro_rules! impl_box_observer_g {
                 }))
             }
         }
-        impl<E: 'static> Clone for $name<E> {
+        impl<E: KvEngine + 'static> Clone for $name<E> {
             fn clone(&self) -> $name<E> {
                 $name((**self).box_clone())
             }
         }
-        impl<E> Deref for $name<E> {
+        impl<E: KvEngine> Deref for $name<E> {
             type Target = Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>;
 
             fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send> {
@@ -103,11 +101,13 @@ macro_rules! impl_box_observer_g {
             }
         }
 
-        struct $wrapper<E, T: $ob<E> + Clone> {
+        struct $wrapper<E: KvEngine, T: $ob<E> + Clone> {
             inner: T,
             _phantom: PhantomData<E>,
         }
-        impl<E: 'static + Send, T: 'static + $ob<E> + Clone> ClonableObserver for $wrapper<E, T> {
+        impl<E: KvEngine + 'static + Send, T: 'static + $ob<E> + Clone> ClonableObserver
+            for $wrapper<E, T>
+        {
             type Ob = dyn $ob<E>;
             fn inner(&self) -> &Self::Ob {
                 &self.inner as _
@@ -146,30 +146,37 @@ impl_box_observer!(
     WrappedRegionChangeObserver
 );
 impl_box_observer_g!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
+impl_box_observer_g!(
+    BoxConsistencyCheckObserver,
+    ConsistencyCheckObserver,
+    WrappedConsistencyCheckObserver
+);
 
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
 pub struct Registry<E>
 where
-    E: 'static,
+    E: KvEngine + 'static,
 {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
     apply_snapshot_observers: Vec<Entry<BoxApplySnapshotObserver>>,
     split_check_observers: Vec<Entry<BoxSplitCheckObserver<E>>>,
+    consistency_check_observers: Vec<Entry<BoxConsistencyCheckObserver<E>>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver<E>>>,
     // TODO: add endpoint
 }
 
-impl<E> Default for Registry<E> {
+impl<E: KvEngine> Default for Registry<E> {
     fn default() -> Registry<E> {
         Registry {
             admin_observers: Default::default(),
             query_observers: Default::default(),
             apply_snapshot_observers: Default::default(),
             split_check_observers: Default::default(),
+            consistency_check_observers: Default::default(),
             role_observers: Default::default(),
             region_change_observers: Default::default(),
             cmd_observers: Default::default(),
@@ -190,7 +197,7 @@ macro_rules! push {
     };
 }
 
-impl<E> Registry<E> {
+impl<E: KvEngine> Registry<E> {
     pub fn register_admin_observer(&mut self, priority: u32, ao: BoxAdminObserver) {
         push!(priority, ao, self.admin_observers);
     }
@@ -209,6 +216,14 @@ impl<E> Registry<E> {
 
     pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver<E>) {
         push!(priority, sco, self.split_check_observers);
+    }
+
+    pub fn register_consistency_check_observer(
+        &mut self,
+        priority: u32,
+        cco: BoxConsistencyCheckObserver<E>,
+    ) {
+        push!(priority, cco, self.consistency_check_observers);
     }
 
     pub fn register_role_observer(&mut self, priority: u32, ro: BoxRoleObserver) {
@@ -272,12 +287,12 @@ macro_rules! loop_ob {
 #[derive(Clone)]
 pub struct CoprocessorHost<E>
 where
-    E: 'static,
+    E: KvEngine + 'static,
 {
     pub registry: Registry<E>,
 }
 
-impl<E> Default for CoprocessorHost<E>
+impl<E: KvEngine> Default for CoprocessorHost<E>
 where
     E: 'static,
 {
@@ -288,10 +303,7 @@ where
     }
 }
 
-impl<E> CoprocessorHost<E>
-where
-    E: KvEngine,
-{
+impl<E: KvEngine> CoprocessorHost<E> {
     pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(ch: C) -> CoprocessorHost<E> {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
@@ -420,6 +432,37 @@ where
         host
     }
 
+    pub fn on_prepropose_compute_hash(&self, req: &mut ComputeHashRequest) {
+        for observer in &self.registry.consistency_check_observers {
+            let observer = observer.observer.inner();
+            if observer.update_context(req.mut_context()) {
+                break;
+            }
+        }
+    }
+
+    pub fn on_compute_hash(
+        &self,
+        region: &Region,
+        context: &[u8],
+        snap: E::Snapshot,
+    ) -> Result<Vec<(Vec<u8>, u32)>> {
+        let mut hashes = Vec::new();
+        let (mut reader, context_len) = (context, context.len());
+        for observer in &self.registry.consistency_check_observers {
+            let observer = observer.observer.inner();
+            let old_len = reader.len();
+            let hash = match box_try!(observer.compute_hash(region, &mut reader, &snap)) {
+                Some(hash) => hash,
+                None => break,
+            };
+            let new_len = reader.len();
+            let ctx = context[context_len - old_len..context_len - new_len].to_vec();
+            hashes.push((ctx, hash));
+        }
+        Ok(hashes)
+    }
+
     pub fn on_role_change(&self, region: &Region, role: StateRole) {
         loop_ob!(region, &self.registry.role_observers, on_role_change, role);
     }
@@ -466,7 +509,7 @@ where
             .on_apply_cmd(observe_id, region_id, cmd)
     }
 
-    pub fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>, engine: E) {
+    pub fn on_flush_apply(&self, engine: E) {
         if self.registry.cmd_observers.is_empty() {
             return;
         }
@@ -478,7 +521,7 @@ where
                 .unwrap()
                 .observer
                 .inner()
-                .on_flush_apply(txn_extras.clone(), engine.clone())
+                .on_flush_apply(engine.clone())
         }
         self.registry
             .cmd_observers
@@ -486,7 +529,7 @@ where
             .unwrap()
             .observer
             .inner()
-            .on_flush_apply(txn_extras, engine)
+            .on_flush_apply(engine)
     }
 
     pub fn shutdown(&self) {
@@ -619,7 +662,7 @@ mod tests {
         fn on_apply_cmd(&self, _: ObserveID, _: u64, _: Cmd) {
             self.called.fetch_add(12, Ordering::SeqCst);
         }
-        fn on_flush_apply(&self, _: Vec<TxnExtra>, _: PanicEngine) {
+        fn on_flush_apply(&self, _: PanicEngine) {
             self.called.fetch_add(13, Ordering::SeqCst);
         }
     }
@@ -697,7 +740,7 @@ mod tests {
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
         assert_all!(&[&ob.called], &[78]);
-        host.on_flush_apply(Vec::default(), PanicEngine);
+        host.on_flush_apply(PanicEngine);
         assert_all!(&[&ob.called], &[91]);
     }
 

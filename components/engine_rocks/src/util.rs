@@ -18,7 +18,6 @@ use std::sync::Arc;
 
 pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
     let raft_path = path.path().join(std::path::Path::new("raft"));
-    let shared_block_cache = false;
     Engines::new(
         new_engine(
             path.path().to_str().unwrap(),
@@ -34,7 +33,6 @@ pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEn
             None,
         )
         .unwrap(),
-        shared_block_cache,
     )
 }
 

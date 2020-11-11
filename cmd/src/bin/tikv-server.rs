@@ -2,14 +2,16 @@
 
 #![feature(proc_macro_hygiene)]
 
+use std::path::Path;
 use std::process;
 
 use clap::{crate_authors, App, Arg};
-use cmd::setup::validate_and_persist_config;
+use cmd::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use tikv::config::TiKvConfig;
 
 fn main() {
-    let version_info = tikv::tikv_version_info();
+    let build_timestamp = option_env!("TIKV_BUILD_TIME");
+    let version_info = tikv::tikv_version_info(build_timestamp);
 
     let matches = App::new("TiKV")
         .about("A distributed transactional key-value database powered by Rust and Raft")
@@ -136,6 +138,7 @@ fn main() {
             Arg::with_name("metrics-addr")
                 .long("metrics-addr")
                 .value_name("IP:PORT")
+                .hidden(true)
                 .help("Sets Prometheus Pushgateway address")
                 .long_help(
                     "Sets push address to the Prometheus Pushgateway, \
@@ -150,14 +153,27 @@ fn main() {
         process::exit(0);
     }
 
+    let mut unrecognized_keys = Vec::new();
+    let is_config_check = matches.is_present("config-check");
+
     let mut config = matches
-        .value_of("config")
-        .map_or_else(TiKvConfig::default, |path| TiKvConfig::from_file(&path));
+        .value_of_os("config")
+        .map_or_else(TiKvConfig::default, |path| {
+            TiKvConfig::from_file(
+                Path::new(path),
+                if is_config_check {
+                    Some(&mut unrecognized_keys)
+                } else {
+                    None
+                },
+            )
+        });
 
     cmd::setup::overwrite_config_with_cmd_args(&mut config, &matches);
 
-    if matches.is_present("config-check") {
+    if is_config_check {
         validate_and_persist_config(&mut config, false);
+        ensure_no_unrecognized_config(&unrecognized_keys);
         println!("config check successful");
         process::exit(0)
     }

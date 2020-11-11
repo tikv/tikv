@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::Local;
 use clap::ArgMatches;
 use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
-use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::collections::HashMap;
 use tikv_util::{self, config, logger};
 
@@ -128,24 +127,13 @@ pub fn initial_logger(config: &TiKvConfig) {
         let rocksdb_info_log_path = if !config.rocksdb.info_log_dir.is_empty() {
             make_engine_log_path(&config.rocksdb.info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
         } else {
-            make_engine_log_path(
-                &config.storage.data_dir,
-                DEFAULT_ROCKSDB_SUB_DIR,
-                DEFAULT_ROCKSDB_LOG_FILE,
-            )
+            // Don't use `DEFAULT_ROCKSDB_SUB_DIR`, because of the logic of `RocksEngine::exists`.
+            make_engine_log_path(&config.storage.data_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
         };
         let raftdb_info_log_path = if !config.raftdb.info_log_dir.is_empty() {
             make_engine_log_path(&config.raftdb.info_log_dir, "", DEFAULT_RAFTDB_LOG_FILE)
         } else {
-            if !config.raft_store.raftdb_path.is_empty() {
-                make_engine_log_path(
-                    &config.raft_store.raftdb_path.clone(),
-                    "",
-                    DEFAULT_RAFTDB_LOG_FILE,
-                )
-            } else {
-                make_engine_log_path(&config.storage.data_dir, "raft", DEFAULT_RAFTDB_LOG_FILE)
-            }
+            make_engine_log_path(&config.storage.data_dir, "", DEFAULT_RAFTDB_LOG_FILE)
         };
         let rocksdb_log_writer = logger::file_writer(
             &rocksdb_info_log_path,
@@ -220,11 +208,16 @@ pub fn initial_logger(config: &TiKvConfig) {
             });
         }
     };
+
+    // Set redact_info_log.
+    let redact_info_log = config.security.redact_info_log.unwrap_or(false);
+    log_wrappers::set_redact_info_log(redact_info_log);
+
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
 }
 
 #[allow(dead_code)]
-pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
+pub fn initial_metric(cfg: &MetricConfig) {
     tikv_util::metrics::monitor_process()
         .unwrap_or_else(|e| fatal!("failed to start process monitor: {}", e));
     tikv_util::metrics::monitor_threads("tikv")
@@ -236,13 +229,7 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
         return;
     }
 
-    let mut push_job = cfg.job.clone();
-    if let Some(id) = node_id {
-        push_job.push_str(&format!("_{}", id));
-    }
-
-    info!("start prometheus client");
-    tikv_util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
+    warn!("metrics push is not supported any more.");
 }
 
 #[allow(dead_code)]
@@ -303,8 +290,8 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
         config.raft_store.capacity = capacity;
     }
 
-    if let Some(metrics_addr) = matches.value_of("metrics-addr") {
-        config.metric.address = metrics_addr.to_owned()
+    if matches.value_of("metrics-addr").is_some() {
+        warn!("metrics push is not supported any more.");
     }
 }
 
@@ -323,5 +310,14 @@ pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
         if let Err(e) = persist_config(&config) {
             fatal!("persist critical config failed: {}", e);
         }
+    }
+}
+
+pub fn ensure_no_unrecognized_config(unrecognized_keys: &[String]) {
+    if !unrecognized_keys.is_empty() {
+        fatal!(
+            "unknown configuration options: {}",
+            unrecognized_keys.join(", ")
+        );
     }
 }

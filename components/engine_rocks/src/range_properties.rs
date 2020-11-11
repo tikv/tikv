@@ -3,8 +3,8 @@
 use crate::engine::RocksEngine;
 use crate::properties::{get_range_entries_and_versions, RangeProperties};
 use engine_traits::{
-    CFHandleExt, MiscExt, Range, RangePropertiesExt, Result, TableProperties,
-    TablePropertiesCollection, TablePropertiesExt, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
+    MiscExt, Range, RangePropertiesExt, Result, TableProperties, TablePropertiesCollection,
+    TablePropertiesExt, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
 };
 use std::path::Path;
 
@@ -28,8 +28,8 @@ impl RangePropertiesExt for RocksEngine {
 
         let start = &range.start_key;
         let end = &range.end_key;
-        let cf = box_try!(self.cf_handle(CF_WRITE));
-        let (_, keys) = get_range_entries_and_versions(self, cf, &start, &end).unwrap_or_default();
+        let (_, keys) =
+            get_range_entries_and_versions(self, CF_WRITE, &start, &end).unwrap_or_default();
         Ok(keys)
     }
 
@@ -219,8 +219,8 @@ impl RangePropertiesExt for RocksEngine {
                 split_size,
                 collection.len(),
                 cfname,
-                hex::encode_upper(&start_key),
-                hex::encode_upper(&end_key)
+                log_wrappers::Value::key(&start_key),
+                log_wrappers::Value::key(&end_key)
             ));
         }
         keys.sort();

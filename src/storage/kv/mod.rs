@@ -1,5 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! There are multiple [`Engine`](kv::Engine) implementations, [`RaftKv`](crate::server::raftkv::RaftKv)
+//! is used by the [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
+//! [`RocksEngine`](RocksEngine) are used for testing only.
+
 mod btree_engine;
 mod cursor;
 mod perf_context;
@@ -13,11 +17,11 @@ use std::{error, ptr, result};
 
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{CfName, CF_DEFAULT};
-use engine_traits::{IterOptions, KvEngine as LocalEngine, ReadOptions};
-use futures03::prelude::*;
+use engine_traits::{IterOptions, KvEngine as LocalEngine, MvccProperties, ReadOptions};
+use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
-use txn_types::{Key, TxnExtra, Value};
+use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp, KeyRange};
+use txn_types::{Key, TimeStamp, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -34,6 +38,7 @@ pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 pub type Callback<T> = Box<dyn FnOnce((CbContext, Result<T>)) + Send>;
+pub type ExtCallback = Box<dyn FnOnce() + Send>;
 pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug)]
@@ -92,6 +97,31 @@ impl WriteData {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SnapContext<'a> {
+    pub pb_ctx: &'a Context,
+    pub read_id: Option<ThreadReadId>,
+    // `start_ts` and `key_ranges` are used in replica read. They are sent to
+    // the leader via raft "read index" to check memory locks.
+    pub start_ts: TimeStamp,
+    pub key_ranges: Vec<KeyRange>,
+}
+
+impl<'a> Default for SnapContext<'a> {
+    fn default() -> Self {
+        SnapContext {
+            #[cfg(feature = "protobuf-codec")]
+            pb_ctx: Default::default(),
+            #[cfg(feature = "prost-codec")]
+            pb_ctx: Context::default_ref(),
+            read_id: None,
+            start_ts: Default::default(),
+            key_ranges: Default::default(),
+        }
+    }
+}
+
+/// Engine defines the common behaviour for a storage engine type.
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
     type Local: LocalEngine;
@@ -104,14 +134,24 @@ pub trait Engine: Send + Clone + 'static {
     /// Write modifications into internal local engine directly.
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
 
-    fn async_snapshot(
+    fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
+
+    fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()>;
+
+    /// Writes data to the engine asynchronously with some extensions.
+    ///
+    /// When the write request is proposed successfully, the `proposed_cb` is invoked.
+    /// When the write request is finished, the `write_cb` is invoked.
+    fn async_write_ext(
         &self,
         ctx: &Context,
-        read_id: Option<ThreadReadId>,
-        cb: Callback<Self::Snap>,
-    ) -> Result<()>;
-
-    fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
+        batch: WriteData,
+        write_cb: Callback<()>,
+        _proposed_cb: Option<ExtCallback>,
+        _committed_cb: Option<ExtCallback>,
+    ) -> Result<()> {
+        self.async_write(ctx, batch, write_cb)
+    }
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
@@ -123,9 +163,9 @@ pub trait Engine: Send + Clone + 'static {
 
     fn release_snapshot(&self) {}
 
-    fn snapshot(&self, ctx: &Context) -> Result<Self::Snap> {
+    fn snapshot(&self, ctx: SnapContext<'_>) -> Result<Self::Snap> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.async_snapshot(ctx, None, cb), timeout) {
+        match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
             Some((_, res)) => res,
             None => Err(Error::from(ErrorInner::Timeout(timeout))),
         }
@@ -161,6 +201,16 @@ pub trait Engine: Send + Clone + 'static {
         _end: &[u8],
     ) -> Result<RocksTablePropertiesCollection> {
         Err(box_err!("no user properties"))
+    }
+
+    fn get_mvcc_properties_cf(
+        &self,
+        _: CfName,
+        _safe_point: TimeStamp,
+        _start: &[u8],
+        _end: &[u8],
+    ) -> Option<MvccProperties> {
+        None
     }
 }
 
@@ -235,6 +285,7 @@ quick_error! {
     pub enum ErrorInner {
         Request(err: ErrorHeader) {
             from()
+            description(err.get_message())
             display("{:?}", err)
         }
         Timeout(d: Duration) {
@@ -377,18 +428,18 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
 /// Get a snapshot of `engine`.
 pub fn snapshot<E: Engine>(
     engine: &E,
-    read_id: Option<ThreadReadId>,
-    ctx: &Context,
+    ctx: SnapContext<'_>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let (callback, future) =
         tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
-    let val = engine.async_snapshot(ctx, read_id, callback);
+    let val = engine.async_snapshot(ctx, callback);
     // make engine not cross yield point
     async move {
         val?; // propagate error
         let (_ctx, result) = future
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
             .await?;
+        fail_point!("after-snapshot");
         result
     }
 }
@@ -433,12 +484,12 @@ pub mod tests {
     }
 
     pub fn assert_has<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap().unwrap(), value);
     }
 
     pub fn assert_has_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         assert_eq!(
             snapshot.get_cf(cf, &Key::from_raw(key)).unwrap().unwrap(),
             value
@@ -446,17 +497,17 @@ pub mod tests {
     }
 
     pub fn assert_none<E: Engine>(engine: &E, key: &[u8]) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap(), None);
     }
 
     pub fn assert_none_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8]) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         assert_eq!(snapshot.get_cf(cf, &Key::from_raw(key)).unwrap(), None);
     }
 
     fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut cursor = snapshot
             .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
@@ -467,7 +518,7 @@ pub mod tests {
     }
 
     fn assert_reverse_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut cursor = snapshot
             .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
@@ -561,7 +612,7 @@ pub mod tests {
         assert_seek(engine, b"x\x00", (b"z", b"2"));
         assert_reverse_seek(engine, b"y", (b"x", b"1"));
         assert_reverse_seek(engine, b"z", (b"x", b"1"));
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut iter = snapshot
             .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
@@ -579,7 +630,7 @@ pub mod tests {
     fn test_near_seek<E: Engine>(engine: &E) {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut cursor = snapshot
             .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
@@ -598,7 +649,7 @@ pub mod tests {
             let key = format!("y{}", i);
             must_put(engine, key.as_bytes(), b"3");
         }
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut cursor = snapshot
             .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
@@ -614,7 +665,7 @@ pub mod tests {
     }
 
     fn test_empty_seek<E: Engine>(engine: &E) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut cursor = snapshot
             .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
@@ -741,7 +792,7 @@ pub mod tests {
             let value = format!("value_{}", i);
             must_put(engine, key.as_bytes(), value.as_bytes());
         }
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         for step in 1..SEEK_BOUND as usize * 3 {
             for start in 0..10 {
@@ -809,7 +860,7 @@ pub mod tests {
         must_delete(engine, b"foo42");
         must_delete(engine, b"foo5");
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut iter = snapshot
             .iter(IterOptions::default(), ScanMode::Forward)
             .unwrap();

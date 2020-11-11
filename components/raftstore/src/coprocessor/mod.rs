@@ -7,9 +7,9 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request};
 use raft::StateRole;
-use txn_types::TxnExtra;
 
 pub mod config;
+mod consistency_check;
 pub mod dispatcher;
 mod error;
 mod metrics;
@@ -18,9 +18,11 @@ mod split_check;
 pub mod split_observer;
 
 pub use self::config::{Config, ConsistencyCheckMethod};
+pub use self::consistency_check::{ConsistencyCheckObserver, Raw as RawConsistencyCheckObserver};
 pub use self::dispatcher::{
-    BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxQueryObserver,
-    BoxRegionChangeObserver, BoxRoleObserver, BoxSplitCheckObserver, CoprocessorHost, Registry,
+    BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
+    BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver, BoxSplitCheckObserver,
+    CoprocessorHost, Registry,
 };
 pub use self::error::{Error, Result};
 pub use self::region_info_accessor::{
@@ -216,13 +218,11 @@ impl CmdBatch {
                 ref response,
                 ..
             } = cmd;
-            if !response.get_header().has_error() {
-                if !request.has_admin_request() {
-                    for req in request.requests.iter() {
-                        let put = req.get_put();
-                        cmd_bytes += put.get_key().len();
-                        cmd_bytes += put.get_value().len();
-                    }
+            if !response.get_header().has_error() && !request.has_admin_request() {
+                for req in request.requests.iter() {
+                    let put = req.get_put();
+                    cmd_bytes += put.get_key().len();
+                    cmd_bytes += put.get_value().len();
                 }
             }
         }
@@ -236,5 +236,5 @@ pub trait CmdObserver<E>: Coprocessor {
     /// Hook to call after applying a write request.
     fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd);
     /// Hook to call after flushing writes to db.
-    fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>, engine: E);
+    fn on_flush_apply(&self, engine: E);
 }

@@ -4,7 +4,7 @@ use super::ErrorCodeExt;
 use raft::Error;
 
 define_error_codes!(
-    "KV:Codec:",
+    "KV:Raft:",
 
     IO => ("Io", "", ""),
     STORE => ("Store", "", ""),
@@ -15,7 +15,8 @@ define_error_codes!(
     CODEC_ERROR => ("CodecError", "", ""),
     EXISTS => ("Exists", "", ""),
     NOT_EXISTS => ("NotExists", "", ""),
-    REQUEST_SNAPSHOT_DROPPED => ("RequestSnapshotDropped", "", "")
+    REQUEST_SNAPSHOT_DROPPED => ("RequestSnapshotDropped", "", ""),
+    CONF_CHANGE_ERROR => ("ConfChangeError", "", "")
 );
 
 impl ErrorCodeExt for Error {
@@ -31,6 +32,7 @@ impl ErrorCodeExt for Error {
             Error::Exists(_, _) => EXISTS,
             Error::NotExists(_, _) => NOT_EXISTS,
             Error::RequestSnapshotDropped => REQUEST_SNAPSHOT_DROPPED,
+            Error::ConfChangeError(_) => CONF_CHANGE_ERROR,
         }
     }
 }

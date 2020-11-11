@@ -5,15 +5,14 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use futures::channel::{mpsc, oneshot};
-use futures::compat::{Compat, Future01CompatExt, Sink01CompatExt, Stream01CompatExt};
+use futures::channel::mpsc;
+use futures::compat::Future01CompatExt;
 use futures::executor::block_on;
 use futures::future::{self, FutureExt};
 use futures::sink::SinkExt;
-use futures::stream::StreamExt;
-use futures::stream::TryStreamExt;
+use futures::stream::{StreamExt, TryStreamExt};
 
-use grpcio::{CallOption, EnvBuilder, WriteFlags};
+use grpcio::{CallOption, EnvBuilder, Result as GrpcResult, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
@@ -98,7 +97,7 @@ impl RpcClient {
                         .inner
                         .rl()
                         .client_stub
-                        .spawn(Compat::new(update_loop.unit_error().boxed()));
+                        .spawn(update_loop);
 
                     return Ok(rpc_client);
                 }
@@ -335,13 +334,50 @@ impl PdClient for RpcClient {
                     panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
                 });
             Box::pin(async move {
-                let mut resp = handler.compat().await?;
+                let mut resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_region_by_id"])
                     .observe(duration_to_sec(timer.elapsed()));
                 check_resp_header(resp.get_header())?;
                 if resp.has_region() {
                     Ok(Some(resp.take_region()))
+                } else {
+                    Ok(None)
+                }
+            }) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn get_region_leader_by_id(
+        &self,
+        region_id: u64,
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetRegionByIdRequest::default();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        let executor = move |client: &RwLock<Inner>, req: pdpb::GetRegionByIdRequest| {
+            let handler = client
+                .rl()
+                .client_stub
+                .get_region_by_id_async_opt(&req, Self::call_option())
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
+                });
+            Box::pin(async move {
+                let mut resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["get_region_by_id"])
+                    .observe(duration_to_sec(timer.elapsed()));
+                check_resp_header(resp.get_header())?;
+                if resp.has_region() {
+                    Ok(Some((resp.take_region(), resp.take_leader())))
                 } else {
                     Ok(None)
                 }
@@ -401,18 +437,18 @@ impl PdClient for RpcClient {
                 .unwrap_or_else(|e| panic!("send request to unbounded channel failed {:?}", e));
             inner.hb_sender = Either::Right(tx);
             Box::pin(async move {
-                let mut sender = sender.sink_compat().sink_map_err(Error::Grpc);
+                let mut sender = sender.sink_map_err(Error::Grpc);
                 let result = sender
                     .send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
                     .await;
                 match result {
                     Ok(()) => {
-                        sender.get_mut().get_mut().cancel();
+                        sender.get_mut().cancel();
                         info!("cancel region heartbeat sender");
                         Ok(())
                     }
                     Err(e) => {
-                        error!("failed to send heartbeat"; "err" => ?e);
+                        error!(?e; "failed to send heartbeat");
                         Err(e)
                     }
                 }
@@ -446,7 +482,7 @@ impl PdClient for RpcClient {
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_split", e));
 
             Box::pin(async move {
-                let resp = handler.compat().await?;
+                let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["ask_split"])
                     .observe(duration_to_sec(timer.elapsed()));
@@ -480,7 +516,7 @@ impl PdClient for RpcClient {
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_batch_split", e));
 
             Box::pin(async move {
-                let resp = handler.compat().await?;
+                let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["ask_batch_split"])
                     .observe(duration_to_sec(timer.elapsed()));
@@ -514,7 +550,7 @@ impl PdClient for RpcClient {
                 .store_heartbeat_async_opt(&req, Self::call_option())
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "store_heartbeat", e));
             Box::pin(async move {
-                let resp = handler.compat().await?;
+                let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["store_heartbeat"])
                     .observe(duration_to_sec(timer.elapsed()));
@@ -549,7 +585,7 @@ impl PdClient for RpcClient {
                     panic!("fail to request PD {} err {:?}", "report_batch_split", e)
                 });
             Box::pin(async move {
-                let resp = handler.compat().await?;
+                let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["report_batch_split"])
                     .observe(duration_to_sec(timer.elapsed()));
@@ -602,7 +638,7 @@ impl PdClient for RpcClient {
                     panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e)
                 });
             Box::pin(async move {
-                let resp = handler.compat().await?;
+                let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_gc_safe_point"])
                     .observe(duration_to_sec(timer.elapsed()));
@@ -665,25 +701,19 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         let executor = move |client: &RwLock<Inner>, req: pdpb::TsoRequest| {
             let cli = client.read().unwrap();
-            let (req_sink, resp_stream) = cli
+            let (mut req_sink, mut resp_stream) = cli
                 .client_stub
                 .tso()
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "tso", e));
-            let mut req_sink = req_sink.sink_compat();
-            let (keep_req_tx, mut keep_req_rx) = oneshot::channel();
             let send_once = async move {
-                let _ = req_sink.send((req, WriteFlags::default())).await;
-                let _ = keep_req_tx.send(req_sink);
-            };
-            cli.client_stub
-                .spawn(Compat::new(send_once.unit_error().boxed()));
+                req_sink.send((req, WriteFlags::default())).await?;
+                req_sink.close().await?;
+                GrpcResult::Ok(())
+            }
+            .map(|_| ());
+            cli.client_stub.spawn(send_once);
             Box::pin(async move {
-                let resp = resp_stream.compat().try_next().await?;
-                // Now we can safely drop sink without
-                // causing a Cancel error.
-                let _ = keep_req_rx
-                    .try_recv()
-                    .unwrap_or_else(|e| panic!("fail to receive tso sender err {:?}", e));
+                let resp = resp_stream.try_next().await?;
                 let resp = match resp {
                     Some(r) => r,
                     None => return Ok(TimeStamp::zero()),

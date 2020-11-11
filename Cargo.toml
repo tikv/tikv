@@ -12,14 +12,18 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec"]
+default = ["protobuf-codec", "test-engines-rocksdb"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
 portable = ["engine_rocks/portable"]
 sse = ["engine_rocks/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
-failpoints = ["fail/failpoints", "raftstore/failpoints"]
+failpoints = [
+  "fail/failpoints",
+  "raftstore/failpoints",
+  "engine_rocks/failpoints"
+]
 prost-codec = [
   "engine_rocks/prost-codec",
   "grpcio/prost-codec",
@@ -51,6 +55,14 @@ protobuf-codec = [
   "tikv_util/protobuf-codec",
 ]
 testexport = ["raftstore/testexport"]
+test-engines-rocksdb = [
+  "engine_test/test-engine-kv-rocksdb",
+  "engine_test/test-engine-raft-rocksdb",
+]
+test-engines-panic = [
+  "engine_test/test-engine-kv-panic",
+  "engine_test/test-engine-raft-panic",
+]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -78,17 +90,16 @@ derive_more = "0.99.3"
 encryption = { path = "components/encryption" }
 engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
+engine_test = { path = "components/engine_test" }
 engine_traits = { path = "components/engine_traits" }
 error_code = { path = "components/error_code" }
-fail = "0.3"
+fail = "0.4"
 failure = "0.1"
 fs2 = "0.4"
-futures = "0.1"
-futures03 = { package = "futures", version = "0.3.1", features = ["compat"] }
-futures-cpupool = "0.1"
+futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
-grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.6", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 hyper-tls = "0.4"
 itertools = "0.8"
@@ -104,7 +115,7 @@ libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "components/log_wrappers" }
 mime = "0.3.13"
-more-asserts = "0.1"
+more-asserts = "0.2"
 murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 num_cpus = "1"
@@ -117,59 +128,46 @@ protobuf = "2.8"
 quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "components/raftstore" }
+raft_log_engine = { path = "components/raft_log_engine" }
 rand = "0.7.3"
 regex = "1.3"
 rev_lines = "0.2.1"
 security = { path = "components/security" }
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
+serde_ignored = "0.1"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 slog_derive = "0.2"
-parking_lot = "0.10"
-prometheus = { version = "0.8", features = ["nightly", "push"] }
+parking_lot = "0.11"
+prometheus = { version = "0.10", features = ["nightly"] }
+prometheus-static-metric = "0.4"
 sst_importer = { path = "components/sst_importer" }
-sysinfo = "0.14"
+sysinfo = "0.15"
 semver = "0.10"
 tempfile = "3.0"
 match_template = { path = "components/match_template" }
 tidb_query_datatype = { path = "components/tidb_query_datatype" }
 tidb_query_common = { path = "components/tidb_query_common" }
-tidb_query_shared_expr = { path = "components/tidb_query_shared_expr" }
-tidb_query_normal_expr = { path = "components/tidb_query_normal_expr" }
-tidb_query_normal_executors = { path = "components/tidb_query_normal_executors" }
-tidb_query_vec_expr = { path = "components/tidb_query_vec_expr" }
-tidb_query_vec_aggr = { path = "components/tidb_query_vec_aggr" }
-tidb_query_vec_executors = { path = "components/tidb_query_vec_executors" }
+tidb_query_expr = { path = "components/tidb_query_expr" }
+tidb_query_aggr = { path = "components/tidb_query_aggr" }
+tidb_query_executors = { path = "components/tidb_query_executors" }
 tikv_alloc = { path = "components/tikv_alloc" }
 tikv_util = { path = "components/tikv_util" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio = { version = "0.2", features = ["full"] }
-tokio-tcp = "0.1"
-tokio-core = "0.1"
-tokio-fs = "0.1.6"
-tokio-io = "0.1.12"
-tokio-sync = "0.1.7"
-tokio-threadpool = "0.1.13"
 tokio-timer = "0.2"
 tokio-openssl = "0.4"
-toml = "0.4"
+toml = "0.5"
 txn_types = { path = "components/txn_types" }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 vlog = "0.1.4"
 walkdir = "2"
 minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", branch = "master" }
-
-
-[dependencies.prometheus-static-metric]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6"
-
-[dependencies.yatp]
-git = "https://github.com/tikv/yatp.git"
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
@@ -180,12 +178,10 @@ zipf = "6.1.0"
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
-raft = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
-raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
-protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
-protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
-fail = { git = "https://github.com/tikv/fail-rs.git", rev = "2cf1175a1a5cc2c70bd20ebd45313afd69b558fc" }
-prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6" }
+raft = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
+raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
+protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
+protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
@@ -203,6 +199,7 @@ members = [
   "components/test_coprocessor",
   "components/test_sst_importer",
   "components/test_util",
+  "components/test_pd",
   "components/tikv_alloc",
   "components/match_template",
   "components/engine_traits/tests",
@@ -215,11 +212,9 @@ members = [
   "components/tidb_query_datatype",
   "components/tidb_query_common",
   "components/tidb_query_codegen",
-  "components/tidb_query_normal_expr",
-  "components/tidb_query_normal_executors",
-  "components/tidb_query_vec_expr",
-  "components/tidb_query_vec_aggr",
-  "components/tidb_query_vec_executors",
+  "components/tidb_query_expr",
+  "components/tidb_query_aggr",
+  "components/tidb_query_executors",
   "components/pd_client",
   "components/external_storage",
   "components/backup",

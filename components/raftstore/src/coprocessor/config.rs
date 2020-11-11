@@ -4,6 +4,7 @@ use super::Result;
 use crate::store::SplitCheckTask;
 
 use configuration::{ConfigChange, ConfigManager, Configuration};
+use engine_rocks::{config as rocks_config, PerfLevel};
 use tikv_util::config::ReadableSize;
 use tikv_util::worker::Scheduler;
 
@@ -34,16 +35,21 @@ pub struct Config {
     /// ConsistencyCheckMethod can not be chanaged dynamically.
     #[config(skip)]
     pub consistency_check_method: ConsistencyCheckMethod,
+
+    #[serde(with = "rocks_config::perf_level_serde")]
+    #[config(skip)]
+    pub perf_level: PerfLevel,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConsistencyCheckMethod {
-    /// Does consistency check for regions based on MVCC.
-    Mvcc,
     /// Does consistency check for regions based on raw data. Only used when
     /// raw APIs are enabled and MVCC-GC is disabled.
-    Raw,
+    Raw = 0,
+
+    /// Does consistency check for regions based on MVCC.
+    Mvcc = 1,
 }
 
 /// Default region split size.
@@ -63,7 +69,8 @@ impl Default for Config {
             region_max_size: split_size / 2 * 3,
             region_split_keys: SPLIT_KEYS,
             region_max_keys: SPLIT_KEYS / 2 * 3,
-            consistency_check_method: ConsistencyCheckMethod::Raw,
+            consistency_check_method: ConsistencyCheckMethod::Mvcc,
+            perf_level: PerfLevel::EnableCount,
         }
     }
 }

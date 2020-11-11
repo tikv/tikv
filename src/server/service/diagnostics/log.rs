@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 
 use chrono::DateTime;
-use futures::stream::{iter_ok, Stream};
+use futures::stream::{self, Stream};
 use itertools::Itertools;
 use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
 use lazy_static::lazy_static;
@@ -303,8 +303,8 @@ fn parse_end_time(file: &std::fs::File, try_lines: usize) -> Result<i64, Error> 
 // Batch size of the log streaming
 const LOG_ITEM_BATCH_SIZE: usize = 256;
 
-fn batch_log_item(item: LogIterator) -> impl Stream<Item = SearchLogResponse, Error = ()> {
-    iter_ok(item.batching(|iter| {
+fn batch_log_item(item: LogIterator) -> impl Stream<Item = SearchLogResponse> {
+    stream::iter(item.batching(|iter| {
         let batch = iter.take(LOG_ITEM_BATCH_SIZE).collect_vec();
         if batch.is_empty() {
             None
@@ -319,7 +319,7 @@ fn batch_log_item(item: LogIterator) -> impl Stream<Item = SearchLogResponse, Er
 pub fn search<P: AsRef<Path>>(
     log_file: P,
     mut req: SearchLogRequest,
-) -> Result<impl Stream<Item = SearchLogResponse, Error = ()>, Error> {
+) -> Result<impl Stream<Item = SearchLogResponse>, Error> {
     if !log_file.as_ref().exists() {
         return Ok(batch_log_item(LogIterator::default()));
     }
@@ -342,6 +342,8 @@ pub fn search<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::executor::block_on;
+    use futures::stream::StreamExt;
     use std::io::Write;
     use tempfile::tempdir;
 
@@ -761,7 +763,7 @@ Some invalid logs 2: Welcome to TiKV - test-filter"#
         let mut req = SearchLogRequest::default();
         req.set_start_time(timestamp("2019/08/23 18:09:54.387 +08:00"));
         req.set_end_time(std::i64::MAX);
-        req.set_levels(vec![LogLevel::Warn.into()].into());
+        req.set_levels(vec![LogLevel::Warn]);
         req.set_patterns(vec![".*test-filter.*".to_string()].into());
         let expected = vec![
             "2019/08/23 18:09:58.387 +08:00",
@@ -771,19 +773,17 @@ Some invalid logs 2: Welcome to TiKV - test-filter"#
         .iter()
         .map(|s| timestamp(s))
         .collect::<Vec<i64>>();
-        assert_eq!(
-            expected,
-            search(log_file, req)
-                .unwrap()
-                .wait()
-                .map(|x| x.unwrap())
-                .collect::<Vec<SearchLogResponse>>()
+        let fact = block_on(async move {
+            let s = search(log_file, req).unwrap();
+            s.collect::<Vec<SearchLogResponse>>()
+                .await
                 .into_iter()
                 .map(|mut resp| resp.take_messages().into_iter())
                 .into_iter()
                 .flatten()
                 .map(|msg| msg.get_time())
                 .collect::<Vec<i64>>()
-        );
+        });
+        assert_eq!(expected, fact);
     }
 }

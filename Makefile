@@ -43,6 +43,14 @@ else ifeq ($(SYSTEM_ALLOC),1)
 # no feature needed for system allocator
 else
 ENABLE_FEATURES += jemalloc
+
+# Only tested on Linux
+ifeq ($(shell uname -s),Linux)
+ENABLE_FEATURES += mem-profiling
+# According to jemalloc/jemalloc#585, enabling it on some platform or some
+# versions of glibc can cause deadlock.
+# export JEMALLOC_SYS_WITH_MALLOC_CONF = prof:true,prof_active:false
+endif
 endif
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
@@ -78,6 +86,13 @@ else
 ENABLE_FEATURES += protobuf-codec
 endif
 
+# Set the storage engines used for testing
+ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
+ENABLE_FEATURES += test-engines-rocksdb
+else
+# Caller is responsible for setting up test engine features
+endif
+
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 BIN_PATH = $(CURDIR)/bin
@@ -87,7 +102,6 @@ CARGO_TARGET_DIR ?= $(CURDIR)/target
 BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
 export TIKV_ENABLE_FEATURES := ${ENABLE_FEATURES}
-export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
 export TIKV_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_TAG ?= $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
@@ -102,9 +116,18 @@ export DOCKER_IMAGE_TAG ?= "latest"
 # https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199/68
 export CARGO_BUILD_PIPELINING=true
 
-default: release
+# Almost all the rules in this Makefile are PHONY
+# Declaring a rule as PHONY could improve correctness
+# But probably instead just improves performance by a little bit
+.PHONY: audit clippy format pre-format pre-clippy pre-audit unset-override
+.PHONY: all build clean dev check-udeps doc error-code fuzz run test
+.PHONY: docker docker-tag docker-tag-with-git-hash docker-tag-with-git-tag
+.PHONY: ctl dist_artifacts dist_tarballs x-build-dist
+.PHONY: build_dist_release dist_release dist_unportable_release
+.PHONY: fail_release prof_release release unportable_release
 
-.PHONY: all
+
+default: release
 
 clean:
 	cargo clean
@@ -114,7 +137,7 @@ clean:
 ## Development builds
 ## ------------------
 
-all: format build test
+all: format build test error-code
 
 dev: format clippy
 	@env FAIL_POINT=1 make test
@@ -189,12 +212,10 @@ dist_unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make dist_release
 
 # Create distributable artifacts. Binaries and Docker image tarballs.
-.PHONY: dist_artifacts
 dist_artifacts: dist_tarballs
 
 # Build gzipped tarballs of the binaries and docker images.
 # Used to build a `dist/` folder containing the release artifacts.
-.PHONY: dist_tarballs
 dist_tarballs: docker
 	docker rm -f tikv-binary-extraction-dummy || true
 	docker create --name tikv-binary-extraction-dummy pingcap/tikv
@@ -206,54 +227,33 @@ dist_tarballs: docker
 	docker rm tikv-binary-extraction-dummy
 
 # Create tags of the docker images
-.PHONY: docker-tag
 docker-tag: docker-tag-with-git-hash docker-tag-with-git-tag
 
 # Tag docker images with the git hash
-.PHONY: docker-tag-with-git-hash
 docker-tag-with-git-hash:
 	docker tag pingcap/tikv pingcap/tikv:${TIKV_BUILD_GIT_HASH}
 
 # Tag docker images with the git tag
-.PHONY: docker-tag-with-git-tag
 docker-tag-with-git-tag:
 	docker tag pingcap/tikv pingcap/tikv:${TIKV_BUILD_GIT_TAG}
+
+
+## Execution environment
+## -------
+## Run a command in the environment setup by the Makefile
+##
+##     COMMAND="echo" make run
+##
+run:
+	@env MAKEFILE_RUN=1 $(COMMAND)
 
 ## Testing
 ## -------
 
 # Run tests under a variety of conditions. This should pass before
-# submitting pull requests. Note though that the CI system tests TiKV
-# through its own scripts and does not use this rule.
-.PHONY: run-test
-run-test:
-	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
-	# again here. LOCAL_DIR is defined in .travis.yml.
-	# The special Linux case below is testing the mem-profiling
-	# features in tikv_alloc, which are marked #[ignore] since
-	# they require special compile-time and run-time setup
-	# Fortunately rebuilding with the mem-profiling feature will only
-	# rebuild starting at jemalloc-sys.
-	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
-	export LOG_LEVEL=DEBUG && \
-	export RUST_BACKTRACE=1 && \
-	cargo test --workspace \
-		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	if [[ "`uname`" == "Linux" ]]; then \
-		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored && \
-		cargo test --workspace \
-			--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-			--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv --lib -- --nocapture --ignored; \
-	fi
-
-.PHONY: test
-test: run-test
-	@if [[ "`uname`" = "Linux" ]]; then \
-		env EXTRA_CARGO_ARGS="--message-format=json-render-diagnostics -q --no-run" make run-test |\
-                python scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-tests; \
-	fi
+# submitting pull requests.
+test:
+	./scripts/test-all
 
 ## Static analysis
 ## ---------------
@@ -266,10 +266,10 @@ pre-format: unset-override
 	@rustup component add rustfmt
 
 format: pre-format
-	@cargo fmt --all -- --check >/dev/null || \
-	cargo fmt --all
+	@cargo fmt -- --check >/dev/null || \
+	cargo fmt
 
-doc: 
+doc:
 	@cargo doc --workspace --document-private-items \
 		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
 		--no-default-features --features "${ENABLE_FEATURES}"
@@ -277,39 +277,8 @@ doc:
 pre-clippy: unset-override
 	@rustup component add clippy
 
-ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cognitive_complexity \
-	-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
-	-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
-	-A clippy::neg_cmp_op_on_partial_ord -A clippy::too_many_arguments \
-	-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
-	-A clippy::needless_range_loop -A clippy::redundant_closure \
-	-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call \
-	-A clippy::useless_conversion -A clippy::new_ret_no_self -A clippy::unnecessary_sort_by
-
-# PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
-ifneq (,$(findstring prost-codec,"$(ENABLE_FEATURES)"))
 clippy: pre-clippy
-	@cargo clippy --workspace --all-targets --no-default-features \
-		--exclude cdc --exclude backup --exclude tests --exclude cmd \
-		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
-	@for pkg in "components/cdc" "components/backup" "cmd" "tests"; do \
-		cd $$pkg && \
-		cargo clippy --all-targets --no-default-features \
-			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
-		cd - >/dev/null;\
-	done
-	@for pkg in "fuzz"; do \
-		cd $$pkg && \
-		cargo clippy --all-targets -- $(ALLOWED_CLIPPY_LINTS) && \
-		cd - >/dev/null; \
-	done
-else
-clippy: pre-clippy
-	@cargo clippy --workspace \
-		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
-endif
+	@./scripts/clippy-all
 
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))
@@ -322,13 +291,11 @@ pre-audit:
 audit: pre-audit
 	cargo audit
 
-.PHONY: check-udeps
 check-udeps:
 	which cargo-udeps &>/dev/null || cargo install cargo-udeps && cargo udeps
 
 FUZZER ?= Honggfuzz
 
-.PHONY: fuzz
 fuzz:
 	@cargo run --package fuzz --no-default-features --features "${ENABLE_FEATURES}" -- run ${FUZZER} ${FUZZ_TARGET} \
 	|| echo "" && echo "Set the target for fuzzing using FUZZ_TARGET and the fuzzer using FUZZER (default is Honggfuzz)"
@@ -343,15 +310,21 @@ ctl:
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
+# Actually use make to track dependencies! This saves half a second.
+error_code_files := $(shell find components/error_code/ -type f )
+etc/error_code.toml: $(error_code_files)
+	cargo run --manifest-path components/error_code/Cargo.toml --features protobuf-codec
+
+error-code: etc/error_code.toml
+
 # A special target for building TiKV docker image.
-.PHONY: docker
 docker:
-	bash ./scripts/gen-dockerfile.sh | docker build \
+	docker build \
 		-t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
-		-f - . \
 		--build-arg GIT_HASH=${TIKV_BUILD_GIT_HASH} \
 		--build-arg GIT_TAG=${TIKV_BUILD_GIT_TAG} \
-		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH}
+		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH} \
+		.
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------

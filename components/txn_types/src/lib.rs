@@ -19,8 +19,8 @@ use std::io;
 pub use lock::{Lock, LockType};
 pub use timestamp::{TimeStamp, TsSet};
 pub use types::{
-    is_short_value, Key, KvPair, Mutation, MutationType, OldValue, TxnExtra, Value,
-    SHORT_VALUE_MAX_LEN,
+    is_short_value, Key, KvPair, Mutation, MutationType, OldValue, TxnExtra, TxnExtraScheduler,
+    Value, SHORT_VALUE_MAX_LEN,
 };
 pub use write::{Write, WriteRef, WriteType};
 

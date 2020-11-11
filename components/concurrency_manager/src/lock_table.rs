@@ -2,29 +2,35 @@
 
 use super::key_handle::{KeyHandle, KeyHandleGuard};
 
-use parking_lot::Mutex;
+use crossbeam_skiplist::SkipMap;
 use std::{
-    collections::BTreeMap,
     ops::Bound,
     sync::{Arc, Weak},
 };
 use txn_types::{Key, Lock};
 
-#[derive(Clone, Default)]
-pub struct LockTable(pub Arc<Mutex<BTreeMap<Key, Weak<KeyHandle>>>>);
+#[derive(Clone)]
+pub struct LockTable(pub Arc<SkipMap<Key, Weak<KeyHandle>>>);
+
+impl Default for LockTable {
+    fn default() -> Self {
+        LockTable(Arc::new(SkipMap::new()))
+    }
+}
 
 impl LockTable {
     pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard {
         loop {
-            if let Some(handle) = self.get(key) {
+            let handle = Arc::new(KeyHandle::new(key.clone(), self.clone()));
+            let weak = Arc::downgrade(&handle);
+            let weak2 = weak.clone();
+            let guard = handle.lock().await;
+
+            let entry = self.0.get_or_insert(key.clone(), weak);
+            if entry.value().ptr_eq(&weak2) {
+                return guard;
+            } else if let Some(handle) = entry.value().upgrade() {
                 return handle.lock().await;
-            } else {
-                let handle = Arc::new(KeyHandle::new(key.clone(), self.clone()));
-                let weak = Arc::downgrade(&handle);
-                let guard = handle.lock().await;
-                if self.insert_if_not_exist(key.clone(), weak) {
-                    return guard;
-                }
             }
         }
     }
@@ -64,23 +70,9 @@ impl LockTable {
         }
     }
 
-    /// Inserts a key handle to the map if the key does not exists in the map.
-    /// Returns whether the handle is successfully inserted into the map.
-    pub fn insert_if_not_exist(&self, key: Key, handle: Weak<KeyHandle>) -> bool {
-        use std::collections::btree_map::Entry;
-
-        match self.0.lock().entry(key) {
-            Entry::Vacant(entry) => {
-                entry.insert(handle);
-                true
-            }
-            Entry::Occupied(_) => false,
-        }
-    }
-
     /// Gets the handle of the key.
-    pub fn get<'m>(&'m self, key: &Key) -> Option<Arc<KeyHandle>> {
-        self.0.lock().get(key).and_then(|handle| handle.upgrade())
+    pub fn get(&self, key: &Key) -> Option<Arc<KeyHandle>> {
+        self.0.get(key).and_then(|e| e.value().upgrade())
     }
 
     /// Finds the first handle in the given range that `pred` returns `Some`.
@@ -91,23 +83,30 @@ impl LockTable {
         end_key: Option<&Key>,
         mut pred: impl FnMut(Arc<KeyHandle>) -> Option<T>,
     ) -> Option<T> {
-        let lower_bound = start_key
-            .map(|k| Bound::Included(k))
-            .unwrap_or(Bound::Unbounded);
-        let upper_bound = end_key
-            .map(|k| Bound::Excluded(k))
-            .unwrap_or(Bound::Unbounded);
-        for (_, handle) in self.0.lock().range::<Key, _>((lower_bound, upper_bound)) {
-            if let Some(v) = handle.upgrade().and_then(&mut pred) {
-                return Some(v);
+        let lower_bound = start_key.map(Bound::Included).unwrap_or(Bound::Unbounded);
+        let upper_bound = end_key.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
+
+        for e in self.0.range((lower_bound, upper_bound)) {
+            let res = e.value().upgrade().and_then(&mut pred);
+            if res.is_some() {
+                return res;
             }
         }
         None
     }
 
+    /// Iterates all handles and call a specified function on each of them.
+    pub fn for_each(&self, mut f: impl FnMut(Arc<KeyHandle>)) {
+        for entry in self.0.iter() {
+            if let Some(handle) = entry.value().upgrade() {
+                f(handle);
+            }
+        }
+    }
+
     /// Removes the key and its key handle from the map.
     pub fn remove(&self, key: &Key) {
-        self.0.lock().remove(key);
+        self.0.remove(key);
     }
 }
 
@@ -243,5 +242,61 @@ mod test {
             lock_table.check_range(None, None, |_, l| ts_check(l, 15)),
             Err(lock_l)
         );
+    }
+
+    #[tokio::test]
+    async fn test_lock_table_for_each() {
+        let lock_table: LockTable = LockTable::default();
+
+        let mut found_locks = Vec::new();
+        let mut expect_locks = Vec::new();
+
+        let collect = |h: Arc<KeyHandle>, to: &mut Vec<_>| {
+            let lock = h.with_lock(|l| l.clone());
+            to.push((h.key.clone(), lock));
+        };
+
+        lock_table.for_each(|h| collect(h, &mut found_locks));
+        assert!(found_locks.is_empty());
+
+        let lock_a = Lock::new(
+            LockType::Lock,
+            b"a".to_vec(),
+            20.into(),
+            100,
+            None,
+            20.into(),
+            1,
+            20.into(),
+        );
+        let guard_a = lock_table.lock_key(&Key::from_raw(b"a")).await;
+        guard_a.with_lock(|l| {
+            *l = Some(lock_a.clone());
+        });
+        expect_locks.push((Key::from_raw(b"a"), Some(lock_a.clone())));
+
+        lock_table.for_each(|h| collect(h, &mut found_locks));
+        assert_eq!(found_locks, expect_locks);
+        found_locks.clear();
+
+        let lock_b = Lock::new(
+            LockType::Lock,
+            b"b".to_vec(),
+            30.into(),
+            120,
+            None,
+            30.into(),
+            2,
+            30.into(),
+        )
+        .use_async_commit(vec![b"c".to_vec()]);
+        let guard_b = lock_table.lock_key(&Key::from_raw(b"b")).await;
+        guard_b.with_lock(|l| {
+            *l = Some(lock_b.clone());
+        });
+        expect_locks.push((Key::from_raw(b"b"), Some(lock_b.clone())));
+
+        lock_table.for_each(|h| collect(h, &mut found_locks));
+        assert_eq!(found_locks, expect_locks);
     }
 }

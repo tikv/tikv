@@ -15,6 +15,7 @@ mod security;
 
 use std::env;
 
+pub use crate::encryption::*;
 pub use crate::kv_generator::*;
 pub use crate::logging::*;
 pub use crate::macros::*;

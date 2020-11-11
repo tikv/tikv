@@ -4,7 +4,7 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{ErrorInner as MvccErrorInner, MvccTxn, Result as MvccResult};
 use crate::storage::txn::commands::{
-    Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
@@ -56,42 +56,27 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             .into()
         ));
 
-        let lock_ttl: MvccResult<_> =
-            if let Some(mut lock) = txn.reader.load_lock(&self.primary_key)? {
-                if lock.ts == self.start_ts {
-                    if lock.ttl < self.advise_ttl {
-                        lock.ttl = self.advise_ttl;
-                        txn.put_lock(self.primary_key.clone(), &lock);
-                    } else {
-                        debug!(
-                            "txn_heart_beat with advise_ttl not large than current ttl";
-                            "primary_key" => %self.primary_key,
-                            "start_ts" => self.start_ts,
-                            "advise_ttl" => self.advise_ttl,
-                            "current_ttl" => lock.ttl,
-                        );
-                    }
-                    Ok(lock.ttl)
+        let lock: MvccResult<_> = if let Some(mut lock) = txn.reader.load_lock(&self.primary_key)? {
+            if lock.ts == self.start_ts {
+                if lock.ttl < self.advise_ttl {
+                    lock.ttl = self.advise_ttl;
+                    txn.put_lock(self.primary_key.clone(), &lock);
                 } else {
                     debug!(
-                        "txn_heart_beat invoked but lock is absent";
+                        "txn_heart_beat with advise_ttl not larger than current ttl";
                         "primary_key" => %self.primary_key,
                         "start_ts" => self.start_ts,
                         "advise_ttl" => self.advise_ttl,
+                        "current_ttl" => lock.ttl,
                     );
-                    Err(MvccErrorInner::TxnLockNotFound {
-                        start_ts: self.start_ts,
-                        commit_ts: TimeStamp::zero(),
-                        key: self.primary_key.clone().into_raw()?,
-                    }
-                    .into())
                 }
+                Ok(lock)
             } else {
                 debug!(
-                "txn_heart_beat invoked but lock is absent";
-                "primary_key" => %self.primary_key,
-                "start_ts" => self.start_ts,
-                "advise_ttl" => self.advise_ttl,
+                    "txn_heart_beat invoked but lock is absent";
+                    "primary_key" => %self.primary_key,
+                    "start_ts" => self.start_ts,
+                    "advise_ttl" => self.advise_ttl,
                 );
                 Err(MvccErrorInner::TxnLockNotFound {
                     start_ts: self.start_ts,
@@ -99,11 +84,25 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
                     key: self.primary_key.clone().into_raw()?,
                 }
                 .into())
-            };
+            }
+        } else {
+            debug!(
+                "txn_heart_beat invoked but lock is absent";
+                "primary_key" => %self.primary_key,
+                "start_ts" => self.start_ts,
+                "advise_ttl" => self.advise_ttl,
+            );
+            Err(MvccErrorInner::TxnLockNotFound {
+                start_ts: self.start_ts,
+                commit_ts: TimeStamp::zero(),
+                key: self.primary_key.clone().into_raw()?,
+            }
+            .into())
+        };
 
         context.statistics.add(&txn.take_statistics());
         let pr = ProcessResult::TxnStatus {
-            txn_status: TxnStatus::uncommitted(lock_ttl?, TimeStamp::zero(), false, vec![]),
+            txn_status: TxnStatus::uncommitted(lock?, false),
         };
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
@@ -113,6 +112,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             pr,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }
@@ -124,6 +124,7 @@ pub mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::commands::WriteCommand;
+    use crate::storage::txn::tests::*;
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
@@ -136,7 +137,7 @@ pub mod tests {
         expect_ttl: u64,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let command = crate::storage::txn::commands::TxnHeartBeat {
@@ -153,23 +154,16 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
-                    enable_async_commit: true,
+                    async_apply_prewrite: false,
                 },
             )
             .unwrap();
         if let ProcessResult::TxnStatus {
-            txn_status:
-                TxnStatus::Uncommitted {
-                    lock_ttl,
-                    min_commit_ts: _,
-                    use_async_commit: _,
-                    secondaries: _,
-                },
+            txn_status: TxnStatus::Uncommitted { lock, .. },
         } = result.pr
         {
             write(engine, &ctx, result.to_be_write.modifies);
-            assert_eq!(lock_ttl, expect_ttl);
+            assert_eq!(lock.ttl, expect_ttl);
         } else {
             unreachable!();
         }
@@ -182,7 +176,7 @@ pub mod tests {
         advise_ttl: u64,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let command = crate::storage::txn::commands::TxnHeartBeat {
@@ -199,8 +193,7 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
-                    enable_async_commit: true,
+                    async_apply_prewrite: false,
                 },
             )
             .is_err());

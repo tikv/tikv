@@ -6,14 +6,13 @@ use crate::server::CONFIG_ROCKSDB_GAUGE;
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use engine_rocks::RocksEngine;
-use engine_traits::{CFHandleExt, ColumnFamilyOptions, CF_DEFAULT};
+use engine_traits::{CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
 use libc::c_int;
 use std::error::Error;
 use tikv_util::config::{self, OptionReadableSize, ReadableSize};
 use tikv_util::sys::sys_quota::SysQuota;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
-pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 1024 * 512;
@@ -45,12 +44,8 @@ pub struct Config {
     #[config(skip)]
     // Reserve disk space to make tikv would have enough space to compact when disk is full.
     pub reserve_space: ReadableSize,
-    // If this option is enabled, prewrite will support async commit and locks in the in-memory
-    // lock table are checked for reading requests.
-    // CAUTION: This feature is not ready for production and this option may be removed in the
-    // future.
     #[config(skip)]
-    pub enable_async_commit: bool,
+    pub enable_async_apply_prewrite: bool,
     #[config(submodule)]
     pub block_cache: BlockCacheConfig,
 }
@@ -66,7 +61,7 @@ impl Default for Config {
             scheduler_worker_pool_size: if cpu_num >= 16.0 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVER_SPACE_SIZE),
-            enable_async_commit: false,
+            enable_async_apply_prewrite: false,
             block_cache: BlockCacheConfig::default(),
         }
     }
@@ -114,8 +109,7 @@ impl ConfigManager for StorageConfigManger {
                     // the size through any of them. Here we change it through default CF in kvdb.
                     // A better way to do it is to hold the cache reference somewhere, and use it to
                     // change cache size.
-                    let handle = self.kvdb.cf_handle(CF_DEFAULT)?;
-                    let opt = self.kvdb.get_options_cf(handle);
+                    let opt = self.kvdb.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
                     opt.set_block_cache_capacity(size.0)?;
                     // Write config to metric
                     CONFIG_ROCKSDB_GAUGE

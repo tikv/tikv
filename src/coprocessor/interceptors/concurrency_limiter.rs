@@ -116,7 +116,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures03::future::FutureExt;
+    use futures::future::FutureExt;
     use std::sync::Arc;
     use std::thread;
     use tokio::task::yield_now;

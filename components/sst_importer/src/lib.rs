@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Importing RocksDB SST files into TiKV
+#![feature(min_specialization)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -9,7 +10,7 @@ extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
-extern crate slog_global;
+extern crate tikv_util;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 

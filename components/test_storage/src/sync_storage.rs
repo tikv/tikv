@@ -1,16 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::Future;
-
+use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, GetRequest, LockInfo};
 use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::router::RaftStoreBlackHole;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    txn::commands, Engine, PrewriteResult, Result, Storage, TestEngineBuilder, TestStorageBuilder,
-    TxnStatus,
+    txn::commands, Engine, PerfStatisticsDelta, PrewriteResult, Result, Statistics, Storage,
+    TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
 use tikv_util::collections::HashMap;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
@@ -61,7 +61,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         }
         let mut gc_worker = GcWorker::new(
             self.engine,
-            None,
+            RaftStoreBlackHole,
             self.gc_config.unwrap_or_default(),
             Default::default(),
         );
@@ -79,7 +79,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 /// Only used for test purpose.
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine> {
-    gc_worker: GcWorker<E>,
+    gc_worker: GcWorker<E, RaftStoreBlackHole>,
     store: Storage<E, DummyLockManager>,
 }
 
@@ -104,8 +104,8 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         key: &Key,
         start_ts: impl Into<TimeStamp>,
-    ) -> Result<Option<Value>> {
-        self.store.get(ctx, key.to_owned(), start_ts.into()).wait()
+    ) -> Result<(Option<Value>, Statistics, PerfStatisticsDelta)> {
+        block_on(self.store.get(ctx, key.to_owned(), start_ts.into()))
     }
 
     #[allow(dead_code)]
@@ -114,18 +114,17 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         keys: &[Key],
         start_ts: impl Into<TimeStamp>,
-    ) -> Result<Vec<Result<KvPair>>> {
-        self.store
-            .batch_get(ctx, keys.to_owned(), start_ts.into())
-            .wait()
+    ) -> Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)> {
+        block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn batch_get_command(
         &self,
         ctx: Context,
         keys: &[&[u8]],
         start_ts: u64,
-    ) -> Result<Vec<Option<Vec<u8>>>> {
+    ) -> Result<Vec<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>> {
         let requests: Vec<GetRequest> = keys
             .to_owned()
             .into_iter()
@@ -137,7 +136,7 @@ impl<E: Engine> SyncTestStorage<E> {
                 req
             })
             .collect();
-        let resp = self.store.batch_get_command(requests).wait()?;
+        let resp = block_on(self.store.batch_get_command(requests))?;
         let mut values = vec![];
 
         for value in resp.into_iter() {
@@ -155,18 +154,16 @@ impl<E: Engine> SyncTestStorage<E> {
         key_only: bool,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Vec<Result<KvPair>>> {
-        self.store
-            .scan(
-                ctx,
-                start_key,
-                end_key,
-                limit,
-                0,
-                start_ts.into(),
-                key_only,
-                false,
-            )
-            .wait()
+        block_on(self.store.scan(
+            ctx,
+            start_key,
+            end_key,
+            limit,
+            0,
+            start_ts.into(),
+            key_only,
+            false,
+        ))
     }
 
     pub fn reverse_scan(
@@ -178,18 +175,16 @@ impl<E: Engine> SyncTestStorage<E> {
         key_only: bool,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Vec<Result<KvPair>>> {
-        self.store
-            .scan(
-                ctx,
-                start_key,
-                end_key,
-                limit,
-                0,
-                start_ts.into(),
-                key_only,
-                true,
-            )
-            .wait()
+        block_on(self.store.scan(
+            ctx,
+            start_key,
+            end_key,
+            limit,
+            0,
+            start_ts.into(),
+            key_only,
+            true,
+        ))
     }
 
     pub fn prewrite(
@@ -240,10 +235,9 @@ impl<E: Engine> SyncTestStorage<E> {
         keys: Vec<Key>,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<()> {
-        wait_op!(|cb| self.store.sched_txn_command(
-            commands::Rollback::new(keys, start_ts.into().into(), ctx),
-            cb,
-        ))
+        wait_op!(|cb| self
+            .store
+            .sched_txn_command(commands::Rollback::new(keys, start_ts.into(), ctx), cb))
         .unwrap()
     }
 
@@ -297,7 +291,7 @@ impl<E: Engine> SyncTestStorage<E> {
     }
 
     pub fn raw_get(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
-        self.store.raw_get(ctx, cf, key).wait()
+        block_on(self.store.raw_get(ctx, cf, key))
     }
 
     pub fn raw_put(&self, ctx: Context, cf: String, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
@@ -316,9 +310,10 @@ impl<E: Engine> SyncTestStorage<E> {
         end_key: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
-        self.store
-            .raw_scan(ctx, cf, start_key, end_key, limit, false, false)
-            .wait()
+        block_on(
+            self.store
+                .raw_scan(ctx, cf, start_key, end_key, limit, false, false),
+        )
     }
 
     pub fn reverse_raw_scan(
@@ -329,8 +324,9 @@ impl<E: Engine> SyncTestStorage<E> {
         end_key: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
-        self.store
-            .raw_scan(ctx, cf, start_key, end_key, limit, false, true)
-            .wait()
+        block_on(
+            self.store
+                .raw_scan(ctx, cf, start_key, end_key, limit, false, true),
+        )
     }
 }

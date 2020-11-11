@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -13,21 +13,20 @@ use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Peekable};
+use engine_traits::{Engines, Peekable, RaftEngine};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::router::RaftStoreRouter;
+use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::FutureWorker;
-use tikv_util::worker::Worker;
+use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -40,10 +39,10 @@ pub fn create_raft_storage<S>(
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
-    pipelined_pessimistic_lock: bool,
+    pipelined_pessimistic_lock: Arc<AtomicBool>,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
-    S: RaftStoreRouter<RocksEngine> + 'static,
+    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
 {
     let store = Storage::from_engine(
         engine,
@@ -58,29 +57,32 @@ where
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static> {
+pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
-    system: RaftBatchSystem<RocksEngine, RocksEngine>,
+    system: RaftBatchSystem<RocksEngine, ER>,
     has_started: bool,
 
     pd_client: Arc<C>,
     state: Arc<Mutex<GlobalReplicationState>>,
+    bg_worker: Option<Worker>,
 }
 
-impl<C> Node<C>
+impl<C, ER> Node<C, ER>
 where
     C: PdClient,
+    ER: RaftEngine,
 {
     /// Creates a new Node.
     pub fn new(
-        system: RaftBatchSystem<RocksEngine, RocksEngine>,
+        system: RaftBatchSystem<RocksEngine, ER>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
-    ) -> Node<C> {
+        bg_worker: Option<Worker>,
+    ) -> Node<C, ER> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -125,6 +127,7 @@ where
             system,
             has_started: false,
             state,
+            bg_worker,
         }
     }
 
@@ -134,14 +137,14 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
-        engines: Engines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, ER>,
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
@@ -183,7 +186,7 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            split_check_worker,
+            split_check_scheduler,
             auto_split_controller,
             concurrency_manager,
         )?;
@@ -198,7 +201,7 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter<RocksEngine, RocksEngine> {
+    pub fn get_router(&self) -> RaftRouter<RocksEngine, ER> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
@@ -208,7 +211,7 @@ where
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engines: &Engines<RocksEngine, RocksEngine>) -> Result<u64> {
+    fn check_store(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
         let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
@@ -253,7 +256,7 @@ where
         }
     }
 
-    fn bootstrap_store(&self, engines: &Engines<RocksEngine, RocksEngine>) -> Result<u64> {
+    fn bootstrap_store(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
         let store_id = self.alloc_id()?;
         debug!("alloc store id"; "store_id" => store_id);
 
@@ -266,7 +269,7 @@ where
     #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
         &self,
-        engines: &Engines<RocksEngine, RocksEngine>,
+        engines: &Engines<RocksEngine, ER>,
         store_id: u64,
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
@@ -290,23 +293,21 @@ where
 
     fn check_or_prepare_bootstrap_cluster(
         &self,
-        engines: &Engines<RocksEngine, RocksEngine>,
+        engines: &Engines<RocksEngine, ER>,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
         if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
             Ok(Some(first_region))
+        } else if self.check_cluster_bootstrapped()? {
+            Ok(None)
         } else {
-            if self.check_cluster_bootstrapped()? {
-                Ok(None)
-            } else {
-                self.prepare_bootstrap_cluster(engines, store_id).map(Some)
-            }
+            self.prepare_bootstrap_cluster(engines, store_id).map(Some)
         }
     }
 
     fn bootstrap_cluster(
         &mut self,
-        engines: &Engines<RocksEngine, RocksEngine>,
+        engines: &Engines<RocksEngine, ER>,
         first_region: metapb::Region,
     ) -> Result<()> {
         let region_id = first_region.get_id();
@@ -340,9 +341,7 @@ where
                     }
                 },
                 // TODO: should we clean region for other errors too?
-                Err(e) => {
-                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e)
-                }
+                Err(e) => error!(?e; "bootstrap cluster"; "cluster_id" => self.cluster_id,),
             }
             retry += 1;
             thread::sleep(Duration::from_secs(
@@ -371,14 +370,14 @@ where
     fn start_store<T>(
         &mut self,
         store_id: u64,
-        engines: Engines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, ER>,
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
@@ -394,6 +393,12 @@ where
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
+        let background_worker = if let Some(worker) = self.bg_worker.as_ref() {
+            worker.clone()
+        } else {
+            // only for test
+            WorkerBuilder::new("background").create()
+        };
         self.system.spawn(
             store,
             cfg,
@@ -405,7 +410,8 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            split_check_worker,
+            split_check_scheduler,
+            background_worker,
             auto_split_controller,
             self.state.clone(),
             concurrency_manager,
@@ -421,6 +427,9 @@ where
     /// Stops the Node.
     pub fn stop(&mut self) {
         let store_id = self.store.get_id();
+        if let Some(worker) = self.bg_worker.take() {
+            worker.stop();
+        }
         self.stop_store(store_id)
     }
 }

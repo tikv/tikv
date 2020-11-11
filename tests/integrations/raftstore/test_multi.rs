@@ -34,7 +34,11 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.must_get(key), Some(value.to_vec()));
 
     let region_id = cluster.get_region_id(b"");
-    let prev_last_index = cluster.raft_local_state(region_id, 1).get_last_index();
+    let prev_committed_index = cluster
+        .raft_local_state(region_id, 1)
+        .get_hard_state()
+        .get_commit();
+    let prev_apply_state = cluster.apply_state(region_id, 1);
 
     // sleep 200ms in case the commit packet is dropped by simulated transport.
     thread::sleep(Duration::from_millis(200));
@@ -62,8 +66,24 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let last_index = cluster.raft_local_state(region_id, 1).get_last_index();
     let apply_state = cluster.apply_state(region_id, 1);
-    assert!(apply_state.get_last_commit_index() < last_index);
-    assert!(apply_state.get_last_commit_index() >= prev_last_index);
+    assert_lt!(apply_state.get_last_commit_index(), last_index);
+    if apply_state != prev_apply_state {
+        // Ensures last commit index is advanced.
+        assert_ge!(
+            apply_state.get_last_commit_index(),
+            prev_committed_index,
+            "{:?} {:?}",
+            apply_state,
+            prev_apply_state
+        );
+        assert_gt!(
+            apply_state.get_last_commit_index(),
+            prev_apply_state.get_last_commit_index(),
+            "{:?} {:?}",
+            apply_state,
+            prev_apply_state
+        );
+    }
     // TODO add epoch not match test cases.
 }
 
@@ -472,7 +492,7 @@ fn test_node_leader_change_with_log_overlap() {
         .get_node_router(1)
         .send_command(
             put_req,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 called_.store(true, Ordering::SeqCst);
                 assert!(resp.response.get_header().has_error());
                 assert!(resp.response.get_header().get_error().has_stale_command());
@@ -724,7 +744,7 @@ fn test_node_dropped_proposal() {
         .get_node_router(1)
         .send_command(
             put_req,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 let _ = tx.send(resp.response);
             })),
         )

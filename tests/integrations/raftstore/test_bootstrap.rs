@@ -18,7 +18,7 @@ use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::server::Node;
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{FutureWorker, Worker};
+use tikv_util::worker::{dummy_scheduler, FutureWorker};
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully
@@ -52,11 +52,9 @@ fn test_node_bootstrap_with_prepared_data() {
         engine_rocks::raw_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None)
             .unwrap(),
     );
-    let shared_block_cache = false;
     let engines = Engines::new(
         RocksEngine::from_db(Arc::clone(&engine)),
         RocksEngine::from_db(Arc::clone(&raft_engine)),
-        shared_block_cache,
     );
     let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
 
@@ -66,6 +64,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::new(VersionTrack::new(cfg.raft_store.clone())),
         Arc::clone(&pd_client),
         Arc::default(),
+        None,
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap());
     let pd_worker = FutureWorker::new("test-pd-worker");
@@ -96,6 +95,7 @@ fn test_node_bootstrap_with_prepared_data() {
         let dir = tmp_path.path().join("import-sst");
         Arc::new(SSTImporter::new(dir, None).unwrap())
     };
+    let (split_check_scheduler, _) = dummy_scheduler();
 
     // try to restart this node, will clear the prepare data
     node.start(
@@ -106,7 +106,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::new(Mutex::new(StoreMeta::new(0))),
         coprocessor_host,
         importer,
-        Worker::new("split"),
+        split_check_scheduler,
         AutoSplitController::default(),
         ConcurrencyManager::new(1.into()),
     )

@@ -9,6 +9,5 @@ define_error_codes!(
     PROTO => ("Proto", "", ""),
     UNKNOWN_ENCRYPTION => ("UnknownEncryption", "", ""),
     WRONG_MASTER_KEY => ("WrongMasterKey", "", ""),
-    BOTH_MASTER_KEY_FAIL => ("BothMasterKeyFail", "", ""),
-    UNKNOWN => ("Unknown", "","")
+    BOTH_MASTER_KEY_FAIL => ("BothMasterKeyFail", "", "")
 );

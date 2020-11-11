@@ -230,7 +230,7 @@ impl ErrorCodeExt for Error {
             Error::ColumnOffset(_) => error_code::coprocessor::COLUMN_OFFSET,
             Error::UnknownSignature(_) => error_code::coprocessor::UNKNOWN_SIGNATURE,
             Error::Eval(_, _) => error_code::coprocessor::EVAL,
-            Error::Other(_) => error_code::coprocessor::UNKNOWN,
+            Error::Other(_) => error_code::UNKNOWN,
         }
     }
 }

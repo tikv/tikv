@@ -6,7 +6,6 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
-use error_code::ErrorCodeExt;
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -194,8 +193,8 @@ where
         debug!(
             "executing task";
             "region_id" => region_id,
-            "start_key" => log_wrappers::Key(&start_key),
-            "end_key" => log_wrappers::Key(&end_key),
+            "start_key" => log_wrappers::Value::key(&start_key),
+            "end_key" => log_wrappers::Value::key(&end_key),
         );
         CHECK_SPILT_COUNTER.all.inc();
 
@@ -216,7 +215,7 @@ where
                 match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                     Ok(keys) => keys,
                     Err(e) => {
-                        error!("failed to scan split key"; "region_id" => region_id, "err" => %e, "error_code" => %e.error_code());
+                        error!(%e; "failed to scan split key"; "region_id" => region_id,);
                         return;
                     }
                 }
@@ -227,16 +226,14 @@ where
                     .map(|k| keys::origin_key(&k).to_vec())
                     .collect(),
                 Err(e) => {
-                    error!(
+                    error!(%e;
                         "failed to get approximate split key, try scan way";
                         "region_id" => region_id,
-                        "err" => %e,
-                        "error_code" => %e.error_code(),
                     );
                     match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                         Ok(keys) => keys,
                         Err(e) => {
-                            error!("failed to scan split key"; "region_id" => region_id, "err" => %e, "error_code" => %e.error_code());
+                            error!(%e; "failed to scan split key"; "region_id" => region_id,);
                             return;
                         }
                     }
@@ -247,7 +244,7 @@ where
 
         if !split_keys.is_empty() {
             let region_epoch = region.get_region_epoch().clone();
-            let msg = new_split_region(region_epoch, split_keys);
+            let msg = new_split_region(region_epoch, split_keys, "split checker");
             let res = self.router.send(region_id, msg);
             if let Err(e) = res {
                 warn!("failed to send check result"; "region_id" => region_id, "err" => %e);
@@ -321,11 +318,13 @@ where
     }
 }
 
-impl<E, S> Runnable<Task> for Runner<E, S>
+impl<E, S> Runnable for Runner<E, S>
 where
     E: KvEngine,
     S: CasualRouter<E>,
 {
+    type Task = Task;
+
     fn run(&mut self, task: Task) {
         match task {
             Task::SplitCheckTask {
@@ -340,7 +339,11 @@ where
     }
 }
 
-fn new_split_region<E>(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage<E>
+fn new_split_region<E>(
+    region_epoch: RegionEpoch,
+    split_keys: Vec<Vec<u8>>,
+    source: &'static str,
+) -> CasualMessage<E>
 where
     E: KvEngine,
 {
@@ -348,5 +351,6 @@ where
         region_epoch,
         split_keys,
         callback: Callback::None,
+        source: source.into(),
     }
 }

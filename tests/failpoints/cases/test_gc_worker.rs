@@ -1,3 +1,5 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,7 +26,7 @@ fn test_collect_lock_from_stale_leader() {
     let mut clients = HashMap::default();
     for node_id in cluster.get_node_ids() {
         let channel =
-            ChannelBuilder::new(Arc::clone(&env)).connect(cluster.sim.rl().get_addr(node_id));
+            ChannelBuilder::new(Arc::clone(&env)).connect(&cluster.sim.rl().get_addr(node_id));
         let client = TikvClient::new(channel);
         clients.insert(node_id, client);
     }
@@ -107,6 +109,7 @@ fn test_observer_send_error() {
 #[test]
 fn test_notify_observer_after_apply() {
     let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
+    cluster.pd_client.disable_default_operator();
     let post_apply_query_fp = "notify_lock_observer_query";
     let apply_plain_kvs_fp = "notify_lock_observer_snapshot";
 
@@ -149,7 +152,7 @@ fn test_notify_observer_after_apply() {
     // Add a new store.
     let store_id = cluster.add_new_engine();
     let channel = ChannelBuilder::new(Arc::new(Environment::new(1)))
-        .connect(cluster.sim.rl().get_addr(store_id));
+        .connect(&cluster.sim.rl().get_addr(store_id));
     let replica_client = TikvClient::new(channel);
 
     // Add a new peer and pause before notifying the lock observer.
@@ -202,7 +205,7 @@ fn test_collect_applying_locks() {
     let mut clients = HashMap::default();
     for node_id in cluster.get_node_ids() {
         let channel =
-            ChannelBuilder::new(Arc::clone(&env)).connect(cluster.sim.rl().get_addr(node_id));
+            ChannelBuilder::new(Arc::clone(&env)).connect(&cluster.sim.rl().get_addr(node_id));
         let client = TikvClient::new(channel);
         clients.insert(node_id, client);
     }
