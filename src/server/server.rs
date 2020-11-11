@@ -361,7 +361,7 @@ mod tests {
     use raftstore::store::*;
 
     use crate::storage::lock_manager::DummyLockManager;
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::{PerfLevel, RocksSnapshot};
     use kvproto::raft_serverpb::RaftMessage;
     use security::SecurityConfig;
     use tokio::runtime::Builder as TokioBuilder;
@@ -442,6 +442,7 @@ mod tests {
             &cfg,
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
+            PerfLevel::EnableCount,
         );
         let debug_thread_pool = Arc::new(
             TokioBuilder::new()
