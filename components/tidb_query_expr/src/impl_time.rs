@@ -150,19 +150,14 @@ pub fn to_seconds(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<Int>> {
     Ok(Some(t.second_number()))
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn add_datetime_and_duration(
     ctx: &mut EvalContext,
-    datetime: Option<&DateTime>,
-    duration: Option<&Duration>,
+    datetime: &DateTime,
+    duration: &Duration,
 ) -> Result<Option<Time>> {
-    if datetime.is_none() || duration.is_none() {
-        return Ok(None);
-    }
-    let datetime = *datetime.unwrap();
-    let duration = *duration.unwrap();
-    let mut res = match datetime.checked_add(ctx, duration) {
+    let mut res = match datetime.checked_add(ctx, *duration) {
         Some(res) => res,
         None => return Ok(None),
     };
@@ -172,19 +167,14 @@ pub fn add_datetime_and_duration(
     Ok(Some(res))
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn sub_datetime_and_duration(
     ctx: &mut EvalContext,
-    datetime: Option<&DateTime>,
-    duration: Option<&Duration>,
+    datetime: &DateTime,
+    duration: &Duration,
 ) -> Result<Option<Time>> {
-    if datetime.is_none() || duration.is_none() {
-        return Ok(None);
-    }
-    let datetime = *datetime.unwrap();
-    let duration = *duration.unwrap();
-    let mut res = match datetime.checked_sub(ctx, duration) {
+    let mut res = match datetime.checked_sub(ctx, *duration) {
         Some(res) => res,
         None => return Ok(None),
     };
@@ -743,7 +733,11 @@ mod tests {
     #[test]
     fn test_add_sub_datetime_and_duration() {
         let mut ctx = EvalContext::default();
-        let null_cases = vec![("", "11:30:45.123456"), ("2019-01-01 01:00:00", ""), ("", "")];
+        let null_cases = vec![
+            ("", "11:30:45.123456"),
+            ("2019-01-01 01:00:00", ""),
+            ("", ""),
+        ];
         for (arg1, arg2) in null_cases {
             let exp: Option<Time> = None;
             let arg1 = match arg1 {
