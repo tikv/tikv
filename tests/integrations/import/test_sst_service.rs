@@ -36,13 +36,6 @@ fn test_upload_sst() {
     let meta = new_sst_meta(0, length);
     assert_to_string_contains!(send_upload_sst(&import, &meta, &data).unwrap_err(), "crc32");
 
-    // Mismatch length
-    let meta = new_sst_meta(crc32, 0);
-    assert_to_string_contains!(
-        send_upload_sst(&import, &meta, &data).unwrap_err(),
-        "length"
-    );
-
     let mut meta = new_sst_meta(crc32, length);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
@@ -124,6 +117,28 @@ fn test_ingest_sst() {
     ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
+}
+
+#[test]
+fn test_upload_and_ingest_with_tde() {
+    let (_tmp_dir, _cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client_tde();
+
+    let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+    send_upload_sst(&import, &meta, &data).unwrap();
+
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx.clone());
+    ingest.set_sst(meta);
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error(), "{:?}", resp.get_error());
+
+    check_ingested_kvs(&tikv, &ctx, sst_range);
 }
 
 #[test]
