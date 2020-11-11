@@ -487,7 +487,7 @@ trait DebugExecutor {
     ) {
         self.check_local_mode();
         let rpc_client =
-            RpcClient::new(cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+            RpcClient::new(cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let regions = region_ids
             .into_iter()
@@ -528,7 +528,7 @@ trait DebugExecutor {
     ) {
         self.check_local_mode();
         let rpc_client =
-            RpcClient::new(cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+            RpcClient::new(cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let regions = region_ids
             .into_iter()
@@ -924,8 +924,8 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     }
 
     fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
-        let rpc_client =
-            RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+        let rpc_client = RpcClient::new(pd_cfg, None, mgr)
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let mut region = match block_on(rpc_client.get_region_by_id(region_id)) {
             Ok(Some(region)) => region,
@@ -2299,7 +2299,7 @@ fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
     let mut cfg = PdConfig::default();
     cfg.endpoints.push(pd.to_owned());
     cfg.validate().unwrap();
-    RpcClient::new(&cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
+    RpcClient::new(&cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
 }
 
 fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64, key: Vec<u8>) {

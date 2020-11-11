@@ -124,13 +124,14 @@ pub struct ServerCluster {
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
+    env: Arc<Environment>,
 }
 
 impl ServerCluster {
     pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster {
         let env = Arc::new(
             EnvBuilder::new()
-                .cq_count(1)
+                .cq_count(2)
                 .name_prefix(thd_name!("server-cluster"))
                 .build(),
         );
@@ -139,7 +140,7 @@ impl ServerCluster {
         // We don't actually need to handle snapshot message, just create a dead worker to make it compile.
         let worker = LazyWorker::new("snap-worker");
         let conn_builder = ConnectionBuilder::new(
-            env,
+            env.clone(),
             Arc::default(),
             security_mgr,
             map.clone(),
@@ -159,6 +160,7 @@ impl ServerCluster {
             coprocessor_hooks: HashMap::default(),
             raft_client,
             concurrency_managers: HashMap::default(),
+            env,
         }
     }
 
@@ -330,6 +332,7 @@ impl Simulator for ServerCluster {
                 resolver.clone(),
                 snap_mgr.clone(),
                 gc_worker.clone(),
+                self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
             )
