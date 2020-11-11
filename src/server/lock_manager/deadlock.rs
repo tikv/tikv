@@ -581,14 +581,7 @@ where
 
     /// Resolves store address.
     fn resolve_store_address(&self, store_id: u64) -> Result<String> {
-        match wait_op!(|cb| self
-            .resolver
-            .resolve(store_id, cb)
-            .map_err(|e| Error::Other(box_err!(e))))
-        {
-            Some(Ok(addr)) => Ok(addr),
-            _ => Err(box_err!("failed to resolve store address")),
-        }
+        futures::executor::block_on(self.resolver.resolve(store_id))
     }
 
     /// Updates the leader info.
@@ -919,6 +912,7 @@ pub mod tests {
     use super::*;
     use crate::server::resolve::Callback;
     use futures::executor::block_on;
+    use futures::future::BoxFuture;
     use security::SecurityConfig;
     use tikv_util::worker::FutureWorker;
 
@@ -1071,8 +1065,8 @@ pub mod tests {
     pub(crate) struct MockResolver;
 
     impl StoreAddrResolver for MockResolver {
-        fn resolve(&self, _store_id: u64, _cb: Callback) -> Result<()> {
-            Err(Error::Other(box_err!("unimplemented")))
+        fn resolve(&self, _store_id: u64) -> BoxFuture<'_, Result<String>> {
+            Box::pin(async { Err(Error::Other(box_err!("unimplemented"))) })
         }
     }
 

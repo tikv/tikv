@@ -136,7 +136,7 @@ struct TiKVServer<ER: RaftEngine> {
     pd_client: Arc<RpcClient>,
     router: RaftRouter<RocksEngine, ER>,
     system: Option<RaftBatchSystem<RocksEngine, ER>>,
-    resolver: resolve::PdStoreAddrResolver,
+    resolver: resolve::PdStoreAddrResolver<RpcClient, RaftRouter<RocksEngine, ER>>,
     state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
@@ -159,7 +159,10 @@ struct TiKVEngines<ER: RaftEngine> {
 
 struct Servers<ER: RaftEngine> {
     lock_mgr: LockManager,
-    server: Server<RaftRouter<RocksEngine, ER>, resolve::PdStoreAddrResolver>,
+    server: Server<
+        RaftRouter<RocksEngine, ER>,
+        resolve::PdStoreAddrResolver<RpcClient, RaftRouter<RocksEngine, ER>>,
+    >,
     node: Node<RpcClient, ER>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
@@ -196,8 +199,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let background_worker = WorkerBuilder::new("background")
             .thread_count(thread_count)
             .create();
-        let (resolver, state) =
-            resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
+        let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
+        let resolver = resolve::PdStoreAddrResolver::new(
+            Arc::clone(&pd_client),
+            router.clone(),
+            Arc::clone(&state),
+        );
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
         let region_info_accessor =

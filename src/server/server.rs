@@ -362,6 +362,7 @@ mod tests {
 
     use crate::storage::lock_manager::DummyLockManager;
     use engine_rocks::{PerfLevel, RocksSnapshot};
+    use futures::future::BoxFuture;
     use kvproto::raft_serverpb::RaftMessage;
     use security::SecurityConfig;
     use tokio::runtime::Builder as TokioBuilder;
@@ -373,16 +374,18 @@ mod tests {
     }
 
     impl StoreAddrResolver for MockResolver {
-        fn resolve(&self, _: u64, cb: ResolveCallback) -> Result<()> {
-            if self.quick_fail.load(Ordering::SeqCst) {
-                return Err(box_err!("quick fail"));
-            }
-            let addr = self.addr.lock().unwrap();
-            cb(addr
-                .as_ref()
-                .map(|s| s.to_owned())
-                .ok_or(box_err!("not set")));
-            Ok(())
+        fn resolve(&self, _: u64) -> BoxFuture<'_, Result<String>> {
+            let quick_fail = self.quick_fail.clone();
+            let addr = self.addr.clone();
+            Box::pin(async move {
+                if quick_fail.load(Ordering::SeqCst) {
+                    return Err(box_err!("quick fail"));
+                }
+                let addr = addr.lock().unwrap();
+                addr.as_ref()
+                    .map(|s| s.to_owned())
+                    .ok_or(box_err!("not set"))
+            })
         }
     }
 

@@ -541,38 +541,28 @@ where
     S: StoreAddrResolver,
     R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
 {
-    fn resolve(&self) -> impl Future<Output = server::Result<String>> {
-        let (tx, rx) = oneshot::channel();
+    fn resolve(&self) -> impl Future<Output = server::Result<String>> + '_ {
         let store_id = self.store_id;
-        let res = self.builder.resolver.resolve(
-            store_id,
-            #[allow(unused_mut)]
-            Box::new(move |mut addr| {
-                {
-                    // Wrapping the fail point in a closure, so we can modify
-                    // local variables without return.
-                    let mut transport_on_resolve_fp = || {
-                        fail_point!(_ON_RESOLVE_FP, |sid| if let Some(sid) = sid {
-                            use std::mem;
-                            let sid: u64 = sid.parse().unwrap();
-                            if sid == store_id {
-                                mem::swap(&mut addr, &mut Err(box_err!("injected failure")));
-                            }
-                        })
-                    };
-                    transport_on_resolve_fp();
-                }
-                let _ = tx.send(addr);
-            }),
-        );
+        let res = self.builder.resolver.resolve(store_id);
+
+        #[allow(unused_mut)]
         async move {
-            res?;
-            match rx.await {
-                Ok(a) => a,
-                Err(_) => Err(server::Error::Other(
-                    "failed to receive resolve result".into(),
-                )),
-            }
+            let mut addr = res.await;
+
+            // Wrapping the fail point in a closure, so we can modify
+            // local variables without return.
+            let mut transport_on_resolve_fp = || {
+                fail_point!(_ON_RESOLVE_FP, |sid| if let Some(sid) = sid {
+                    use std::mem;
+                    let sid: u64 = sid.parse().unwrap();
+                    if sid == store_id {
+                        mem::swap(&mut addr, &mut Err(box_err!("injected failure")));
+                    }
+                })
+            };
+            transport_on_resolve_fp();
+
+            addr
         }
     }
 
