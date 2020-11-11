@@ -62,4 +62,12 @@ impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
     fn move_files(&mut self, f: bool) {
         self.0.move_files(f);
     }
+
+    fn snapshot_consistency(&mut self, f: bool) {
+        self.0.snapshot_consistency(f);
+    }
+
+    fn write_global_seqno(&mut self, f: bool) {
+        self.0.write_global_seqno(f);
+    }
 }

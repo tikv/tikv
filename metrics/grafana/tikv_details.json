@@ -58,7 +58,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1589260003867,
+  "iteration": 1605066069047,
   "links": [],
   "panels": [
     {
@@ -5498,7 +5498,7 @@
             "align": false,
             "alignLevel": null
           }
-        },
+        }
       ],
       "repeat": null,
       "title": "Thread CPU",
@@ -15470,7 +15470,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 25
+            "y": 52
           },
           "id": 138,
           "legend": {
@@ -15604,7 +15604,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 25
+            "y": 52
           },
           "id": 82,
           "legend": {
@@ -15728,7 +15728,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 33
+            "y": 60
           },
           "id": 129,
           "legend": {
@@ -15874,7 +15874,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 33
+            "y": 60
           },
           "id": 125,
           "legend": {
@@ -15998,7 +15998,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 41
+            "y": 68
           },
           "id": 139,
           "legend": {
@@ -16114,7 +16114,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 41
+            "y": 68
           },
           "id": 126,
           "legend": {
@@ -16232,13 +16232,138 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
+          "description": "The bytes per write",
+          "fill": 0,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 76
+          },
+          "id": 134,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxPerRow": 2,
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "max(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"$db\",type=\"bytes_per_write_max\"})",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "max",
+              "refId": "A",
+              "step": 10
+            },
+            {
+              "expr": "avg(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"$db\",type=\"bytes_per_write_percentile99\"})",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "99%",
+              "refId": "B",
+              "step": 10
+            },
+            {
+              "expr": "avg(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"$db\",type=\"bytes_per_write_percentile95\"})",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "95%",
+              "refId": "C",
+              "step": 10
+            },
+            {
+              "expr": "avg(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"$db\",type=\"bytes_per_write_average\"})",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "avg",
+              "refId": "D",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Bytes / Write",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "decbytes",
+              "label": null,
+              "logBase": 10,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
           "description": "The time consumed when executing write wal operation",
           "fill": 0,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 41
+            "y": 76
           },
           "id": 130,
           "legend": {
@@ -16362,7 +16487,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 49
+            "y": 84
           },
           "id": 137,
           "legend": {
@@ -16463,7 +16588,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 49
+            "y": 84
           },
           "id": 135,
           "legend": {
@@ -16582,15 +16707,16 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The count of compaction and flush operations",
+          "description": "The flow of different kinds of write operations",
           "fill": 1,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 57
+            "y": 92
           },
-          "id": 128,
+          "height": "",
+          "id": 86,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -16626,12 +16752,21 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_engine_event_total{instance=~\"$instance\", db=\"$db\"}[1m])) by (type)",
+              "expr": "sum(rate(tikv_engine_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"wal_file_bytes\"}[1m]))",
               "format": "time_series",
+              "hide": false,
               "intervalFactor": 2,
-              "legendFormat": "{{type}}",
-              "metric": "tikv_engine_event_total",
-              "refId": "B",
+              "legendFormat": "wal",
+              "refId": "C",
+              "step": 10
+            },
+            {
+              "expr": "sum(rate(tikv_engine_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"bytes_written\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 2,
+              "legendFormat": "write",
+              "refId": "A",
               "step": 10
             }
           ],
@@ -16639,7 +16774,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Compaction operations",
+          "title": "Write flow",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -16655,11 +16790,11 @@
           },
           "yaxes": [
             {
-              "format": "ops",
+              "format": "Bps",
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             },
             {
@@ -16667,7 +16802,7 @@
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             }
           ],
@@ -16683,15 +16818,16 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The time consumed when executing the compaction and flush operations",
+          "description": "The flow of different kinds of operations on keys",
           "fill": 0,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 57
+            "y": 92
           },
-          "id": 136,
+          "height": "",
+          "id": 132,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -16727,36 +16863,34 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "max(tikv_engine_compaction_time{instance=~\"$instance\", db=\"$db\",type=\"compaction_time_max\"})",
+              "expr": "sum(rate(tikv_engine_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"keys_read\"}[1m]))",
               "format": "time_series",
+              "hide": false,
+              "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "max",
-              "metric": "",
-              "refId": "A",
-              "step": 10
-            },
-            {
-              "expr": "avg(tikv_engine_compaction_time{instance=~\"$instance\", db=\"$db\",type=\"compaction_time_percentile99\"})",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "99%",
+              "legendFormat": "read",
               "refId": "B",
               "step": 10
             },
             {
-              "expr": "avg(tikv_engine_compaction_time{instance=~\"$instance\", db=\"$db\",type=\"compaction_time_percentile95\"})",
+              "expr": "sum(rate(tikv_engine_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"keys_written\"}[1m]))",
               "format": "time_series",
+              "hide": false,
+              "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "95%",
+              "legendFormat": "written",
               "refId": "C",
               "step": 10
             },
             {
-              "expr": "avg(tikv_engine_compaction_time{instance=~\"$instance\", db=\"$db\",type=\"compaction_time_average\"})",
+              "expr": "sum(rate(tikv_engine_compaction_num_corrupt_keys{instance=~\"$instance\", db=\"$db\"}[1m]))",
               "format": "time_series",
+              "hide": false,
+              "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "avg",
-              "refId": "D",
+              "legendFormat": "corrupt",
+              "metric": "",
+              "refId": "A",
               "step": 10
             }
           ],
@@ -16764,7 +16898,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Compaction duration",
+          "title": "Keys flow",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -16780,11 +16914,11 @@
           },
           "yaxes": [
             {
-              "format": "µs",
+              "format": "short",
               "label": null,
-              "logBase": 2,
+              "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             },
             {
@@ -16792,7 +16926,7 @@
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             }
           ],
@@ -16808,15 +16942,14 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The time consumed when reading SST files",
           "fill": 1,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 65
+            "y": 100
           },
-          "id": 140,
+          "id": 2452,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -16852,39 +16985,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "max(tikv_engine_sst_read_micros{instance=~\"$instance\", db=\"$db\", type=\"sst_read_micros_max\"})",
+              "expr": "sum(increase(tikv_engine_write_stall_reason{instance=~\"$instance\", db=\"$db\"}[1m])) by (type)",
               "format": "time_series",
+              "hide": false,
               "intervalFactor": 2,
-              "legendFormat": "max",
+              "legendFormat": "{{type}}",
               "metric": "",
               "refId": "A",
-              "step": 10
-            },
-            {
-              "expr": "avg(tikv_engine_sst_read_micros{instance=~\"$instance\", db=\"$db\", type=\"sst_read_micros_percentile99\"})",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "99%",
-              "metric": "",
-              "refId": "B",
-              "step": 10
-            },
-            {
-              "expr": "avg(tikv_engine_sst_read_micros{instance=~\"$instance\", db=\"$db\", type=\"sst_read_micros_percentile95\"})",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "95%",
-              "metric": "",
-              "refId": "C",
-              "step": 10
-            },
-            {
-              "expr": "avg(tikv_engine_sst_read_micros{instance=~\"$instance\", db=\"$db\", type=\"sst_read_micros_average\"})",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "avg",
-              "metric": "",
-              "refId": "D",
               "step": 10
             }
           ],
@@ -16892,7 +16999,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "SST read duration",
+          "title": "Write Stall Reason",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -16908,11 +17015,11 @@
           },
           "yaxes": [
             {
-              "format": "µs",
+              "format": "short",
               "label": null,
-              "logBase": 10,
+              "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             },
             {
@@ -16920,7 +17027,7 @@
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             }
           ],
@@ -16942,7 +17049,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 153
+            "y": 100
           },
           "id": 87,
           "legend": {
@@ -17064,15 +17171,15 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The memtable size of each column family",
+          "description": "The count of compaction and flush operations",
           "fill": 1,
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
-            "y": 153
+            "x": 0,
+            "y": 108
           },
-          "id": 103,
+          "id": 128,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -17108,10 +17215,113 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "avg(tikv_engine_memory_bytes{instance=~\"$instance\", db=\"$db\", type=\"mem-tables\"}) by (cf)",
+              "expr": "sum(rate(tikv_engine_event_total{instance=~\"$instance\", db=\"$db\"}[1m])) by (type)",
               "format": "time_series",
               "intervalFactor": 2,
+              "legendFormat": "{{type}}",
+              "metric": "tikv_engine_event_total",
+              "refId": "B",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Compaction operations",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "ops",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "The pending bytes to be compacted",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 108
+          },
+          "id": 127,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"$db\"}) by (cf)",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 2,
               "legendFormat": "{{cf}}",
+              "metric": "tikv_engine_pending_compaction_bytes",
               "refId": "A",
               "step": 10
             }
@@ -17120,7 +17330,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Memtable size",
+          "title": "Compaction pending bytes",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -17137,6 +17347,650 @@
           "yaxes": [
             {
               "format": "bytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "Bps",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "The flow rate of compaction operations per type",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 116
+          },
+          "id": 90,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_engine_compaction_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"bytes_read\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 2,
+              "legendFormat": "read",
+              "refId": "A",
+              "step": 10
+            },
+            {
+              "expr": "sum(rate(tikv_engine_compaction_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"bytes_written\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 2,
+              "legendFormat": "written",
+              "refId": "C",
+              "step": 10
+            },
+            {
+              "expr": "sum(rate(tikv_engine_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"flush_write_bytes\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 2,
+              "legendFormat": "flushed",
+              "refId": "B",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Compaction flow",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "Bps",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "Bps",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 116
+          },
+          "id": 2451,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_engine_compaction_reason{instance=~\"$instance\", db=\"$db\"}[1m])) by (cf, reason)",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 2,
+              "legendFormat": "{{cf}} - {{reason}}",
+              "metric": "",
+              "refId": "A",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Compaction reason",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "the output level of compaction",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 124
+          },
+          "id": 4982,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": false,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": true,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_engine_event_total{instance=~\"$instance\", db=\"$db\", type=\"compaction\"}[1m])) by (cf, level)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{cf}}, level-{{level}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Compaction output levels",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "The time consumed when executing the compaction and flush operations",
+          "fill": 0,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 124
+          },
+          "id": 136,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "max(tikv_engine_compaction_time{instance=~\"$instance\", db=\"$db\",type=\"compaction_time_max\"})",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "max",
+              "metric": "",
+              "refId": "A",
+              "step": 10
+            },
+            {
+              "expr": "avg(tikv_engine_compaction_time{instance=~\"$instance\", db=\"$db\",type=\"compaction_time_percentile99\"})",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "99%",
+              "refId": "B",
+              "step": 10
+            },
+            {
+              "expr": "avg(tikv_engine_compaction_time{instance=~\"$instance\", db=\"$db\",type=\"compaction_time_percentile95\"})",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "95%",
+              "refId": "C",
+              "step": 10
+            },
+            {
+              "expr": "avg(tikv_engine_compaction_time{instance=~\"$instance\", db=\"$db\",type=\"compaction_time_average\"})",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "avg",
+              "refId": "D",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Compaction duration",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "µs",
+              "label": null,
+              "logBase": 2,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The time consumed when ingesting SST files",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 132
+          },
+          "id": 2003,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": true,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_snapshot_ingest_sst_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "99%",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(tikv_snapshot_ingest_sst_duration_seconds_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_snapshot_ingest_sst_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 2,
+              "legendFormat": "avg",
+              "refId": "B"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Ingest SST duration seconds",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The target level of ingesting SST files",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 132
+          },
+          "id": 4983,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": false,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": true,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_engine_event_total{instance=~\"$instance\", db=\"$db\", type=\"ingestion\"}[1m])) by (cf, level)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{cf}}, level-{{level}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Ingestion picked levels",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -17169,8 +18023,8 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
-            "y": 73
+            "x": 0,
+            "y": 140
           },
           "id": 88,
           "legend": {
@@ -17264,13 +18118,113 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
+          "description": "The memtable size of each column family",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 140
+          },
+          "id": 103,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "avg(tikv_engine_memory_bytes{instance=~\"$instance\", db=\"$db\", type=\"mem-tables\"}) by (cf)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{cf}}",
+              "refId": "A",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Memtable size",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "bytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
           "description": "The block cache size. Broken down by column family if shared block cache is disabled.",
           "fill": 1,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 81
+            "y": 148
           },
           "id": 102,
           "legend": {
@@ -17370,7 +18324,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 81
+            "y": 148
           },
           "id": 80,
           "legend": {
@@ -17502,13 +18456,150 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
+          "description": "The count of different kinds of block cache operations",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 156
+          },
+          "id": 468,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_engine_cache_efficiency{instance=~\"$instance\", db=\"$db\", type=\"block_cache_add\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "total_add",
+              "metric": "",
+              "refId": "A",
+              "step": 10
+            },
+            {
+              "expr": "sum(rate(tikv_engine_cache_efficiency{instance=~\"$instance\", db=\"$db\", type=\"block_cache_data_add\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "data_add",
+              "metric": "",
+              "refId": "C",
+              "step": 10
+            },
+            {
+              "expr": "sum(rate(tikv_engine_cache_efficiency{instance=~\"$instance\", db=\"$db\", type=\"block_cache_filter_add\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "filter_add",
+              "metric": "",
+              "refId": "D",
+              "step": 10
+            },
+            {
+              "expr": "sum(rate(tikv_engine_cache_efficiency{instance=~\"$instance\", db=\"$db\", type=\"block_cache_index_add\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "index_add",
+              "metric": "",
+              "refId": "E",
+              "step": 10
+            },
+            {
+              "expr": "sum(rate(tikv_engine_cache_efficiency{instance=~\"$instance\", db=\"$db\", type=\"block_cache_add_failures\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "add_failures",
+              "metric": "",
+              "refId": "B",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Block cache operations",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "ops",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
           "description": "The flow of different kinds of block cache operations",
           "fill": 0,
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 0,
-            "y": 89
+            "x": 12,
+            "y": 156
           },
           "height": "",
           "id": 467,
@@ -17670,376 +18761,13 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The count of different kinds of block cache operations",
-          "fill": 1,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 89
-          },
-          "id": 468,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "db": {
-              "selected": false,
-              "text": "kv",
-              "value": "kv"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(rate(tikv_engine_cache_efficiency{instance=~\"$instance\", db=\"$db\", type=\"block_cache_add\"}[1m]))",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "total_add",
-              "metric": "",
-              "refId": "A",
-              "step": 10
-            },
-            {
-              "expr": "sum(rate(tikv_engine_cache_efficiency{instance=~\"$instance\", db=\"$db\", type=\"block_cache_data_add\"}[1m]))",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "data_add",
-              "metric": "",
-              "refId": "C",
-              "step": 10
-            },
-            {
-              "expr": "sum(rate(tikv_engine_cache_efficiency{instance=~\"$instance\", db=\"$db\", type=\"block_cache_filter_add\"}[1m]))",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "filter_add",
-              "metric": "",
-              "refId": "D",
-              "step": 10
-            },
-            {
-              "expr": "sum(rate(tikv_engine_cache_efficiency{instance=~\"$instance\", db=\"$db\", type=\"block_cache_index_add\"}[1m]))",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "index_add",
-              "metric": "",
-              "refId": "E",
-              "step": 10
-            },
-            {
-              "expr": "sum(rate(tikv_engine_cache_efficiency{instance=~\"$instance\", db=\"$db\", type=\"block_cache_add_failures\"}[1m]))",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "add_failures",
-              "metric": "",
-              "refId": "B",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Block cache operations",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "ops",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The flow of different kinds of operations on keys",
-          "fill": 0,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 97
-          },
-          "height": "",
-          "id": 132,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "db": {
-              "selected": false,
-              "text": "kv",
-              "value": "kv"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(rate(tikv_engine_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"keys_read\"}[1m]))",
-              "format": "time_series",
-              "hide": false,
-              "interval": "",
-              "intervalFactor": 2,
-              "legendFormat": "read",
-              "refId": "B",
-              "step": 10
-            },
-            {
-              "expr": "sum(rate(tikv_engine_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"keys_written\"}[1m]))",
-              "format": "time_series",
-              "hide": false,
-              "interval": "",
-              "intervalFactor": 2,
-              "legendFormat": "written",
-              "refId": "C",
-              "step": 10
-            },
-            {
-              "expr": "sum(rate(tikv_engine_compaction_num_corrupt_keys{instance=~\"$instance\", db=\"$db\"}[1m]))",
-              "format": "time_series",
-              "hide": false,
-              "interval": "",
-              "intervalFactor": 2,
-              "legendFormat": "corrupt",
-              "metric": "",
-              "refId": "A",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Keys flow",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "ops",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The count of keys in each column family",
-          "fill": 1,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 97
-          },
-          "id": 131,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "db": {
-              "selected": false,
-              "text": "kv",
-              "value": "kv"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(tikv_engine_estimate_num_keys{instance=~\"$instance\", db=\"$db\"}) by (cf)",
-              "format": "time_series",
-              "hide": false,
-              "intervalFactor": 2,
-              "legendFormat": "{{cf}}",
-              "metric": "tikv_engine_estimate_num_keys",
-              "refId": "A",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Total keys",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
           "description": "The flow rate of read operations per type",
           "fill": 0,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 105
+            "y": 164
           },
           "height": "",
           "id": 85,
@@ -18152,7 +18880,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 105
+            "y": 164
           },
           "id": 133,
           "legend": {
@@ -18270,26 +18998,23 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The flow of different kinds of write operations",
+          "description": "The number of SST files for different column families in each level",
           "fill": 1,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 113
+            "y": 172
           },
-          "height": "",
-          "id": 86,
+          "id": 2002,
           "legend": {
             "alignAsTable": true,
             "avg": false,
             "current": true,
             "max": true,
-            "min": false,
+            "min": true,
             "rightSide": true,
             "show": true,
-            "sideWidth": null,
             "sort": "current",
             "sortDesc": true,
             "total": false,
@@ -18316,29 +19041,18 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_engine_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"wal_file_bytes\"}[1m]))",
+              "expr": "avg(tikv_engine_num_files_at_level{instance=~\"$instance\", db=\"$db\"}) by (cf, level)",
               "format": "time_series",
-              "hide": false,
               "intervalFactor": 2,
-              "legendFormat": "wal",
-              "refId": "C",
-              "step": 10
-            },
-            {
-              "expr": "sum(rate(tikv_engine_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"bytes_written\"}[1m]))",
-              "format": "time_series",
-              "hide": false,
-              "intervalFactor": 2,
-              "legendFormat": "write",
-              "refId": "A",
-              "step": 10
+              "legendFormat": "cf-{{cf}}, level-{{level}}",
+              "refId": "A"
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Write flow",
+          "title": "Number files at each level",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -18353,137 +19067,12 @@
             "values": []
           },
           "yaxes": [
-            {
-              "format": "Bps",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
             {
               "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": "0",
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The bytes per write",
-          "fill": 0,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 113
-          },
-          "id": 134,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxPerRow": 2,
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "db": {
-              "selected": false,
-              "text": "kv",
-              "value": "kv"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "max(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"$db\",type=\"bytes_per_write_max\"})",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "max",
-              "refId": "A",
-              "step": 10
-            },
-            {
-              "expr": "avg(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"$db\",type=\"bytes_per_write_percentile99\"})",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "99%",
-              "refId": "B",
-              "step": 10
-            },
-            {
-              "expr": "avg(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"$db\",type=\"bytes_per_write_percentile95\"})",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "95%",
-              "refId": "C",
-              "step": 10
-            },
-            {
-              "expr": "avg(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"$db\",type=\"bytes_per_write_average\"})",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "avg",
-              "refId": "D",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Bytes / Write",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "decbytes",
-              "label": null,
-              "logBase": 10,
-              "max": null,
-              "min": "0",
+              "min": null,
               "show": true
             },
             {
@@ -18507,134 +19096,15 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The flow rate of compaction operations per type",
-          "fill": 1,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 121
-          },
-          "id": 90,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "db": {
-              "selected": false,
-              "text": "kv",
-              "value": "kv"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(rate(tikv_engine_compaction_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"bytes_read\"}[1m]))",
-              "format": "time_series",
-              "hide": false,
-              "intervalFactor": 2,
-              "legendFormat": "read",
-              "refId": "A",
-              "step": 10
-            },
-            {
-              "expr": "sum(rate(tikv_engine_compaction_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"bytes_written\"}[1m]))",
-              "format": "time_series",
-              "hide": false,
-              "intervalFactor": 2,
-              "legendFormat": "written",
-              "refId": "C",
-              "step": 10
-            },
-            {
-              "expr": "sum(rate(tikv_engine_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"flush_write_bytes\"}[1m]))",
-              "format": "time_series",
-              "hide": false,
-              "intervalFactor": 2,
-              "legendFormat": "flushed",
-              "refId": "B",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Compaction flow",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "Bps",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
-              "format": "Bps",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The pending bytes to be compacted",
+          "description": "The time consumed when reading SST files",
           "fill": 1,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 121
+            "y": 172
           },
-          "id": 127,
+          "id": 140,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -18670,13 +19140,39 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"$db\"}) by (cf)",
+              "expr": "max(tikv_engine_sst_read_micros{instance=~\"$instance\", db=\"$db\", type=\"sst_read_micros_max\"})",
               "format": "time_series",
-              "hide": false,
               "intervalFactor": 2,
-              "legendFormat": "{{cf}}",
-              "metric": "tikv_engine_pending_compaction_bytes",
+              "legendFormat": "max",
+              "metric": "",
               "refId": "A",
+              "step": 10
+            },
+            {
+              "expr": "avg(tikv_engine_sst_read_micros{instance=~\"$instance\", db=\"$db\", type=\"sst_read_micros_percentile99\"})",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "99%",
+              "metric": "",
+              "refId": "B",
+              "step": 10
+            },
+            {
+              "expr": "avg(tikv_engine_sst_read_micros{instance=~\"$instance\", db=\"$db\", type=\"sst_read_micros_percentile95\"})",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "95%",
+              "metric": "",
+              "refId": "C",
+              "step": 10
+            },
+            {
+              "expr": "avg(tikv_engine_sst_read_micros{instance=~\"$instance\", db=\"$db\", type=\"sst_read_micros_average\"})",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "avg",
+              "metric": "",
+              "refId": "D",
               "step": 10
             }
           ],
@@ -18684,7 +19180,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Compaction pending bytes",
+          "title": "SST read duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -18700,19 +19196,19 @@
           },
           "yaxes": [
             {
-              "format": "bytes",
+              "format": "µs",
               "label": null,
-              "logBase": 1,
+              "logBase": 10,
               "max": null,
-              "min": "0",
+              "min": null,
               "show": true
             },
             {
-              "format": "Bps",
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": "0",
+              "min": null,
               "show": true
             }
           ],
@@ -18727,25 +19223,23 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The read amplification per TiKV instance \t",
+          "description": "The number of ingested SST files for different column families in each level(except the bottommost level)",
           "fill": 1,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 129
+            "y": 180
           },
-          "id": 518,
+          "id": 4984,
           "legend": {
             "alignAsTable": true,
             "avg": false,
             "current": true,
             "max": true,
-            "min": false,
+            "min": true,
             "rightSide": true,
             "show": true,
-            "sideWidth": null,
             "sort": "current",
             "sortDesc": true,
             "total": false,
@@ -18772,21 +19266,18 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_engine_read_amp_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"read_amp_total_read_bytes\"}[1m])) by (instance) / sum(rate(tikv_engine_read_amp_flow_bytes{db=\"$db\", type=\"read_amp_estimate_useful_bytes\"}[1m])) by (instance)",
+              "expr": "avg(tikv_engine_num_ingested_files_at_level{instance=~\"$instance\", db=\"$db\"}) by (cf, level)",
               "format": "time_series",
-              "hide": false,
               "intervalFactor": 2,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "refId": "A",
-              "step": 10
+              "legendFormat": "cf-{{cf}}, level-{{level}}",
+              "refId": "A"
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Read amplication",
+          "title": "Number ingested files at each level",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -18806,7 +19297,7 @@
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": "0",
+              "min": null,
               "show": true
             },
             {
@@ -18814,7 +19305,104 @@
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": "0",
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The number of ingested SST files for different column families in each level",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 180
+          },
+          "id": 5314,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": true,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "avg(tikv_engine_num_ingested_bytes_at_level{instance=~\"$instance\", db=\"$db\"}) by (cf, level)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "cf-{{cf}}, level-{{level}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Number ingested bytes at each level",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "decbytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
               "show": true
             }
           ],
@@ -18835,8 +19423,8 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
-            "y": 129
+            "x": 0,
+            "y": 188
           },
           "id": 863,
           "legend": {
@@ -18932,13 +19520,115 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
+          "description": "The count of keys in each column family",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 188
+          },
+          "id": 131,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(tikv_engine_estimate_num_keys{instance=~\"$instance\", db=\"$db\"}) by (cf)",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 2,
+              "legendFormat": "{{cf}}",
+              "metric": "tikv_engine_estimate_num_keys",
+              "refId": "A",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Total keys",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
           "description": "The number of snapshot of each TiKV instance",
           "fill": 1,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 137
+            "y": 196
           },
           "id": 516,
           "legend": {
@@ -19040,7 +19730,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 137
+            "y": 196
           },
           "id": 517,
           "legend": {
@@ -19135,314 +19825,16 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of SST files for different column families in each level",
-          "fill": 1,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 145
-          },
-          "id": 2002,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": true,
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "db": {
-              "selected": false,
-              "text": "kv",
-              "value": "kv"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "avg(tikv_engine_num_files_at_level{instance=~\"$instance\", db=\"$db\"}) by (cf, level)",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "cf-{{cf}}, level-{{level}}",
-              "refId": "A"
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Number files at each level",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed when ingesting SST files",
-          "fill": 1,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 145
-          },
-          "id": 2003,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": true,
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "db": {
-              "selected": false,
-              "text": "kv",
-              "value": "kv"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_snapshot_ingest_sst_duration_seconds_bucket{instance=~\"$instance\", db=\"$db\"}[1m])) by (le))",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "99%",
-              "refId": "A"
-            },
-            {
-              "expr": "sum(rate(tikv_snapshot_ingest_sst_duration_seconds_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_snapshot_ingest_sst_duration_seconds_count{instance=~\"$instance\"}[1m]))",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "average",
-              "refId": "B"
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Ingest SST duration seconds",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "s",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Stall conditions changed of each column family",
-          "fill": 1,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 153
-          },
-          "id": 2381,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideZero": true,
-            "max": true,
-            "min": true,
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "db": {
-              "selected": false,
-              "text": "kv",
-              "value": "kv"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "tikv_engine_stall_conditions_changed{instance=~\"$instance\", db=\"$db\"}",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "{{instance}}-{{cf}}-{{type}}",
-              "refId": "B"
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Stall conditions changed of each CF",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
+          "description": "The read amplification per TiKV instance \t",
           "fill": 1,
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 161
+            "y": 204
           },
-          "id": 2452,
+          "id": 518,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -19478,11 +19870,11 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(increase(tikv_engine_write_stall_reason{instance=~\"$instance\", db=\"$db\"}[1m])) by (type)",
+              "expr": "sum(rate(tikv_engine_read_amp_flow_bytes{instance=~\"$instance\", db=\"$db\", type=\"read_amp_total_read_bytes\"}[1m])) by (instance) / sum(rate(tikv_engine_read_amp_flow_bytes{db=\"$db\", type=\"read_amp_estimate_useful_bytes\"}[1m])) by (instance)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
-              "legendFormat": "{{type}}",
+              "legendFormat": "{{instance}}",
               "metric": "",
               "refId": "A",
               "step": 10
@@ -19492,108 +19884,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Write Stall Reason",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "fill": 1,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 65
-          },
-          "id": 2451,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "db": {
-              "selected": false,
-              "text": "kv",
-              "value": "kv"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(rate(tikv_engine_compaction_reason{instance=~\"$instance\", db=\"$db\"}[1m])) by (cf, reason)",
-              "format": "time_series",
-              "hide": false,
-              "intervalFactor": 2,
-              "legendFormat": "{{cf}} - {{reason}}",
-              "metric": "",
-              "refId": "A",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Compaction reason",
+          "title": "Read amplication",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -24227,567 +24518,568 @@
         "y": 27
       },
       "id": 4466,
-      "panels": [],
+      "panels": [
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Total number of encryption data keys in use",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 58
+          },
+          "id": 4464,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": true,
+            "rightSide": true,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "tikv_encryption_data_key_storage_total",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Encryption data keys",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": 0,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": 0,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Number of files being encrypted",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 58
+          },
+          "id": 4554,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": true,
+            "rightSide": true,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "tikv_encryption_file_num",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Encrypted files",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Flag to indicate if encryption is initialized",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 66
+          },
+          "id": 4555,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": false,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "tikv_encryption_is_initialized",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Encryption initialized",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": 0,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": 0,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Total size of encryption meta files",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 66
+          },
+          "id": 4556,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": true,
+            "rightSide": true,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "tikv_encryption_meta_file_size_bytes",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "{{name}}-{{instance}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Encryption meta files size",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "decbytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 74
+          },
+          "id": 4557,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": true,
+            "rightSide": true,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_coprocessor_rocksdb_perf{instance=~\"$instance\" ,metric=\"encrypt_data_nanos\"}[1m])) by (req)",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "encrypt-{{req}}",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(tikv_coprocessor_rocksdb_perf{instance=~\"$instance\" ,metric=\"decrypt_data_nanos\"}[1m])) by (req)",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "decrypt-{{req}}",
+              "refId": "B"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Encrypt/decrypt data nanos",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Writing or reading file duration (second)",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 74
+          },
+          "id": 4559,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null as zero",
+          "percentage": false,
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "histogram_quantile(1, sum(rate(tikv_encryption_write_read_file_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le, type, operation))",
+              "format": "time_series",
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "max-{{type}}-{{operation}}",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(tikv_encryption_write_read_file_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le, type, operation))",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "95%-{{type}}-{{operation}}",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(tikv_encryption_write_read_file_duration_seconds_sum{instance=~\"$instance\"}[1m])) by (le, type, operation) / sum(rate(tikv_encryption_write_read_file_duration_seconds_count{instance=~\"$instance\"}[1m])) by (le, type, operation)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "avg-{{type}}-{{operation}}",
+              "refId": "C"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Read/write encryption meta duration",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        }
+      ],
       "title": "Encryption",
       "type": "row"
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "description": "Total number of encryption data keys in use",
-      "fill": 1,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 28
-      },
-      "id": 4464,
-      "legend": {
-        "alignAsTable": true,
-        "avg": false,
-        "current": true,
-        "max": true,
-        "min": true,
-        "rightSide": true,
-        "show": true,
-        "total": false,
-        "values": true
-      },
-      "lines": true,
-      "linewidth": 1,
-      "links": [],
-      "nullPointMode": "null",
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "tikv_encryption_data_key_storage_total",
-          "format": "time_series",
-          "intervalFactor": 1,
-          "legendFormat": "{{instance}}",
-          "refId": "A"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Encryption data keys",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "decimals": 0,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "decimals": 0,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "description": "Number of files being encrypted",
-      "fill": 1,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 28
-      },
-      "id": 4554,
-      "legend": {
-        "alignAsTable": true,
-        "avg": false,
-        "current": true,
-        "max": true,
-        "min": true,
-        "rightSide": true,
-        "show": true,
-        "total": false,
-        "values": true
-      },
-      "lines": true,
-      "linewidth": 1,
-      "links": [],
-      "nullPointMode": "null",
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "tikv_encryption_file_num",
-          "format": "time_series",
-          "intervalFactor": 1,
-          "legendFormat": "{{instance}}",
-          "refId": "A"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Encrypted files",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "description": "Flag to indicate if encryption is initialized",
-      "fill": 1,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 36
-      },
-      "id": 4555,
-      "legend": {
-        "alignAsTable": true,
-        "avg": false,
-        "current": true,
-        "max": false,
-        "min": false,
-        "rightSide": true,
-        "show": true,
-        "total": false,
-        "values": true
-      },
-      "lines": true,
-      "linewidth": 1,
-      "links": [],
-      "nullPointMode": "null",
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "tikv_encryption_is_initialized",
-          "format": "time_series",
-          "intervalFactor": 1,
-          "legendFormat": "{{instance}}",
-          "refId": "A"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Encryption initialized",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "decimals": 0,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "decimals": 0,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "description": "Total size of encryption meta files",
-      "fill": 1,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 36
-      },
-      "id": 4556,
-      "legend": {
-        "alignAsTable": true,
-        "avg": false,
-        "current": true,
-        "max": true,
-        "min": true,
-        "rightSide": true,
-        "show": true,
-        "total": false,
-        "values": true
-      },
-      "lines": true,
-      "linewidth": 1,
-      "links": [],
-      "nullPointMode": "null",
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "tikv_encryption_meta_file_size_bytes",
-          "format": "time_series",
-          "intervalFactor": 1,
-          "legendFormat": "{{name}}-{{instance}}",
-          "refId": "A"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Encryption meta files size",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "decbytes",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "description": "",
-      "fill": 1,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 44
-      },
-      "id": 4557,
-      "legend": {
-        "alignAsTable": true,
-        "avg": false,
-        "current": true,
-        "max": true,
-        "min": true,
-        "rightSide": true,
-        "show": true,
-        "total": false,
-        "values": true
-      },
-      "lines": true,
-      "linewidth": 1,
-      "links": [],
-      "nullPointMode": "null",
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "sum(rate(tikv_coprocessor_rocksdb_perf{instance=~\"$instance\" ,metric=\"encrypt_data_nanos\"}[1m])) by (req)",
-          "format": "time_series",
-          "intervalFactor": 1,
-          "legendFormat": "encrypt-{{req}}",
-          "refId": "A"
-        },
-        {
-          "expr": "sum(rate(tikv_coprocessor_rocksdb_perf{instance=~\"$instance\" ,metric=\"decrypt_data_nanos\"}[1m])) by (req)",
-          "format": "time_series",
-          "intervalFactor": 1,
-          "legendFormat": "decrypt-{{req}}",
-          "refId": "B"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Encrypt/decrypt data nanos",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "description": "Writing or reading file duration (second)",
-      "fill": 1,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 44
-      },
-      "id": 4559,
-      "legend": {
-        "alignAsTable": true,
-        "avg": false,
-        "current": true,
-        "max": true,
-        "min": false,
-        "rightSide": true,
-        "show": true,
-        "total": false,
-        "values": true
-      },
-      "lines": true,
-      "linewidth": 1,
-      "links": [],
-      "nullPointMode": "null as zero",
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "histogram_quantile(1, sum(rate(tikv_encryption_write_read_file_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le, type, operation))",
-          "format": "time_series",
-          "instant": false,
-          "interval": "",
-          "intervalFactor": 2,
-          "legendFormat": "max-{{type}}-{{operation}}",
-          "refId": "A"
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(tikv_encryption_write_read_file_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le, type, operation))",
-          "format": "time_series",
-          "interval": "",
-          "intervalFactor": 2,
-          "legendFormat": "95%-{{type}}-{{operation}}",
-          "refId": "B"
-        },
-        {
-          "expr": "sum(rate(tikv_encryption_write_read_file_duration_seconds_sum{instance=~\"$instance\"}[1m])) by (le, type, operation) / sum(rate(tikv_encryption_write_read_file_duration_seconds_count{instance=~\"$instance\"}[1m])) by (le, type, operation)",
-          "format": "time_series",
-          "interval": "",
-          "intervalFactor": 2,
-          "legendFormat": "avg-{{type}}-{{operation}}",
-          "refId": "C"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Read/write encryption meta duration",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "decimals": null,
-          "format": "s",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
     }
   ],
   "refresh": "1m",
@@ -24918,5 +25210,5 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiKV-Details",
   "uid": "RDVQiEzZz",
-  "version": 23
+  "version": 1
 }

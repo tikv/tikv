@@ -198,6 +198,8 @@ where
 {
     let mut ingest_opt = <E as ImportExt>::IngestExternalFileOptions::new();
     ingest_opt.move_files(true);
+    ingest_opt.snapshot_consistency(false);
+    ingest_opt.write_global_seqno(false);
     box_try!(db.ingest_external_file_cf(cf, &ingest_opt, &[path]));
     Ok(())
 }

@@ -964,6 +964,20 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
                     .set(v as i64);
             }
 
+            if let Some(v) = crate::util::get_cf_num_ingested_files_at_level(engine, handle, level)
+            {
+                STORE_ENGINE_NUM_INGESTED_FILES_AT_LEVEL_VEC
+                    .with_label_values(&[name, cf, &level.to_string()])
+                    .set(v as i64);
+            }
+
+            if let Some(v) = crate::util::get_cf_num_ingested_bytes_at_level(engine, handle, level)
+            {
+                STORE_ENGINE_NUM_INGESTED_BYTES_AT_LEVEL_VEC
+                    .with_label_values(&[name, cf, &level.to_string()])
+                    .set(v as i64);
+            }
+
             // Titan Num blob files at levels
             if let Some(v) = crate::util::get_cf_num_blob_files_at_level(engine, handle, level) {
                 STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_VEC
@@ -1121,6 +1135,16 @@ lazy_static! {
     pub static ref STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_num_files_at_level",
         "Number of files at each level",
+        &["db", "cf", "level"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_NUM_INGESTED_FILES_AT_LEVEL_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_num_ingested_files_at_level",
+        "Number of ingested files at each level",
+        &["db", "cf", "level"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_NUM_INGESTED_BYTES_AT_LEVEL_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_num_ingested_bytes_at_level",
+        "Number of ingested bytes at each level",
         &["db", "cf", "level"]
     ).unwrap();
     pub static ref STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
@@ -1306,7 +1330,7 @@ lazy_static! {
     pub static ref STORE_ENGINE_EVENT_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_event_total",
         "Number of engine events",
-        &["db", "cf", "type"]
+        &["db", "cf", "type", "level"]
     ).unwrap();
     pub static ref STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_num_immutable_mem_table",

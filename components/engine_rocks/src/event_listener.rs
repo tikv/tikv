@@ -21,13 +21,18 @@ impl RocksEventListener {
 impl rocksdb::EventListener for RocksEventListener {
     fn on_flush_completed(&self, info: &FlushJobInfo) {
         STORE_ENGINE_EVENT_COUNTER_VEC
-            .with_label_values(&[&self.db_name, info.cf_name(), "flush"])
+            .with_label_values(&[&self.db_name, info.cf_name(), "flush", &0.to_string()])
             .inc();
     }
 
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
         STORE_ENGINE_EVENT_COUNTER_VEC
-            .with_label_values(&[&self.db_name, info.cf_name(), "compaction"])
+            .with_label_values(&[
+                &self.db_name,
+                info.cf_name(),
+                "compaction",
+                &info.output_level().to_string(),
+            ])
             .inc();
         STORE_ENGINE_COMPACTION_DURATIONS_VEC
             .with_label_values(&[&self.db_name, info.cf_name()])
@@ -46,7 +51,12 @@ impl rocksdb::EventListener for RocksEventListener {
 
     fn on_external_file_ingested(&self, info: &IngestionInfo) {
         STORE_ENGINE_EVENT_COUNTER_VEC
-            .with_label_values(&[&self.db_name, info.cf_name(), "ingestion"])
+            .with_label_values(&[
+                &self.db_name,
+                info.cf_name(),
+                "ingestion",
+                &info.picked_level().to_string(),
+            ])
             .inc();
     }
 
@@ -70,9 +80,5 @@ impl rocksdb::EventListener for RocksEventListener {
         }
     }
 
-    fn on_stall_conditions_changed(&self, info: &WriteStallInfo) {
-        STORE_ENGINE_EVENT_COUNTER_VEC
-            .with_label_values(&[&self.db_name, info.cf_name(), "stall_conditions_changed"])
-            .inc();
-    }
+    fn on_stall_conditions_changed(&self, _info: &WriteStallInfo) {}
 }

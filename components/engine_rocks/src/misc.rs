@@ -82,6 +82,8 @@ impl RocksEngine {
             writer.finish()?;
             let mut opt = RocksIngestExternalFileOptions::new();
             opt.move_files(true);
+            opt.snapshot_consistency(false);
+            opt.write_global_seqno(false);
             self.ingest_external_file_cf(cf, &opt, &[sst_path.as_str()])?;
         } else {
             let mut wb = self.write_batch();

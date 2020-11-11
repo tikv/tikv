@@ -239,6 +239,7 @@ macro_rules! cf_config {
             pub compaction_pri: CompactionPriority,
             #[config(skip)]
             pub dynamic_level_bytes: bool,
+            pub ingest_tolerant_ratio: u64,
             #[config(skip)]
             pub num_levels: i32,
             pub max_bytes_for_level_multiplier: i32,
@@ -437,6 +438,7 @@ macro_rules! build_cf_opt {
         cf_opts.set_max_compaction_bytes($opt.max_compaction_bytes.0);
         cf_opts.compaction_priority($opt.compaction_pri);
         cf_opts.set_level_compaction_dynamic_level_bytes($opt.dynamic_level_bytes);
+        cf_opts.set_ingest_tolerant_ratio($opt.ingest_tolerant_ratio);
         cf_opts.set_max_bytes_for_level_multiplier($opt.max_bytes_for_level_multiplier);
         cf_opts.set_compaction_style($opt.compaction_style);
         cf_opts.set_disable_auto_compactions($opt.disable_auto_compactions);
@@ -500,6 +502,7 @@ impl Default for DefaultCfConfig {
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             dynamic_level_bytes: true,
+            ingest_tolerant_ratio: 10,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
@@ -574,6 +577,7 @@ impl Default for WriteCfConfig {
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             dynamic_level_bytes: true,
+            ingest_tolerant_ratio: 10,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
@@ -656,6 +660,7 @@ impl Default for LockCfConfig {
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
             dynamic_level_bytes: true,
+            ingest_tolerant_ratio: 10,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
@@ -727,6 +732,7 @@ impl Default for RaftCfConfig {
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
             dynamic_level_bytes: true,
+            ingest_tolerant_ratio: 10,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
@@ -798,6 +804,7 @@ impl Default for VersionCfConfig {
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             dynamic_level_bytes: true,
+            ingest_tolerant_ratio: 10,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
@@ -1142,6 +1149,7 @@ impl Default for RaftDefaultCfConfig {
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
             dynamic_level_bytes: true,
+            ingest_tolerant_ratio: 10,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,

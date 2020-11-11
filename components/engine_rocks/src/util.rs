@@ -144,6 +144,26 @@ pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -
     engine.get_property_int_cf(handle, &prop)
 }
 
+/// Gets the number of ingested files at given level of given column family.
+pub fn get_cf_num_ingested_files_at_level(
+    engine: &DB,
+    handle: &CFHandle,
+    level: usize,
+) -> Option<u64> {
+    let prop = format!("{}{}", ROCKSDB_NUM_INGESTED_FILES_AT_LEVEL, level);
+    engine.get_property_int_cf(handle, &prop)
+}
+
+/// Gets the number of ingested bytes at given level of given column family.
+pub fn get_cf_num_ingested_bytes_at_level(
+    engine: &DB,
+    handle: &CFHandle,
+    level: usize,
+) -> Option<u64> {
+    let prop = format!("{}{}", ROCKSDB_NUM_INGESTED_BYTES_AT_LEVEL, level);
+    engine.get_property_int_cf(handle, &prop)
+}
+
 /// Gets the number of blob files at given level of given column family.
 pub fn get_cf_num_blob_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
     let prop = format!("{}{}", ROCKSDB_TITANDB_NUM_BLOB_FILES_AT_LEVEL, level);
