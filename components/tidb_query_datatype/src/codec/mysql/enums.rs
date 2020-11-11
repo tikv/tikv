@@ -138,13 +138,13 @@ mod tests {
             value: 1,
         };
 
-        assert_eq!(s.as_ref().is_empty(), false);
+        assert!(!s.as_ref().is_empty());
 
         let s = Enum {
             data: s.data.clone(),
             value: 0,
         };
 
-        assert_eq!(s.as_ref().is_empty(), true);
+        assert!(s.as_ref().is_empty());
     }
 }

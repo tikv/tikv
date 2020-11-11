@@ -183,13 +183,13 @@ mod tests {
             value: 0b101,
         };
 
-        assert_eq!(s.as_ref().is_empty(), false);
+        assert!(!s.as_ref().is_empty());
 
         let s = Set {
             data: s.data.clone(),
             value: 0b000,
         };
 
-        assert_eq!(s.as_ref().is_empty(), true);
+        assert!(s.as_ref().is_empty());
     }
 }
