@@ -207,20 +207,18 @@ impl Config {
                         self.advertise_status_addr
                     ));
                 }
+            } else if !self.status_addr.starts_with("0.0.0.0") {
+                info!(
+                    "no advertise-status-addr is specified, falling back to status-addr";
+                    "status-addr" => %self.status_addr
+                );
+                self.advertise_status_addr = self.status_addr.clone();
             } else {
-                if !self.status_addr.starts_with("0.0.0.0") {
-                    info!(
-                        "no advertise-status-addr is specified, falling back to status-addr";
-                        "status-addr" => %self.status_addr
-                    );
-                    self.advertise_status_addr = self.status_addr.clone();
-                } else {
-                    info!(
-                        "no advertise-status-addr is specified, and we can't falling back to \
-                        status-addr because it is invalid as advertise-status-addr";
-                        "status-addr" => %self.status_addr
-                    );
-                }
+                info!(
+                    "no advertise-status-addr is specified, and we can't falling back to \
+                    status-addr because it is invalid as advertise-status-addr";
+                    "status-addr" => %self.status_addr
+                );
             }
         }
         if self.advertise_status_addr == self.advertise_addr {
