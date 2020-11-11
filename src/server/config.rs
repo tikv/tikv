@@ -188,7 +188,7 @@ impl Config {
             );
             self.advertise_addr = self.addr.clone();
         }
-        if self.advertise_addr.starts_with("0.0.0.0") {
+        if box_try!(config::check_addr(&self.advertise_addr)) {
             return Err(box_err!(
                 "invalid advertise-addr: {:?}",
                 self.advertise_addr
@@ -198,16 +198,15 @@ impl Config {
             return Err(box_err!("status-addr can not be empty"));
         }
         if !self.status_addr.is_empty() {
-            box_try!(config::check_addr(&self.status_addr));
+            let status_addr_unspecified = box_try!(config::check_addr(&self.status_addr));
             if !self.advertise_status_addr.is_empty() {
-                box_try!(config::check_addr(&self.advertise_status_addr));
-                if self.advertise_status_addr.starts_with("0.0.0.0") {
+                if box_try!(config::check_addr(&self.advertise_status_addr)) {
                     return Err(box_err!(
                         "invalid advertise-status-addr: {:?}",
                         self.advertise_status_addr
                     ));
                 }
-            } else if !self.status_addr.starts_with("0.0.0.0") {
+            } else if !status_addr_unspecified {
                 info!(
                     "no advertise-status-addr is specified, falling back to status-addr";
                     "status-addr" => %self.status_addr
