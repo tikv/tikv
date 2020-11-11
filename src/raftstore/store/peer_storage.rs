@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::Instant;
-use std::{cmp, error, u64};
+use std::{cmp, error, mem, u64};
 
 use engine::rocks;
 use engine::rocks::{Cache, Snapshot as DbSnapshot, WriteBatch, DB};
@@ -23,6 +23,7 @@ use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
 use crate::raftstore::store::fsm::GenSnapTask;
+use crate::raftstore::store::fsm::PeerMemoryTrace;
 use crate::raftstore::store::util::conf_state_from_region;
 use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
@@ -57,6 +58,8 @@ pub const JOB_STATUS_CANCELLED: usize = 3;
 pub const JOB_STATUS_FINISHED: usize = 4;
 pub const JOB_STATUS_FAILED: usize = 5;
 
+pub const ENTRY_MEM_SIZE: usize = mem::size_of::<Entry>();
+
 #[derive(Debug)]
 pub enum SnapState {
     Relax,
@@ -89,9 +92,9 @@ pub fn last_index(state: &RaftLocalState) -> u64 {
     state.get_last_index()
 }
 
-#[derive(Default)]
 struct EntryCache {
     cache: VecDeque<Entry>,
+    mem_size: usize,
 }
 
 impl EntryCache {
@@ -151,15 +154,24 @@ impl EntryCache {
             let first_index = entries[0].get_index();
             if cache_last_index >= first_index {
                 if self.cache.front().unwrap().get_index() >= first_index {
+                    self.mem_size = self.cache.capacity() * ENTRY_MEM_SIZE;
                     self.cache.clear();
                 } else {
                     let left = self.cache.len() - (cache_last_index - first_index + 1) as usize;
+                    self.mem_size -= self
+                        .cache
+                        .iter()
+                        .skip(left)
+                        .map(|e| e.data.capacity() + e.context.capacity())
+                        .sum::<usize>();
                     self.cache.truncate(left);
                 }
                 if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY
                     && self.cache.capacity() > SHRINK_CACHE_CAPACITY
                 {
+                    let old_capacity = self.cache.capacity();
                     self.cache.shrink_to_fit();
+                    self.mem_size -= ENTRY_MEM_SIZE * (old_capacity - self.cache.capacity());
                 }
             } else if cache_last_index + 1 < first_index {
                 panic!(
@@ -171,15 +183,25 @@ impl EntryCache {
         let mut start_idx = 0;
         if let Some(len) = (self.cache.len() + entries.len()).checked_sub(MAX_CACHE_CAPACITY) {
             if len < self.cache.len() {
-                self.cache.drain(..len);
+                let drained_cache_entries_size: usize = self
+                    .cache
+                    .drain(..len)
+                    .map(|e| e.data.capacity() + e.context.capacity())
+                    .sum();
+                self.mem_size -= drained_cache_entries_size;
             } else {
                 start_idx = len - self.cache.len();
+                self.mem_size = self.cache.capacity() * ENTRY_MEM_SIZE;
                 self.cache.clear();
             }
         }
+        let old_capacity = self.cache.capacity();
+        let mut entries_mem_size = 0;
         for e in &entries[start_idx..] {
             self.cache.push_back(e.to_owned());
+            entries_mem_size += e.data.capacity() + e.context.capacity();
         }
+        self.mem_size += ENTRY_MEM_SIZE * (self.cache.capacity() - old_capacity) + entries_mem_size;
     }
 
     pub fn compact_to(&mut self, idx: u64) {
@@ -190,19 +212,33 @@ impl EntryCache {
         let cache_last_idx = self.cache.back().unwrap().get_index();
         // Use `cache_last_idx + 1` to make sure cache can be cleared completely
         // if necessary.
-        self.cache
-            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize);
+        let drained_cache_entries_size: usize = self
+            .cache
+            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize)
+            .map(|e| e.data.capacity() + e.context.capacity())
+            .sum();
+        self.mem_size -= drained_cache_entries_size;
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
         {
+            let old_capacity = self.cache.capacity();
             // So the peer storage doesn't have much writes since the proposal of compaction,
             // we can consider this peer is going to be inactive.
             self.cache.shrink_to_fit();
+            self.mem_size -= (old_capacity - self.cache.capacity()) * ENTRY_MEM_SIZE;
         }
     }
 
     #[inline]
     fn is_empty(&self) -> bool {
         self.cache.is_empty()
+    }
+}
+
+impl Default for EntryCache {
+    fn default() -> EntryCache {
+        let cache = VecDeque::default();
+        let mem_size = ENTRY_MEM_SIZE * cache.capacity();
+        EntryCache { cache, mem_size }
     }
 }
 
@@ -886,8 +922,11 @@ impl PeerStorage {
     }
 
     #[inline]
-    pub fn flush_cache_metrics(&mut self) {
+    pub fn flush_cache_metrics(&mut self, trace: &PeerMemoryTrace) {
         self.stats.flush();
+        trace
+            .log_cache
+            .store(self.cache.mem_size, Ordering::Relaxed);
     }
 
     // Apply the peer with given snapshot.

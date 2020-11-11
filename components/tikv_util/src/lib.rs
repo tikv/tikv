@@ -30,6 +30,7 @@ extern crate slog_global;
 #[cfg(test)]
 extern crate test;
 
+use crate::memory::HeapSize;
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::fs::File;
@@ -38,7 +39,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
-use std::{env, slice, thread, u64};
+use std::{env, mem, slice, thread, u64};
 
 use protobuf::Message;
 use rand;
@@ -55,6 +56,7 @@ pub mod macros;
 pub mod keybuilder;
 pub mod logger;
 pub mod lru;
+pub mod memory;
 pub mod metrics;
 pub mod mpsc;
 pub mod security;
@@ -409,6 +411,13 @@ impl<T> RingQueue<T> {
         } else {
             None
         }
+    }
+}
+
+impl<T> HeapSize for RingQueue<T> {
+    #[inline]
+    fn heap_size(&self) -> usize {
+        self.buf.capacity() * mem::size_of::<T>()
     }
 }
 

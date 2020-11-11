@@ -51,7 +51,7 @@ fn test_basic() {
             let (sender, mut runner) = Runner::new(10);
             let (tx1, rx1) = mpsc::unbounded();
             runner.sender = Some(tx1);
-            let mailbox = BasicMailbox::new(sender, runner);
+            let mailbox = BasicMailbox::new(sender, runner, Arc::default());
             router_.register(1, mailbox);
             tx.send(rx1).unwrap();
         })))

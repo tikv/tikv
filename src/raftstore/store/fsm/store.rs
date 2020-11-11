@@ -29,6 +29,9 @@ use crate::pd::{PdClient, PdRunner, PdTask};
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::config::Config;
+use crate::raftstore::store::fsm::memory::{
+    RaftContextTrace, RaftStoreMemoryProvider, RaftStoreMemoryTrace,
+};
 use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
@@ -62,6 +65,7 @@ use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
 
 use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant, SlowTimer};
 use tikv_util::timer::SteadyTimer;
@@ -100,6 +104,7 @@ pub struct StoreMeta {
     /// An inverse mapping of `pending_merge_targets` used to let source peer help target peer to clean up related entry.
     /// source_region_id -> target_region_id
     pub targets_map: HashMap<u64, u64>,
+    pub mem_size: usize,
 }
 
 impl StoreMeta {
@@ -113,6 +118,7 @@ impl StoreMeta {
             pending_snapshot_regions: Vec::default(),
             pending_merge_targets: HashMap::default(),
             targets_map: HashMap::default(),
+            mem_size: 0,
         }
     }
 
@@ -123,13 +129,20 @@ impl StoreMeta {
         region: Region,
         peer: &mut crate::raftstore::store::Peer,
     ) {
+        let heap_size = region.heap_size();
         let prev = self.regions.insert(region.get_id(), region.clone());
-        if prev.map_or(true, |r| r.get_id() != region.get_id()) {
-            // TODO: may not be a good idea to panic when holding a lock.
-            panic!("{} region corrupted", peer.tag);
+        if let Some(r) = prev {
+            if r.id == region.id {
+                self.mem_size += heap_size;
+                self.mem_size -= r.heap_size();
+                let reader = self.readers.get_mut(&region.get_id()).unwrap();
+                peer.set_region(host, reader, region);
+                return;
+            }
         }
-        let reader = self.readers.get_mut(&region.get_id()).unwrap();
-        peer.set_region(host, reader, region);
+
+        // TODO: may not be a good idea to panic when holding a lock.
+        panic!("{} region corrupted", peer.tag);
     }
 }
 
@@ -210,6 +223,7 @@ pub struct PollContext<T, C: 'static> {
     pub compact_scheduler: Scheduler<CompactTask>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
+    pub memory_trace: Arc<RaftStoreMemoryTrace>,
     pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager,
@@ -482,6 +496,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
     poll_ctx: PollContext<T, C>,
     pending_proposals: Vec<RegionProposal>,
     messages_per_tick: usize,
+    memory_trace: Option<Arc<RaftContextTrace>>,
 }
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
@@ -695,6 +710,34 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             self.poll_ctx.trans.flush();
             self.poll_ctx.need_flush_trans = false;
         }
+        if self.memory_trace.is_none() {
+            let t: Arc<RaftContextTrace> = Arc::default();
+            let mut ctx = self.poll_ctx.memory_trace.raft_context.lock().unwrap();
+            ctx.push((thread::current().id(), t.clone()));
+            self.memory_trace = Some(t);
+        }
+        let trace = self.memory_trace.as_ref().unwrap();
+        // TODO: record raft batch size, there is no API ATM.
+        trace.write_batch.store(
+            self.poll_ctx.kv_wb.data_size() + self.poll_ctx.raft_wb.data_size(),
+            Ordering::Relaxed,
+        );
+        let mut size = self.poll_ctx.ready_res.heap_size();
+        size += self.poll_ctx.queued_snapshot.heap_size();
+        size += self.store_msg_buf.heap_size();
+        size += self.peer_msg_buf.heap_size();
+        size += mem::size_of::<Self>();
+        trace.rest.store(size, Ordering::Relaxed);
+    }
+}
+
+impl<T, C> Drop for RaftPoller<T, C> {
+    fn drop(&mut self) {
+        if self.memory_trace.take().is_some() {
+            let cur_id = thread::current().id();
+            let mut ctx = self.poll_ctx.memory_trace.raft_context.lock().unwrap();
+            ctx.retain(|(id, _)| *id != cur_id);
+        }
     }
 }
 
@@ -714,6 +757,7 @@ pub struct RaftPollerBuilder<T, C> {
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
     snap_mgr: SnapManager,
+    pub memory_trace: Arc<RaftStoreMemoryTrace>,
     pub coprocessor_host: Arc<CoprocessorHost>,
     trans: T,
     pd_client: Arc<C>,
@@ -912,6 +956,7 @@ where
             raft_metrics: RaftMetrics::default(),
             snap_mgr: self.snap_mgr.clone(),
             applying_snap_count: self.applying_snap_count.clone(),
+            memory_trace: self.memory_trace.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
             timer: SteadyTimer::default(),
             trans: self.trans.clone(),
@@ -940,6 +985,7 @@ where
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             pending_proposals: Vec::new(),
+            memory_trace: None,
         }
     }
 }
@@ -982,6 +1028,17 @@ impl RaftBatchSystem {
         mut coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
     ) -> Result<()> {
+        let apply_router_trace = self.apply_router.trace();
+        let raft_router_trace = self.router.trace();
+        let memory_trace = Arc::new(RaftStoreMemoryTrace::new(
+            raft_router_trace,
+            apply_router_trace,
+        ));
+        let provider = Box::new(RaftStoreMemoryProvider::new(
+            store_meta.clone(),
+            memory_trace.clone(),
+        ));
+        tikv_alloc::trace::register_provider(provider);
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
         cfg.validate()?;
@@ -1020,6 +1077,7 @@ impl RaftBatchSystem {
             apply_router: self.apply_router.clone(),
             trans,
             pd_client,
+            memory_trace,
             coprocessor_host: workers.coprocessor_host.clone(),
             importer,
             snap_mgr: mgr,
@@ -1079,7 +1137,10 @@ impl RaftBatchSystem {
         let mut address = Vec::with_capacity(region_peers.len());
         for (tx, fsm) in region_peers {
             address.push(fsm.region_id());
-            mailboxes.push((fsm.region_id(), BasicMailbox::new(tx, fsm)));
+            mailboxes.push((
+                fsm.region_id(),
+                BasicMailbox::new(tx, fsm, self.router.state_cnt().clone()),
+            ));
         }
         self.router.register_all(mailboxes);
 
@@ -1487,7 +1548,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         // snapshot is applied.
         meta.regions
             .insert(region_id, peer.get_peer().region().to_owned());
-        let mailbox = BasicMailbox::new(tx, peer);
+        let mailbox = BasicMailbox::new(tx, peer, self.ctx.router.state_cnt().clone());
         self.ctx.router.register(region_id, mailbox);
         self.ctx
             .router

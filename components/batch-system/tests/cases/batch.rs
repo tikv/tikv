@@ -2,6 +2,7 @@
 
 use batch_system::test_runner::*;
 use batch_system::*;
+use std::sync::Arc;
 use std::time::Duration;
 use tikv_util::mpsc;
 
@@ -20,7 +21,7 @@ fn test_batch() {
     router
         .send_control(Message::Callback(Box::new(move |_: &mut Runner| {
             let (tx, runner) = Runner::new(10);
-            let mailbox = BasicMailbox::new(tx, runner);
+            let mailbox = BasicMailbox::new(tx, runner, Arc::default());
             r.register(1, mailbox);
             tx_.send(1).unwrap();
         })))

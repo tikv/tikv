@@ -16,6 +16,7 @@ mem-profiling = ["jemallocator/profiling"]
 [dependencies]
 libc = "0.2"
 log = "0.3"
+lazy_static = "1.4"
 
 [dev-dependencies]
 tempdir = "0.3"

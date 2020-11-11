@@ -10,6 +10,8 @@ use crate::mailbox::BasicMailbox;
 use crate::router::Router;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use tikv_util::mpsc;
 
@@ -439,11 +441,12 @@ pub fn create_system<N: Fsm, C: Fsm>(
     sender: mpsc::LooseBoundedSender<C::Message>,
     controller: Box<C>,
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
-    let control_box = BasicMailbox::new(sender, controller);
+    let state_cnt = Arc::new(AtomicUsize::new(0));
+    let control_box = BasicMailbox::new(sender, controller, state_cnt.clone());
     let (tx, rx) = channel::unbounded();
     let normal_scheduler = NormalScheduler { sender: tx.clone() };
     let control_scheduler = ControlScheduler { sender: tx };
-    let router = Router::new(control_box, normal_scheduler, control_scheduler);
+    let router = Router::new(control_box, normal_scheduler, control_scheduler, state_cnt);
     let system = BatchSystem {
         name_prefix: None,
         router: router.clone(),

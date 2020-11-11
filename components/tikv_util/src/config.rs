@@ -77,6 +77,28 @@ impl ReadableSize {
     pub fn as_mb(self) -> u64 {
         self.0 / MB
     }
+
+    /// Formats the size into readable format.
+    ///
+    /// This function will round the value to maximun floor unit.
+    pub fn round_and_format(self, buffer: &mut String) {
+        let mut size = self.0 as f64;
+        let units = &["", "KiB", "MiB", "GiB", "TiB"];
+        let mut choice = "PiB";
+        for unit in units {
+            if size >= 1024f64 {
+                size /= 1024f64;
+            } else {
+                choice = unit;
+                break;
+            }
+        }
+        if choice.is_empty() {
+            write!(buffer, "{}", self.0).unwrap();
+        } else {
+            write!(buffer, "{:.1}{}", size, choice).unwrap();
+        }
+    }
 }
 
 impl Div<u64> for ReadableSize {
@@ -942,6 +964,28 @@ mod tests {
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
             assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
+        }
+    }
+
+    #[test]
+    fn test_format_readable_size() {
+        let cases = vec![
+            (12, "12"),
+            (0, "0"),
+            (KB, "1.0KiB"),
+            (MB / 2, "512.0KiB"),
+            (MB * 2, "2.0MiB"),
+            (GB * 2, "2.0GiB"),
+            (TB * 2, "2.0TiB"),
+            (PB * 2, "2.0PiB"),
+            (PB * 1024, "1024.0PiB"),
+            (4512345, "4.3MiB"),
+        ];
+        let mut buffer = String::with_capacity(10);
+        for (src, exp) in cases {
+            ReadableSize(src).round_and_format(&mut buffer);
+            assert_eq!(buffer, exp, "{}", src);
+            buffer.clear();
         }
     }
 

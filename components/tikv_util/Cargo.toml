@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 hashbrown = { version = "0.1", features = ["serde"] }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
 log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-async = "2.3"

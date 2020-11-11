@@ -3,9 +3,10 @@
 use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::VecDeque;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::{cmp, u64};
+use std::{cmp, mem, u64};
 
 use crate::pd::{PdClient, PdTask};
 use batch_system::{BasicMailbox, Fsm};
@@ -29,6 +30,7 @@ use protobuf::{Message, RepeatedField};
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
+use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -36,6 +38,7 @@ use tikv_util::{escape, is_zero_duration};
 
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
+use crate::raftstore::store::fsm::memory::PeerMemoryTrace;
 use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
 use crate::raftstore::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangePeer, ExecResult,
@@ -96,6 +99,7 @@ pub struct PeerFsm {
     has_ready: bool,
     mailbox: Option<BasicMailbox<PeerFsm>>,
     pub receiver: Receiver<PeerMsg>,
+    trace: Option<Arc<PeerMemoryTrace>>,
 }
 
 impl Drop for PeerFsm {
@@ -157,6 +161,7 @@ impl PeerFsm {
                 has_ready: false,
                 mailbox: None,
                 receiver: rx,
+                trace: None,
             }),
         ))
     }
@@ -194,6 +199,7 @@ impl PeerFsm {
                 has_ready: false,
                 mailbox: None,
                 receiver: rx,
+                trace: None,
             }),
         ))
     }
@@ -224,6 +230,26 @@ impl PeerFsm {
 
     pub fn schedule_applying_snapshot(&mut self) {
         self.peer.mut_store().schedule_applying_snapshot();
+    }
+
+    #[inline]
+    pub fn raft_heap_size(&self, cfg: &Config) -> usize {
+        let raft = &self.peer.raft_group.raft;
+        let peer_cnt = self.peer.region().get_peers().len();
+        let inflight_size = cfg.raft_max_inflight_msgs * mem::size_of::<u64>();
+        // Progress size
+        let mut size =
+            mem::size_of::<raft::Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt;
+        // We use Uuid for read request.
+        size += raft.read_states.heap_size() + 16 * raft.read_states.len();
+        // Every requests have at least header, which should be at least 8 bytes.
+        let entries = &raft.raft_log.unstable.entries;
+        size += entries.heap_size() + entries.len() * 8;
+        let read_only = &raft.read_only;
+        size += read_only.pending_read_index.heap_size() + read_only.pending_read_index.len() * 16;
+        size += read_only.read_index_queue.heap_size() + 16 * read_only.read_index_queue.len();
+        size += raft.msgs.heap_size();
+        size
     }
 }
 
@@ -386,6 +412,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn start(&mut self) {
+        let mut peers = self.ctx.memory_trace.peers.lock().unwrap();
+        let trace = peers.entry(self.fsm.peer.peer_id()).or_default().clone();
+        drop(peers);
+        self.fsm.trace = Some(trace);
         self.register_raft_base_tick();
         self.register_raft_gc_log_tick();
         self.register_pd_heartbeat_tick();
@@ -604,6 +634,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // After applying a snapshot, merge is rollbacked implicitly.
             self.on_ready_rollback_merge(0, None);
         }
+        let s = self.fsm.raft_heap_size(&self.ctx.cfg);
+        let trace = self.fsm.trace.as_ref().unwrap();
+        trace.raft_machine.store(s, Ordering::Relaxed);
+        trace
+            .proposals
+            .store(self.fsm.peer.proposal_size(), Ordering::Relaxed);
+        let rest = self.fsm.peer.rest_size() + mem::size_of::<Self>();
+        trace.rest.store(rest, Ordering::Relaxed);
     }
 
     #[inline]
@@ -693,7 +731,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_raft_base_tick(&mut self) {
         if self.fsm.peer.pending_remove {
-            self.fsm.peer.mut_store().flush_cache_metrics();
+            self.fsm
+                .peer
+                .mut_store()
+                .flush_cache_metrics(self.fsm.trace.as_ref().unwrap());
             return;
         }
         // When having pending snapshot, if election timeout is met, it can't pass
@@ -745,7 +786,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.fsm.has_ready = true;
         }
 
-        self.fsm.peer.mut_store().flush_cache_metrics();
+        self.fsm
+            .peer
+            .mut_store()
+            .flush_cache_metrics(self.fsm.trace.as_ref().unwrap());
         let res = match res {
             // hibernate_region is false.
             None => {
@@ -1368,6 +1412,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // data too.
             panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
         }
+        self.ctx
+            .memory_trace
+            .peers
+            .lock()
+            .unwrap()
+            .remove(&self.fsm.peer_id());
         self.ctx.router.close(region_id);
         self.fsm.stop();
 
@@ -1557,6 +1607,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         new_region_id, r, new_region
                     );
                 }
+                self.ctx
+                    .memory_trace
+                    .peers
+                    .lock()
+                    .unwrap()
+                    .remove(&self.fsm.peer_id());
                 self.ctx.router.close(new_region_id);
             }
 
@@ -1602,7 +1658,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // check again after split.
                 new_peer.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
             }
-            let mailbox = BasicMailbox::new(sender, new_peer);
+            let mailbox = BasicMailbox::new(sender, new_peer, self.ctx.router.state_cnt().clone());
             self.ctx.router.register(new_region_id, mailbox);
             self.ctx
                 .router

@@ -13,13 +13,90 @@ use prost::Message;
 use regex::Regex;
 use tokio_threadpool::{Builder, ThreadPool};
 
+use std::borrow::Cow;
+use std::fmt::Write;
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::{error, result};
 
 use super::Result;
 use tikv_util::collections::HashMap;
+use tikv_util::config::ReadableSize;
 use tikv_util::metrics::dump;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+
+fn trace_to_json(buffer: &mut String, snapshot: &tikv_alloc::trace::MemoryTrace) {
+    write!(buffer, r#""{}":"#, snapshot.id()).unwrap();
+    if snapshot.children().is_empty() {
+        buffer.push('"');
+        ReadableSize(snapshot.size() as u64).round_and_format(buffer);
+        buffer.push('"');
+    } else {
+        buffer.push('{');
+        let mut total = 0;
+        for c in snapshot.children() {
+            trace_to_json(buffer, c);
+            buffer.push(',');
+            total += c.size();
+        }
+        buffer.push_str(r#""total":""#);
+        ReadableSize(snapshot.size() as u64).round_and_format(buffer);
+        if snapshot.size() > total {
+            buffer.push_str(r#"","size":""#);
+            ReadableSize((snapshot.size() - total) as u64).round_and_format(buffer);
+        }
+        buffer.push_str(r#""}"#);
+    }
+}
+
+fn trace_to_flamegraph(
+    buffer: &mut String,
+    trace: &mut String,
+    snapshot: &tikv_alloc::trace::MemoryTrace,
+) {
+    let origin_len = trace.len();
+    if trace.is_empty() {
+        write!(trace, "{}-", snapshot.id()).unwrap();
+    } else {
+        write!(trace, ";{}-", snapshot.id()).unwrap();
+    }
+    ReadableSize(snapshot.size() as u64).round_and_format(trace);
+    let mut total = 0;
+    for c in snapshot.children() {
+        trace_to_flamegraph(buffer, trace, c);
+        total += c.size();
+    }
+    // When merging frame, size will of children will also be counted.
+    if snapshot.size() > total {
+        writeln!(buffer, "{} {}", trace, snapshot.size() - total).unwrap();
+    }
+    trace.truncate(origin_len);
+}
+
+fn dump_memory_trace(
+    snapshot: &tikv_alloc::trace::MemoryTrace,
+    is_json: bool,
+) -> result::Result<Vec<u8>, Box<dyn error::Error>> {
+    let mut buffer = String::new();
+    if is_json {
+        buffer.push('{');
+        trace_to_json(&mut buffer, snapshot);
+        buffer.push('}');
+        Ok(buffer.into_bytes())
+    } else {
+        let mut trace = String::new();
+        trace_to_flamegraph(&mut buffer, &mut trace, &snapshot);
+        let mut out = Vec::default();
+        if let Err(e) = inferno::flamegraph::from_lines(
+            &mut inferno::flamegraph::Options::default(),
+            buffer.lines(),
+            &mut out,
+        ) {
+            return Err(format!("failed to generate flamegraph: {:?}", e).into());
+        }
+        Ok(out)
+    }
+}
 
 pub struct StatusServer {
     thread_pool: ThreadPool,
@@ -209,6 +286,40 @@ impl StatusServer {
         )
     }
 
+    fn memory_trace_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let query = match req.uri().query() {
+            Some(query) => query,
+            None => {
+                return Ok(StatusServer::err_response(
+                    StatusCode::BAD_REQUEST,
+                    "request should have the query part",
+                ));
+            }
+        };
+        let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
+        let is_json = match query_pairs.get("type") {
+            Some(Cow::Borrowed("json")) => true,
+            _ => false,
+        };
+
+        match dump_memory_trace(&tikv_alloc::trace::snapshot(), is_json) {
+            Ok(buf) => {
+                if is_json {
+                    Ok(Response::builder()
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(buf))
+                        .unwrap())
+                } else {
+                    Ok(StatusServer::err_response(StatusCode::OK, buf))
+                }
+            }
+            Err(err) => Ok(StatusServer::err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                err.to_string(),
+            )),
+        }
+    }
+
     pub fn start(&mut self, status_addr: String) -> Result<()> {
         let addr = SocketAddr::from_str(&status_addr)?;
 
@@ -219,35 +330,42 @@ impl StatusServer {
         let server = builder.serve(move || {
             // Create a status service.
             service_fn(
-                move |req: Request<Body>| -> Box<
-                    dyn Future<Item = Response<Body>, Error = hyper::Error> + Send,
-                > {
-                    let path = req.uri().path().to_owned();
-                    let method = req.method().to_owned();
+                    move |req: Request<Body>| -> Box<
+                        dyn Future<Item = Response<Body>, Error = hyper::Error> + Send,
+                    > {
+                        let path = req.uri().path().to_owned();
+                        let method = req.method().to_owned();
 
-                    #[cfg(feature = "failpoints")]
+                        #[cfg(feature = "failpoints")]
                         {
                             if path.starts_with(FAIL_POINTS_REQUEST_PATH) {
                                 return handle_fail_points_request(req);
                             }
                         }
 
-                    match (method, path.as_ref()) {
-                        (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
-                        (Method::GET, "/status") => Box::new(ok(Response::default())),
-                        (Method::GET, "/debug/pprof/profile") => {
-                            #[cfg(target_os = "linux")]
-                                { Self::dump_rsperf_to_resp(req) }
-                            #[cfg(not(target_os = "linux"))]
-                                { Box::new(ok(Response::default())) }
+                        match (method, path.as_ref()) {
+                            (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
+                            (Method::GET, "/status") => Box::new(ok(Response::default())),
+                            (Method::GET, "/debug/pprof/profile") => {
+                                #[cfg(target_os = "linux")]
+                                {
+                                    Self::dump_rsperf_to_resp(req)
+                                }
+                                #[cfg(not(target_os = "linux"))]
+                                {
+                                    Box::new(ok(Response::default()))
+                                }
+                            }
+                            (Method::GET, "/debug/trace/memory") => {
+                                Box::new(futures::future::result(Self::memory_trace_to_resp(req)))
+                            }
+                            _ => Box::new(ok(StatusServer::err_response(
+                                StatusCode::NOT_FOUND,
+                                "path not found",
+                            ))),
                         }
-                        _ => Box::new(ok(StatusServer::err_response(
-                            StatusCode::NOT_FOUND,
-                            "path not found",
-                        ))),
-                    }
-                },
-            )
+                    },
+                )
         });
         self.addr = Some(server.local_addr());
         let graceful = server

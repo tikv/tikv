@@ -2,7 +2,8 @@
 
 use std::ffi::CString;
 use std::i64;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::mem;
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -10,7 +11,6 @@ use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
 use crate::server::transport::RaftStoreRouter;
-use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpcio::{
     ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
@@ -19,6 +19,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 use protobuf::RepeatedField;
+use tikv_alloc::trace::{MemoryTrace, MemoryTraceProvider};
 use tikv_util::collections::{HashMap, HashMapEntry};
 use tikv_util::mpsc::batch::{self, BatchCollector, Sender as BatchSender};
 use tikv_util::security::SecurityManager;
@@ -33,9 +34,29 @@ const RAFT_MSG_NOTIFY_SIZE: usize = 8;
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
+pub struct CachedSizeMessage {
+    msg: RaftMessage,
+    size: usize,
+}
+
+impl CachedSizeMessage {
+    fn new(msg: RaftMessage) -> CachedSizeMessage {
+        let mut msg_size = msg.start_key.len() + msg.end_key.len();
+        for entry in msg.get_message().get_entries() {
+            msg_size += entry.data.len();
+        }
+        CachedSizeMessage {
+            msg,
+            size: msg_size,
+        }
+    }
+}
+
 struct Conn {
-    stream: BatchSender<RaftMessage>,
+    stream: BatchSender<CachedSizeMessage>,
+    trace: RaftClientMemoryTrace,
     _client: TikvClient,
+    pending_msg_len: Arc<AtomicUsize>,
 }
 
 impl Conn {
@@ -46,6 +67,7 @@ impl Conn {
         cfg: &Config,
         security_mgr: &SecurityManager,
         store_id: u64,
+        trace: RaftClientMemoryTrace,
     ) -> Conn {
         info!("server: new connection with tikv endpoint"; "addr" => addr);
 
@@ -64,12 +86,13 @@ impl Conn {
         let client1 = TikvClient::new(channel);
         let client2 = client1.clone();
 
-        let (tx, rx) = batch::unbounded::<RaftMessage>(RAFT_MSG_NOTIFY_SIZE);
+        let pending_msg_len = trace.new_conn_trace();
+        let (tx, rx) = batch::unbounded::<CachedSizeMessage>(RAFT_MSG_NOTIFY_SIZE);
         let rx = batch::BatchReceiver::new(
             rx,
             RAFT_MSG_MAX_BATCH_SIZE,
             Vec::new,
-            RaftMsgCollector::new(cfg.max_grpc_send_msg_len as usize),
+            RaftMsgCollector::new(pending_msg_len.clone(), cfg.max_grpc_send_msg_len as usize),
         );
 
         // Use a mutex to make compiler happy.
@@ -128,10 +151,50 @@ impl Conn {
                 .map(|_| ()),
         );
 
+        pending_msg_len.fetch_add(mem::size_of::<Conn>(), Ordering::Relaxed);
+
         Conn {
             stream: tx,
+            pending_msg_len,
+            trace,
             _client: client1,
         }
+    }
+}
+
+impl Drop for Conn {
+    fn drop(&mut self) {
+        self.trace.remove(&self.pending_msg_len);
+    }
+}
+
+#[derive(Default, Clone)]
+struct RaftClientMemoryTrace {
+    mem_sizes: Arc<Mutex<Vec<Arc<AtomicUsize>>>>,
+}
+
+impl RaftClientMemoryTrace {
+    fn new_conn_trace(&self) -> Arc<AtomicUsize> {
+        let s = Arc::new(AtomicUsize::new(0));
+        self.mem_sizes.lock().unwrap().push(s.clone());
+        s
+    }
+
+    fn remove(&self, s: &Arc<AtomicUsize>) {
+        let mut sizes = self.mem_sizes.lock().unwrap();
+        let pos = sizes.iter().position(|i| Arc::ptr_eq(i, s)).unwrap();
+        sizes.swap_remove(pos);
+    }
+}
+
+impl MemoryTraceProvider for RaftClientMemoryTrace {
+    fn trace(&mut self, dump: &mut MemoryTrace) {
+        let sizes = self.mem_sizes.lock().unwrap();
+        let sum = sizes.iter().map(|s| s.load(Ordering::Relaxed)).sum();
+        drop(sizes);
+        let s = dump.add_sub_trace("RaftClient");
+        s.set_size(sum);
+        dump.add_size(sum);
     }
 }
 
@@ -150,6 +213,7 @@ pub struct RaftClient<T: 'static> {
     // it can put a tokio_timer::Delay to the runtime.
     stats_pool: tokio_threadpool::Sender,
     timer: Handle,
+    trace: RaftClientMemoryTrace,
 }
 
 impl<T: RaftStoreRouter> RaftClient<T> {
@@ -161,6 +225,8 @@ impl<T: RaftStoreRouter> RaftClient<T> {
         grpc_thread_load: Arc<ThreadLoad>,
         stats_pool: tokio_threadpool::Sender,
     ) -> RaftClient<T> {
+        let trace = RaftClientMemoryTrace::default();
+        tikv_alloc::trace::register_provider(Box::new(trace.clone()));
         RaftClient {
             env,
             router: Mutex::new(router),
@@ -171,6 +237,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
             grpc_thread_load,
             stats_pool,
             timer: GLOBAL_TIMER_HANDLE.clone(),
+            trace,
         }
     }
 
@@ -186,6 +253,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
                     &self.cfg,
                     &self.security_mgr,
                     store_id,
+                    self.trace.clone(),
                 );
                 e.insert(conn)
             }
@@ -193,23 +261,28 @@ impl<T: RaftStoreRouter> RaftClient<T> {
     }
 
     pub fn send(&mut self, store_id: u64, addr: &str, msg: RaftMessage) -> Result<()> {
-        if let Err(SendError(msg)) = self
-            .get_conn(addr, msg.region_id, store_id)
-            .stream
-            .send(msg)
-        {
-            warn!("send to {} fail, the gRPC connection could be broken", addr);
-            let index = msg.region_id as usize % self.cfg.grpc_raft_conn_num;
-            self.conns.remove(&(addr.to_owned(), index));
+        let region_id = msg.region_id;
+        let msg = CachedSizeMessage::new(msg);
+        let size = msg.size;
 
-            if let Some(current_addr) = self.addrs.remove(&store_id) {
-                if current_addr != *addr {
-                    self.addrs.insert(store_id, current_addr);
-                }
+        {
+            let conn = self.get_conn(addr, region_id, store_id);
+            if conn.stream.send(msg).is_ok() {
+                conn.pending_msg_len.fetch_add(size, Ordering::Relaxed);
+                return Ok(());
             }
-            return Err(box_err!("RaftClient send fail"));
         }
-        Ok(())
+
+        warn!("send to {} fail, the gRPC connection could be broken", addr);
+        let index = region_id as usize % self.cfg.grpc_raft_conn_num;
+        self.conns.remove(&(addr.to_owned(), index));
+
+        if let Some(current_addr) = self.addrs.remove(&store_id) {
+            if current_addr != *addr {
+                self.addrs.insert(store_id, current_addr);
+            }
+        }
+        Err(box_err!("RaftClient send fail"))
     }
 
     pub fn flush(&mut self) {
@@ -241,28 +314,34 @@ impl<T: RaftStoreRouter> RaftClient<T> {
 
 // Collect raft messages into a vector so that we can merge them into one message later.
 struct RaftMsgCollector {
+    pending_msg_len: Arc<AtomicUsize>,
     size: usize,
     limit: usize,
 }
 
 impl RaftMsgCollector {
-    fn new(limit: usize) -> Self {
-        Self { size: 0, limit }
+    fn new(pending_msg_len: Arc<AtomicUsize>, limit: usize) -> Self {
+        Self {
+            size: 0,
+            limit,
+            pending_msg_len,
+        }
     }
 }
 
-impl BatchCollector<Vec<RaftMessage>, RaftMessage> for RaftMsgCollector {
-    fn collect(&mut self, v: &mut Vec<RaftMessage>, e: RaftMessage) -> Option<RaftMessage> {
-        let mut msg_size = e.start_key.len() + e.end_key.len();
-        for entry in e.get_message().get_entries() {
-            msg_size += entry.data.len();
-        }
-        if self.size > 0 && self.size + msg_size + GRPC_SEND_MSG_BUF >= self.limit as usize {
+impl BatchCollector<Vec<RaftMessage>, CachedSizeMessage> for RaftMsgCollector {
+    fn collect(
+        &mut self,
+        v: &mut Vec<RaftMessage>,
+        e: CachedSizeMessage,
+    ) -> Option<CachedSizeMessage> {
+        if self.size > 0 && self.size + e.size + GRPC_SEND_MSG_BUF >= self.limit as usize {
+            self.pending_msg_len.fetch_sub(self.size, Ordering::Relaxed);
             self.size = 0;
             return Some(e);
         }
-        self.size += msg_size;
-        v.push(e);
+        self.size += e.size;
+        v.push(e.msg);
         None
     }
 }

@@ -5,16 +5,19 @@
 //! stores. They are mixed for now, will be separated in the future.
 
 pub mod apply;
+mod memory;
 mod metrics;
 mod peer;
 pub mod store;
 
+pub(crate) use self::apply::ApplyFsm;
 pub use self::apply::{
     create_apply_batch_system, Apply, ApplyBatchSystem, ApplyMetrics, ApplyRes, ApplyRouter,
     Builder as ApplyPollerBuilder, CatchUpLogs, ChangePeer, ExecResult, GenSnapTask,
     Msg as ApplyTask, Notifier as ApplyNotifier, Proposal, RegionProposal, Registration,
     TaskRes as ApplyTaskRes,
 };
+pub(crate) use self::memory::PeerMemoryTrace;
 pub use self::peer::{DestroyPeerJob, GroupState, PeerFsm};
 pub use self::store::{
     create_raft_batch_system, new_compaction_listener, RaftBatchSystem, RaftPollerBuilder,

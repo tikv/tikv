@@ -3,6 +3,7 @@
 use crate::fsm::{Fsm, FsmScheduler, FsmState};
 use crossbeam::channel::{SendError, TrySendError};
 use std::borrow::Cow;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use tikv_util::mpsc;
 
@@ -24,10 +25,11 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     pub fn new(
         sender: mpsc::LooseBoundedSender<Owner::Message>,
         fsm: Box<Owner>,
+        state_cnt: Arc<AtomicUsize>,
     ) -> BasicMailbox<Owner> {
         BasicMailbox {
             sender,
-            state: Arc::new(FsmState::new(fsm)),
+            state: Arc::new(FsmState::new(fsm, state_cnt)),
         }
     }
 

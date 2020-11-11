@@ -30,4 +30,4 @@ pub mod test_runner;
 pub use self::batch::{create_system, BatchRouter, BatchSystem, HandlerBuilder, PollHandler};
 pub use self::fsm::Fsm;
 pub use self::mailbox::{BasicMailbox, Mailbox};
-pub use self::router::Router;
+pub use self::router::{Router, RouterTrace};

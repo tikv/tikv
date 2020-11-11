@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-use std::{cmp, usize};
+use std::{cmp, mem, thread, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -37,10 +37,14 @@ use uuid::Uuid;
 use crate::import::SSTImporter;
 use crate::observe_perf_context_type;
 use crate::raftstore::coprocessor::CoprocessorHost;
+use crate::raftstore::store::fsm::memory::{
+    ApplyContextTrace, ApplyMemoryTrace, RaftStoreMemoryTrace,
+};
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::{Callback, PeerMsg, SignificantMsg};
 use crate::raftstore::store::peer::Peer;
+use crate::raftstore::store::peer_storage::ENTRY_MEM_SIZE;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::util::{KeysInfoFormatter, PerfContextStatistics};
@@ -49,6 +53,7 @@ use crate::raftstore::{Error, Result};
 use crate::report_perf_context;
 
 use tikv_util::escape;
+use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
 use tikv_util::worker::Scheduler;
@@ -139,6 +144,13 @@ impl PendingCmdQueue {
     // TODO: seems we don't need to separate conf change from normal entries.
     fn set_conf_change(&mut self, cmd: PendingCmd) {
         self.conf_change = Some(cmd);
+    }
+}
+
+impl HeapSize for PendingCmdQueue {
+    #[inline]
+    fn heap_size(&self) -> usize {
+        self.normals.capacity() * mem::size_of::<PendingCmd>()
     }
 }
 
@@ -305,6 +317,7 @@ struct ApplyContext {
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
 
+    memory_trace: Arc<RaftStoreMemoryTrace>,
     perf_context_statistics: PerfContextStatistics,
 }
 
@@ -318,6 +331,7 @@ impl ApplyContext {
         router: ApplyRouter,
         notifier: Notifier,
         cfg: &Config,
+        memory_trace: Arc<RaftStoreMemoryTrace>,
     ) -> ApplyContext {
         ApplyContext {
             tag,
@@ -339,6 +353,7 @@ impl ApplyContext {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
+            memory_trace,
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
         }
     }
@@ -575,6 +590,7 @@ struct YieldState {
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg>,
+    approximate_size: usize,
 }
 
 impl Debug for YieldState {
@@ -583,6 +599,20 @@ impl Debug for YieldState {
             .field("pending_entries", &self.pending_entries.len())
             .field("pending_msgs", &self.pending_msgs.len())
             .finish()
+    }
+}
+
+impl HeapSize for YieldState {
+    fn heap_size(&self) -> usize {
+        let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>()
+            + self.pending_msgs.capacity() * mem::size_of::<Msg>();
+        for e in &self.pending_entries {
+            size += e.get_data().len() + e.get_context().len();
+        }
+        for m in &self.pending_msgs {
+            size += m.heap_size();
+        }
+        size
     }
 }
 
@@ -649,6 +679,8 @@ pub struct ApplyDelegate {
     /// The term of the raft log at applied index.
     applied_index_term: u64,
 
+    trace: Option<Arc<ApplyMemoryTrace>>,
+
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
 }
@@ -672,6 +704,7 @@ impl ApplyDelegate {
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
+            trace: None,
         }
     }
 
@@ -734,6 +767,7 @@ impl ApplyDelegate {
                     self.yield_state = Some(YieldState {
                         pending_entries,
                         pending_msgs: Vec::default(),
+                        approximate_size: 0,
                     });
                     if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
@@ -1017,6 +1051,12 @@ impl ApplyDelegate {
     fn destroy(&mut self, apply_ctx: &mut ApplyContext) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
+        apply_ctx
+            .memory_trace
+            .applys
+            .lock()
+            .unwrap()
+            .remove(&self.id);
         for cmd in self.pending_cmds.normals.drain(..) {
             notify_region_removed(self.region.get_id(), self.id, cmd);
         }
@@ -2135,18 +2175,31 @@ pub fn compact_raft_log(
     Ok(())
 }
 
+fn get_entries_mem_size(entries: &[Entry]) -> usize {
+    if entries.is_empty() {
+        return 0;
+    }
+    entries
+        .iter()
+        .map(|e| e.data.capacity() + e.context.capacity())
+        .sum()
+}
+
 pub struct Apply {
     pub region_id: u64,
     pub term: u64,
     pub entries: Vec<Entry>,
+    entries_mem_size: usize,
 }
 
 impl Apply {
     pub fn new(region_id: u64, term: u64, entries: Vec<Entry>) -> Apply {
+        let entries_mem_size = ENTRY_MEM_SIZE * entries.capacity() + get_entries_mem_size(&entries);
         Apply {
             region_id,
             term,
             entries,
+            entries_mem_size,
         }
     }
 }
@@ -2297,6 +2350,21 @@ impl Msg {
     }
 }
 
+impl HeapSize for Msg {
+    #[inline]
+    fn heap_size(&self) -> usize {
+        match self {
+            Msg::Proposal(p) => p.props.heap_size(),
+            Msg::Apply { apply, .. } => apply.entries_mem_size as usize,
+            Msg::Registration(r) => r.region.heap_size(),
+            Msg::LogsUpToDate(_) => 8,
+            Msg::Snapshot(_) | Msg::Destroy(_) | Msg::Noop => 0,
+            #[cfg(any(test, feature = "testexport"))]
+            Msg::Validate(_, _) => 0,
+        }
+    }
+}
+
 impl Debug for Msg {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -2375,7 +2443,7 @@ impl ApplyFsm {
     }
 
     /// Handles peer registration. When a peer is created, it will register an apply delegate.
-    fn handle_registration(&mut self, reg: Registration) {
+    fn handle_registration(&mut self, reg: Registration, apply_ctx: &mut ApplyContext) {
         info!(
             "re-register to apply delegates";
             "region_id" => self.delegate.region_id(),
@@ -2386,6 +2454,8 @@ impl ApplyFsm {
         self.delegate.term = reg.term;
         self.delegate.clear_all_commands_as_stale();
         self.delegate = ApplyDelegate::from_registration(reg);
+        let applys = apply_ctx.memory_trace.applys.lock().unwrap();
+        self.delegate.trace = applys.get(&self.delegate.id).cloned();
     }
 
     /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
@@ -2572,6 +2642,10 @@ impl ApplyFsm {
     }
 
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
+        if self.delegate.trace.is_none() {
+            let mut applys = apply_ctx.memory_trace.applys.lock().unwrap();
+            self.delegate.trace = Some(applys.entry(self.delegate.id).or_default().clone());
+        }
         let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
         loop {
@@ -2587,7 +2661,7 @@ impl ApplyFsm {
                     }
                 }
                 Some(Msg::Proposal(prop)) => self.handle_proposal(prop),
-                Some(Msg::Registration(reg)) => self.handle_registration(reg),
+                Some(Msg::Registration(reg)) => self.handle_registration(reg, apply_ctx),
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
                 Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
                 Some(Msg::Noop) => {}
@@ -2601,6 +2675,19 @@ impl ApplyFsm {
             let elapsed = duration_to_sec(timer.elapsed());
             APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
         }
+        let trace = self.delegate.trace.as_ref().unwrap();
+        trace
+            .pending_cmds
+            .store(self.delegate.pending_cmds.heap_size(), Ordering::Relaxed);
+        let s = self.delegate.yield_state.as_mut().map_or(0, |s| {
+            if s.approximate_size == 0 {
+                s.approximate_size = s.heap_size();
+            }
+            s.approximate_size
+        });
+        trace
+            .rest
+            .store(s + mem::size_of::<Self>(), Ordering::Relaxed);
     }
 }
 
@@ -2652,6 +2739,17 @@ pub struct ApplyPoller {
     msg_buf: Vec<Msg>,
     apply_ctx: ApplyContext,
     messages_per_tick: usize,
+    memory_trace: Option<Arc<ApplyContextTrace>>,
+}
+
+impl Drop for ApplyPoller {
+    fn drop(&mut self) {
+        if self.memory_trace.take().is_some() {
+            let cur_id = thread::current().id();
+            let mut ctx = self.apply_ctx.memory_trace.apply_context.lock().unwrap();
+            ctx.retain(|(id, _)| *id != cur_id);
+        }
+    }
 }
 
 impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
@@ -2716,6 +2814,24 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     fn end(&mut self, _: &mut [Box<ApplyFsm>]) {
         self.apply_ctx.flush();
     }
+
+    fn pause(&mut self) {
+        if self.memory_trace.is_none() {
+            let t: Arc<ApplyContextTrace> = Arc::default();
+            let mut ctx = self.apply_ctx.memory_trace.apply_context.lock().unwrap();
+            ctx.push((thread::current().id(), t.clone()));
+            self.memory_trace = Some(t);
+        }
+        let trace = self.memory_trace.as_ref().unwrap();
+        // TODO: record raft batch size, there is no API ATM.
+        trace
+            .cbs_size
+            .store(self.apply_ctx.cbs.heap_size(), Ordering::Relaxed);
+        let mut size = self.apply_ctx.apply_res.heap_size();
+        size += self.msg_buf.heap_size();
+        size += mem::size_of::<Self>();
+        trace.rest.store(size, Ordering::Relaxed);
+    }
 }
 
 pub struct Builder {
@@ -2727,6 +2843,7 @@ pub struct Builder {
     engines: Engines,
     sender: Notifier,
     router: ApplyRouter,
+    memory_trace: Arc<RaftStoreMemoryTrace>,
 }
 
 impl Builder {
@@ -2744,6 +2861,7 @@ impl Builder {
             engines: builder.engines.clone(),
             sender,
             router,
+            memory_trace: builder.memory_trace.clone(),
         }
     }
 }
@@ -2763,8 +2881,10 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
                 self.router.clone(),
                 self.sender.clone(),
                 &self.cfg,
+                self.memory_trace.clone(),
             ),
             messages_per_tick: self.cfg.messages_per_tick,
+            memory_trace: None,
         }
     }
 }
@@ -2838,7 +2958,7 @@ impl ApplyRouter {
         // queued inside both queue of control fsm and normal fsm, which can reorder
         // messages.
         let (sender, apply_fsm) = ApplyFsm::from_registration(reg);
-        let mailbox = BasicMailbox::new(sender, apply_fsm);
+        let mailbox = BasicMailbox::new(sender, apply_fsm, self.state_cnt().clone());
         self.register(region_id, mailbox);
     }
 }
@@ -2866,7 +2986,10 @@ impl ApplyBatchSystem {
         let mut mailboxes = Vec::with_capacity(peers.size_hint().0);
         for peer in peers {
             let (tx, fsm) = ApplyFsm::from_peer(peer);
-            mailboxes.push((peer.region().get_id(), BasicMailbox::new(tx, fsm)));
+            mailboxes.push((
+                peer.region().get_id(),
+                BasicMailbox::new(tx, fsm, self.router().state_cnt().clone()),
+            ));
         }
         self.router().register_all(mailboxes);
     }
@@ -3027,6 +3150,7 @@ mod tests {
             sender,
             engines: engines.clone(),
             router: router.clone(),
+            memory_trace: Arc::default(),
         };
         system.spawn("test-basic".to_owned(), builder);
 
@@ -3364,6 +3488,7 @@ mod tests {
             importer: importer.clone(),
             engines: engines.clone(),
             router: router.clone(),
+            memory_trace: Arc::default(),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -3709,6 +3834,7 @@ mod tests {
             coprocessor_host: host,
             engines: engines.clone(),
             router: router.clone(),
+            memory_trace: Arc::default(),
         };
         system.spawn("test-split".to_owned(), builder);
 

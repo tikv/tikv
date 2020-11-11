@@ -3,6 +3,7 @@
 use crate::mailbox::BasicMailbox;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::{ptr, usize};
 
 // The FSM is notified.
@@ -49,13 +50,16 @@ pub trait Fsm {
 pub struct FsmState<N> {
     status: AtomicUsize,
     data: AtomicPtr<N>,
+    state_cnt: Arc<AtomicUsize>,
 }
 
 impl<N: Fsm> FsmState<N> {
-    pub fn new(data: Box<N>) -> FsmState<N> {
+    pub fn new(data: Box<N>, state_cnt: Arc<AtomicUsize>) -> FsmState<N> {
+        state_cnt.fetch_add(1, Ordering::Relaxed);
         FsmState {
             status: AtomicUsize::new(NOTIFYSTATE_IDLE),
             data: AtomicPtr::new(Box::into_raw(data)),
+            state_cnt,
         }
     }
 
@@ -143,5 +147,6 @@ impl<N> Drop for FsmState<N> {
         if !ptr.is_null() {
             unsafe { Box::from_raw(ptr) };
         }
+        self.state_cnt.fetch_sub(1, Ordering::Relaxed);
     }
 }

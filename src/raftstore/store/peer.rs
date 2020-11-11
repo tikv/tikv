@@ -41,6 +41,7 @@ use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
 use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::memory::HeapSize;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
 use tikv_util::MustConsumeVec;
@@ -100,16 +101,26 @@ impl Drop for ReadIndexRequest {
     }
 }
 
+impl HeapSize for ReadIndexRequest {
+    #[inline]
+    fn heap_size(&self) -> usize {
+        // Protobuf will allocate for sub structs.
+        self.cmds.heap_size() + 8 * self.cmds.len()
+    }
+}
+
 #[derive(Default)]
 struct ReadIndexQueue {
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
+    mem_size: usize,
 }
 
 impl ReadIndexQueue {
     fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
             RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+            self.mem_size -= read.heap_size();
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
@@ -142,6 +153,13 @@ impl ReadIndexQueue {
         {
             self.reads.shrink_to_fit();
         }
+    }
+}
+
+impl HeapSize for ReadIndexQueue {
+    #[inline]
+    fn heap_size(&self) -> usize {
+        self.mem_size + self.reads.heap_size()
     }
 }
 
@@ -581,6 +599,7 @@ impl Peer {
                 apply::notify_req_region_removed(region.get_id(), cb);
             }
         }
+        self.pending_reads.mem_size = 0;
 
         for proposal in self.apply_proposals.drain(..) {
             apply::notify_req_region_removed(region.get_id(), proposal.cb);
@@ -743,6 +762,24 @@ impl Peer {
     #[inline]
     pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
         self.raft_group.get_snap()
+    }
+
+    #[inline]
+    pub fn proposal_size(&self) -> usize {
+        self.proposals.queue.heap_size()
+            + self.pending_reads.heap_size()
+            + self.apply_proposals.heap_size()
+    }
+
+    #[inline]
+    pub fn rest_size(&self) -> usize {
+        self.peer_cache.borrow().heap_size()
+            + self.peer_heartbeats.heap_size()
+            + self.pending_messages.heap_size()
+            + self.peers_start_pending_time.heap_size()
+            + self.down_peer_ids.heap_size()
+            + self.check_stale_peers.heap_size()
+            + self.want_rollback_merge_peers.heap_size()
     }
 
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
@@ -1447,6 +1484,7 @@ impl Peer {
         if self.pending_reads.ready_cnt > 0 {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
+                self.pending_reads.mem_size -= read.heap_size();
                 RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
 
                 let is_read_index_request = read.cmds.len() == 1
@@ -1486,6 +1524,7 @@ impl Peer {
         } else if self.ready_to_handle_read() {
             for state in &ready.read_states {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
+                self.pending_reads.mem_size -= read.heap_size();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
                 debug!("handle reads with a read index";
@@ -1561,6 +1600,7 @@ impl Peer {
             if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
                 for _ in 0..self.pending_reads.ready_cnt {
                     let mut read = self.pending_reads.reads.pop_front().unwrap();
+                    self.pending_reads.mem_size -= read.heap_size();
                     debug!("handle reads with a read index";
                         "request_id" => ?read.binary_id(),
                         "region_id" => self.region_id,
@@ -2078,6 +2118,7 @@ impl Peer {
         }
 
         let read_proposal = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        self.pending_reads.mem_size += read_proposal.heap_size();
         self.pending_reads.reads.push_back(read_proposal);
         self.should_wake_up = true;
 
@@ -2430,6 +2471,7 @@ impl Peer {
             RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             read.cmds.clear();
         }
+        self.pending_reads.mem_size = 0;
     }
 
     pub fn maybe_add_want_rollback_merge_peer(&mut self, peer_id: u64, extra_msg: &ExtraMessage) {

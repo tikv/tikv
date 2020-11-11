@@ -89,6 +89,7 @@ nix = "0.11"
 utime = "0.2"
 chrono = "0.4"
 chrono-tz = "0.5.1"
+inferno = "0.9"
 lazy_static = "0.2.1"
 backtrace = "0.2.3"
 clap = "2.32"
@@ -140,6 +141,7 @@ tipb = { git = "https://github.com/pingcap/tipb.git", branch = "release-3.0" }
 # TODO: use master branch after the next version is released.
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
 log_wrappers = { path = "components/log_wrappers" }
+memory-trace-macros = { path = "components/memory-trace-macros" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
 farmhash = "1.1.5"
@@ -194,6 +196,7 @@ members = [
   "components/test_util",
   "components/tikv_alloc",
   "components/match_template",
+  "components/memory-trace-macros",
   "components/codec",
   "components/panic_hook",
   "components/cop_datatype",
