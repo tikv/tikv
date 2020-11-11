@@ -1,3 +1,5 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::cmp::Ordering;
 use std::sync::Arc;
 use tikv_util::buffer_vec::BufferVec;
