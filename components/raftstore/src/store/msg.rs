@@ -13,6 +13,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
+use std::borrow::Cow;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
@@ -72,6 +73,9 @@ pub enum Callback<S: Snapshot> {
         /// It's used to notify the caller to move on early because it's very likely the request
         /// will be applied to the raftstore.
         proposed_cb: Option<ExtCallback>,
+        /// `committed_cb` is called after a request is committed and before it's being applied, and
+        /// it's guaranteed that the request will be successfully applied soon.
+        committed_cb: Option<ExtCallback>,
     },
 }
 
@@ -80,11 +84,19 @@ where
     S: Snapshot,
 {
     pub fn write(cb: WriteCallback) -> Self {
-        Self::write_ext(cb, None)
+        Self::write_ext(cb, None, None)
     }
 
-    pub fn write_ext(cb: WriteCallback, proposed_cb: Option<ExtCallback>) -> Self {
-        Callback::Write { cb, proposed_cb }
+    pub fn write_ext(
+        cb: WriteCallback,
+        proposed_cb: Option<ExtCallback>,
+        committed_cb: Option<ExtCallback>,
+    ) -> Self {
+        Callback::Write {
+            cb,
+            proposed_cb,
+            committed_cb,
+        }
     }
 
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
@@ -108,6 +120,14 @@ where
     pub fn invoke_proposed(&mut self) {
         if let Callback::Write { proposed_cb, .. } = self {
             if let Some(cb) = proposed_cb.take() {
+                cb()
+            }
+        }
+    }
+
+    pub fn invoke_committed(&mut self) {
+        if let Callback::Write { committed_cb, .. } = self {
+            if let Some(cb) = committed_cb.take() {
                 cb()
             }
         }
@@ -269,6 +289,7 @@ pub enum CasualMessage<EK: KvEngine> {
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
         callback: Callback<EK::Snapshot>,
+        source: Cow<'static, str>,
     },
 
     /// Hash result of ComputeHash command.
@@ -294,6 +315,7 @@ pub enum CasualMessage<EK: KvEngine> {
     HalfSplitRegion {
         region_epoch: RegionEpoch,
         policy: CheckPolicy,
+        source: &'static str,
     },
     /// Remove snapshot files in `snaps`.
     GcSnap {
@@ -334,10 +356,15 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
                 log_wrappers::Value::key(&context),
                 escape(hash)
             ),
-            CasualMessage::SplitRegion { ref split_keys, .. } => write!(
+            CasualMessage::SplitRegion {
+                ref split_keys,
+                source,
+                ..
+            } => write!(
                 fmt,
-                "Split region with {}",
-                KeysInfoFormatter(split_keys.iter())
+                "Split region with {} from {}",
+                KeysInfoFormatter(split_keys.iter()),
+                source,
             ),
             CasualMessage::RegionApproximateSize { size } => {
                 write!(fmt, "Region's approximate size [size: {:?}]", size)
@@ -348,7 +375,9 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::CompactionDeclinedBytes { bytes } => {
                 write!(fmt, "compaction declined bytes {}", bytes)
             }
-            CasualMessage::HalfSplitRegion { .. } => write!(fmt, "Half Split"),
+            CasualMessage::HalfSplitRegion { source, .. } => {
+                write!(fmt, "Half Split from {}", source)
+            }
             CasualMessage::GcSnap { ref snaps } => write! {
                 fmt,
                 "gc snaps {:?}",

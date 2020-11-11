@@ -4,7 +4,7 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{ErrorInner as MvccErrorInner, MvccTxn, Result as MvccResult};
 use crate::storage::txn::commands::{
-    Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
@@ -87,10 +87,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             }
         } else {
             debug!(
-            "txn_heart_beat invoked but lock is absent";
-            "primary_key" => %self.primary_key,
-            "start_ts" => self.start_ts,
-            "advise_ttl" => self.advise_ttl,
+                "txn_heart_beat invoked but lock is absent";
+                "primary_key" => %self.primary_key,
+                "start_ts" => self.start_ts,
+                "advise_ttl" => self.advise_ttl,
             );
             Err(MvccErrorInner::TxnLockNotFound {
                 start_ts: self.start_ts,
@@ -112,6 +112,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             pr,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }
@@ -136,7 +137,7 @@ pub mod tests {
         expect_ttl: u64,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let command = crate::storage::txn::commands::TxnHeartBeat {
@@ -153,7 +154,7 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
+                    async_apply_prewrite: false,
                 },
             )
             .unwrap();
@@ -175,7 +176,7 @@ pub mod tests {
         advise_ttl: u64,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let command = crate::storage::txn::commands::TxnHeartBeat {
@@ -192,7 +193,7 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
+                    async_apply_prewrite: false,
                 },
             )
             .is_err());

@@ -8,6 +8,10 @@ If you're unsure about anything, just ask; somebody should be along to answer wi
 PR Title Format:
 1. module [, module2, module3]: what's changed
 2. *: what's changed
+
+If you want to open the **Challenge Program** pull request, please use the following template:
+https://raw.githubusercontent.com/tikv/.github/master/.github/PULL_REQUEST_TEMPLATE/challenge-program.md
+You can use it with query parameters: https://github.com/tikv/tikv/compare/master...${you branch}?template=challenge-program.md
 -->
 
 ### What problem does this PR solve?

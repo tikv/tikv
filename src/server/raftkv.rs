@@ -24,7 +24,7 @@ use super::metrics::*;
 use crate::storage::kv::{
     write_modifies, Callback, CbContext, Cursor, Engine, Error as KvError,
     ErrorInner as KvErrorInner, ExtCallback, Iterator as EngineIterator, Modify, ScanMode,
-    Snapshot as EngineSnapshot, WriteData,
+    SnapContext, Snapshot as EngineSnapshot, WriteData,
 };
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
@@ -32,7 +32,6 @@ use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
 use tikv_util::time::Instant;
-use tikv_util::time::ThreadReadId;
 
 quick_error! {
     #[derive(Debug)]
@@ -202,18 +201,17 @@ where
 
     fn exec_snapshot(
         &self,
-        read_id: Option<ThreadReadId>,
-        ctx: &Context,
+        ctx: SnapContext<'_>,
         req: Request,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
-        let header = self.new_request_header(ctx);
+        let header = self.new_request_header(&*ctx.pb_ctx);
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
         self.router
             .read(
-                read_id,
+                ctx.read_id,
                 cmd,
                 StoreCallback::Read(Box::new(move |resp| {
                     let (cb_ctx, res) = on_read_result(resp, 1);
@@ -229,6 +227,7 @@ where
         reqs: Vec<Request>,
         write_cb: Callback<CmdRes>,
         proposed_cb: Option<ExtCallback>,
+        committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
         {
@@ -267,6 +266,7 @@ where
                         write_cb((cb_ctx, res.map_err(Error::into)));
                     }),
                     proposed_cb,
+                    committed_cb,
                 ),
             )
             .map_err(From::from)
@@ -349,7 +349,7 @@ where
         batch: WriteData,
         write_cb: Callback<()>,
     ) -> kv::Result<()> {
-        self.async_write_ext(ctx, batch, write_cb, None)
+        self.async_write_ext(ctx, batch, write_cb, None, None)
     }
 
     fn async_write_ext(
@@ -358,6 +358,7 @@ where
         batch: WriteData,
         write_cb: Callback<()>,
         proposed_cb: Option<ExtCallback>,
+        committed_cb: Option<ExtCallback>,
     ) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
         if batch.modifies.is_empty() {
@@ -432,6 +433,7 @@ where
                 }
             }),
             proposed_cb,
+            committed_cb,
         )
         .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
@@ -440,18 +442,12 @@ where
         })
     }
 
-    fn async_snapshot(
-        &self,
-        ctx: &Context,
-        read_id: Option<ThreadReadId>,
-        cb: Callback<Self::Snap>,
-    ) -> kv::Result<()> {
+    fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> kv::Result<()> {
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
         let begin_instant = Instant::now_coarse();
         self.exec_snapshot(
-            read_id,
             ctx,
             req,
             Box::new(move |(cb_ctx, res)| match res {
@@ -542,7 +538,12 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
             "injected error for iter"
         )));
-        Ok(Cursor::new(RegionSnapshot::iter(self, iter_opt), mode))
+        let prefix_seek = iter_opt.prefix_seek_used();
+        Ok(Cursor::new(
+            RegionSnapshot::iter(self, iter_opt),
+            mode,
+            prefix_seek,
+        ))
     }
 
     fn iter_cf(
@@ -554,9 +555,11 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
             "injected error for iter_cf"
         )));
+        let prefix_seek = iter_opt.prefix_seek_used();
         Ok(Cursor::new(
             RegionSnapshot::iter_cf(self, cf, iter_opt)?,
             mode,
+            prefix_seek,
         ))
     }
 

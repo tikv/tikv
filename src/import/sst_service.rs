@@ -184,13 +184,18 @@ where
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
-        let sst_writer = <E as SstExt>::SstWriterBuilder::new()
-            .set_db(&self.engine)
-            .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
-            .build(self.importer.get_path(req.get_sst()).to_str().unwrap())
-            .unwrap();
+        let engine = self.engine.clone();
 
         let handle_task = async move {
+            // SST writer must not be opened in gRPC threads, because it may be
+            // blocked for a long time due to IO, especially, when encryption at rest
+            // is enabled, and it leads to gRPC keepalive timeout.
+            let sst_writer = <E as SstExt>::SstWriterBuilder::new()
+                .set_db(&engine)
+                .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
+                .build(importer.get_path(req.get_sst()).to_str().unwrap())
+                .unwrap();
+
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
             // Unfortunately, this currently can't happen because the S3Storage

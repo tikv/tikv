@@ -112,6 +112,7 @@ impl TxnStatus {
 pub struct PrewriteResult {
     pub locks: Vec<Result<()>>,
     pub min_commit_ts: TimeStamp,
+    pub one_pc_commit_ts: TimeStamp,
 }
 
 #[derive(Clone, Debug, PartialEq)]

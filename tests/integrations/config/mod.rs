@@ -93,6 +93,7 @@ fn test_serde_custom_tikv_config() {
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),
         enable_request_batch: false,
+        background_thread_count: 999,
         raft_client_backoff_step: ReadableDuration::secs(1),
     };
     value.readpool = ReadPoolConfig {
@@ -229,6 +230,7 @@ fn test_serde_custom_tikv_config() {
         wal_size_limit: ReadableSize::kb(1),
         max_total_wal_size: ReadableSize::gb(1),
         max_background_jobs: 12,
+        max_background_flushes: 4,
         max_manifest_file_size: ReadableSize::mb(12),
         create_if_missing: false,
         max_open_files: 12_345,
@@ -243,7 +245,7 @@ fn test_serde_custom_tikv_config() {
         rate_bytes_per_sec: ReadableSize::kb(1),
         rate_limiter_refill_period: ReadableDuration::millis(10),
         rate_limiter_mode: DBRateLimiterMode::AllIo,
-        auto_tuned: true,
+        auto_tuned: false,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
         max_sub_compactions: 12,
@@ -539,6 +541,7 @@ fn test_serde_custom_tikv_config() {
         wal_size_limit: ReadableSize::kb(12),
         max_total_wal_size: ReadableSize::gb(1),
         max_background_jobs: 12,
+        max_background_flushes: 4,
         max_manifest_file_size: ReadableSize::mb(12),
         create_if_missing: false,
         max_open_files: 12_345,
@@ -616,6 +619,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(2),
+        enable_async_apply_prewrite: true,
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
@@ -633,6 +637,7 @@ fn test_serde_custom_tikv_config() {
         region_max_keys: 100000,
         region_split_keys: 100000,
         consistency_check_method: ConsistencyCheckMethod::Raw,
+        perf_level: PerfLevel::EnableTime,
     };
     let mut cert_allowed_cn = HashSet::default();
     cert_allowed_cn.insert("example.tikv.com".to_owned());
@@ -652,6 +657,7 @@ fn test_serde_custom_tikv_config() {
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
+            file_rewrite_threshold: 1000000,
         },
     };
     value.backup = BackupConfig { num_threads: 456 };

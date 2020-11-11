@@ -34,7 +34,7 @@ where
         Value::String(s) => ReadableDuration::deserialize(s.into_deserializer()),
         Value::Number(n) => n
             .as_u64()
-            .map(|n| ReadableDuration::millis(n))
+            .map(ReadableDuration::millis)
             .ok_or_else(|| serde::de::Error::custom(format!("expect unsigned integer: {}", n))),
         other => Err(serde::de::Error::custom(format!(
             "expect ReadableDuration or unsigned integer: {}",

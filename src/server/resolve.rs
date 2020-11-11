@@ -140,17 +140,13 @@ impl PdStoreAddrResolver {
 /// Creates a new `PdStoreAddrResolver`.
 pub fn new_resolver<T, RR: 'static>(
     pd_client: Arc<T>,
+    worker: &Worker,
     router: RR,
-) -> Result<(
-    Worker<Task>,
-    PdStoreAddrResolver,
-    Arc<Mutex<GlobalReplicationState>>,
-)>
+) -> (PdStoreAddrResolver, Arc<Mutex<GlobalReplicationState>>)
 where
     T: PdClient + 'static,
     RR: RaftStoreRouter<RocksEngine>,
 {
-    let mut worker = Worker::new("addr-resolver");
     let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
     let runner = Runner {
         pd_client,
@@ -158,9 +154,9 @@ where
         state: state.clone(),
         router,
     };
-    box_try!(worker.start(runner));
-    let resolver = PdStoreAddrResolver::new(worker.scheduler());
-    Ok((worker, resolver, state))
+    let scheduler = worker.start("addr-resolver", runner);
+    let resolver = PdStoreAddrResolver::new(scheduler);
+    (resolver, state)
 }
 
 impl StoreAddrResolver for PdStoreAddrResolver {

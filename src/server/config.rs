@@ -16,7 +16,7 @@ pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
-const DEFAULT_GRPC_CONCURRENCY: usize = 4;
+const DEFAULT_GRPC_CONCURRENCY: usize = 5;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
 const DEFAULT_GRPC_MEMORY_POOL_QUOTA: u64 = isize::MAX as u64;
@@ -100,6 +100,7 @@ pub struct Config {
     pub heavy_load_threshold: usize,
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
+    pub background_thread_count: usize,
 
     // Test only.
     #[doc(hidden)]
@@ -128,6 +129,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         let cpu_num = SysQuota::new().cpu_cores_quota();
+        let mut background_thread_count = (cpu_num.round() as usize + 7) / 8;
+        background_thread_count = std::cmp::max(1, background_thread_count);
+        background_thread_count = std::cmp::min(4, background_thread_count);
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
@@ -171,6 +175,7 @@ impl Default for Config {
             heavy_load_wait_duration: ReadableDuration::millis(1),
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
+            background_thread_count,
         }
     }
 }

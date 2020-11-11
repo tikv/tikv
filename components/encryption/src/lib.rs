@@ -15,6 +15,7 @@ mod crypter;
 mod encrypted_file;
 mod errors;
 mod io;
+mod log_file;
 mod manager;
 mod master_key;
 mod metrics;
