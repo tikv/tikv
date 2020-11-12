@@ -544,15 +544,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
             .on_flush_apply(engine)
     }
 
-    // Returns true if we have finished handling this message and we needn't
-    // do anything else before redirecting the message to the raft state machine.
-    pub fn on_step_read_index(&self, msg: &mut eraftpb::Message) -> bool {
+    pub fn on_step_read_index(&self, msg: &mut eraftpb::Message) {
         for step_ob in &self.registry.read_index_observers {
-            if step_ob.observer.inner().on_step(msg) {
-                return true;
-            }
+            step_ob.observer.inner().on_step(msg);
         }
-        false
     }
 
     pub fn shutdown(&self) {

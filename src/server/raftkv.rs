@@ -687,9 +687,9 @@ impl ReplicaReadLockChecker {
 impl Coprocessor for ReplicaReadLockChecker {}
 
 impl ReadIndexObserver for ReplicaReadLockChecker {
-    fn on_step(&self, msg: &mut eraftpb::Message) -> bool {
+    fn on_step(&self, msg: &mut eraftpb::Message) {
         if msg.get_msg_type() != MessageType::MsgReadIndex {
-            return false;
+            return;
         }
         assert_eq!(msg.get_entries().len(), 1);
         let mut rctx = ReadIndexContext::parse(msg.get_entries()[0].get_data()).unwrap();
@@ -724,7 +724,6 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             }
             msg.mut_entries()[0].set_data(rctx.to_bytes());
         }
-        rctx.locked.is_some()
     }
 }
 
@@ -745,8 +744,7 @@ mod tests {
         e.set_data(uuid.as_bytes().to_vec());
         m.mut_entries().push(e);
 
-        let finished = checker.on_step(&mut m);
-        assert!(!finished);
+        checker.on_step(&mut m);
         assert_eq!(m.get_entries()[0].get_data(), uuid.as_bytes());
     }
 }

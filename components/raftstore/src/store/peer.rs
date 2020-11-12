@@ -1030,9 +1030,8 @@ where
         }
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
-            if ctx.coprocessor_host.on_step_read_index(&mut m) {
-                return Ok(self.raft_group.step(m)?);
-            }
+            ctx.coprocessor_host.on_step_read_index(&mut m);
+
             // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
             // request directly, rather than send a heartbeat to check quorum.
             let committed = self.raft_group.raft.raft_log.committed;

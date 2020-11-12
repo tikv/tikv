@@ -241,8 +241,5 @@ pub trait CmdObserver<E>: Coprocessor {
 
 pub trait ReadIndexObserver: Coprocessor {
     // Hook to call when stepping in raft and the message is a read index message.
-    // Returns whether to do other hooks or special handling on this message.
-    fn on_step(&self, _msg: &mut eraftpb::Message) -> bool {
-        false
-    }
+    fn on_step(&self, _msg: &mut eraftpb::Message) {}
 }
