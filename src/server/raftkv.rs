@@ -727,3 +727,26 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
         rctx.locked.is_some()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    // This test ensures `ReplicaReadLockChecker` won't change UUID context of read index.
+    #[test]
+    fn test_replica_read_lock_checker_for_single_uuid() {
+        let cm = ConcurrencyManager::new(1.into());
+        let checker = ReplicaReadLockChecker::new(cm);
+        let mut m = eraftpb::Message::default();
+        m.set_msg_type(MessageType::MsgReadIndex);
+        let uuid = Uuid::new_v4();
+        let mut e = eraftpb::Entry::default();
+        e.set_data(uuid.as_bytes().to_vec());
+        m.mut_entries().push(e);
+
+        let finished = checker.on_step(&mut m);
+        assert!(!finished);
+        assert_eq!(m.get_entries()[0].get_data(), uuid.as_bytes());
+    }
+}

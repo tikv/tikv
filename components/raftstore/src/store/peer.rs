@@ -1793,8 +1793,6 @@ where
             "peer_id" => self.peer.get_id(),
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-        // Only replica reads check locks and in this case there is only one command.
-        assert!(read.locked.is_none() || read.cmds.len() <= 1);
         for (req, cb, mut read_index) in read.cmds.drain(..) {
             // leader reports key is locked
             if let Some(locked) = read.locked.take() {
