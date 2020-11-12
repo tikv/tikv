@@ -101,15 +101,25 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             return std::ptr::null_mut();
         }
 
-        if !is_compaction_filter_allowd(
-            &*gc_context.cfg_tracker.value(),
-            &gc_context.cluster_version,
-        ) {
+        let (enable, skip_vcheck, ratio_threshold) = {
+            let value = &*gc_context.cfg_tracker.value();
+            (
+                value.enable_compaction_filter,
+                value.compaction_filter_skip_version_check,
+                value.ratio_threshold,
+            )
+        };
+        debug!(
+            "creating compaction filter"; "feature_enable" => enable,
+            "skip_version_check" => skip_vcheck,
+            "ratio_threshold" => ratio_threshold,
+        );
+
+        if !do_check_allowed(enable, skip_vcheck, &gc_context.cluster_version) {
             debug!("skip gc in compaction filter because it's not allowed");
             return std::ptr::null_mut();
         }
 
-        let ratio_threshold = gc_context.cfg_tracker.value().ratio_threshold;
         let (mut needs_gc, mut mvcc_props) = (false, MvccProperties::new());
         for i in 0..context.file_numbers().len() {
             let table_props = context.table_properties(i);
@@ -396,8 +406,16 @@ fn parse_write(value: &[u8]) -> WriteRef {
 }
 
 pub fn is_compaction_filter_allowd(cfg_value: &GcConfig, cluster_version: &ClusterVersion) -> bool {
-    cfg_value.enable_compaction_filter
-        && (cfg_value.compaction_filter_skip_version_check || {
+    do_check_allowed(
+        cfg_value.enable_compaction_filter,
+        cfg_value.compaction_filter_skip_version_check,
+        cluster_version,
+    )
+}
+
+fn do_check_allowed(enable: bool, skip_vcheck: bool, cluster_version: &ClusterVersion) -> bool {
+    enable
+        && (skip_vcheck || {
             cluster_version.get().map_or(false, |cluster_version| {
                 let minimal = semver::Version::parse(COMPACTION_FILTER_MINIMAL_VERSION).unwrap();
                 cluster_version >= minimal
