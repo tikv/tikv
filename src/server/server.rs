@@ -345,7 +345,7 @@ pub mod test_router {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::*;
-    use std::sync::Mutex;
+    use std::sync::{mpsc, Mutex};
     use std::time::Duration;
 
     use super::*;
@@ -378,7 +378,7 @@ mod tests {
             let quick_fail = self.quick_fail.clone();
             let addr = self.addr.clone();
             if quick_fail.load(Ordering::SeqCst) {
-                return Box::pin(err(Err(box_err!("quick fail"))));
+                return Box::pin(err(box_err!("quick fail")));
             }
             let addr = addr.lock().unwrap();
             Box::pin(ready(

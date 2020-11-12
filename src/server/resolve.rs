@@ -151,6 +151,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::future::ok;
     use std::net::SocketAddr;
     use std::ops::Sub;
     use std::str::FromStr;
@@ -158,7 +159,7 @@ mod tests {
     use std::sync::Arc;
 
     use kvproto::metapb;
-    use pd_client::{PdClient, PdFuture, Result};
+    use pd_client::{PdClient, PdFuture};
     use raftstore::router::RaftStoreBlackHole;
     use tikv_util::time::{Duration, Instant};
 
@@ -170,18 +171,13 @@ mod tests {
     }
 
     impl PdClient for MockPdClient {
-        fn get_store(&self, _: u64) -> Result<metapb::Store> {
+        fn get_store(&self, _store_id: u64) -> PdFuture<metapb::Store> {
             // The store address will be changed every millisecond.
             let mut store = self.store.clone();
             let mut sock = SocketAddr::from_str(store.get_address()).unwrap();
             sock.set_port(self.counter.fetch_add(1, Ordering::Relaxed));
             store.set_address(format!("{}:{}", sock.ip(), sock.port()));
-            Ok(store)
-        }
-
-        fn get_store_async(&self, store_id: u64) -> PdFuture<metapb::Store> {
-            let res = self.get_store(store_id);
-            Box::pin(async move { res })
+            Box::pin(ok(store))
         }
     }
 
