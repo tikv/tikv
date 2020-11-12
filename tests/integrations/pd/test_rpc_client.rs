@@ -17,7 +17,7 @@ use txn_types::TimeStamp;
 
 use test_pd::{mocker::*, util::*, Server as MockServer};
 
-#[tokio::test]
+#[tokio::test(threaded_scheduler)]
 async fn test_retry_rpc_client() {
     let eps_count = 1;
     let mut server = MockServer::new(eps_count);
@@ -35,7 +35,7 @@ async fn test_retry_rpc_client() {
     assert_eq!(child.await.is_ok(), true);
 }
 
-#[tokio::test]
+#[tokio::test(threaded_scheduler)]
 async fn test_rpc_client() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);
@@ -95,10 +95,9 @@ async fn test_rpc_client() {
     }
 
     let (tx, rx) = mpsc::channel();
-    let f = client.handle_region_heartbeat_response(1, move |resp| {
+    tokio::spawn(client.handle_region_heartbeat_response(1, move |resp| {
         let _ = tx.send(resp);
-    });
-    tokio::spawn(f);
+    }));
     tokio::spawn(client.region_heartbeat(
         store::RAFT_INIT_LOG_TERM,
         region.clone(),
@@ -342,7 +341,7 @@ async fn test_change_leader_async() {
     panic!("failed, leader should changed");
 }
 
-#[tokio::test]
+#[tokio::test(threaded_scheduler)]
 async fn test_region_heartbeat_on_leader_change() {
     let eps_count = 3;
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
@@ -350,10 +349,9 @@ async fn test_region_heartbeat_on_leader_change() {
 
     let client = new_client(eps, None);
     let (tx, rx) = mpsc::channel();
-    let f = client.handle_region_heartbeat_response(1, move |resp| {
+    tokio::spawn(client.handle_region_heartbeat_response(1, move |resp| {
         tx.send(resp).unwrap();
-    });
-    tokio::spawn(f);
+    }));
     let region = metapb::Region::default();
     let peer = metapb::Peer::default();
     let stat = RegionStat::default();

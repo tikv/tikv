@@ -20,7 +20,7 @@ const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 pub type Callback = Box<dyn FnOnce(Result<String>) + Send>;
 
 /// A trait for resolving store addresses.
-pub trait StoreAddrResolver: Send + Sync + Clone {
+pub trait StoreAddrResolver: Send + Clone {
     /// Resolves the address for the specified store id asynchronously.
     fn resolve(&self, _store_id: u64) -> BoxFuture<'_, Result<String>>;
 }

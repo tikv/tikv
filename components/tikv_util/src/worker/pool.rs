@@ -383,10 +383,6 @@ impl Worker {
             || self.counter.load(Ordering::Acquire) >= self.thread_count
     }
 
-    pub fn remote(&self) -> Remote<yatp::task::future::TaskCell> {
-        self.remote.clone()
-    }
-
     fn start_impl<R: Runnable + 'static>(
         &self,
         runner: R,
