@@ -2313,9 +2313,8 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
         .leader
         .expect("region must have leader");
 
-    let store = pd_client
-        .get_store(leader.get_store_id())
-        .expect("get_store should success");
+    let store =
+        block_on(pd_client.get_store(leader.get_store_id())).expect("get_store should success");
 
     let tikv_client = {
         let cb = ChannelBuilder::new(Arc::new(Environment::new(1)));

@@ -10,7 +10,7 @@ use std::{cmp, thread};
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::compat::Future01CompatExt;
 use futures::executor::block_on;
-use futures::future::{err, ok, FutureExt};
+use futures::future::{err, ok, ready, FutureExt};
 use futures::{stream, stream::StreamExt};
 use tokio_timer::timer::Handle;
 
@@ -1250,9 +1250,11 @@ impl PdClient for TestPdClient {
         self.cluster.rl().get_all_stores()
     }
 
-    fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
-        self.check_bootstrap()?;
-        self.cluster.rl().get_store(store_id)
+    fn get_store(&self, store_id: u64) -> PdFuture<metapb::Store> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::pin(err(e));
+        }
+        Box::pin(ready(self.cluster.rl().get_store(store_id)))
     }
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
@@ -1279,10 +1281,7 @@ impl PdClient for TestPdClient {
         if let Err(e) = self.check_bootstrap() {
             return Box::pin(err(e));
         }
-        match self.cluster.rl().get_region_by_id(region_id) {
-            Ok(resp) => Box::pin(ok(resp)),
-            Err(e) => Box::pin(err(e)),
-        }
+        Box::pin(ready(self.cluster.rl().get_region_by_id(region_id)))
     }
 
     fn get_region_leader_by_id(

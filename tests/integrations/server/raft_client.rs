@@ -15,13 +15,13 @@ use kvproto::tikvpb::BatchRaftMessage;
 use raft::eraftpb::Entry;
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter};
 use security::{SecurityConfig, SecurityManager};
-use tikv::server::resolve::Callback;
 use tikv::server::{
     self, Config, ConnectionBuilder, RaftClient, StoreAddrResolver, TestRaftStoreRouter,
 };
 use tikv_util::worker::LazyWorker;
 
 use super::{mock_kv_service, MockKv, MockKvService};
+use futures::future::{ok, BoxFuture};
 
 #[derive(Clone)]
 pub struct StaticResolver {
@@ -29,9 +29,8 @@ pub struct StaticResolver {
 }
 
 impl StoreAddrResolver for StaticResolver {
-    fn resolve(&self, _store_id: u64, cb: Callback) -> server::Result<()> {
-        cb(Ok(format!("localhost:{}", self.port)));
-        Ok(())
+    fn resolve(&self, _store_id: u64) -> BoxFuture<'_, server::Result<String>> {
+        Box::pin(ok(format!("localhost:{}", self.port)))
     }
 }
 

@@ -345,12 +345,12 @@ pub mod test_router {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::*;
-    use std::sync::*;
+    use std::sync::Mutex;
     use std::time::Duration;
 
     use super::*;
 
-    use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
+    use super::super::resolve::StoreAddrResolver;
     use super::super::{Config, Result};
     use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::{self, readpool_impl};
@@ -362,7 +362,7 @@ mod tests {
 
     use crate::storage::lock_manager::DummyLockManager;
     use engine_rocks::{PerfLevel, RocksSnapshot};
-    use futures::future::BoxFuture;
+    use futures::future::{err, ready, BoxFuture};
     use kvproto::raft_serverpb::RaftMessage;
     use security::SecurityConfig;
     use tokio::runtime::Builder as TokioBuilder;
@@ -377,15 +377,15 @@ mod tests {
         fn resolve(&self, _: u64) -> BoxFuture<'_, Result<String>> {
             let quick_fail = self.quick_fail.clone();
             let addr = self.addr.clone();
-            Box::pin(async move {
-                if quick_fail.load(Ordering::SeqCst) {
-                    return Err(box_err!("quick fail"));
-                }
-                let addr = addr.lock().unwrap();
+            if quick_fail.load(Ordering::SeqCst) {
+                return Box::pin(err(Err(box_err!("quick fail"))));
+            }
+            let addr = addr.lock().unwrap();
+            Box::pin(ready(
                 addr.as_ref()
                     .map(|s| s.to_owned())
-                    .ok_or(box_err!("not set"))
-            })
+                    .ok_or(box_err!("not set")),
+            ))
         }
     }
 

@@ -23,6 +23,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
+use futures::future::{ready, BoxFuture};
 use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
@@ -32,7 +33,8 @@ use raftstore::router::{
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::{
-    AutoSplitController, Callback, LocalReader, SnapManagerBuilder, SplitCheckRunner,
+    AutoSplitController, Callback, GlobalReplicationState, LocalReader, SnapManagerBuilder,
+    SplitCheckRunner,
 };
 use raftstore::Result;
 use security::SecurityManager;
@@ -58,8 +60,8 @@ use tikv_util::HandyRwLock;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
 type SimulateServerTransport =
-    SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
-
+    SimulateTransport<ServerTransport<SimulateStoreTransport, SimulateResolver>>;
+type SimulateResolver = PdStoreAddrResolver<TestPdClient, RaftRouter<RocksEngine, RocksEngine>>;
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
 #[derive(Default, Clone)]
@@ -79,26 +81,17 @@ impl AddressMap {
 }
 
 impl StoreAddrResolver for AddressMap {
-    fn resolve(
-        &self,
-        store_id: u64,
-        cb: Box<dyn FnOnce(ServerResult<String>) + Send>,
-    ) -> ServerResult<()> {
-        let addr = self.get(store_id);
-        match addr {
-            Some(addr) => cb(Ok(addr)),
-            None => cb(Err(box_err!(
-                "unable to find address for store {}",
-                store_id
-            ))),
-        }
-        Ok(())
+    fn resolve(&self, store_id: u64) -> BoxFuture<'_, ServerResult<String>> {
+        Box::pin(ready(self.get(store_id).ok_or(box_err!(
+            "unable to find address for store {}",
+            store_id
+        ))))
     }
 }
 
 struct ServerMeta {
     node: Node<TestPdClient, RocksEngine>,
-    server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
+    server: Server<SimulateStoreTransport, SimulateResolver>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
@@ -282,8 +275,12 @@ impl Simulator for ServerCluster {
         let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
 
         // Create pd client, snapshot manager, server.
-        let (resolver, state) =
-            resolve::new_resolver(Arc::clone(&self.pd_client), &bg_worker, router.clone());
+        let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
+        let resolver = resolve::PdStoreAddrResolver::new(
+            Arc::clone(&self.pd_client),
+            router.clone(),
+            state.clone(),
+        );
         let snap_mgr = SnapManagerBuilder::default()
             .encryption_key_manager(key_manager)
             .build(tmp_str);

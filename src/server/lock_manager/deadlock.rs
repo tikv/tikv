@@ -910,9 +910,9 @@ impl Deadlock for Service {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::server::resolve::Callback;
     use futures::executor::block_on;
     use futures::future::BoxFuture;
+    use futures_util::future::err;
     use security::SecurityConfig;
     use tikv_util::worker::FutureWorker;
 
@@ -1066,7 +1066,7 @@ pub mod tests {
 
     impl StoreAddrResolver for MockResolver {
         fn resolve(&self, _store_id: u64) -> BoxFuture<'_, Result<String>> {
-            Box::pin(async { Err(Error::Other(box_err!("unimplemented"))) })
+            Box::pin(err(Error::Other(box_err!("unimplemented"))))
         }
     }
 

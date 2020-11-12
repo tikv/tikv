@@ -1,3 +1,4 @@
+use futures::future::{err, BoxFuture};
 use std::sync::{atomic::Ordering, mpsc, Arc};
 use std::time::Duration;
 
@@ -5,7 +6,7 @@ use security::SecurityManager;
 use test_raftstore::TestPdClient;
 use tikv::config::*;
 use tikv::server::lock_manager::*;
-use tikv::server::resolve::{Callback, StoreAddrResolver};
+use tikv::server::resolve::StoreAddrResolver;
 use tikv::server::{Error, Result};
 use tikv_util::config::ReadableDuration;
 
@@ -22,8 +23,8 @@ fn test_config_validate() {
 #[derive(Clone)]
 struct MockResolver;
 impl StoreAddrResolver for MockResolver {
-    fn resolve(&self, _store_id: u64, _cb: Callback) -> Result<()> {
-        Err(Error::Other(box_err!("unimplemented")))
+    fn resolve(&self, _store_id: u64) -> BoxFuture<'_, Result<String>> {
+        Box::pin(err(Error::Other(box_err!("unimplemented"))))
     }
 }
 

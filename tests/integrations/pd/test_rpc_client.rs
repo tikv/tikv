@@ -2,14 +2,11 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
-use std::thread;
 use std::time::Duration;
 
-use futures::executor::block_on;
 use grpcio::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
-use tokio::runtime::Builder;
 
 use pd_client::{validate_endpoints, Error as PdError, PdClient, RegionStat, RpcClient};
 use raftstore::store;
@@ -20,8 +17,8 @@ use txn_types::TimeStamp;
 
 use test_pd::{mocker::*, util::*, Server as MockServer};
 
-#[test]
-fn test_retry_rpc_client() {
+#[tokio::test]
+async fn test_retry_rpc_client() {
     let eps_count = 1;
     let mut server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
@@ -29,17 +26,17 @@ fn test_retry_rpc_client() {
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let m_mgr = mgr.clone();
     server.stop();
-    let child = thread::spawn(move || {
+    let child = tokio::spawn(async move {
         let cfg = new_config(m_eps);
         assert_eq!(RpcClient::new(&cfg, None, m_mgr).is_ok(), true);
     });
-    thread::sleep(Duration::from_millis(500));
+    tokio::time::delay_for(Duration::from_millis(500)).await;
     server.start(&mgr, eps);
-    assert_eq!(child.join().is_ok(), true);
+    assert_eq!(child.await.is_ok(), true);
 }
 
-#[test]
-fn test_rpc_client() {
+#[tokio::test]
+async fn test_rpc_client() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
@@ -72,7 +69,7 @@ fn test_rpc_client() {
     assert_eq!(tmp_stores.len(), 1);
     assert_eq!(tmp_stores[0], store);
 
-    let tmp_store = client.get_store(store_id).unwrap();
+    let tmp_store = client.get_store(store_id).await.unwrap();
     assert_eq!(tmp_store.get_id(), store.get_id());
 
     let region_key = region.get_start_key();
@@ -83,12 +80,10 @@ fn test_rpc_client() {
     assert_eq!(region_info.region, region);
     assert_eq!(region_info.leader, None);
 
-    let tmp_region = block_on(client.get_region_by_id(region_id))
-        .unwrap()
-        .unwrap();
+    let tmp_region = client.get_region_by_id(region_id).await.unwrap().unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
-    let ts = block_on(client.get_tso()).unwrap();
+    let ts = client.get_tso().await.unwrap();
     assert_ne!(ts, TimeStamp::zero());
 
     let mut prev_id = 0;
@@ -99,18 +94,12 @@ fn test_rpc_client() {
         prev_id = alloc_id;
     }
 
-    let poller = Builder::new()
-        .threaded_scheduler()
-        .thread_name(thd_name!("poller"))
-        .core_threads(1)
-        .build()
-        .unwrap();
     let (tx, rx) = mpsc::channel();
     let f = client.handle_region_heartbeat_response(1, move |resp| {
         let _ = tx.send(resp);
     });
-    poller.spawn(f);
-    poller.spawn(client.region_heartbeat(
+    tokio::spawn(f);
+    tokio::spawn(client.region_heartbeat(
         store::RAFT_INIT_LOG_TERM,
         region.clone(),
         peer.clone(),
@@ -123,17 +112,25 @@ fn test_rpc_client() {
     assert_eq!(region_info.region, region);
     assert_eq!(region_info.leader.unwrap(), peer);
 
-    block_on(client.store_heartbeat(pdpb::StoreStats::default())).unwrap();
-    block_on(client.ask_batch_split(metapb::Region::default(), 1)).unwrap();
-    block_on(client.report_batch_split(vec![metapb::Region::default(), metapb::Region::default()]))
+    client
+        .store_heartbeat(pdpb::StoreStats::default())
+        .await
+        .unwrap();
+    client
+        .ask_batch_split(metapb::Region::default(), 1)
+        .await
+        .unwrap();
+    client
+        .report_batch_split(vec![metapb::Region::default(), metapb::Region::default()])
+        .await
         .unwrap();
 
     let region_info = client.get_region_info(region_key).unwrap();
     client.scatter_region(region_info).unwrap();
 }
 
-#[test]
-fn test_get_tombstone_stores() {
+#[tokio::test]
+async fn test_get_tombstone_stores() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
@@ -181,9 +178,9 @@ fn test_get_tombstone_stores() {
     s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
     assert_eq!(s, all_stores);
 
-    client.get_store(store_id).unwrap();
-    client.get_store(99).unwrap_err();
-    client.get_store(199).unwrap_err();
+    client.get_store(store_id).await.unwrap();
+    client.get_store(99).await.unwrap_err();
+    client.get_store(199).await.unwrap_err();
 }
 
 #[test]
@@ -219,7 +216,8 @@ fn test_validate_endpoints() {
     assert!(validate_endpoints(env, &new_config(eps), mgr).is_err());
 }
 
-fn test_retry<F: Fn(&RpcClient)>(func: F) {
+#[tokio::test]
+async fn test_retry() {
     let eps_count = 1;
     // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
     let retry = Arc::new(Retry::new(3));
@@ -229,27 +227,12 @@ fn test_retry<F: Fn(&RpcClient)>(func: F) {
     let client = new_client(eps, None);
 
     for _ in 0..3 {
-        func(&client);
+        client.get_region_by_id(1).await.unwrap();
     }
 }
 
-#[test]
-fn test_retry_async() {
-    let r#async = |client: &RpcClient| {
-        block_on(client.get_region_by_id(1)).unwrap();
-    };
-    test_retry(r#async);
-}
-
-#[test]
-fn test_retry_sync() {
-    let sync = |client: &RpcClient| {
-        client.get_store(1).unwrap();
-    };
-    test_retry(sync)
-}
-
-fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
+#[tokio::test]
+async fn test_not_retry() {
     let eps_count = 1;
     // NotRetry mocker returns Ok() with error header first, and next returns Ok() without any error header.
     let not_retry = Arc::new(NotRetry::new());
@@ -258,41 +241,25 @@ fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
 
     let client = new_client(eps, None);
 
-    func(&client);
+    client.get_region_by_id(1).await.unwrap_err();
 }
 
-#[test]
-fn test_not_retry_async() {
-    let r#async = |client: &RpcClient| {
-        block_on(client.get_region_by_id(1)).unwrap_err();
-    };
-    test_not_retry(r#async);
-}
-
-#[test]
-fn test_not_retry_sync() {
-    let sync = |client: &RpcClient| {
-        client.get_store(1).unwrap_err();
-    };
-    test_not_retry(sync);
-}
-
-#[test]
-fn test_incompatible_version() {
+#[tokio::test]
+async fn test_incompatible_version() {
     let incompatible = Arc::new(Incompatible);
     let server = MockServer::with_case(1, incompatible);
     let eps = server.bind_addrs();
 
     let client = new_client(eps, None);
 
-    let resp = block_on(client.ask_batch_split(metapb::Region::default(), 2));
+    let resp = client.ask_batch_split(metapb::Region::default(), 2).await;
     assert_eq!(
         resp.unwrap_err().to_string(),
         PdError::Incompatible.to_string()
     );
 }
 
-fn restart_leader(mgr: SecurityManager) {
+async fn restart_leader(mgr: SecurityManager) {
     let mgr = Arc::new(mgr);
     // Service has only one GetMembersResponse, so the leader never changes.
     let mut server =
@@ -316,7 +283,9 @@ fn restart_leader(mgr: SecurityManager) {
     region.mut_peers().push(peer);
     client.bootstrap_cluster(store, region.clone()).unwrap();
 
-    let region = block_on(client.get_region_by_id(region.get_id()))
+    let region = client
+        .get_region_by_id(region.get_id())
+        .await
         .unwrap()
         .unwrap();
 
@@ -325,27 +294,27 @@ fn restart_leader(mgr: SecurityManager) {
     server.start(&mgr, eps);
 
     // RECONNECT_INTERVAL_SEC is 1s.
-    thread::sleep(Duration::from_secs(1));
+    tokio::time::delay_for(Duration::from_secs(1)).await;
 
-    let region = block_on(client.get_region_by_id(region.get_id())).unwrap();
+    let region = client.get_region_by_id(region.get_id()).await.unwrap();
     assert_eq!(region.unwrap().get_id(), region_id);
 }
 
-#[test]
-fn test_restart_leader_insecure() {
+#[tokio::test]
+async fn test_restart_leader_insecure() {
     let mgr = SecurityManager::new(&SecurityConfig::default()).unwrap();
-    restart_leader(mgr)
+    restart_leader(mgr).await;
 }
 
-#[test]
-fn test_restart_leader_secure() {
+#[tokio::test]
+async fn test_restart_leader_secure() {
     let security_cfg = test_util::new_security_cfg(None);
     let mgr = SecurityManager::new(&security_cfg).unwrap();
-    restart_leader(mgr)
+    restart_leader(mgr).await;
 }
 
-#[test]
-fn test_change_leader_async() {
+#[tokio::test]
+async fn test_change_leader_async() {
     let eps_count = 3;
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
@@ -359,7 +328,7 @@ fn test_change_leader_async() {
     let leader = client.get_leader();
 
     for _ in 0..5 {
-        let region = block_on(client.get_region_by_id(1));
+        let region = client.get_region_by_id(1).await;
         region.ok();
 
         let new = client.get_leader();
@@ -367,34 +336,28 @@ fn test_change_leader_async() {
             assert!(counter.load(Ordering::SeqCst) >= 1);
             return;
         }
-        thread::sleep(LeaderChange::get_leader_interval());
+        tokio::time::delay_for(LeaderChange::get_leader_interval()).await;
     }
 
     panic!("failed, leader should changed");
 }
 
-#[test]
-fn test_region_heartbeat_on_leader_change() {
+#[tokio::test]
+async fn test_region_heartbeat_on_leader_change() {
     let eps_count = 3;
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
 
     let client = new_client(eps, None);
-    let poller = Builder::new()
-        .threaded_scheduler()
-        .thread_name(thd_name!("poller"))
-        .core_threads(1)
-        .build()
-        .unwrap();
     let (tx, rx) = mpsc::channel();
     let f = client.handle_region_heartbeat_response(1, move |resp| {
         tx.send(resp).unwrap();
     });
-    poller.spawn(f);
+    tokio::spawn(f);
     let region = metapb::Region::default();
     let peer = metapb::Peer::default();
     let stat = RegionStat::default();
-    poller.spawn(client.region_heartbeat(
+    tokio::spawn(client.region_heartbeat(
         store::RAFT_INIT_LOG_TERM,
         region.clone(),
         peer.clone(),
@@ -404,21 +367,21 @@ fn test_region_heartbeat_on_leader_change() {
     rx.recv_timeout(LeaderChange::get_leader_interval())
         .unwrap();
 
-    let heartbeat_on_leader_change = |count| {
+    for count in 1..=2 {
         let mut leader = client.get_leader();
         for _ in 0..count {
             loop {
-                let _ = block_on(client.get_region_by_id(1));
+                let _ = client.get_region_by_id(1).await;
                 let new = client.get_leader();
                 if leader != new {
                     leader = new;
                     info!("leader changed!");
                     break;
                 }
-                thread::sleep(LeaderChange::get_leader_interval());
+                tokio::time::delay_for(LeaderChange::get_leader_interval()).await;
             }
         }
-        poller.spawn(client.region_heartbeat(
+        tokio::spawn(client.region_heartbeat(
             store::RAFT_INIT_LOG_TERM,
             region.clone(),
             peer.clone(),
@@ -427,17 +390,11 @@ fn test_region_heartbeat_on_leader_change() {
         ));
         rx.recv_timeout(LeaderChange::get_leader_interval())
             .unwrap();
-    };
-
-    // Change PD leader once then heartbeat PD.
-    heartbeat_on_leader_change(1);
-
-    // Change PD leader twice without update the heartbeat sender, then heartbeat PD.
-    heartbeat_on_leader_change(2);
+    }
 }
 
-#[test]
-fn test_periodical_update() {
+#[tokio::test]
+async fn test_periodical_update() {
     let eps_count = 3;
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
@@ -456,14 +413,14 @@ fn test_periodical_update() {
             assert!(counter.load(Ordering::SeqCst) >= 1);
             return;
         }
-        thread::sleep(LeaderChange::get_leader_interval());
+        tokio::time::delay_for(LeaderChange::get_leader_interval()).await;
     }
 
     panic!("failed, leader should changed");
 }
 
-#[test]
-fn test_cluster_version() {
+#[tokio::test]
+async fn test_cluster_version() {
     let server = MockServer::<Service>::new(3);
     let eps = server.bind_addrs();
 
@@ -471,9 +428,9 @@ fn test_cluster_version() {
     let cluster_version = client.cluster_version();
     assert!(cluster_version.get().is_none());
 
-    let emit_heartbeat = || {
+    let emit_heartbeat = || async {
         let req = pdpb::StoreStats::default();
-        block_on(client.store_heartbeat(req)).unwrap();
+        client.store_heartbeat(req).await.unwrap();
     };
 
     let set_cluster_version = |version: &str| {
@@ -482,12 +439,12 @@ fn test_cluster_version() {
     };
 
     // Empty version string will be treated as invalid.
-    emit_heartbeat();
+    emit_heartbeat().await;
     assert!(cluster_version.get().is_none());
 
     // Explicitly invalid version string.
     set_cluster_version("invalid-version");
-    emit_heartbeat();
+    emit_heartbeat().await;
     assert!(cluster_version.get().is_none());
 
     let v_500 = Version::parse("5.0.0").unwrap();
@@ -495,12 +452,12 @@ fn test_cluster_version() {
 
     // Correct version string.
     set_cluster_version("5.0.0");
-    emit_heartbeat();
+    emit_heartbeat().await;
     assert_eq!(cluster_version.get().unwrap(), v_500,);
 
     // Version can't go backwards.
     set_cluster_version("4.99");
-    emit_heartbeat();
+    emit_heartbeat().await;
     assert_eq!(cluster_version.get().unwrap(), v_500,);
 
     // After reconnect the version should be still accessable.
@@ -509,6 +466,6 @@ fn test_cluster_version() {
 
     // Version can go forwards.
     set_cluster_version("5.0.1");
-    emit_heartbeat();
+    emit_heartbeat().await;
     assert_eq!(cluster_version.get().unwrap(), v_501);
 }

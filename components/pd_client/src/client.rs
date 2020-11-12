@@ -260,29 +260,7 @@ impl PdClient for RpcClient {
         Ok(resp.replication_status.take())
     }
 
-    fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["get_store"])
-            .start_coarse_timer();
-
-        let mut req = pdpb::GetStoreRequest::default();
-        req.set_header(self.header());
-        req.set_store_id(store_id);
-
-        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
-            client.get_store_opt(&req, Self::call_option())
-        })?;
-        check_resp_header(resp.get_header())?;
-
-        let store = resp.take_store();
-        if store.get_state() != metapb::StoreState::Tombstone {
-            Ok(store)
-        } else {
-            Err(Error::StoreTombstone(format!("{:?}", store)))
-        }
-    }
-
-    fn get_store_async(&self, store_id: u64) -> PdFuture<metapb::Store> {
+    fn get_store(&self, store_id: u64) -> PdFuture<metapb::Store> {
         let timer = Instant::now();
 
         let mut req = pdpb::GetStoreRequest::default();
