@@ -584,6 +584,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["hibernate_regions"])
             .set((self.hibernate_regions as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["hibernate_timeout"])
+            .set(self.hibernate_timeout.0.as_secs_f64());
     }
 
     fn write_change_into_metrics(change: ConfigChange) {
