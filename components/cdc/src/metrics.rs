@@ -13,7 +13,7 @@ lazy_static! {
     pub static ref CDC_SCAN_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_cdc_scan_duration_seconds",
         "Bucketed histogram of cdc async scan duration",
-        exponential_buckets(0.0001, 2.0, 20).unwrap()
+        exponential_buckets(0.005, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref CDC_MIN_RESOLVED_TS_REGION: IntGauge = register_int_gauge!(
