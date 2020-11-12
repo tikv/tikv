@@ -905,14 +905,13 @@ pub fn repeat(input: BytesRef, cnt: &Int, writer: BytesWriter) -> Result<BytesGu
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::{f64, i64};
-    use tipb::ScalarFuncSig;
-
-    use crate::types::test_util::RpnFnScalarEvaluator;
 
     use tidb_query_datatype::codec::mysql::MAX_FSP;
+    use tipb::ScalarFuncSig;
+
+    use super::*;
+    use crate::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
     fn test_bin() {
@@ -1687,26 +1686,27 @@ mod tests {
             ),
         ];
 
-        for (arg0, arg1, exp) in cases {
-            let d = match arg1 {
-                Some(arg1) => Some(
-                    Duration::parse(&mut EvalContext::default(), arg1.as_bytes(), MAX_FSP).unwrap(),
+        for (arg_str, arg_dur, sum) in cases {
+            let arg_dur = match arg_dur {
+                Some(arg_dur) => Some(
+                    Duration::parse(&mut EvalContext::default(), arg_dur.as_bytes(), MAX_FSP)
+                        .unwrap(),
                 ),
                 None => Some(Duration::zero()),
             };
             let add_output = RpnFnScalarEvaluator::new()
-                .push_param(arg0.clone())
-                .push_param(d)
+                .push_param(arg_str.clone())
+                .push_param(arg_dur)
                 .evaluate(ScalarFuncSig::AddStringAndDuration)
                 .unwrap();
-            assert_eq!(add_output, exp);
+            assert_eq!(add_output, sum);
 
             let sub_output = RpnFnScalarEvaluator::new()
-                .push_param(exp)
-                .push_param(d)
+                .push_param(sum)
+                .push_param(arg_dur)
                 .evaluate(ScalarFuncSig::SubStringAndDuration)
                 .unwrap();
-            assert_eq!(sub_output, arg0);
+            assert_eq!(sub_output, arg_str);
         }
     }
 
