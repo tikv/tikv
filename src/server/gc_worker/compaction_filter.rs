@@ -127,6 +127,8 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             }
         }
         if !needs_gc && !check_need_gc(safe_point.into(), ratio_threshold, &mvcc_props) {
+            // NOTE: here we don't treat the bottommost level specially.
+            // Maybe it's necessary to make a green channel for it.
             debug!("skip gc in compaction filter because it's not necessary");
             return std::ptr::null_mut();
         }
@@ -477,7 +479,7 @@ pub mod tests {
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
         let engine = engine.get_rocksdb();
         // Put a new key-value pair to ensure compaction can be triggered correctly.
-        engine.delete_cf("write", b"not-exists-key").unwrap();
+        engine.delete_cf("write", b"znot-exists-key").unwrap();
         do_gc_by_compact(&engine, None, None, safe_point, None);
     }
 
@@ -515,26 +517,26 @@ pub mod tests {
         let value = vec![b'v'; 512];
 
         // GC can't delete keys after the given safe point.
-        must_prewrite_put(&engine, b"key", &value, b"key", 100);
-        must_commit(&engine, b"key", 100, 110);
+        must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
+        must_commit(&engine, b"zkey", 100, 110);
         do_gc_by_compact(&raw_engine, None, None, 50, None);
-        must_get(&engine, b"key", 110, &value);
+        must_get(&engine, b"zkey", 110, &value);
 
         // GC can't delete keys before the safe ponit if they are latest versions.
         do_gc_by_compact(&raw_engine, None, None, 200, None);
-        must_get(&engine, b"key", 110, &value);
+        must_get(&engine, b"zkey", 110, &value);
 
-        must_prewrite_put(&engine, b"key", &value, b"key", 120);
-        must_commit(&engine, b"key", 120, 130);
+        must_prewrite_put(&engine, b"zkey", &value, b"zkey", 120);
+        must_commit(&engine, b"zkey", 120, 130);
 
         // GC can't delete the latest version before the safe ponit.
         do_gc_by_compact(&raw_engine, None, None, 115, None);
-        must_get(&engine, b"key", 110, &value);
+        must_get(&engine, b"zkey", 110, &value);
 
         // GC a version will also delete the key on default CF.
         do_gc_by_compact(&raw_engine, None, None, 200, None);
-        must_get_none(&engine, b"key", 110);
-        let default_key = Key::from_encoded_slice(b"key").append_ts(100.into());
+        must_get_none(&engine, b"zkey", 110);
+        let default_key = Key::from_encoded_slice(b"zkey").append_ts(100.into());
         let default_key = default_key.into_encoded();
         assert!(raw_engine.get_value(&default_key).unwrap().is_none());
     }
@@ -546,21 +548,21 @@ pub mod tests {
         let value = vec![b'v'; 512];
 
         // Delete mark and masked versions can be handled in `drop`.
-        must_prewrite_put(&engine, b"key", &value, b"key", 100);
-        must_commit(&engine, b"key", 100, 110);
-        must_prewrite_delete(&engine, b"key", b"key", 120);
-        must_commit(&engine, b"key", 120, 130);
+        must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
+        must_commit(&engine, b"zkey", 100, 110);
+        must_prewrite_delete(&engine, b"zkey", b"zkey", 120);
+        must_commit(&engine, b"zkey", 120, 130);
         do_gc_by_compact(&raw_engine, None, None, 200, None);
-        must_get_none(&engine, b"key", 110);
+        must_get_none(&engine, b"zkey", 110);
 
-        must_prewrite_put(&engine, b"key", &value, b"key", 100);
-        must_commit(&engine, b"key", 100, 110);
-        must_prewrite_delete(&engine, b"key", b"key", 120);
-        must_commit(&engine, b"key", 120, 130);
-        must_prewrite_put(&engine, b"key1", &value, b"key1", 120);
-        must_commit(&engine, b"key1", 120, 130);
+        must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
+        must_commit(&engine, b"zkey", 100, 110);
+        must_prewrite_delete(&engine, b"zkey", b"zkey", 120);
+        must_commit(&engine, b"zkey", 120, 130);
+        must_prewrite_put(&engine, b"zkey1", &value, b"zkey1", 120);
+        must_commit(&engine, b"zkey1", 120, 130);
         do_gc_by_compact(&raw_engine, None, None, 200, None);
-        must_get_none(&engine, b"key", 110);
+        must_get_none(&engine, b"zkey", 110);
     }
 
     #[test]
@@ -570,16 +572,16 @@ pub mod tests {
         let value = vec![b'v'; 512];
 
         for start_ts in &[100, 110, 120, 130] {
-            must_prewrite_put(&engine, b"key", &value, b"key", *start_ts);
-            must_commit(&engine, b"key", *start_ts, *start_ts + 5);
+            must_prewrite_put(&engine, b"zkey", &value, b"zkey", *start_ts);
+            must_commit(&engine, b"zkey", *start_ts, *start_ts + 5);
         }
-        must_prewrite_delete(&engine, b"key", b"key", 140);
-        must_commit(&engine, b"key", 140, 145);
+        must_prewrite_delete(&engine, b"zkey", b"zkey", 140);
+        must_commit(&engine, b"zkey", 140, 145);
 
         // Can't GC stale versions because of the threshold.
         do_gc_by_compact_with_ratio_threshold(&raw_engine, 200, 10.0);
         for commit_ts in &[105, 115, 125, 135] {
-            must_get(&engine, b"key", commit_ts, &value);
+            must_get(&engine, b"zkey", commit_ts, &value);
         }
     }
 
@@ -592,29 +594,29 @@ pub mod tests {
             let engine = TestEngineBuilder::new().build().unwrap();
             let raw_engine = engine.get_rocksdb();
 
-            let split_key = Key::from_raw(b"key")
+            let split_key = Key::from_raw(b"zkey")
                 .append_ts(TimeStamp::from(135))
                 .into_encoded();
 
             // So the construction of SST files will be:
             // L6: |key_110|
-            must_prewrite_put(&engine, b"key", b"value", b"key", 100);
-            must_commit(&engine, b"key", 100, 110);
+            must_prewrite_put(&engine, b"zkey", b"zvalue", b"zkey", 100);
+            must_commit(&engine, b"zkey", 100, 110);
             do_gc_by_compact(&raw_engine, None, None, 50, None);
             assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
 
             // So the construction of SST files will be:
             // L6: |key_140, key_130|, |key_110|
-            must_prewrite_put(&engine, b"key", b"value", b"key", 120);
-            must_commit(&engine, b"key", 120, 130);
-            must_prewrite_delete(&engine, b"key", b"key", 140);
-            must_commit(&engine, b"key", 140, 140);
+            must_prewrite_put(&engine, b"zkey", b"zvalue", b"zkey", 120);
+            must_commit(&engine, b"zkey", 120, 130);
+            must_prewrite_delete(&engine, b"zkey", b"zkey", 140);
+            must_commit(&engine, b"zkey", 140, 140);
             do_gc_by_compact(&raw_engine, None, Some(&split_key), 50, None);
             assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 2);
 
             // Put more key/value pairs so that 1 file in L0 and 1 file in L6 can be merged.
-            must_prewrite_put(&engine, b"kex", b"value", b"kex", 100);
-            must_commit(&engine, b"kex", 100, 110);
+            must_prewrite_put(&engine, b"zkex", b"zvalue", b"zkex", 100);
+            must_commit(&engine, b"zkex", 100, 110);
 
             do_gc_by_compact(&raw_engine, None, Some(&split_key), 200, None);
 
@@ -623,7 +625,7 @@ pub mod tests {
 
             // Although the SST files is not involved in the last compaction,
             // all versions of "key" should be cleared.
-            let key = Key::from_raw(b"key")
+            let key = Key::from_raw(b"zkey")
                 .append_ts(TimeStamp::from(110))
                 .into_encoded();
             let x = raw_engine.get_value_cf(CF_WRITE, &key).unwrap();
@@ -639,39 +641,39 @@ pub mod tests {
 
             // So the construction of SST files will be:
             // L6: |AAAAA_101, CCCCC_111|
-            must_prewrite_put(&engine, b"AAAAA", b"value", b"key", 100);
-            must_commit(&engine, b"AAAAA", 100, 101);
-            must_prewrite_put(&engine, b"CCCCC", b"value", b"key", 110);
-            must_commit(&engine, b"CCCCC", 110, 111);
+            must_prewrite_put(&engine, b"zAAAAA", b"zvalue", b"zkey", 100);
+            must_commit(&engine, b"zAAAAA", 100, 101);
+            must_prewrite_put(&engine, b"zCCCCC", b"zvalue", b"zkey", 110);
+            must_commit(&engine, b"zCCCCC", 110, 111);
             do_gc_by_compact(&raw_engine, None, None, 50, Some(6));
             assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
 
             // So the construction of SST files will be:
             // L0: |BBBB_101, DDDDD_101|
             // L6: |AAAAA_101, CCCCC_111|
-            must_prewrite_put(&engine, b"BBBBB", b"value", b"key", 100);
-            must_commit(&engine, b"BBBBB", 100, 101);
-            must_prewrite_put(&engine, b"DDDDD", b"value", b"key", 100);
-            must_commit(&engine, b"DDDDD", 100, 101);
+            must_prewrite_put(&engine, b"zBBBBB", b"zvalue", b"zkey", 100);
+            must_commit(&engine, b"zBBBBB", 100, 101);
+            must_prewrite_put(&engine, b"zDDDDD", b"zvalue", b"zkey", 100);
+            must_commit(&engine, b"zDDDDD", 100, 101);
             raw_engine.flush_cf(CF_WRITE, true).unwrap();
             assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[0], 1);
 
             // So the construction of SST files will be:
             // L0: |AAAAA_111, BBBBB_111|, |BBBB_101, DDDDD_101|
             // L6: |AAAAA_101, CCCCC_111|
-            must_prewrite_put(&engine, b"AAAAA", b"value", b"key", 110);
-            must_commit(&engine, b"AAAAA", 110, 111);
-            must_prewrite_delete(&engine, b"BBBBB", b"BBBBB", 110);
-            must_commit(&engine, b"BBBBB", 110, 111);
+            must_prewrite_put(&engine, b"zAAAAA", b"zvalue", b"zkey", 110);
+            must_commit(&engine, b"zAAAAA", 110, 111);
+            must_prewrite_delete(&engine, b"zBBBBB", b"zBBBBB", 110);
+            must_commit(&engine, b"zBBBBB", 110, 111);
             raw_engine.flush_cf(CF_WRITE, true).unwrap();
             assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[0], 2);
 
             // Compact |AAAAA_111, BBBBB_111| at L0 and |AAAA_101, CCCCC_111| at L6.
-            let start = Key::from_raw(b"AAAAA").into_encoded();
-            let end = Key::from_raw(b"AAAAAA").into_encoded();
+            let start = Key::from_raw(b"zAAAAA").into_encoded();
+            let end = Key::from_raw(b"zAAAAAA").into_encoded();
             do_gc_by_compact(&raw_engine, Some(&start), Some(&end), 200, Some(6));
 
-            must_get_none(&engine, b"BBBBB", 101);
+            must_get_none(&engine, b"zBBBBB", 101);
         }
     }
 }

@@ -432,6 +432,11 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             return;
         }
 
+        if !keys::validate_data_key(key) {
+            self.num_errors += 1;
+            return;
+        }
+
         let (k, ts) = match Key::split_on_ts_for(key) {
             Ok((k, ts)) => (k, ts),
             Err(_) => {
