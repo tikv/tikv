@@ -1985,7 +1985,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c6b58a4e99bb7fcc088cf856493d5f80907658ea"
+source = "git+https://github.com/tikv/rust-rocksdb.git#87420f1b73d99d77577d0f4d3cbb424e5a23b17b"
 dependencies = [
  "cc",
  "cmake",
@@ -1994,7 +1994,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c6b58a4e99bb7fcc088cf856493d5f80907658ea"
+source = "git+https://github.com/tikv/rust-rocksdb.git#87420f1b73d99d77577d0f4d3cbb424e5a23b17b"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2014,7 +2014,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c6b58a4e99bb7fcc088cf856493d5f80907658ea"
+source = "git+https://github.com/tikv/rust-rocksdb.git#87420f1b73d99d77577d0f4d3cbb424e5a23b17b"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3429,7 +3429,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c6b58a4e99bb7fcc088cf856493d5f80907658ea"
+source = "git+https://github.com/tikv/rust-rocksdb.git#87420f1b73d99d77577d0f4d3cbb424e5a23b17b"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4251,6 +4251,7 @@ name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
  "concurrency_manager",
+ "engine_rocks",
  "futures 0.3.7",
  "kvproto",
  "protobuf",
@@ -4412,11 +4413,11 @@ dependencies = [
  "test_sst_importer",
  "test_storage",
  "test_util",
+ "tidb_query_aggr",
  "tidb_query_common",
  "tidb_query_datatype",
- "tidb_query_vec_aggr",
- "tidb_query_vec_executors",
- "tidb_query_vec_expr",
+ "tidb_query_executors",
+ "tidb_query_expr",
  "tikv",
  "tikv_util",
  "time 0.1.42",
@@ -4464,6 +4465,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6b53e329000edc2b34dbe8545fd20e55a333362d0a321909685a19bd28c3f1b"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "tidb_query_aggr"
+version = "0.0.1"
+dependencies = [
+ "match_template",
+ "panic_hook",
+ "tidb_query_codegen",
+ "tidb_query_common",
+ "tidb_query_datatype",
+ "tidb_query_expr",
+ "tikv_util",
+ "tipb",
+ "tipb_helper",
 ]
 
 [[package]]
@@ -4530,32 +4546,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tidb_query_shared_expr"
-version = "0.0.1"
-dependencies = [
- "rand",
- "safemem",
- "tidb_query_datatype",
- "time 0.1.42",
-]
-
-[[package]]
-name = "tidb_query_vec_aggr"
-version = "0.0.1"
-dependencies = [
- "match_template",
- "panic_hook",
- "tidb_query_codegen",
- "tidb_query_common",
- "tidb_query_datatype",
- "tidb_query_vec_expr",
- "tikv_util",
- "tipb",
- "tipb_helper",
-]
-
-[[package]]
-name = "tidb_query_vec_executors"
+name = "tidb_query_executors"
 version = "0.0.1"
 dependencies = [
  "codec",
@@ -4568,11 +4559,11 @@ dependencies = [
  "slog",
  "slog-global",
  "smallvec",
+ "tidb_query_aggr",
  "tidb_query_codegen",
  "tidb_query_common",
  "tidb_query_datatype",
- "tidb_query_vec_aggr",
- "tidb_query_vec_expr",
+ "tidb_query_expr",
  "tikv_util",
  "tipb",
  "tipb_helper",
@@ -4580,7 +4571,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tidb_query_vec_expr"
+name = "tidb_query_expr"
 version = "0.0.1"
 dependencies = [
  "base64 0.12.0",
@@ -4596,12 +4587,14 @@ dependencies = [
  "panic_hook",
  "profiler",
  "protobuf",
+ "rand",
+ "safemem",
  "static_assertions",
  "tidb_query_codegen",
  "tidb_query_common",
  "tidb_query_datatype",
- "tidb_query_shared_expr",
  "tikv_util",
+ "time 0.1.42",
  "tipb",
  "tipb_helper",
  "twoway",
@@ -4693,12 +4686,11 @@ dependencies = [
  "tempfile",
  "test_sst_importer",
  "test_util",
+ "tidb_query_aggr",
  "tidb_query_common",
  "tidb_query_datatype",
- "tidb_query_shared_expr",
- "tidb_query_vec_aggr",
- "tidb_query_vec_executors",
- "tidb_query_vec_expr",
+ "tidb_query_executors",
+ "tidb_query_expr",
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
@@ -5385,7 +5377,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#6bbea16a485583d7a6e32de335f6c6ec448df44a"
+source = "git+https://github.com/tikv/yatp.git#6bbea16a485583d7a6e32de335f6c6ec448df44a"
 dependencies = [
  "crossbeam-deque",
  "dashmap",

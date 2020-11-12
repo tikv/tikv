@@ -8,7 +8,7 @@ use criterion::measurement::Measurement;
 use tipb::Expr;
 
 use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_vec_executors::BatchTopNExecutor;
+use tidb_query_executors::BatchTopNExecutor;
 
 use crate::util::bencher::Bencher;
 

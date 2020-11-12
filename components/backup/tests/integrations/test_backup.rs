@@ -35,16 +35,17 @@ use tikv::storage::SnapshotStore;
 use tikv::{config::BackupConfig, storage::kv::SnapContext};
 use tikv_util::collections::HashMap;
 use tikv_util::file::calc_crc32_bytes;
-use tikv_util::worker::Worker;
+use tikv_util::worker::{LazyWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
 struct TestSuite {
     cluster: Cluster<ServerCluster>,
-    endpoints: HashMap<u64, Worker<Task>>,
+    endpoints: HashMap<u64, LazyWorker<Task>>,
     tikv_cli: TikvClient,
     context: Context,
     ts: TimeStamp,
+    bg_worker: Worker,
 
     _env: Arc<Environment>,
 }
@@ -79,6 +80,7 @@ impl TestSuite {
         let concurrency_manager =
             ConcurrencyManager::new(block_on(cluster.pd_client.get_tso()).unwrap());
         let mut endpoints = HashMap::default();
+        let bg_worker = Worker::new("backup-test");
         for (id, engines) in &cluster.engines {
             // Create and run backup endpoints.
             let sim = cluster.sim.rl();
@@ -90,8 +92,8 @@ impl TestSuite {
                 BackupConfig { num_threads: 4 },
                 concurrency_manager.clone(),
             );
-            let mut worker = Worker::new(format!("backup-{}", id));
-            worker.start(backup_endpoint).unwrap();
+            let mut worker = bg_worker.lazy_build(format!("backup-{}", id));
+            worker.start(backup_endpoint);
             endpoints.insert(*id, worker);
         }
 
@@ -118,6 +120,7 @@ impl TestSuite {
             context,
             ts: TimeStamp::zero(),
             _env: env,
+            bg_worker,
         }
     }
 
@@ -127,8 +130,9 @@ impl TestSuite {
 
     fn stop(mut self) {
         for (_, mut worker) in self.endpoints {
-            worker.stop().unwrap();
+            worker.stop();
         }
+        self.bg_worker.stop();
         self.cluster.shutdown();
     }
 
@@ -221,7 +225,7 @@ impl TestSuite {
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
             let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
-            end.schedule(task).unwrap();
+            end.scheduler().schedule(task).unwrap();
         }
         rx
     }
@@ -242,7 +246,7 @@ impl TestSuite {
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
             let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
-            end.schedule(task).unwrap();
+            end.scheduler().schedule(task).unwrap();
         }
         rx
     }
