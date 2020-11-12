@@ -3,7 +3,7 @@
 use criterion::black_box;
 use criterion::measurement::Measurement;
 use futures::executor::block_on;
-use tidb_query_vec_executors::interface::*;
+use tidb_query_executors::interface::*;
 use tikv::coprocessor::RequestHandler;
 
 pub trait Bencher {

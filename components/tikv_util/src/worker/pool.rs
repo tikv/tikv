@@ -114,19 +114,21 @@ impl<T: Display + Send> Scheduler<T> {
         if self.counter.load(Ordering::Acquire) >= self.pending_capacity {
             return Err(ScheduleError::Full(task));
         }
+        self.counter.fetch_add(1, Ordering::SeqCst);
+        self.metrics_pending_task_count.inc();
         if let Err(e) = self.sender.unbounded_send(Msg::Task(task)) {
             if let Msg::Task(t) = e.into_inner() {
+                self.counter.fetch_sub(1, Ordering::SeqCst);
+                self.metrics_pending_task_count.dec();
                 return Err(ScheduleError::Stopped(t));
             }
         }
-        self.metrics_pending_task_count.inc();
-        self.counter.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
     /// Checks if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
-        self.counter.load(Ordering::SeqCst) > 0
+        self.counter.load(Ordering::Acquire) > 0
     }
 
     pub fn stop(&self) {
@@ -286,6 +288,7 @@ impl<S: Into<String>> Builder<S> {
             pool,
             counter: Arc::new(AtomicUsize::new(0)),
             pending_capacity: self.pending_capacity,
+            thread_count: self.thread_count,
         }
     }
 }
@@ -298,6 +301,7 @@ pub struct Worker {
     pending_capacity: usize,
     counter: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
+    thread_count: usize,
 }
 
 impl Worker {
@@ -369,14 +373,15 @@ impl Worker {
     /// Stops the worker thread.
     pub fn stop(&self) {
         if let Some(pool) = self.pool.lock().unwrap().take() {
-            pool.shutdown();
             self.stop.store(true, Ordering::Release);
+            pool.shutdown();
         }
     }
 
     /// Checks if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
-        self.stop.load(Ordering::SeqCst) || self.counter.load(Ordering::SeqCst) > 0
+        self.stop.load(Ordering::Acquire)
+            || self.counter.load(Ordering::Acquire) >= self.thread_count
     }
 
     fn start_impl<R: Runnable + 'static>(
@@ -392,7 +397,7 @@ impl Worker {
                 match msg {
                     Msg::Task(task) => {
                         handle.inner.run(task);
-                        counter.fetch_sub(1, Ordering::Relaxed);
+                        counter.fetch_sub(1, Ordering::SeqCst);
                         metrics_pending_task_count.dec();
                     }
                     Msg::Timeout => (),
@@ -419,7 +424,7 @@ impl Worker {
                 match msg {
                     Msg::Task(task) => {
                         handle.inner.run(task);
-                        counter.fetch_sub(1, Ordering::Relaxed);
+                        counter.fetch_sub(1, Ordering::SeqCst);
                         metrics_pending_task_count.dec();
                     }
                     Msg::Timeout => {
