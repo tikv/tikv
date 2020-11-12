@@ -379,8 +379,9 @@ mod tests {
         let keys: Vec<_> = origin_keys
             .iter()
             .map(|k| {
-                k.clone().append(&mut vec![ts; 8]);
-                k
+                let mut k2 = k.clone();
+                k2.append(&mut vec![ts; 8]);
+                k2
             })
             .collect();
 
