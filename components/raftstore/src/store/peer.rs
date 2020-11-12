@@ -3514,6 +3514,7 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     resp
 }
 
+const UUID_LEN: usize = 16;
 const REQUEST_FLAG: u8 = b'r';
 const LOCKED_FLAG: u8 = b'l';
 
@@ -3528,8 +3529,10 @@ impl ReadIndexContext {
     pub fn parse(bytes: &[u8]) -> Result<ReadIndexContext> {
         use tikv_util::codec::number::*;
 
-        if bytes.len() < 16 {
-            return Err(box_err!("read index context less than 16 bytes"));
+        if bytes.len() < UUID_LEN {
+            return Err(box_err!(
+                "read index context must contain a 16 byte long UUID"
+            ));
         }
         let mut res = ReadIndexContext {
             id: Uuid::from_slice(&bytes[..16]).unwrap(),
@@ -3597,6 +3600,7 @@ mod read_index_ctx_tests {
     #[test]
     fn test_single_uuid() {
         let id = Uuid::new_v4();
+        // We should be able to parse old version context (a single UUID).
         let ctx = ReadIndexContext::parse(id.as_bytes()).unwrap();
         assert_eq!(
             ctx,
@@ -3606,6 +3610,10 @@ mod read_index_ctx_tests {
                 locked: None,
             }
         );
+
+        // Old version TiKV should be able to parse context without lock checking fields.
+        let bytes = ctx.to_bytes();
+        assert_eq!(bytes, id.as_bytes());
     }
 
     #[test]

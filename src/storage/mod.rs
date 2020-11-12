@@ -277,29 +277,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
 
-                // Update max_ts and check the in-memory lock table before getting the snapshot
-                async_commit_check_keys(
-                    &concurrency_manager,
+                let snap_ctx = prepare_snap_ctx(
+                    &ctx,
                     iter::once(&key),
                     start_ts,
-                    ctx.get_isolation_level(),
                     &bypass_locks,
+                    &concurrency_manager,
                 )?;
-
-                let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        read_id: None,
-                        start_ts,
-                        key_ranges: vec![point_key_range(key.clone())],
-                    }
-                } else {
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        ..Default::default()
-                    }
-                };
-
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
@@ -384,29 +368,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                         let region_id = ctx.get_region_id();
 
-                        // Update max_ts and check the in-memory lock table before getting the snapshot
-                        if let Err(e) = async_commit_check_keys(
-                            &concurrency_manager,
+                        let snap_ctx = match prepare_snap_ctx(
+                            &ctx,
                             iter::once(&key),
                             start_ts,
-                            ctx.get_isolation_level(),
                             &bypass_locks,
+                            &concurrency_manager,
                         ) {
-                            req_snaps.push(Err(e));
-                            continue;
-                        }
-                        let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
-                            SnapContext {
-                                pb_ctx: &ctx,
-                                read_id: read_id.clone(),
-                                start_ts,
-                                key_ranges: vec![point_key_range(key.clone())],
+                            Ok(mut snap_ctx) => {
+                                snap_ctx.read_id = read_id.clone();
+                                snap_ctx
                             }
-                        } else {
-                            SnapContext {
-                                pb_ctx: &ctx,
-                                read_id: read_id.clone(),
-                                ..Default::default()
+                            Err(e) => {
+                                req_snaps.push(Err(e));
+                                continue;
                             }
                         };
 
@@ -514,29 +489,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
-                // Update max_ts and check the in-memory lock table before getting the snapshot
-                async_commit_check_keys(
-                    &concurrency_manager,
-                    &keys,
-                    start_ts,
-                    ctx.get_isolation_level(),
-                    &bypass_locks,
-                )?;
-
-                let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        read_id: None,
-                        start_ts,
-                        key_ranges: keys.iter().cloned().map(point_key_range).collect(),
-                    }
-                } else {
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        ..Default::default()
-                    }
-                };
-
+                let snap_ctx =
+                    prepare_snap_ctx(&ctx, &keys, start_ts, &bypass_locks, &concurrency_manager)?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
@@ -1498,25 +1452,39 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
     }
 }
 
-fn async_commit_check_keys<'a>(
+fn prepare_snap_ctx<'a>(
+    pb_ctx: &'a Context,
+    keys: impl IntoIterator<Item = &'a Key> + Clone,
+    start_ts: TimeStamp,
+    bypass_locks: &'a TsSet,
     concurrency_manager: &ConcurrencyManager,
-    keys: impl IntoIterator<Item = &'a Key>,
-    ts: TimeStamp,
-    isolation_level: IsolationLevel,
-    bypass_locks: &TsSet,
-) -> Result<()> {
-    concurrency_manager.update_max_ts(ts);
+) -> Result<SnapContext<'a>> {
+    // Update max_ts and check the in-memory lock table before getting the snapshot
+    concurrency_manager.update_max_ts(start_ts);
     fail_point!("before-storage-check-memory-locks");
+    let isolation_level = pb_ctx.get_isolation_level();
     if isolation_level == IsolationLevel::Si {
-        for key in keys {
+        for key in keys.clone() {
             concurrency_manager
                 .read_key_check(&key, |lock| {
-                    Lock::check_ts_conflict(Cow::Borrowed(lock), &key, ts, bypass_locks)
+                    Lock::check_ts_conflict(Cow::Borrowed(lock), &key, start_ts, bypass_locks)
                 })
                 .map_err(mvcc::Error::from)?;
         }
     }
-    Ok(())
+
+    let mut snap_ctx = SnapContext {
+        pb_ctx,
+        start_ts,
+        ..Default::default()
+    };
+    if need_check_locks_in_replica_read(pb_ctx) {
+        snap_ctx.key_ranges = keys
+            .into_iter()
+            .map(|k| point_key_range(k.clone()))
+            .collect();
+    }
+    Ok(snap_ctx)
 }
 
 pub fn need_check_locks_in_replica_read(ctx: &Context) -> bool {
