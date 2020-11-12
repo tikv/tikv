@@ -3531,15 +3531,16 @@ impl ReadIndexContext {
 
         if bytes.len() < UUID_LEN {
             return Err(box_err!(
-                "read index context must contain a 16 byte long UUID"
+                "read index context must contain a {} byte long UUID",
+                UUID_LEN
             ));
         }
         let mut res = ReadIndexContext {
-            id: Uuid::from_slice(&bytes[..16]).unwrap(),
+            id: Uuid::from_slice(&bytes[..UUID_LEN]).unwrap(),
             request: None,
             locked: None,
         };
-        let mut bytes = &bytes[16..];
+        let mut bytes = &bytes[UUID_LEN..];
         while !bytes.is_empty() {
             match read_u8(&mut bytes).unwrap() {
                 REQUEST_FLAG => {
@@ -3575,7 +3576,7 @@ impl ReadIndexContext {
         let request_size = request.map(Message::compute_size);
         let locked_size = locked.map(Message::compute_size);
         let field_size = |s: Option<u32>| s.map(|s| 1 + MAX_VAR_U64_LEN + s as usize).unwrap_or(0);
-        let cap = 16 + field_size(request_size) + field_size(locked_size);
+        let cap = UUID_LEN + field_size(request_size) + field_size(locked_size);
         let mut b = Vec::with_capacity(cap);
         b.extend_from_slice(id.as_bytes());
         if let Some(request) = request {
