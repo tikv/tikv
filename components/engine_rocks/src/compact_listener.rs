@@ -143,18 +143,21 @@ impl CompactedEvent for RocksCompactedEvent {
     }
 
     fn calc_ranges_declined_bytes(
-        self,
+        &self,
         ranges: &BTreeMap<Vec<u8>, u64>,
         bytes_threshold: u64,
     ) -> Vec<(u64, u64)> {
         // Calculate influenced regions.
         let mut influenced_regions = vec![];
-        for (end_key, region_id) in
-            ranges.range((Excluded(self.start_key), Included(self.end_key.clone())))
-        {
+        for (end_key, region_id) in ranges.range((
+            Excluded(self.start_key.clone()),
+            Included(self.end_key.clone()),
+        )) {
             influenced_regions.push((region_id, end_key.clone()));
         }
-        if let Some((end_key, region_id)) = ranges.range((Included(self.end_key), Unbounded)).next()
+        if let Some((end_key, region_id)) = ranges
+            .range((Included(self.end_key.clone()), Unbounded))
+            .next()
         {
             influenced_regions.push((region_id, end_key.clone()));
         }

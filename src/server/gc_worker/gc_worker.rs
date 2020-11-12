@@ -7,7 +7,6 @@ use engine_rocks::RocksEngine;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use pd_client::ClusterVersion;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
-use raftstore::router::RaftStoreRouter;
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{LazyWorker, ScheduleError, Scheduler};
 use txn_types::{Key, TimeStamp};
@@ -19,6 +18,7 @@ use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollec
 use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_runner::{AutoGcConfig, GcExecutor, GcRunner, GcSafePointProvider, GcTask};
 use super::{Callback, CompactionFilterInitializer, Error, ErrorInner, Result};
+use raftstore::store::StoreRouter;
 
 pub const GC_MAX_EXECUTING_TASKS: usize = 10;
 
@@ -94,19 +94,17 @@ impl GcWorker {
         }
     }
 
-    pub fn start_auto_gc<E, S, R, RR>(
+    pub fn start_auto_gc<E, R>(
         &self,
         cfg: AutoGcConfig,
-        safe_point_provider: S,
+        safe_point_provider: impl GcSafePointProvider,
         region_info_provider: R,
         engine: E,
-        raft_store_router: RR,
+        raft_store_router: impl StoreRouter + 'static,
     ) -> Result<Arc<AtomicU64>>
     where
-        S: GcSafePointProvider,
         R: RegionInfoProvider,
         E: Engine,
-        RR: RaftStoreRouter<RocksEngine> + 'static,
     {
         let safe_point = Arc::new(AtomicU64::new(0));
 
@@ -114,16 +112,15 @@ impl GcWorker {
         let cfg_mgr = self.config_manager.clone();
         let cluster_version = self.cluster_version.clone();
         kvdb.init_compaction_filter(safe_point.clone(), cfg_mgr, cluster_version);
-
         let executor = GcExecutor::new(
             engine,
-            raft_store_router,
+            Box::new(raft_store_router),
             self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.config_manager.value().clone(),
         );
-        let mut mgr = GcRunner::new(
+        let mut runner = GcRunner::new(
             cfg,
-            safe_point_provider,
+            Box::new(safe_point_provider),
             region_info_provider,
             safe_point.clone(),
             self.config_manager.clone(),
@@ -131,8 +128,8 @@ impl GcWorker {
             self.stop.clone(),
             Box::new(executor),
         );
-        mgr.start();
-        self.worker.lock().unwrap().start_with_timer(mgr);
+        runner.start();
+        self.worker.lock().unwrap().start_with_timer(runner);
         Ok(safe_point)
     }
 

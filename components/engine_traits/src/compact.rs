@@ -52,7 +52,7 @@ pub trait CompactedEvent: Send {
     /// This takes self by value so that engine_rocks can move keys out of the
     /// CompactedEvent
     fn calc_ranges_declined_bytes(
-        self,
+        &self,
         ranges: &BTreeMap<Vec<u8>, u64>,
         bytes_threshold: u64,
     ) -> Vec<(u64, u64)>;

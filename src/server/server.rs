@@ -297,8 +297,8 @@ pub mod test_router {
         }
     }
 
-    impl StoreRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
+    impl StoreRouter for TestRaftStoreRouter {
+        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }

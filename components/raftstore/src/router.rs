@@ -18,7 +18,7 @@ use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<EK>:
-    StoreRouter<EK> + ProposalRouter<EK::Snapshot> + CasualRouter<EK> + Send + Clone
+    StoreRouter + ProposalRouter<EK::Snapshot> + CasualRouter<EK> + Send + Clone
 where
     EK: KvEngine,
 {
@@ -41,8 +41,8 @@ where
     }
 
     /// Send a store message to the backend raft batch system.
-    fn send_store_msg(&self, msg: StoreMsg<EK>) -> RaftStoreResult<()> {
-        <Self as StoreRouter<EK>>::send(self, msg)
+    fn send_store_msg(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+        <Self as StoreRouter>::send(self, msg)
     }
 
     /// Sends RaftCmdRequest to local store.
@@ -119,11 +119,8 @@ impl<S: Snapshot> ProposalRouter<S> for RaftStoreBlackHole {
     }
 }
 
-impl<EK> StoreRouter<EK> for RaftStoreBlackHole
-where
-    EK: KvEngine,
-{
-    fn send(&self, _: StoreMsg<EK>) -> RaftStoreResult<()> {
+impl StoreRouter for RaftStoreBlackHole {
+    fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
         Ok(())
     }
 }
@@ -174,8 +171,8 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK> for ServerRaftStoreRouter<EK, ER> {
-    fn send(&self, msg: StoreMsg<EK>) -> RaftStoreResult<()> {
+impl<EK: KvEngine, ER: RaftEngine> StoreRouter for ServerRaftStoreRouter<EK, ER> {
+    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
         StoreRouter::send(&self.router, msg)
     }
 }

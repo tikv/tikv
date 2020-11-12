@@ -16,12 +16,11 @@ use txn_types::{Key, TimeStamp};
 
 use raftstore::coprocessor::Result as CopResult;
 use raftstore::coprocessor::{RegionInfo, RegionInfoProvider, SeekRegionCallback};
-use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
 use raftstore::store::util::find_peer;
+use raftstore::store::StoreRouter;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksEngine;
 use engine_traits::{DeleteStrategy, MiscExt, Range, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
@@ -166,14 +165,10 @@ pub trait Executor: Send {
 }
 
 /// Used to perform GC operations on the engine.
-pub struct GcExecutor<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<RocksEngine>,
-{
+pub struct GcExecutor<E: Engine> {
     engine: E,
 
-    raft_store_router: RR,
+    raft_store_router: Box<dyn StoreRouter>,
 
     /// Used to limit the write flow of GC.
     limiter: Limiter,
@@ -233,9 +228,9 @@ impl RegionInfoProvider for MockRegionInfoProvider {
 /// Controls how GC runs automatically on the TiKV.
 /// It polls safe point periodically, and when the safe point is updated, `GcManager` will start to
 /// scan all regions (whose leader is on this TiKV), and does GC on all those regions.
-pub(super) struct GcRunner<S: GcSafePointProvider, R: RegionInfoProvider> {
+pub(super) struct GcRunner<R: RegionInfoProvider> {
     cfg: AutoGcConfig,
-    safe_point_provider: S,
+    safe_point_provider: Box<dyn GcSafePointProvider>,
     region_info_provider: R,
 
     /// The current safe point. `GcManager` will try to update it periodically. When `safe_point` is
@@ -252,17 +247,17 @@ pub(super) struct GcRunner<S: GcSafePointProvider, R: RegionInfoProvider> {
     stop: Arc<AtomicBool>,
 }
 
-impl<S: GcSafePointProvider, R: RegionInfoProvider> GcRunner<S, R> {
+impl<R: RegionInfoProvider> GcRunner<R> {
     pub fn new(
         cfg: AutoGcConfig,
-        safe_point_provider: S,
+        safe_point_provider: Box<dyn GcSafePointProvider>,
         region_info_provider: R,
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
         cluster_version: ClusterVersion,
         stop: Arc<AtomicBool>,
         executor: Box<dyn Executor>,
-    ) -> GcRunner<S, R> {
+    ) -> GcRunner<R> {
         GcRunner {
             cfg,
             safe_point_provider,
@@ -563,11 +558,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcRunner<S, R> {
     }
 }
 
-impl<S: GcSafePointProvider, R: RegionInfoProvider> Runnable for GcRunner<S, R> {
+impl<R: RegionInfoProvider> Runnable for GcRunner<R> {
     type Task = GcTask;
 
-    fn run(&mut self, t: GcTask) {
-        self.executor.execute(t);
+    fn run(&mut self, task: GcTask) {
+        self.executor.execute(task);
     }
 
     fn before_start(&mut self) {
@@ -580,7 +575,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> Runnable for GcRunner<S, R> 
     }
 }
 
-impl<S: GcSafePointProvider, R: RegionInfoProvider> RunnableWithTimer for GcRunner<S, R> {
+impl<R: RegionInfoProvider> RunnableWithTimer for GcRunner<R> {
     fn on_timeout(&mut self) {
         if self.try_update_safe_point() {
             // Don't need to run GC any more if compaction filter is enabled.
@@ -606,14 +601,41 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> RunnableWithTimer for GcRunn
     }
 }
 
-impl<E, RR> GcExecutor<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<RocksEngine>,
-{
+impl Display for GcTask {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            GcTask::Gc {
+                start_key,
+                end_key,
+                safe_point,
+                ..
+            } => f
+                .debug_struct("GC")
+                .field("start_key", &hex::encode_upper(&start_key))
+                .field("end_key", &hex::encode_upper(&end_key))
+                .field("safe_point", safe_point)
+                .finish(),
+            GcTask::UnsafeDestroyRange {
+                start_key, end_key, ..
+            } => f
+                .debug_struct("UnsafeDestroyRange")
+                .field("start_key", &format!("{}", start_key))
+                .field("end_key", &format!("{}", end_key))
+                .finish(),
+            GcTask::PhysicalScanLock { max_ts, .. } => f
+                .debug_struct("PhysicalScanLock")
+                .field("max_ts", max_ts)
+                .finish(),
+            #[cfg(any(test, feature = "testexport"))]
+            GcTask::Validate(_) => write!(f, "Validate gc worker config"),
+        }
+    }
+}
+
+impl<E: Engine> GcExecutor<E> {
     pub fn new(
         engine: E,
-        raft_store_router: RR,
+        raft_store_router: Box<dyn StoreRouter>,
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
     ) -> Self {
@@ -824,7 +846,7 @@ where
         );
 
         self.raft_store_router
-            .send_store_msg(StoreMsg::ClearRegionSizeInRange {
+            .send(StoreMsg::ClearRegionSizeInRange {
                 start_key: start_key.as_encoded().to_vec(),
                 end_key: end_key.as_encoded().to_vec(),
             })
@@ -881,11 +903,7 @@ where
     }
 }
 
-impl<E, RR> Executor for GcExecutor<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<RocksEngine>,
-{
+impl<E: Engine> Executor for GcExecutor<E> {
     #[inline]
     fn execute(&mut self, task: GcTask) {
         let enum_label = task.get_enum_label();
@@ -969,37 +987,6 @@ where
     }
 }
 
-impl Display for GcTask {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            GcTask::Gc {
-                start_key,
-                end_key,
-                safe_point,
-                ..
-            } => f
-                .debug_struct("GC")
-                .field("start_key", &hex::encode_upper(&start_key))
-                .field("end_key", &hex::encode_upper(&end_key))
-                .field("safe_point", safe_point)
-                .finish(),
-            GcTask::UnsafeDestroyRange {
-                start_key, end_key, ..
-            } => f
-                .debug_struct("UnsafeDestroyRange")
-                .field("start_key", &format!("{}", start_key))
-                .field("end_key", &format!("{}", end_key))
-                .finish(),
-            GcTask::PhysicalScanLock { max_ts, .. } => f
-                .debug_struct("PhysicalScanLock")
-                .field("max_ts", max_ts)
-                .finish(),
-            #[cfg(any(test, feature = "testexport"))]
-            GcTask::Validate(_) => write!(f, "Validate gc worker config"),
-        }
-    }
-}
-
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -1057,7 +1044,7 @@ pub mod tests {
     /// A set of utilities that helps testing `GcManager`.
     /// The safe_point polling interval is set to 100 ms.
     struct GcManagerTestUtil {
-        gc_manager: Option<GcRunner<MockSafePointProvider, MockRegionInfoProvider>>,
+        gc_manager: Option<GcRunner<MockRegionInfoProvider>>,
         safe_point_sender: Sender<TimeStamp>,
         gc_task_receiver: Receiver<GcTask>,
         stop: Arc<AtomicBool>,
@@ -1076,9 +1063,9 @@ pub mod tests {
             let stop = Arc::new(AtomicBool::new(false));
             let gc_manager = GcRunner::new(
                 cfg,
-                MockSafePointProvider {
+                Box::new(MockSafePointProvider {
                     rx: safe_point_receiver,
-                },
+                }),
                 MockRegionInfoProvider { regions },
                 Arc::new(AtomicU64::new(0)),
                 GcWorkerConfigManager::default(),
