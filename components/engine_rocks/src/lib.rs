@@ -60,6 +60,8 @@ mod write_batch;
 pub use crate::write_batch::*;
 pub mod mvcc_properties;
 pub use crate::mvcc_properties::*;
+pub mod perf_context;
+pub use crate::perf_context::*;
 
 mod engine_iterator;
 pub use crate::engine_iterator::*;

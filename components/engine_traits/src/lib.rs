@@ -301,6 +301,8 @@ pub use crate::sst_partitioner::*;
 mod range_properties;
 pub use crate::mvcc_properties::*;
 pub use crate::range_properties::*;
+mod perf_context;
+pub use crate::perf_context::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
