@@ -357,9 +357,8 @@ mod tests {
 
     fn test_delete_all_in_range(
         strategy: DeleteStrategy,
-        origin_keys: Vec<Vec<u8>>,
-        start: &[u8],
-        end: &[u8],
+        origin_keys: &Vec<Vec<u8>>,
+        ranges: &[Range],
     ) {
         let path = Builder::new()
             .prefix("engine_delete_all_in_range")
@@ -378,9 +377,9 @@ mod tests {
         let mut wb = db.write_batch();
         let ts: u8 = 12;
         let keys: Vec<_> = origin_keys
-            .into_iter()
-            .map(|mut k| {
-                k.append(&mut vec![ts; 8]);
+            .iter()
+            .map(|k| {
+                k.clone().append(&mut vec![ts; 8]);
                 k
             })
             .collect();
@@ -397,13 +396,16 @@ mod tests {
         db.write(&wb).unwrap();
         check_data(&db, ALL_CFS, kvs.as_slice());
 
-        // Delete all in [start, end).
-        db.delete_all_in_range(strategy, &[Range::new(start, end)])
-            .unwrap();
-        let kvs_left: Vec<_> = kvs
-            .into_iter()
-            .filter(|k| k.0 < start || k.0 >= end)
-            .collect();
+        // Delete all in ranges.
+        db.delete_all_in_range(strategy, ranges).unwrap();
+
+        let mut kvs_left: Vec<_> = kvs;
+        for r in ranges {
+            kvs_left = kvs_left
+                .into_iter()
+                .filter(|k| k.0 < r.start_key || k.0 >= r.end_key)
+                .collect();
+        }
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
@@ -416,7 +418,30 @@ mod tests {
             b"k3".to_vec(),
             b"k4".to_vec(),
         ];
-        test_delete_all_in_range(DeleteStrategy::DeleteByRange, data, b"k1", b"k4");
+        // Single range.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByRange,
+            &data,
+            &[Range::new(b"k1", b"k4")],
+        );
+        // Two ranges without overlap.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByRange,
+            &data,
+            &[Range::new(b"k0", b"k1"), Range::new(b"k3", b"k4")],
+        );
+        // Two ranges with overlap.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByRange,
+            &data,
+            &[Range::new(b"k1", b"k3"), Range::new(b"k2", b"k4")],
+        );
+        // One range contains the other range.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByRange,
+            &data,
+            &[Range::new(b"k1", b"k4"), Range::new(b"k2", b"k3")],
+        );
     }
 
     #[test]
@@ -428,7 +453,30 @@ mod tests {
             b"k3".to_vec(),
             b"k4".to_vec(),
         ];
-        test_delete_all_in_range(DeleteStrategy::DeleteByKey, data, b"k1", b"k4");
+        // Single range.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &data,
+            &[Range::new(b"k1", b"k4")],
+        );
+        // Two ranges without overlap.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &data,
+            &[Range::new(b"k0", b"k1"), Range::new(b"k3", b"k4")],
+        );
+        // Two ranges with overlap.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &data,
+            &[Range::new(b"k1", b"k3"), Range::new(b"k2", b"k4")],
+        );
+        // One range contains the other range.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &data,
+            &[Range::new(b"k1", b"k4"), Range::new(b"k2", b"k3")],
+        );
     }
 
     #[test]
@@ -443,13 +491,17 @@ mod tests {
         for i in 1000..5000 {
             data.push(i.to_string().as_bytes().to_vec());
         }
-        let start = data[2].clone();
-        let end = data[3000].clone();
         test_delete_all_in_range(
             DeleteStrategy::DeleteByWriter { sst_path },
-            data,
-            &start,
-            &end,
+            &data,
+            &[
+                Range::new(&data[2], &data[499]),
+                Range::new(&data[502], &data[999]),
+                Range::new(&data[1002], &data[1999]),
+                Range::new(&data[1499], &data[2499]),
+                Range::new(&data[2502], &data[3999]),
+                Range::new(&data[3002], &data[3499]),
+            ],
         );
     }
 
