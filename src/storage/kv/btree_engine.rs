@@ -17,7 +17,8 @@ use crate::storage::kv::{
     ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, ScanMode, Snapshot,
     WriteData,
 };
-use tikv_util::time::ThreadReadId;
+
+use super::SnapContext;
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
@@ -102,8 +103,7 @@ impl Engine for BTreeEngine {
     /// warning: It returns a fake snapshot whose content will be affected by the later modifies!
     fn async_snapshot(
         &self,
-        _ctx: &Context,
-        _: Option<ThreadReadId>,
+        _ctx: SnapContext<'_>,
         cb: EngineCallback<Self::Snap>,
     ) -> EngineResult<()> {
         cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(&self))));
@@ -330,7 +330,7 @@ pub mod tests {
         for (k, v) in &test_data {
             must_put(&engine, k.as_slice(), v.as_slice());
         }
-        let snap = engine.snapshot(&Context::default()).unwrap();
+        let snap = engine.snapshot(Default::default()).unwrap();
         let mut statistics = CfStatistics::default();
 
         // lower bound > upper bound, seek() returns false.

@@ -20,9 +20,10 @@
 extern crate tikv_alloc;
 #[macro_use]
 extern crate tikv_util;
-
 #[macro_use]
 extern crate serde_derive;
+#[macro_use(fail_point)]
+extern crate fail;
 
 #[cfg(test)]
 extern crate test;

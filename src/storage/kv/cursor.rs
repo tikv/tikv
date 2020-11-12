@@ -17,6 +17,7 @@ use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapsh
 pub struct Cursor<I: Iterator> {
     iter: I,
     scan_mode: ScanMode,
+    // prefix_seek doesn't support seek_to_first and seek_to_last.
     prefix_seek: bool,
     // the data cursor can be seen will be
     min_key: Option<Vec<u8>>,
@@ -46,9 +47,9 @@ impl<I: Iterator> Cursor<I> {
         Self {
             iter,
             scan_mode: mode,
+            prefix_seek,
             min_key: None,
             max_key: None,
-            prefix_seek,
 
             cur_key_has_read: Cell::new(false),
             cur_value_has_read: Cell::new(false),
@@ -145,15 +146,13 @@ impl<I: Iterator> Cursor<I> {
                 if self.key(statistics) < key.as_encoded().as_slice() {
                     self.next(statistics);
                 }
+            } else if self.prefix_seek {
+                // When prefixed seek and prefix_same_as_start enabled
+                // seek_to_first may return false due to no key's prefix is same as iter lower bound's
+                return self.seek(key, statistics);
             } else {
-                if self.prefix_seek {
-                    // When prefixed seek and prefix_same_as_start enabled
-                    // seek_to_first may return false due to no key's prefix is same as iter lower bound's
-                    return self.seek(key, statistics);
-                } else {
-                    assert!(self.seek_to_first(statistics));
-                    return Ok(true);
-                }
+                assert!(self.seek_to_first(statistics));
+                return Ok(true);
             }
         } else {
             // ord == Less
@@ -255,13 +254,11 @@ impl<I: Iterator> Cursor<I> {
                 if self.key(statistics) > key.as_encoded().as_slice() {
                     self.prev(statistics);
                 }
+            } else if self.prefix_seek {
+                return self.seek_for_prev(key, statistics);
             } else {
-                if self.prefix_seek {
-                    return self.seek_for_prev(key, statistics);
-                } else {
-                    assert!(self.seek_to_last(statistics));
-                    return Ok(true);
-                }
+                assert!(self.seek_to_last(statistics));
+                return Ok(true);
             }
         } else {
             near_loop!(
@@ -331,6 +328,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
+        assert!(!self.prefix_seek);
         statistics.seek += 1;
         self.mark_unread();
         let before = PerfContext::get().internal_delete_skipped_count() as usize;
@@ -342,6 +340,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
+        assert!(!self.prefix_seek);
         statistics.seek += 1;
         self.mark_unread();
         let before = PerfContext::get().internal_delete_skipped_count() as usize;
@@ -423,14 +422,14 @@ impl<I: Iterator> Cursor<I> {
             panic!(
                 "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
                 e,
-                self.min_key.as_ref().map(|v| hex::encode_upper(v)),
-                self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+                self.min_key.as_ref().map(hex::encode_upper),
+                self.max_key.as_ref().map(hex::encode_upper),
             );
         } else {
             error!(?e;
                 "failed to iterate";
-                "min_key" => ?self.min_key.as_ref().map(|v| hex::encode_upper(v)),
-                "max_key" => ?self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+                "min_key" => ?self.min_key.as_ref().map(hex::encode_upper),
+                "max_key" => ?self.max_key.as_ref().map(hex::encode_upper),
             );
             Err(e)
         }
@@ -547,6 +546,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         if let Some(ts) = self.hint_max_ts {
             iter_opt.set_hint_max_ts(Bound::Included(ts.into_inner()));
         }
+        // prefix_seek is only used for single key, so set prefix_same_as_start for safety.
         if self.prefix_seek {
             iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
         }

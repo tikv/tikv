@@ -587,7 +587,7 @@ mod tests {
     use super::*;
     use crate::storage::kv::{
         Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
-        TestEngineBuilder, WriteData,
+        SnapContext, TestEngineBuilder, WriteData,
     };
     use crate::storage::mvcc::{Mutation, MvccTxn};
     use crate::storage::txn::{commit, prewrite};
@@ -616,7 +616,7 @@ mod tests {
                 .map(|i| format!("{}{}", KEY_PREFIX, i))
                 .collect();
             let ctx = Context::default();
-            let snapshot = engine.snapshot(&ctx).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut store = TestStore {
                 keys,
                 snapshot,
@@ -648,6 +648,7 @@ mod tests {
                         0,
                         TimeStamp::default(),
                         TimeStamp::default(),
+                        false,
                     )
                     .unwrap();
                 }
@@ -671,7 +672,11 @@ mod tests {
 
         #[inline]
         fn refresh_snapshot(&mut self) {
-            self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
+            let snap_ctx = SnapContext {
+                pb_ctx: &self.ctx,
+                ..Default::default()
+            };
+            self.snapshot = self.engine.snapshot(snap_ctx).unwrap()
         }
 
         fn store(&self) -> SnapshotStore<Arc<RocksSnapshot>> {

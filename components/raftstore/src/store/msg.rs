@@ -13,6 +13,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
+use std::borrow::Cow;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
@@ -288,6 +289,7 @@ pub enum CasualMessage<EK: KvEngine> {
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
         callback: Callback<EK::Snapshot>,
+        source: Cow<'static, str>,
     },
 
     /// Hash result of ComputeHash command.
@@ -313,6 +315,7 @@ pub enum CasualMessage<EK: KvEngine> {
     HalfSplitRegion {
         region_epoch: RegionEpoch,
         policy: CheckPolicy,
+        source: &'static str,
     },
     /// Remove snapshot files in `snaps`.
     GcSnap {
@@ -353,10 +356,15 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
                 log_wrappers::Value::key(&context),
                 escape(hash)
             ),
-            CasualMessage::SplitRegion { ref split_keys, .. } => write!(
+            CasualMessage::SplitRegion {
+                ref split_keys,
+                source,
+                ..
+            } => write!(
                 fmt,
-                "Split region with {}",
-                KeysInfoFormatter(split_keys.iter())
+                "Split region with {} from {}",
+                KeysInfoFormatter(split_keys.iter()),
+                source,
             ),
             CasualMessage::RegionApproximateSize { size } => {
                 write!(fmt, "Region's approximate size [size: {:?}]", size)
@@ -367,7 +375,9 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::CompactionDeclinedBytes { bytes } => {
                 write!(fmt, "compaction declined bytes {}", bytes)
             }
-            CasualMessage::HalfSplitRegion { .. } => write!(fmt, "Half Split"),
+            CasualMessage::HalfSplitRegion { source, .. } => {
+                write!(fmt, "Half Split from {}", source)
+            }
             CasualMessage::GcSnap { ref snaps } => write! {
                 fmt,
                 "gc snaps {:?}",

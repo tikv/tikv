@@ -171,7 +171,7 @@ pub mod tests {
         min_commit_ts: impl Into<TimeStamp>,
     ) -> Option<Value> {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let min_commit_ts = min_commit_ts.into();
         let cm = ConcurrencyManager::new(min_commit_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
@@ -312,8 +312,7 @@ pub mod tests {
         need_value: bool,
         min_commit_ts: impl Into<TimeStamp>,
     ) -> MvccError {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let min_commit_ts = min_commit_ts.into();
         let cm = ConcurrencyManager::new(min_commit_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
@@ -336,7 +335,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
     ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
@@ -432,9 +431,6 @@ pub mod tests {
         must_commit(&engine, k, 19, 20);
         must_err(&engine, k, k, 18, 21);
         must_unlocked(&engine, k);
-
-        // Prewrite non-exist pessimistic lock
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 22, 22, true);
 
         // LockTypeNotMatch
         must_prewrite_put(&engine, k, v, k, 23);

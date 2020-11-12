@@ -16,10 +16,10 @@ use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::FieldTypeAccessor;
-use tidb_query_vec_executors::{
+use tidb_query_executors::{
     interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
 };
-use tidb_query_vec_expr::BATCH_MAX_SIZE;
+use tidb_query_expr::BATCH_MAX_SIZE;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
 
@@ -232,7 +232,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
             ranges,
-            req.take_primary_column_ids().into(),
+            req.take_primary_column_ids(),
             false,
             false, // Streaming mode is not supported in Analyze request, always false here
         )?;

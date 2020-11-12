@@ -208,6 +208,7 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         io_options.compression_per_level(&[]);
         io_options.bottommost_compression(DBCompressionType::Disable);
         let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
+        fail_point!("on_open_sst_writer");
         writer.open(path)?;
         Ok(RocksSstWriter { writer, env })
     }

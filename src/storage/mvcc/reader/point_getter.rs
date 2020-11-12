@@ -340,7 +340,6 @@ impl<S: Snapshot> PointGetter<S> {
 mod tests {
     use super::*;
 
-    use kvproto::kvrpcpb::Context;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use crate::storage::kv::{
@@ -349,11 +348,11 @@ mod tests {
     use crate::storage::mvcc::tests::*;
     use crate::storage::txn::tests::{
         must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_delete,
-        must_prewrite_delete, must_prewrite_lock, must_prewrite_put,
+        must_prewrite_delete, must_prewrite_lock, must_prewrite_put, must_rollback,
     };
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         PointGetterBuilder::new(snapshot, ts)
             .isolation_level(IsolationLevel::Si)
             .build()
@@ -361,7 +360,7 @@ mod tests {
     }
 
     fn new_single_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         PointGetterBuilder::new(snapshot, ts)
             .isolation_level(IsolationLevel::Si)
             .multi(false)
@@ -385,7 +384,7 @@ mod tests {
         value: &[u8],
         expected_met_newer_ts_data: bool,
     ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = getter_ts.into();
         let mut point_getter = PointGetterBuilder::new(snapshot.clone(), ts)
             .isolation_level(IsolationLevel::Si)
@@ -631,7 +630,7 @@ mod tests {
         must_prewrite_put(&engine, b"foo", b"bar", b"foo", 10);
         must_commit(&engine, b"foo", 10, 20);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let write_cursor = CursorBuilder::new(&snapshot, CF_WRITE)
             .prefix_seek(true)
             .scan_mode(ScanMode::Mixed)
@@ -787,7 +786,7 @@ mod tests {
     fn test_omit_value() {
         let engine = new_sample_engine_2();
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         let mut getter = PointGetterBuilder::new(snapshot.clone(), 4.into())
             .isolation_level(IsolationLevel::Si)
@@ -867,7 +866,7 @@ mod tests {
 
         must_prewrite_delete(&engine, key, key, 30);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut getter = PointGetterBuilder::new(snapshot, 60.into())
             .isolation_level(IsolationLevel::Si)
             .bypass_locks(TsSet::from_u64s(vec![30, 40, 50]))
@@ -875,7 +874,7 @@ mod tests {
             .unwrap();
         must_get_value(&mut getter, key, val);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut getter = PointGetterBuilder::new(snapshot, 60.into())
             .isolation_level(IsolationLevel::Si)
             .bypass_locks(TsSet::from_u64s(vec![31, 29]))

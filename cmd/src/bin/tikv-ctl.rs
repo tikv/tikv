@@ -73,7 +73,7 @@ fn new_debug_executor(
             let key_manager =
                 DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .unwrap()
-                    .map(|key_manager| Arc::new(key_manager));
+                    .map(Arc::new);
             let cache = cfg.storage.block_cache.build_shared_cache();
             let shared_block_cache = cache.is_some();
             let env = get_env(key_manager, None).unwrap();
@@ -487,7 +487,7 @@ trait DebugExecutor {
     ) {
         self.check_local_mode();
         let rpc_client =
-            RpcClient::new(cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+            RpcClient::new(cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let regions = region_ids
             .into_iter()
@@ -528,7 +528,7 @@ trait DebugExecutor {
     ) {
         self.check_local_mode();
         let rpc_client =
-            RpcClient::new(cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+            RpcClient::new(cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let regions = region_ids
             .into_iter()
@@ -924,8 +924,8 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     }
 
     fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
-        let rpc_client =
-            RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+        let rpc_client = RpcClient::new(pd_cfg, None, mgr)
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let mut region = match block_on(rpc_client.get_region_by_id(region_id)) {
             Ok(Some(region)) => region,
@@ -2027,7 +2027,7 @@ fn main() {
         let from = unescape(matches.value_of("from").unwrap());
         let to = matches
             .value_of("to")
-            .map_or_else(|| vec![], |to| unescape(to));
+            .map_or_else(Vec::new, |to| unescape(to));
         let limit = matches
             .value_of("limit")
             .map_or(0, |s| s.parse().expect("parse u64"));
@@ -2299,7 +2299,7 @@ fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
     let mut cfg = PdConfig::default();
     cfg.endpoints.push(pd.to_owned());
     cfg.validate().unwrap();
-    RpcClient::new(&cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
+    RpcClient::new(&cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
 }
 
 fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64, key: Vec<u8>) {
@@ -2415,7 +2415,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     args.insert(0, "ldb".to_owned());
     let key_manager = DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
-        .map(|key_manager| Arc::new(key_manager));
+        .map(Arc::new);
     let env = get_env(key_manager, None).unwrap();
     let mut opts = cfg.rocksdb.build_opt();
     opts.set_env(env);
