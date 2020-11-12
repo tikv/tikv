@@ -16,6 +16,8 @@ pub enum EvalType {
     DateTime,
     Duration,
     Json,
+    Enum,
+    Set,
 }
 
 impl EvalType {
@@ -32,6 +34,8 @@ impl EvalType {
             EvalType::DateTime => crate::FieldTypeTp::DateTime,
             EvalType::Duration => crate::FieldTypeTp::Duration,
             EvalType::Json => crate::FieldTypeTp::JSON,
+            EvalType::Enum => crate::FieldTypeTp::Enum,
+            EvalType::Set => crate::FieldTypeTp::Set,
         }
     }
 }
@@ -68,6 +72,8 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
             | crate::FieldTypeTp::Blob
             | crate::FieldTypeTp::VarString
             | crate::FieldTypeTp::String => EvalType::Bytes,
+            crate::FieldTypeTp::Enum => EvalType::Enum,
+            crate::FieldTypeTp::Set => EvalType::Set,
             _ => {
                 // In TiDB, Bit's eval type is Int, but it is not yet supported in TiKV.
                 return Err(crate::DataTypeError::UnsupportedType {
