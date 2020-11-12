@@ -3,11 +3,14 @@
 mod bit_vec;
 mod chunked_vec_bytes;
 mod chunked_vec_common;
+mod chunked_vec_enum;
 mod chunked_vec_json;
+mod chunked_vec_set;
 mod chunked_vec_sized;
 mod logical_rows;
 mod scalar;
 mod vector;
+
 pub use logical_rows::{LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS};
 
 // Concrete eval types without a nullable wrapper.
@@ -15,10 +18,15 @@ pub type Int = i64;
 pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub type BytesRef<'a> = &'a [u8];
-pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
+
+pub use crate::codec::mysql::{
+    json::JsonRef, Decimal, Duration, Enum, EnumRef, Json, JsonType, Set, SetRef, Time as DateTime,
+};
 pub use bit_vec::{BitAndIterator, BitVec};
 pub use chunked_vec_bytes::{BytesGuard, BytesWriter, ChunkedVecBytes, PartialBytesWriter};
+pub use chunked_vec_enum::ChunkedVecEnum;
 pub use chunked_vec_json::ChunkedVecJson;
+pub use chunked_vec_set::ChunkedVecSet;
 pub use chunked_vec_sized::ChunkedVecSized;
 
 // Dynamic eval types.
@@ -92,6 +100,18 @@ impl<'a> AsMySQLBool for JsonRef<'a> {
     }
 }
 
+impl<'a> AsMySQLBool for EnumRef<'a> {
+    fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
+        Ok(!self.is_empty())
+    }
+}
+
+impl<'a> AsMySQLBool for SetRef<'a> {
+    fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
+        Ok(!self.is_empty())
+    }
+}
+
 impl<'a> AsMySQLBool for Option<BytesRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
@@ -102,6 +122,24 @@ impl<'a> AsMySQLBool for Option<BytesRef<'a>> {
 }
 
 impl<'a> AsMySQLBool for Option<JsonRef<'a>> {
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        match self {
+            None => Ok(false),
+            Some(ref v) => v.as_mysql_bool(context),
+        }
+    }
+}
+
+impl<'a> AsMySQLBool for Option<EnumRef<'a>> {
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        match self {
+            None => Ok(false),
+            Some(ref v) => v.as_mysql_bool(context),
+        }
+    }
+}
+
+impl<'a> AsMySQLBool for Option<SetRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -356,6 +394,18 @@ impl<'a> UnsafeRefInto<JsonRef<'static>> for JsonRef<'a> {
     }
 }
 
+impl<'a> UnsafeRefInto<EnumRef<'static>> for EnumRef<'a> {
+    unsafe fn unsafe_into(self) -> EnumRef<'static> {
+        std::mem::transmute(self)
+    }
+}
+
+impl<'a> UnsafeRefInto<SetRef<'static>> for SetRef<'a> {
+    unsafe fn unsafe_into(self) -> SetRef<'static> {
+        std::mem::transmute(self)
+    }
+}
+
 impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     const EVAL_TYPE: EvalType = EvalType::Json;
     type EvaluableType = Json;
@@ -393,6 +443,58 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     #[inline]
     fn from_owned_value(value: &'a Json) -> Self {
         value.as_ref()
+    }
+}
+
+impl<'a> EvaluableRef<'a> for EnumRef<'a> {
+    const EVAL_TYPE: EvalType = EvalType::Int;
+    type EvaluableType = Int;
+    type ChunkedType = &'a ChunkedVecEnum;
+
+    fn borrow_scalar_value(_v: &'a ScalarValue) -> Option<Self> {
+        unimplemented!()
+    }
+
+    fn borrow_scalar_value_ref(_v: ScalarValueRef<'a>) -> Option<Self> {
+        unimplemented!()
+    }
+
+    fn borrow_vector_value(_v: &'a VectorValue) -> Self::ChunkedType {
+        unimplemented!()
+    }
+
+    fn to_owned_value(self) -> Self::EvaluableType {
+        unimplemented!()
+    }
+
+    fn from_owned_value(_value: &'a Self::EvaluableType) -> Self {
+        unimplemented!()
+    }
+}
+
+impl<'a> EvaluableRef<'a> for SetRef<'a> {
+    const EVAL_TYPE: EvalType = EvalType::Int;
+    type EvaluableType = Int;
+    type ChunkedType = &'a ChunkedVecSet;
+
+    fn borrow_scalar_value(_v: &'a ScalarValue) -> Option<Self> {
+        unimplemented!()
+    }
+
+    fn borrow_scalar_value_ref(_v: ScalarValueRef<'a>) -> Option<Self> {
+        unimplemented!()
+    }
+
+    fn borrow_vector_value(_v: &'a VectorValue) -> Self::ChunkedType {
+        unimplemented!()
+    }
+
+    fn to_owned_value(self) -> Self::EvaluableType {
+        unimplemented!()
+    }
+
+    fn from_owned_value(_value: &'a Self::EvaluableType) -> Self {
+        unimplemented!()
     }
 }
 
