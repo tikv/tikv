@@ -28,11 +28,10 @@ fn setup_cfg_controller(cfg: TiKvConfig) -> (GcWorker, ConfigController) {
     let engine = TestEngineBuilder::new().build().unwrap();
     let gc_worker = GcWorker::new(cfg.gc.clone(), Default::default());
     let gc_cfg = AutoGcConfig::new(1);
-    let (_, rx) = channel();
     gc_worker
         .start_auto_gc(
             gc_cfg,
-            MockSafePointProvider { rx },
+            MockSafePointProvider::default(),
             MockRegionInfoProvider::default(),
             engine,
             RaftStoreBlackHole,

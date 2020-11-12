@@ -201,6 +201,13 @@ pub struct MockSafePointProvider {
     pub rx: std::sync::mpsc::Receiver<TimeStamp>,
 }
 
+impl Default for MockSafePointProvider {
+    fn default() -> Self {
+        let (_, rx) = std::sync::mpsc::channel();
+        Self { rx }
+    }
+}
+
 impl GcSafePointProvider for MockSafePointProvider {
     fn get_safe_point(&self) -> Result<TimeStamp> {
         // Error will be ignored by `GcManager`, which is equivalent to that the safe_point
