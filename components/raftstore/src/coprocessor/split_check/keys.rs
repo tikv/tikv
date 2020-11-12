@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine_traits::{KvEngine, Range, CfName, CF_DEFAULT, CF_WRITE};
+use engine_traits::{CfName, KvEngine, Range, CF_DEFAULT, CF_WRITE};
 use error_code::ErrorCodeExt;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::marker::PhantomData;
@@ -29,7 +29,7 @@ impl Checker {
         split_threshold: u64,
         batch_split_limit: u64,
         policy: CheckPolicy,
-        cf: CfName
+        cf: CfName,
     ) -> Checker {
         Checker {
             max_keys_count,
@@ -367,7 +367,7 @@ mod tests {
         test_region_approximate_keys_impl(true /*txn*/);
         test_region_approximate_keys_impl(false /*raw*/);
     }
-    
+
     fn test_region_approximate_keys_impl(is_txn: bool) {
         let path = Builder::new()
             .prefix("_test_region_approximate_keys")
@@ -406,7 +406,7 @@ mod tests {
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
         let (cf, range_keys) = get_region_approximate_keys(&db, &region, 0).unwrap();
-        assert_eq!(range_keys, cases.len() as u64);    
+        assert_eq!(range_keys, cases.len() as u64);
         assert_eq!(cf, if is_txn { CF_WRITE } else { CF_DEFAULT });
     }
 

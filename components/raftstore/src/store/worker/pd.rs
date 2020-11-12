@@ -1112,7 +1112,9 @@ where
                     get_region_approximate_size(&self.db, &region, 0).unwrap_or_default()
                 });
                 let approximate_keys = approximate_keys.unwrap_or_else(|| {
-                    get_region_approximate_keys(&self.db, &region, 0).unwrap_or_default().1
+                    get_region_approximate_keys(&self.db, &region, 0)
+                        .unwrap_or_default()
+                        .1
                 });
                 let (
                     read_bytes_delta,

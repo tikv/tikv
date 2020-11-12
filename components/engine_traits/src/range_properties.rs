@@ -6,7 +6,7 @@
 //! which might require the database to be constructed with specific options.
 
 use crate::errors::Result;
-use crate::{Range, CfName};
+use crate::{CfName, Range};
 
 pub trait RangePropertiesExt {
     /// Gets the number of keys in a range.
