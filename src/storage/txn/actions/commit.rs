@@ -111,7 +111,7 @@ pub mod tests {
     #[cfg(test)]
     use crate::storage::txn::tests::{
         must_acquire_pessimistic_lock_for_large_txn, must_prewrite_delete, must_prewrite_lock,
-        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl,
+        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl, must_rollback,
     };
 
     #[cfg(test)]
@@ -126,7 +126,7 @@ pub mod tests {
         commit_ts: impl Into<TimeStamp>,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
@@ -140,8 +140,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
@@ -268,7 +267,6 @@ pub mod tests {
             1,
             ts(60, 1),
             TimeStamp::zero(),
-            false,
         );
         // The min_commit_ts is ts(70, 0) other than ts(60, 1) in prewrite request.
         must_large_txn_locked(&engine, k, ts(60, 0), 100, ts(70, 1), false);

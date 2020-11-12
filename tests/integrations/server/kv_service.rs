@@ -18,7 +18,7 @@ use txn_types::{Key, Lock, LockType};
 fn build_client(cluster: &Cluster<ServerCluster>) -> (TikvClient, Context) {
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
+    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
 
     let env = Arc::new(Environment::new(1));
     let channel = ChannelBuilder::new(env).connect(&addr);
@@ -130,7 +130,7 @@ fn test_async_commit_check_txn_status() {
     client.kv_prewrite(&req).unwrap();
 
     let mut req = CheckTxnStatusRequest::default();
-    req.set_context(ctx.clone());
+    req.set_context(ctx);
     req.set_primary_key(b"key".to_vec());
     req.set_lock_ts(start_ts.into_inner());
     req.set_rollback_if_not_exist(true);
@@ -222,7 +222,7 @@ fn test_prewrite_check_max_commit_ts() {
     assert_eq!(resp.get_min_commit_ts(), 101);
 
     let mut req = PrewriteRequest::default();
-    req.set_context(ctx.clone());
+    req.set_context(ctx);
     req.set_primary_lock(b"k2".to_vec());
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);

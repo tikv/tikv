@@ -616,9 +616,8 @@ impl Snap {
 
             if !plain_file_used(cf_file.cf) {
                 // Reset global seq number.
-                let cf = engine.cf_handle(cf_file.cf)?;
                 engine.validate_sst_for_ingestion(
-                    &cf,
+                    &cf_file.cf,
                     &cf_file.path,
                     cf_file.size,
                     cf_file.checksum,
@@ -635,7 +634,7 @@ impl Snap {
                 sst_importer::prepare_sst_for_ingestion(
                     &cf_file.path,
                     &cf_file.clone_path,
-                    self.mgr.encryption_key_manager.as_ref(),
+                    self.mgr.encryption_key_manager.as_deref(),
                 )?;
             }
         }
@@ -1197,15 +1196,12 @@ impl SnapManager {
                 }
 
                 let is_sending = name.starts_with(SNAP_GEN_PREFIX);
-                let numbers: Vec<u64> = name.split('.').next().map_or_else(
-                    || vec![],
-                    |s| {
-                        s.split('_')
-                            .skip(1)
-                            .filter_map(|s| s.parse().ok())
-                            .collect()
-                    },
-                );
+                let numbers: Vec<u64> = name.split('.').next().map_or_else(Vec::new, |s| {
+                    s.split('_')
+                        .skip(1)
+                        .filter_map(|s| s.parse().ok())
+                        .collect()
+                });
                 if numbers.len() != 3 {
                     error!(
                         "failed to parse snapkey";

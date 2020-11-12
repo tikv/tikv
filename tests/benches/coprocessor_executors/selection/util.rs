@@ -8,13 +8,11 @@ use criterion::measurement::Measurement;
 use tipb::Expr;
 
 use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_normal_executors::{Executor, SelectionExecutor};
-use tidb_query_vec_executors::interface::BatchExecutor;
-use tidb_query_vec_executors::BatchSelectionExecutor;
+use tidb_query_executors::interface::BatchExecutor;
+use tidb_query_executors::BatchSelectionExecutor;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;
-use crate::util::executor_descriptor::selection;
 use crate::util::FixtureBuilder;
 
 pub trait SelectionBencher<M>
@@ -35,38 +33,6 @@ where
     #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
-    }
-}
-
-/// A bencher that will use normal selection executor to bench the giving expressions.
-pub struct NormalBencher;
-
-impl<M> SelectionBencher<M> for NormalBencher
-where
-    M: Measurement,
-{
-    fn name(&self) -> &'static str {
-        "normal"
-    }
-
-    fn bench(&self, b: &mut criterion::Bencher<M>, fb: &FixtureBuilder, exprs: &[Expr]) {
-        crate::util::bencher::NormalNextAllBencher::new(|| {
-            let meta = selection(exprs).take_selection();
-            let src = fb.clone().build_normal_fixture_executor();
-            Box::new(
-                SelectionExecutor::new(
-                    black_box(meta),
-                    black_box(Arc::new(EvalConfig::default())),
-                    black_box(Box::new(src)),
-                )
-                .unwrap(),
-            ) as Box<dyn Executor<StorageStats = Statistics>>
-        })
-        .bench(b);
-    }
-
-    fn box_clone(&self) -> Box<dyn SelectionBencher<M>> {
-        Box::new(Self)
     }
 }
 

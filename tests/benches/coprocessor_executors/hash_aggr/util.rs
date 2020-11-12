@@ -9,14 +9,13 @@ use tipb::Aggregation;
 use tipb::Expr;
 
 use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_normal_executors::{Executor, HashAggExecutor};
-use tidb_query_vec_executors::interface::*;
-use tidb_query_vec_executors::BatchFastHashAggregationExecutor;
-use tidb_query_vec_executors::BatchSlowHashAggregationExecutor;
+use tidb_query_executors::interface::*;
+use tidb_query_executors::BatchFastHashAggregationExecutor;
+use tidb_query_executors::BatchSlowHashAggregationExecutor;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;
-use crate::util::executor_descriptor::hash_aggregate;
+
 use crate::util::FixtureBuilder;
 
 pub trait HashAggrBencher<M>
@@ -43,44 +42,6 @@ where
     #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
-    }
-}
-
-/// A bencher that will use normal hash aggregation executor to bench the giving aggregate
-/// expression.
-pub struct NormalBencher;
-
-impl<M> HashAggrBencher<M> for NormalBencher
-where
-    M: Measurement,
-{
-    fn name(&self) -> &'static str {
-        "normal"
-    }
-
-    fn bench(
-        &self,
-        b: &mut criterion::Bencher<M>,
-        fb: &FixtureBuilder,
-        group_by_expr: &[Expr],
-        aggr_expr: &[Expr],
-    ) {
-        crate::util::bencher::NormalNextAllBencher::new(|| {
-            let meta = hash_aggregate(aggr_expr, group_by_expr).take_aggregation();
-            let src = fb.clone().build_normal_fixture_executor();
-            let ex = HashAggExecutor::new(
-                black_box(meta),
-                black_box(Arc::new(EvalConfig::default())),
-                black_box(Box::new(src)),
-            )
-            .unwrap();
-            Box::new(ex) as Box<dyn Executor<StorageStats = Statistics>>
-        })
-        .bench(b);
-    }
-
-    fn box_clone(&self) -> Box<dyn HashAggrBencher<M>> {
-        Box::new(Self)
     }
 }
 

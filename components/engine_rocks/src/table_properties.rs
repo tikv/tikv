@@ -21,14 +21,15 @@ impl TablePropertiesExt for RocksEngine {
 
     fn get_properties_of_tables_in_range(
         &self,
-        cf: &Self::CFHandle,
+        cf: &str,
         ranges: &[Range],
     ) -> Result<Self::TablePropertiesCollection> {
+        let cf = util::get_cf_handle(self.as_inner(), cf)?;
         // FIXME: extra allocation
         let ranges: Vec<_> = ranges.iter().map(util::range_to_rocks_range).collect();
         let raw = self
             .as_inner()
-            .get_properties_of_tables_in_range_rc(cf.as_inner(), &ranges);
+            .get_properties_of_tables_in_range_rc(cf, &ranges);
         let raw = raw.map_err(Error::Engine)?;
         Ok(RocksTablePropertiesCollection::from_raw(raw))
     }

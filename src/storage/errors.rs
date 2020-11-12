@@ -5,7 +5,9 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 
 use crate::storage::{
-    kv::{self, Error as EngineError, ErrorInner as EngineErrorInner},
+    kv::{
+        self, Error as EngineError, ErrorInner as EngineErrorInner, PerfStatisticsDelta, Statistics,
+    },
     mvcc::{self, Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
@@ -327,28 +329,48 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
 
 pub fn extract_kv_pairs(res: Result<Vec<Result<KvPair>>>) -> Vec<kvrpcpb::KvPair> {
     match res {
-        Ok(res) => res
-            .into_iter()
-            .map(|r| match r {
-                Ok((key, value)) => {
-                    let mut pair = kvrpcpb::KvPair::default();
-                    pair.set_key(key);
-                    pair.set_value(value);
-                    pair
-                }
-                Err(e) => {
-                    let mut pair = kvrpcpb::KvPair::default();
-                    pair.set_error(extract_key_error(&e));
-                    pair
-                }
-            })
-            .collect(),
+        Ok(res) => map_kv_pairs(res),
         Err(e) => {
             let mut pair = kvrpcpb::KvPair::default();
             pair.set_error(extract_key_error(&e));
             vec![pair]
         }
     }
+}
+
+pub fn extract_kv_pairs_and_statistics(
+    res: Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)>,
+) -> (Vec<kvrpcpb::KvPair>, Statistics, PerfStatisticsDelta) {
+    match res {
+        Ok((r, s, ps)) => (map_kv_pairs(r), s, ps),
+        Err(e) => {
+            let mut pair = kvrpcpb::KvPair::default();
+            pair.set_error(extract_key_error(&e));
+            (
+                vec![pair],
+                Statistics::default(),
+                PerfStatisticsDelta::default(),
+            )
+        }
+    }
+}
+
+fn map_kv_pairs(r: Vec<Result<KvPair>>) -> Vec<kvrpcpb::KvPair> {
+    r.into_iter()
+        .map(|r| match r {
+            Ok((key, value)) => {
+                let mut pair = kvrpcpb::KvPair::default();
+                pair.set_key(key);
+                pair.set_value(value);
+                pair
+            }
+            Err(e) => {
+                let mut pair = kvrpcpb::KvPair::default();
+                pair.set_error(extract_key_error(&e));
+                pair
+            }
+        })
+        .collect()
 }
 
 pub fn extract_key_errors(res: Result<Vec<Result<()>>>) -> Vec<kvrpcpb::KeyError> {

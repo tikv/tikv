@@ -30,8 +30,10 @@ use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
+use tikv::storage::Statistics;
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
+use tikv_util::time::Instant;
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
 use crate::endpoint::{OldValueCache, OldValueCallback};
@@ -360,13 +362,12 @@ impl Delegate {
             self.region_id,
             change_data_event,
         );
-        for i in 0..downstreams.len() - 1 {
-            if normal_only && downstreams[i].state.load() != DownstreamState::Normal {
+        for downstream in downstreams {
+            if normal_only && downstream.state.load() != DownstreamState::Normal {
                 continue;
             }
-            downstreams[i].sink_event(change_data_event.clone());
+            downstream.sink_event(change_data_event.clone());
         }
-        downstreams.last().unwrap().sink_event(change_data_event);
     }
 
     /// Install a resolver and return pending downstreams.
@@ -612,8 +613,22 @@ impl Delegate {
 
                     if self.txn_extra_op == TxnExtraOp::ReadOldValue {
                         let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
+                        let start = Instant::now();
+
+                        let mut statistics = Statistics::default();
                         row.old_value =
-                            old_value_cb.borrow_mut()(key, old_value_cache).unwrap_or_default();
+                            old_value_cb.borrow_mut()(key, old_value_cache, &mut statistics)
+                                .unwrap_or_default();
+                        CDC_OLD_VALUE_DURATION_HISTOGRAM
+                            .with_label_values(&["all"])
+                            .observe(start.elapsed().as_secs_f64());
+                        for (cf, cf_details) in statistics.details().iter() {
+                            for (tag, count) in cf_details.iter() {
+                                CDC_OLD_VALUE_SCAN_DETAILS
+                                    .with_label_values(&[*cf, *tag])
+                                    .inc_by(*count as i64);
+                            }
+                        }
                     }
 
                     let occupied = rows.entry(row.key.clone()).or_default();
@@ -724,7 +739,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     row.start_ts = write.start_ts.into_inner();
     row.commit_ts = commit_ts;
     row.key = key.truncate_ts().unwrap().into_raw().unwrap();
-    row.op_type = op_type.into();
+    row.op_type = op_type;
     set_event_row_type(row, r_type);
     if let Some(value) = write.short_value {
         row.value = value;
@@ -750,7 +765,7 @@ fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     let key = Key::from_encoded(key);
     row.start_ts = lock.ts.into_inner();
     row.key = key.into_raw().unwrap();
-    row.op_type = op_type.into();
+    row.op_type = op_type;
     set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {
         row.value = value;
@@ -992,14 +1007,14 @@ mod tests {
         row1.start_ts = 1;
         row1.commit_ts = 0;
         row1.key = b"a".to_vec();
-        row1.op_type = EventRowOpType::Put.into();
+        row1.op_type = EventRowOpType::Put;
         set_event_row_type(&mut row1, EventLogType::Prewrite);
         row1.value = b"b".to_vec();
         let mut row2 = EventRow::default();
         row2.start_ts = 1;
         row2.commit_ts = 2;
         row2.key = b"a".to_vec();
-        row2.op_type = EventRowOpType::Put.into();
+        row2.op_type = EventRowOpType::Put;
         set_event_row_type(&mut row2, EventLogType::Committed);
         row2.value = b"b".to_vec();
         let mut row3 = EventRow::default();

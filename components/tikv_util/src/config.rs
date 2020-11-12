@@ -5,7 +5,7 @@ use std::fmt::{self, Write};
 use std::fs;
 use std::net::{SocketAddrV4, SocketAddrV6};
 use std::ops::{Div, Mul};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::{self, FromStr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
@@ -118,7 +118,7 @@ impl From<OptionReadableSize> for ConfigValue {
 impl Into<OptionReadableSize> for ConfigValue {
     fn into(self) -> OptionReadableSize {
         if let ConfigValue::OptionSize(s) = self {
-            OptionReadableSize(s.map(|v| ReadableSize(v)))
+            OptionReadableSize(s.map(ReadableSize))
         } else {
             panic!("expect: ConfigValue::OptionSize, got: {:?}", self);
         }
@@ -473,7 +473,12 @@ pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
-    let mut path = Path::new(path).canonicalize()?;
+    let path = Path::new(path);
+    let mut path = match path.canonicalize() {
+        Ok(path) => path,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PathBuf::from(path),
+        Err(e) => return Err(Box::new(e) as Box<dyn Error>),
+    };
     if !sub_path.is_empty() {
         path = path.join(Path::new(sub_path));
     }
@@ -1358,7 +1363,7 @@ mod tests {
         );
 
         let path2 = format!("{}", tmp_dir.to_path_buf().join("test2").display());
-        assert!(canonicalize_path(&path2).is_err());
+        assert!(canonicalize_path(&path2).is_ok());
         ensure_dir_exist(&path2).unwrap();
         let res_path2 = canonicalize_path(&path2).unwrap();
         assert_eq!(

@@ -17,7 +17,7 @@ pub trait KvEngine:
     + WriteBatchExt
     + DBOptionsExt
     + CFNamesExt
-    + CFHandleExt
+    + CFOptionsExt
     + ImportExt
     + SstExt
     + TablePropertiesExt
