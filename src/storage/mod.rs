@@ -4520,7 +4520,7 @@ mod tests {
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 100, Context::default()),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                        box mvcc::ErrorInner::TxnNotFound { .. },
                     ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
@@ -4579,7 +4579,7 @@ mod tests {
                 commands::TxnHeartBeat::new(k, 11.into(), 150, Context::default()),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                        box mvcc::ErrorInner::TxnNotFound { .. },
                     ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
