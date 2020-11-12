@@ -6,10 +6,13 @@ use std::{cmp, u64, usize};
 use crate::store::fsm::apply;
 use crate::store::metrics::*;
 use crate::store::{Callback, Config};
+use crate::Result;
 
 use engine_traits::Snapshot;
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::{self, RaftCmdRequest};
+use protobuf::Message;
+use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::MustConsumeVec;
@@ -299,6 +302,127 @@ where
         self.reads.push_front(read);
         self.ready_cnt += 1;
         self.handled_cnt -= 1;
+    }
+}
+
+const UUID_LEN: usize = 16;
+const REQUEST_FLAG: u8 = b'r';
+const LOCKED_FLAG: u8 = b'l';
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReadIndexContext {
+    pub id: Uuid,
+    pub request: Option<raft_cmdpb::ReadIndexRequest>,
+    pub locked: Option<LockInfo>,
+}
+
+impl ReadIndexContext {
+    pub fn parse(bytes: &[u8]) -> Result<ReadIndexContext> {
+        use tikv_util::codec::number::*;
+
+        if bytes.len() < UUID_LEN {
+            return Err(box_err!(
+                "read index context must contain a {} byte long UUID",
+                UUID_LEN
+            ));
+        }
+        let mut res = ReadIndexContext {
+            id: Uuid::from_slice(&bytes[..UUID_LEN]).unwrap(),
+            request: None,
+            locked: None,
+        };
+        let mut bytes = &bytes[UUID_LEN..];
+        while !bytes.is_empty() {
+            match read_u8(&mut bytes).unwrap() {
+                REQUEST_FLAG => {
+                    let len = decode_var_u64(&mut bytes)? as usize;
+                    let mut request = raft_cmdpb::ReadIndexRequest::default();
+                    request.merge_from_bytes(&bytes[..len])?;
+                    bytes = &bytes[len..];
+                    res.request = Some(request);
+                }
+                LOCKED_FLAG => {
+                    let len = decode_var_u64(&mut bytes)? as usize;
+                    let mut locked = LockInfo::default();
+                    locked.merge_from_bytes(&bytes[..len])?;
+                    bytes = &bytes[len..];
+                    res.locked = Some(locked);
+                }
+                // just break for forward compatibility
+                _ => break,
+            }
+        }
+        Ok(res)
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        Self::fields_to_bytes(self.id, self.request.as_ref(), self.locked.as_ref())
+    }
+
+    pub fn fields_to_bytes(
+        id: Uuid,
+        request: Option<&raft_cmdpb::ReadIndexRequest>,
+        locked: Option<&LockInfo>,
+    ) -> Vec<u8> {
+        let request_size = request.map(Message::compute_size);
+        let locked_size = locked.map(Message::compute_size);
+        let field_size = |s: Option<u32>| s.map(|s| 1 + MAX_VAR_U64_LEN + s as usize).unwrap_or(0);
+        let cap = UUID_LEN + field_size(request_size) + field_size(locked_size);
+        let mut b = Vec::with_capacity(cap);
+        b.extend_from_slice(id.as_bytes());
+        if let Some(request) = request {
+            b.push(REQUEST_FLAG);
+            b.encode_var_u64(request_size.unwrap() as u64).unwrap();
+            request.write_to_vec(&mut b).unwrap();
+        }
+        if let Some(locked) = locked {
+            b.push(LOCKED_FLAG);
+            b.encode_var_u64(locked_size.unwrap() as u64).unwrap();
+            locked.write_to_vec(&mut b).unwrap();
+        }
+        b
+    }
+}
+
+#[cfg(test)]
+mod read_index_ctx_tests {
+    use super::*;
+
+    // Test backward compatibility
+    #[test]
+    fn test_single_uuid() {
+        let id = Uuid::new_v4();
+        // We should be able to parse old version context (a single UUID).
+        let ctx = ReadIndexContext::parse(id.as_bytes()).unwrap();
+        assert_eq!(
+            ctx,
+            ReadIndexContext {
+                id,
+                request: None,
+                locked: None,
+            }
+        );
+
+        // Old version TiKV should be able to parse context without lock checking fields.
+        let bytes = ctx.to_bytes();
+        assert_eq!(bytes, id.as_bytes());
+    }
+
+    #[test]
+    fn test_serde_request() {
+        let id = Uuid::new_v4();
+        let mut request = raft_cmdpb::ReadIndexRequest::default();
+        request.set_start_ts(10);
+        let mut locked = LockInfo::default();
+        locked.set_lock_version(5);
+        let ctx = ReadIndexContext {
+            id,
+            request: Some(request),
+            locked: Some(locked),
+        };
+        let bytes = ctx.to_bytes();
+        let parsed_ctx = ReadIndexContext::parse(&bytes).unwrap();
+        assert_eq!(ctx, parsed_ctx);
     }
 }
 
