@@ -15,6 +15,7 @@ pub const ROCKSDB_OLDEST_SNAPSHOT_SEQUENCE: &str = "rocksdb.oldest-snapshot-sequ
 pub const ROCKSDB_NUM_FILES_AT_LEVEL: &str = "rocksdb.num-files-at-level";
 pub const ROCKSDB_NUM_INGESTED_FILES_AT_LEVEL: &str = "rocksdb.num-ingested-files-at-level";
 pub const ROCKSDB_NUM_INGESTED_BYTES_AT_LEVEL: &str = "rocksdb.num-ingested-bytes-at-level";
+pub const ROCKSDB_NUM_TOLERANT_BYTES_AT_LEVEL: &str = "rocksdb.num-tolerant-bytes-at-level";
 pub const ROCKSDB_NUM_IMMUTABLE_MEM_TABLE: &str = "rocksdb.num-immutable-mem-table";
 
 pub const ROCKSDB_TITANDB_NUM_BLOB_FILES_AT_LEVEL: &str = "rocksdb.titandb.num-blob-files-at-level";

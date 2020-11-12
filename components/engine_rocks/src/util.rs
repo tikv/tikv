@@ -164,6 +164,16 @@ pub fn get_cf_num_ingested_bytes_at_level(
     engine.get_property_int_cf(handle, &prop)
 }
 
+/// Gets the number of ingested bytes at given level of given column family.
+pub fn get_cf_num_tolerant_bytes_at_level(
+    engine: &DB,
+    handle: &CFHandle,
+    level: usize,
+) -> Option<u64> {
+    let prop = format!("{}{}", ROCKSDB_NUM_TOLERANT_BYTES_AT_LEVEL, level);
+    engine.get_property_int_cf(handle, &prop)
+}
+
 /// Gets the number of blob files at given level of given column family.
 pub fn get_cf_num_blob_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
     let prop = format!("{}{}", ROCKSDB_TITANDB_NUM_BLOB_FILES_AT_LEVEL, level);
