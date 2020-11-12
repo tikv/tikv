@@ -1083,7 +1083,7 @@ impl Stop for Worker {
 }
 
 impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
-    fn stop(self: Box<Self>) {
+    fn stop(mut self: Box<Self>) {
         self.stop_worker();
     }
 }

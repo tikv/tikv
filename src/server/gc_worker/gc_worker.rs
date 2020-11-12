@@ -149,7 +149,7 @@ impl GcWorker {
     pub fn stop(&self) -> Result<()> {
         self.stop.store(true, Ordering::Release);
         // Stop self.
-        self.worker.lock().unwrap().stop();
+        self.worker.lock().unwrap().stop_worker();
         Ok(())
     }
 
@@ -290,8 +290,8 @@ mod tests {
     use tikv_util::future::paired_future_callback;
     use txn_types::Mutation;
 
-    use crate::server::gc_worker::gc_runner::make_mock_auto_gc_cfg;
-    use crate::server::gc_worker::gc_runner::{MockRegionInfoProvider, MockSafePointProvider};
+    use crate::server::gc_worker::gc_runner::tests::make_mock_auto_gc_cfg;
+    use crate::server::gc_worker::gc_runner::MockRegionInfoProvider;
     use crate::storage::kv::{
         self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
         SnapContext, TestEngineBuilder, WriteData,

@@ -995,7 +995,6 @@ impl Display for GcTask {
 
 #[cfg(test)]
 pub mod tests {
-    use super::super::Result;
     use super::*;
     use crate::storage::Callback;
     use kvproto::metapb;

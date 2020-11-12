@@ -192,7 +192,7 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
         self.scheduler.stop();
     }
 
-    pub fn stop_worker(mut self) {
+    pub fn stop_worker(&mut self) {
         self.stop();
         self.worker.stop()
     }
