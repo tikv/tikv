@@ -810,32 +810,35 @@ mod read_consistency {
         assert!(db.engine.get_value(b"a").unwrap().is_none());
     }
 
-    #[test]
-    fn snapshot_iterator_with_writes() {
-        let db = default_engine();
+    // Both the snapshot and engine iterators maintain read consistency at a
+    // single point in time. It seems the engine iterator is essentially just a
+    // snapshot iterator.
+    fn iterator_with_writes<E, I, IF>(e: &E, i: IF)
+    where E: KvEngine,
+          I: Iterator,
+          IF: Fn(&E) -> I,
+    {
+        e.put(b"a", b"").unwrap();
+        e.put(b"c", b"").unwrap();
 
-        db.engine.put(b"a", b"").unwrap();
-        db.engine.put(b"c", b"").unwrap();
-
-        let snapshot = db.engine.snapshot();
-        let mut iter = snapshot.iterator().unwrap();
+        let mut iter = i(e);
 
         assert!(iter.seek_to_first().unwrap());
         assert_eq!(iter.key(), b"a");
 
-        db.engine.put(b"b", b"").unwrap();
+        e.put(b"b", b"").unwrap();
 
         assert!(iter.next().unwrap());
         assert_eq!(iter.key(), b"c");
-        assert!(db.engine.get_value(b"b").unwrap().is_some());
+        assert!(e.get_value(b"b").unwrap().is_some());
 
-        db.engine.put(b"d", b"").unwrap();
+        e.put(b"d", b"").unwrap();
 
         assert!(!iter.next().unwrap());
-        assert!(db.engine.get_value(b"d").unwrap().is_some());
+        assert!(e.get_value(b"d").unwrap().is_some());
 
-        db.engine.delete(b"a").unwrap();
-        db.engine.delete(b"c").unwrap();
+        e.delete(b"a").unwrap();
+        e.delete(b"c").unwrap();
 
         iter.seek_to_first().unwrap();
         assert_eq!(iter.key(), b"a");
@@ -843,8 +846,20 @@ mod read_consistency {
         assert_eq!(iter.key(), b"c");
         assert!(!iter.next().unwrap());
 
-        assert!(db.engine.get_value(b"a").unwrap().is_none());
-        assert!(db.engine.get_value(b"c").unwrap().is_none());
+        assert!(e.get_value(b"a").unwrap().is_none());
+        assert!(e.get_value(b"c").unwrap().is_none());
+    }
+
+    #[test]
+    fn iterator_with_writes_engine() {
+        let db = default_engine();
+        iterator_with_writes(&db.engine, |e| e.iterator().unwrap());
+    }
+
+    #[test]
+    fn iterator_with_writes_snapshot() {
+        let db = default_engine();
+        iterator_with_writes(&db.engine, |e| e.snapshot().iterator().unwrap());
     }
 }
 
