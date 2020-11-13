@@ -385,7 +385,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let compacted_handler =
             Box::new(move |compacted_event: engine_rocks::RocksCompactedEvent| {
                 let ch = ch.lock().unwrap();
-                let event = StoreMsg::CompactedEvent(compacted_event);
+                let event = StoreMsg::CompactedEvent(Box::new(compacted_event));
                 if let Err(e) = ch.send_control(event) {
                     error!(?e; "send compaction finished event to raftstore failed");
                 }

@@ -192,8 +192,8 @@ impl<C: Transport> Transport for SimulateTransport<C> {
     }
 }
 
-impl<C: RaftStoreRouter<RocksEngine>> StoreRouter<RocksEngine> for SimulateTransport<C> {
-    fn send(&self, msg: StoreMsg<RocksEngine>) -> Result<()> {
+impl<C: RaftStoreRouter<RocksEngine>> StoreRouter for SimulateTransport<C> {
+    fn send(&self, msg: StoreMsg) -> Result<()> {
         StoreRouter::send(&self.ch, msg)
     }
 }

@@ -306,8 +306,8 @@ pub mod test_router {
         }
     }
 
-    impl StoreRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
+    impl StoreRouter for TestRaftStoreRouter {
+        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
@@ -352,10 +352,6 @@ pub mod test_router {
                 status,
             };
             self.significant_send(region_id, msg)
-        }
-
-        fn broadcast_unreachable(&self, store_id: u64) {
-            let _ = self.send_store_msg(StoreMsg::StoreUnreachable { store_id });
         }
 
         fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
