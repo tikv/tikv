@@ -57,21 +57,20 @@ where
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
+pub struct Node<ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
     system: RaftBatchSystem<RocksEngine, ER>,
     has_started: bool,
 
-    pd_client: Arc<C>,
+    pd_client: Arc<dyn PdClient>,
     state: Arc<Mutex<GlobalReplicationState>>,
     bg_worker: Option<Worker>,
 }
 
-impl<C, ER> Node<C, ER>
+impl<ER> Node<ER>
 where
-    C: PdClient,
     ER: RaftEngine,
 {
     /// Creates a new Node.
@@ -79,10 +78,10 @@ where
         system: RaftBatchSystem<RocksEngine, ER>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
-        pd_client: Arc<C>,
+        pd_client: Arc<dyn PdClient>,
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Option<Worker>,
-    ) -> Node<C, ER> {
+    ) -> Node<ER> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {

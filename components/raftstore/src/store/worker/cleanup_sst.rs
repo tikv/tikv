@@ -25,27 +25,20 @@ impl fmt::Display for Task {
     }
 }
 
-pub struct Runner<C, S>
-where
-    S: StoreRouter,
-{
+pub struct Runner {
     store_id: u64,
-    store_router: S,
+    store_router: Box<dyn StoreRouter>,
     importer: Arc<SSTImporter>,
-    pd_client: Arc<C>,
+    pd_client: Arc<dyn PdClient>,
 }
 
-impl<C, S> Runner<C, S>
-where
-    C: PdClient,
-    S: StoreRouter,
-{
+impl Runner {
     pub fn new(
         store_id: u64,
-        store_router: S,
+        store_router: Box<dyn StoreRouter>,
         importer: Arc<SSTImporter>,
-        pd_client: Arc<C>,
-    ) -> Runner<C, S> {
+        pd_client: Arc<dyn PdClient>,
+    ) -> Runner {
         Runner {
             store_id,
             store_router,
@@ -99,11 +92,7 @@ where
     }
 }
 
-impl<C, S> Runnable for Runner<C, S>
-where
-    C: PdClient,
-    S: StoreRouter,
-{
+impl Runnable for Runner {
     type Task = Task;
 
     fn run(&mut self, task: Task) {

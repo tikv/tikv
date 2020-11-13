@@ -428,14 +428,13 @@ where
     }
 }
 
-pub struct Runner<EK, ER, T>
+pub struct Runner<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
 {
     store_id: u64,
-    pd_client: Arc<T>,
+    pd_client: Arc<dyn PdClient>,
     router: RaftRouter<EK, ER>,
     db: EK,
     region_peers: HashMap<u64, PeerStat>,
@@ -453,24 +452,23 @@ where
     concurrency_manager: ConcurrencyManager,
 }
 
-impl<EK, ER, T> Runner<EK, ER, T>
+impl<EK, ER> Runner<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient + 'static,
 {
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
         store_id: u64,
-        pd_client: Arc<T>,
+        pd_client: Arc<dyn PdClient>,
         router: RaftRouter<EK, ER>,
         db: EK,
         scheduler: Scheduler<Task<EK>>,
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
-    ) -> Runner<EK, ER, T> {
+    ) -> Runner<EK, ER> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start(auto_split_controller) {
@@ -541,7 +539,7 @@ where
     fn handle_ask_batch_split(
         router: RaftRouter<EK, ER>,
         scheduler: Scheduler<Task<EK>>,
-        pd_client: Arc<T>,
+        pd_client: Arc<dyn PdClient>,
         mut region: metapb::Region,
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
@@ -820,7 +818,7 @@ where
         let store_id = self.store_id;
 
         let fut = self.pd_client
-            .handle_region_heartbeat_response(self.store_id, move |mut resp| {
+            .handle_region_heartbeat_response(self.store_id, Box::new(move |mut resp| {
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
                 let peer = resp.take_target_peer();
@@ -904,7 +902,7 @@ where
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
-            });
+            }));
         let f = async move {
             match fut.await {
                 Ok(_) => {
@@ -1023,11 +1021,10 @@ where
     }
 }
 
-impl<EK, ER, T> Runnable<Task<EK>> for Runner<EK, ER, T>
+impl<EK, ER> Runnable<Task<EK>> for Runner<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    T: PdClient,
 {
     fn run(&mut self, task: Task<EK>) {
         debug!("executing task"; "task" => %task);

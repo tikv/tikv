@@ -122,10 +122,10 @@ impl LeaderClient {
         }
     }
 
-    pub fn handle_region_heartbeat_response<F>(&self, f: F) -> PdFuture<()>
-    where
-        F: Fn(RegionHeartbeatResponse) + Send + 'static,
-    {
+    pub fn handle_region_heartbeat_response(
+        &self,
+        f: Box<dyn Fn(RegionHeartbeatResponse) + Send + 'static>,
+    ) -> PdFuture<()> {
         let recv = HeartbeatReceiver {
             receiver: None,
             inner: Arc::clone(&self.inner),

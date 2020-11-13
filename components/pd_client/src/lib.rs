@@ -189,11 +189,11 @@ pub trait PdClient: Send + Sync {
     /// Gets a stream of Region heartbeat response.
     ///
     /// Please note that this method should only be called once.
-    fn handle_region_heartbeat_response<F>(&self, _store_id: u64, _f: F) -> PdFuture<()>
-    where
-        Self: Sized,
-        F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
-    {
+    fn handle_region_heartbeat_response(
+        &self,
+        _store_id: u64,
+        _f: Box<dyn Fn(pdpb::RegionHeartbeatResponse) + Send + 'static>,
+    ) -> PdFuture<()> {
         unimplemented!();
     }
 
@@ -229,11 +229,7 @@ pub trait PdClient: Send + Sync {
     /// Registers a handler to the client, which will be invoked after reconnecting to PD.
     ///
     /// Please note that this method should only be called once.
-    fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, _: F)
-    where
-        Self: Sized,
-    {
-    }
+    fn handle_reconnect(&self, _: Box<dyn Fn() + Sync + Send + 'static>) {}
 
     fn get_gc_safe_point(&self) -> PdFuture<u64> {
         unimplemented!();

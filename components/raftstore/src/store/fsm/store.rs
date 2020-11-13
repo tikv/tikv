@@ -1125,13 +1125,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     }
 
     // TODO: reduce arguments
-    pub fn spawn<T: Transport + 'static, C: PdClient + 'static>(
+    pub fn spawn<T: Transport + 'static>(
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
         engines: Engines<EK, ER>,
         trans: T,
-        pd_client: Arc<C>,
+        pd_client: Arc<dyn PdClient>,
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<EK>>,
         store_meta: Arc<Mutex<StoreMeta>>,
@@ -1177,9 +1177,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let compact_runner = CompactRunner::new(engines.kv.clone());
         let cleanup_sst_runner = CleanupSSTRunner::new(
             meta.get_id(),
-            self.router.clone(),
+            Box::new(self.router.clone()),
             Arc::clone(&importer),
-            Arc::clone(&pd_client),
+            pd_client.clone(),
         );
         let cleanup_runner = CleanupRunner::new(compact_runner, cleanup_sst_runner);
         let cleanup_scheduler = workers
@@ -1216,7 +1216,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();
         if engine.support_write_batch_vec() {
-            self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatchVec>(
+            self.start_system::<T, <EK as WriteBatchExt>::WriteBatchVec>(
                 workers,
                 region_peers,
                 builder,
@@ -1225,7 +1225,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 pd_client,
             )?;
         } else {
-            self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
+            self.start_system::<T, <EK as WriteBatchExt>::WriteBatch>(
                 workers,
                 region_peers,
                 builder,
@@ -1237,14 +1237,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         Ok(())
     }
 
-    fn start_system<T: Transport + 'static, C: PdClient + 'static, W: WriteBatch<EK> + 'static>(
+    fn start_system<T: Transport + 'static, W: WriteBatch<EK> + 'static>(
         &mut self,
         mut workers: Workers<EK>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
         builder: RaftPollerBuilder<EK, ER, T>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
-        pd_client: Arc<C>,
+        pd_client: Arc<dyn PdClient>,
     ) -> Result<()> {
         let engines = builder.engines.clone();
         let cfg = builder.cfg.value().clone();
@@ -1268,12 +1268,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         }
 
         let router = Mutex::new(self.router.clone());
-        pd_client.handle_reconnect(move || {
+        pd_client.handle_reconnect(Box::new(move || {
             router
                 .lock()
                 .unwrap()
                 .broadcast_normal(|| PeerMsg::HeartbeatPd);
-        });
+        }));
 
         let tag = format!("raftstore-{}", store.get_id());
         self.system.spawn(tag, builder);
@@ -1300,7 +1300,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let pd_runner = PdRunner::new(
             store.get_id(),
-            Arc::clone(&pd_client),
+            pd_client,
             self.router.clone(),
             engines.kv,
             workers.pd_worker.scheduler(),
