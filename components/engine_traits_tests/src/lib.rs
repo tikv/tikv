@@ -484,5 +484,74 @@ mod engine_iter {
 
         assert!(!iter.valid().unwrap());
     }
+
+    // When seek finds an exact key then seek_for_prev behaves just like seek
+    #[test]
+    fn seek_for_prev() {
+        let db = default_engine();
+
+        db.engine.put(b"a", b"a").unwrap();
+        db.engine.put(b"b", b"b").unwrap();
+        db.engine.put(b"c", b"c").unwrap();
+
+        let mut iter = db.engine.iterator().unwrap();
+
+        assert!(iter.seek_for_prev(SeekKey::Start).unwrap());
+
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"a");
+
+        assert!(iter.seek_for_prev(SeekKey::End).unwrap());
+
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"c");
+
+        assert!(iter.seek_for_prev(SeekKey::Key(b"c")).unwrap());
+
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"c");
+    }
+
+    // When Seek::Key doesn't find an exact match,
+    // it still might succeed, but its behavior differs
+    // based on whether `seek` or `seek_for_prev` is called.
+    #[test]
+    fn seek_key_miss() {
+        let db = default_engine();
+
+        db.engine.put(b"c", b"c").unwrap();
+
+        let mut iter = db.engine.iterator().unwrap();
+
+        assert!(!iter.valid().unwrap());
+
+        assert!(iter.seek(SeekKey::Key(b"b")).unwrap());
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"c");
+
+        assert!(!iter.seek(SeekKey::Key(b"d")).unwrap());
+        assert!(!iter.valid().unwrap());
+    }
+
+    #[test]
+    fn seek_key_prev_miss() {
+        let db = default_engine();
+
+        db.engine.put(b"c", b"c").unwrap();
+
+        let mut iter = db.engine.iterator().unwrap();
+
+        assert!(!iter.valid().unwrap());
+
+        assert!(iter.seek_for_prev(SeekKey::Key(b"d")).unwrap());
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"c");
+
+        assert!(!iter.seek_for_prev(SeekKey::Key(b"b")).unwrap());
+        assert!(!iter.valid().unwrap());
+    }
 }
 
