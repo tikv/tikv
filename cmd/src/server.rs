@@ -26,6 +26,7 @@ use engine_traits::{
 };
 use fs2::FileExt;
 use futures::executor::block_on;
+use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
@@ -51,6 +52,7 @@ use tikv::{
     coprocessor,
     import::{ImportSSTService, SSTImporter},
     read_pool::{build_yatp_read_pool, ReadPool},
+    server::raftkv::ReplicaReadLockChecker,
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
@@ -59,7 +61,7 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
-        Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
+        Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
     storage::{self, config::StorageConfigManger},
 };
@@ -201,6 +203,7 @@ struct TiKVServer<ER: RaftEngine> {
     to_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
     concurrency_manager: ConcurrencyManager,
+    env: Arc<Environment>,
     background_worker: Worker,
 }
 
@@ -226,7 +229,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             SecurityManager::new(&config.security)
                 .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e)),
         );
-        let pd_client = Self::connect_to_pd_cluster(&mut config, Arc::clone(&security_mgr));
+        let env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(config.server.grpc_concurrency)
+                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
+                .build(),
+        );
+        let pd_client =
+            Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
 
         // Initialize and check config
         let cfg_controller = Self::init_config(config);
@@ -270,6 +280,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             to_stop: vec![],
             lock_files: vec![],
             concurrency_manager,
+            env,
             background_worker,
         }
     }
@@ -313,10 +324,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn connect_to_pd_cluster(
         config: &mut TiKvConfig,
+        env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
     ) -> Arc<RpcClient> {
         let pd_client = Arc::new(
-            RpcClient::new(&config.pd, security_mgr)
+            RpcClient::new(&config.pd, Some(env), security_mgr)
                 .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
         );
 
@@ -553,6 +565,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
+        ReplicaReadLockChecker::new(self.concurrency_manager.clone())
+            .register(self.coprocessor_host.as_mut().unwrap());
+
         // Create snapshot manager, server.
         let snap_path = self
             .store_path
@@ -599,6 +614,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.resolver.clone(),
             snap_mgr.clone(),
             gc_worker.clone(),
+            self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
         )

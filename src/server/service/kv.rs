@@ -32,6 +32,7 @@ use grpcio::{
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
+use kvproto::mpp::*;
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
@@ -909,6 +910,33 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         _ctx: RpcContext<'_>,
         _req: BatchRequest,
         _sink: ServerStreamingSink<BatchResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn dispatch_mpp_task(
+        &mut self,
+        _: RpcContext<'_>,
+        _: DispatchTaskRequest,
+        _: UnarySink<DispatchTaskResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn cancel_mpp_task(
+        &mut self,
+        _: RpcContext<'_>,
+        _: CancelTaskRequest,
+        _: UnarySink<CancelTaskResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn establish_mpp_connection(
+        &mut self,
+        _: RpcContext<'_>,
+        _: EstablishMppConnectionRequest,
+        _: ServerStreamingSink<MppDataPacket>,
     ) {
         unimplemented!()
     }
