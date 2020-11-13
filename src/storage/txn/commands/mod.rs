@@ -131,6 +131,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_min_commit_ts().into(),
                 req.get_max_commit_ts().into(),
                 secondary_keys,
+                req.get_try_one_pc(),
                 req.take_context(),
             )
         } else {
@@ -151,6 +152,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_min_commit_ts().into(),
                 req.get_max_commit_ts().into(),
                 secondary_keys,
+                req.get_try_one_pc(),
                 req.take_context(),
             )
         }
@@ -328,7 +330,7 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
 }
 
 #[derive(Default)]
-struct ReleasedLocks {
+pub(super) struct ReleasedLocks {
     start_ts: TimeStamp,
     commit_ts: TimeStamp,
     hashes: Vec<u64>,
@@ -379,6 +381,10 @@ impl ReleasedLocks {
                 self.pessimistic = lock.pessimistic;
             }
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.hashes.is_empty()
     }
 
     // Wake up pessimistic transactions that waiting for these locks.
@@ -452,7 +458,6 @@ pub struct WriteContext<'a, L: LockManager> {
     pub concurrency_manager: ConcurrencyManager,
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
-    pub pipelined_pessimistic_lock: bool,
     pub async_apply_prewrite: bool,
 }
 
@@ -606,4 +611,209 @@ pub trait ReadCommand<S: Snapshot>: CommandExt {
 
 pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult>;
+}
+
+#[cfg(test)]
+pub mod test_util {
+    use super::*;
+
+    use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+    use crate::storage::txn::{Error, ErrorInner, Result};
+    use crate::storage::DummyLockManager;
+    use crate::storage::Engine;
+    use txn_types::Mutation;
+
+    // Some utils for tests that may be used in multiple source code files.
+
+    pub fn prewrite<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        mutations: Vec<Mutation>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        one_pc_max_commit_ts: Option<u64>,
+    ) -> Result<()> {
+        let cm = ConcurrencyManager::new(start_ts.into());
+        prewrite_with_cm(
+            engine,
+            cm,
+            statistics,
+            mutations,
+            primary,
+            start_ts,
+            one_pc_max_commit_ts,
+        )
+    }
+
+    pub fn prewrite_with_cm<E: Engine>(
+        engine: &E,
+        cm: ConcurrencyManager,
+        statistics: &mut Statistics,
+        mutations: Vec<Mutation>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        one_pc_max_commit_ts: Option<u64>,
+    ) -> Result<()> {
+        let snap = engine.snapshot(Default::default())?;
+        let cmd = if let Some(max_commit_ts) = one_pc_max_commit_ts {
+            Prewrite::with_1pc(
+                mutations,
+                primary,
+                TimeStamp::from(start_ts),
+                max_commit_ts.into(),
+            )
+        } else {
+            Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts))
+        };
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager: cm,
+            extra_op: ExtraOp::Noop,
+            statistics,
+            async_apply_prewrite: false,
+        };
+        let ret = cmd.cmd.process_write(snap, context)?;
+        if let ProcessResult::PrewriteResult {
+            result: PrewriteResult { locks, .. },
+        } = ret.pr
+        {
+            if !locks.is_empty() {
+                let info = LockInfo::default();
+                return Err(Error::from(ErrorInner::Mvcc(MvccError::from(
+                    MvccErrorInner::KeyIsLocked(info),
+                ))));
+            }
+        }
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
+    }
+
+    pub fn pessimsitic_prewrite<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        mutations: Vec<(Mutation, bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
+        one_pc_max_commit_ts: Option<u64>,
+    ) -> Result<()> {
+        let cm = ConcurrencyManager::new(start_ts.into());
+        pessimsitic_prewrite_with_cm(
+            engine,
+            cm,
+            statistics,
+            mutations,
+            primary,
+            start_ts,
+            for_update_ts,
+            one_pc_max_commit_ts,
+        )
+    }
+
+    pub fn pessimsitic_prewrite_with_cm<E: Engine>(
+        engine: &E,
+        cm: ConcurrencyManager,
+        statistics: &mut Statistics,
+        mutations: Vec<(Mutation, bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
+        one_pc_max_commit_ts: Option<u64>,
+    ) -> Result<()> {
+        let snap = engine.snapshot(Default::default())?;
+        let cmd = if let Some(max_commit_ts) = one_pc_max_commit_ts {
+            PrewritePessimistic::with_1pc(
+                mutations,
+                primary,
+                start_ts.into(),
+                for_update_ts.into(),
+                max_commit_ts.into(),
+            )
+        } else {
+            PrewritePessimistic::with_defaults(
+                mutations,
+                primary,
+                start_ts.into(),
+                for_update_ts.into(),
+            )
+        };
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager: cm,
+            extra_op: ExtraOp::Noop,
+            statistics,
+            async_apply_prewrite: false,
+        };
+        let ret = cmd.cmd.process_write(snap, context)?;
+        if let ProcessResult::PrewriteResult {
+            result: PrewriteResult { locks, .. },
+        } = ret.pr
+        {
+            if !locks.is_empty() {
+                let info = LockInfo::default();
+                return Err(Error::from(ErrorInner::Mvcc(MvccError::from(
+                    MvccErrorInner::KeyIsLocked(info),
+                ))));
+            }
+        }
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
+    }
+
+    pub fn commit<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        keys: Vec<Key>,
+        lock_ts: u64,
+        commit_ts: u64,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snap = engine.snapshot(Default::default())?;
+        let concurrency_manager = ConcurrencyManager::new(lock_ts.into());
+        let cmd = Commit::new(
+            keys,
+            TimeStamp::from(lock_ts),
+            TimeStamp::from(commit_ts),
+            ctx,
+        );
+
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager,
+            extra_op: ExtraOp::Noop,
+            statistics,
+            async_apply_prewrite: false,
+        };
+
+        let ret = cmd.cmd.process_write(snap, context)?;
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
+    }
+
+    pub fn rollback<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        keys: Vec<Key>,
+        start_ts: u64,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snap = engine.snapshot(Default::default())?;
+        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
+        let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager,
+            extra_op: ExtraOp::Noop,
+            statistics,
+            async_apply_prewrite: false,
+        };
+
+        let ret = cmd.cmd.process_write(snap, context)?;
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
+    }
 }

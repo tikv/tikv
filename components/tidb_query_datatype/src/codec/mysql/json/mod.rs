@@ -231,7 +231,7 @@ impl Json {
     /// Creates a new JSON from the type and encoded bytes
     pub fn new(tp: JsonType, value: Vec<u8>) -> Self {
         Self {
-            type_code: tp.into(),
+            type_code: tp,
             value,
         }
     }

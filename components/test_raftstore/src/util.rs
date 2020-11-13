@@ -551,7 +551,7 @@ pub fn create_test_engine(
     let key_manager =
         DataKeyManager::from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
-            .map(|key_manager| Arc::new(key_manager));
+            .map(Arc::new);
 
     let env = get_env(key_manager.clone(), None).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();

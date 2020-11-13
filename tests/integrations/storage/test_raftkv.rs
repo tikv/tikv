@@ -4,16 +4,18 @@ use std::sync::Arc;
 use std::thread;
 use std::time;
 
-use kvproto::kvrpcpb::Context;
+use futures::executor::block_on;
+use kvproto::kvrpcpb::{Context, KeyRange};
 use raft::eraftpb::MessageType;
 
 use engine_traits::{CfName, IterOptions, CF_DEFAULT};
 use test_raftstore::*;
 use tikv::storage::kv::*;
+use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::CfStatistics;
 use tikv_util::codec::bytes;
 use tikv_util::HandyRwLock;
-use txn_types::Key;
+use txn_types::{Key, Lock, LockType};
 
 #[test]
 fn test_raftkv() {
@@ -32,12 +34,16 @@ fn test_raftkv() {
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(region.get_peers()[0].clone());
+    let snap_ctx = SnapContext {
+        pb_ctx: &ctx,
+        ..Default::default()
+    };
 
-    get_put(&ctx, &storage);
-    batch(&ctx, &storage);
-    seek(&ctx, &storage);
-    near_seek(&ctx, &storage);
-    cf(&ctx, &storage);
+    get_put(snap_ctx.clone(), &storage);
+    batch(snap_ctx.clone(), &storage);
+    seek(snap_ctx.clone(), &storage);
+    near_seek(snap_ctx.clone(), &storage);
+    cf(snap_ctx, &storage);
     empty_write(&ctx, &storage);
     wrong_context(&ctx, &storage);
     // TODO: test multiple node
@@ -63,16 +69,20 @@ fn test_read_leader_in_lease() {
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader.clone());
+    let snap_ctx = SnapContext {
+        pb_ctx: &ctx,
+        ..Default::default()
+    };
 
     // write some data
-    assert_none(&ctx, &storage, k2);
+    assert_none(snap_ctx.clone(), &storage, k2);
     must_put(&ctx, &storage, k2, v2);
 
     // isolate leader
     cluster.add_send_filter(IsolationFilterFactory::new(leader.get_store_id()));
 
     // leader still in lease, check if can read on leader
-    assert_eq!(can_read(&ctx, &storage, k2, v2), true);
+    assert_eq!(can_read(snap_ctx, &storage, k2, v2), true);
 }
 
 #[test]
@@ -95,10 +105,14 @@ fn test_read_index_on_replica() {
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader.clone());
+    let snap_ctx = SnapContext {
+        pb_ctx: &ctx,
+        ..Default::default()
+    };
 
     // write some data
     let peers = region.get_peers();
-    assert_none(&ctx, &storage, k2);
+    assert_none(snap_ctx, &storage, k2);
     must_put(&ctx, &storage, k2, v2);
 
     // read on follower
@@ -151,10 +165,14 @@ fn test_read_on_replica() {
     leader_ctx.set_region_id(region.get_id());
     leader_ctx.set_region_epoch(region.get_region_epoch().clone());
     leader_ctx.set_peer(leader.clone());
+    let leader_snap_ctx = SnapContext {
+        pb_ctx: &leader_ctx,
+        ..Default::default()
+    };
 
     // write some data
     let peers = region.get_peers();
-    assert_none(&leader_ctx, &leader_storage, k2);
+    assert_none(leader_snap_ctx, &leader_storage, k2);
     must_put(&leader_ctx, &leader_storage, k2, v2);
 
     // read on follower
@@ -174,11 +192,15 @@ fn test_read_on_replica() {
     follower_ctx.set_region_epoch(region.get_region_epoch().clone());
     follower_ctx.set_peer(follower_peer.as_ref().unwrap().clone());
     follower_ctx.set_replica_read(true);
+    let follower_snap_ctx = SnapContext {
+        pb_ctx: &follower_ctx,
+        ..Default::default()
+    };
     let follower_storage = cluster.sim.rl().storages[&follower_id].clone();
-    assert_has(&follower_ctx, &follower_storage, k2, v2);
+    assert_has(follower_snap_ctx.clone(), &follower_storage, k2, v2);
 
     must_put(&leader_ctx, &leader_storage, k3, v3);
-    assert_has(&follower_ctx, &follower_storage, k3, v3);
+    assert_has(follower_snap_ctx.clone(), &follower_storage, k3, v3);
 
     cluster.stop_node(follower_id);
     must_put(&leader_ctx, &leader_storage, k4, v4);
@@ -186,7 +208,72 @@ fn test_read_on_replica() {
     let follower_storage = cluster.sim.rl().storages[&follower_id].clone();
     // sleep to ensure the follower has received a heartbeat from the leader
     thread::sleep(time::Duration::from_millis(300));
-    assert_has(&follower_ctx, &follower_storage, k4, v4);
+    assert_has(follower_snap_ctx, &follower_storage, k4, v4);
+}
+
+#[test]
+fn test_read_on_replica_check_memory_locks() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.hibernate_regions = false;
+    cluster.run();
+
+    let raw_key = b"key";
+    let encoded_key = Key::from_raw(raw_key);
+
+    // make sure leader has been elected.
+    assert_eq!(cluster.must_get(raw_key), None);
+
+    let region = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(leader.get_id());
+
+    let lock = Lock::new(
+        LockType::Put,
+        raw_key.to_vec(),
+        10.into(),
+        20000,
+        None,
+        10.into(),
+        1,
+        20.into(),
+    );
+    let guard = block_on(leader_cm.lock_key(&encoded_key));
+    guard.with_lock(|l| *l = Some(lock.clone()));
+
+    // read on follower
+    let mut follower_peer = None;
+    let mut follower_id = 0;
+    let peers = region.get_peers();
+    for p in peers {
+        if p.get_id() != leader.get_id() {
+            follower_id = p.get_id();
+            follower_peer = Some(p.clone());
+            break;
+        }
+    }
+
+    assert!(follower_peer.is_some());
+    let mut follower_ctx = Context::default();
+    follower_ctx.set_region_id(region.get_id());
+    follower_ctx.set_region_epoch(region.get_region_epoch().clone());
+    follower_ctx.set_peer(follower_peer.as_ref().unwrap().clone());
+    follower_ctx.set_replica_read(true);
+    let mut range = KeyRange::default();
+    range.set_start_key(encoded_key.as_encoded().to_vec());
+    let follower_snap_ctx = SnapContext {
+        pb_ctx: &follower_ctx,
+        start_ts: 100.into(),
+        key_ranges: vec![range],
+        ..Default::default()
+    };
+    let follower_storage = cluster.sim.rl().storages[&follower_id].clone();
+    match follower_storage.snapshot(follower_snap_ctx) {
+        Err(Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))))) => {
+            assert_eq!(lock_info, lock.into_lock_info(raw_key.to_vec()))
+        }
+        other => panic!("unexpected result: {:?}", other),
+    }
 }
 
 #[test]
@@ -265,12 +352,12 @@ fn must_delete_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8]) 
     engine.delete_cf(ctx, cf, Key::from_raw(key)).unwrap();
 }
 
-fn assert_has<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
+fn assert_has<E: Engine>(ctx: SnapContext<'_>, engine: &E, key: &[u8], value: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
     assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap().unwrap(), value);
 }
 
-fn can_read<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) -> bool {
+fn can_read<E: Engine>(ctx: SnapContext<'_>, engine: &E, key: &[u8], value: &[u8]) -> bool {
     if let Ok(s) = engine.snapshot(ctx) {
         assert_eq!(s.get(&Key::from_raw(key)).unwrap().unwrap(), value);
         return true;
@@ -278,7 +365,13 @@ fn can_read<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) -> b
     false
 }
 
-fn assert_has_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
+fn assert_has_cf<E: Engine>(
+    ctx: SnapContext<'_>,
+    engine: &E,
+    cf: CfName,
+    key: &[u8],
+    value: &[u8],
+) {
     let snapshot = engine.snapshot(ctx).unwrap();
     assert_eq!(
         snapshot.get_cf(cf, &Key::from_raw(key)).unwrap().unwrap(),
@@ -286,17 +379,17 @@ fn assert_has_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8], v
     );
 }
 
-fn assert_none<E: Engine>(ctx: &Context, engine: &E, key: &[u8]) {
+fn assert_none<E: Engine>(ctx: SnapContext<'_>, engine: &E, key: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
     assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap(), None);
 }
 
-fn assert_none_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8]) {
+fn assert_none_cf<E: Engine>(ctx: SnapContext<'_>, engine: &E, cf: CfName, key: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
     assert_eq!(snapshot.get_cf(cf, &Key::from_raw(key)).unwrap(), None);
 }
 
-fn assert_seek<E: Engine>(ctx: &Context, engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
+fn assert_seek<E: Engine>(ctx: SnapContext<'_>, engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut cursor = snapshot
         .iter(IterOptions::default(), ScanMode::Mixed)
@@ -308,7 +401,7 @@ fn assert_seek<E: Engine>(ctx: &Context, engine: &E, key: &[u8], pair: (&[u8], &
 }
 
 fn assert_seek_cf<E: Engine>(
-    ctx: &Context,
+    ctx: SnapContext<'_>,
     engine: &E,
     cf: CfName,
     key: &[u8],
@@ -348,48 +441,48 @@ fn assert_near_reverse_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pai
     assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 
-fn get_put<E: Engine>(ctx: &Context, engine: &E) {
-    assert_none(ctx, engine, b"x");
-    must_put(ctx, engine, b"x", b"1");
-    assert_has(ctx, engine, b"x", b"1");
-    must_put(ctx, engine, b"x", b"2");
+fn get_put<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
+    assert_none(ctx.clone(), engine, b"x");
+    must_put(ctx.pb_ctx, engine, b"x", b"1");
+    assert_has(ctx.clone(), engine, b"x", b"1");
+    must_put(ctx.pb_ctx, engine, b"x", b"2");
     assert_has(ctx, engine, b"x", b"2");
 }
 
-fn batch<E: Engine>(ctx: &Context, engine: &E) {
+fn batch<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
     engine
         .write(
-            ctx,
+            ctx.pb_ctx,
             WriteData::from_modifies(vec![
                 Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
                 Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
             ]),
         )
         .unwrap();
-    assert_has(ctx, engine, b"x", b"1");
-    assert_has(ctx, engine, b"y", b"2");
+    assert_has(ctx.clone(), engine, b"x", b"1");
+    assert_has(ctx.clone(), engine, b"y", b"2");
 
     engine
         .write(
-            ctx,
+            ctx.pb_ctx,
             WriteData::from_modifies(vec![
                 Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
                 Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
             ]),
         )
         .unwrap();
-    assert_none(ctx, engine, b"y");
+    assert_none(ctx.clone(), engine, b"y");
     assert_none(ctx, engine, b"y");
 }
 
-fn seek<E: Engine>(ctx: &Context, engine: &E) {
-    must_put(ctx, engine, b"x", b"1");
-    assert_seek(ctx, engine, b"x", (b"x", b"1"));
-    assert_seek(ctx, engine, b"a", (b"x", b"1"));
-    must_put(ctx, engine, b"z", b"2");
-    assert_seek(ctx, engine, b"y", (b"z", b"2"));
-    assert_seek(ctx, engine, b"x\x00", (b"z", b"2"));
-    let snapshot = engine.snapshot(ctx).unwrap();
+fn seek<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
+    must_put(ctx.pb_ctx, engine, b"x", b"1");
+    assert_seek(ctx.clone(), engine, b"x", (b"x", b"1"));
+    assert_seek(ctx.clone(), engine, b"a", (b"x", b"1"));
+    must_put(ctx.pb_ctx, engine, b"z", b"2");
+    assert_seek(ctx.clone(), engine, b"y", (b"z", b"2"));
+    assert_seek(ctx.clone(), engine, b"x\x00", (b"z", b"2"));
+    let snapshot = engine.snapshot(ctx.clone()).unwrap();
     let mut iter = snapshot
         .iter(IterOptions::default(), ScanMode::Mixed)
         .unwrap();
@@ -397,14 +490,14 @@ fn seek<E: Engine>(ctx: &Context, engine: &E) {
     assert!(!iter
         .seek(&Key::from_raw(b"z\x00"), &mut statistics)
         .unwrap());
-    must_delete(ctx, engine, b"x");
-    must_delete(ctx, engine, b"z");
+    must_delete(ctx.pb_ctx, engine, b"x");
+    must_delete(ctx.pb_ctx, engine, b"z");
 }
 
-fn near_seek<E: Engine>(ctx: &Context, engine: &E) {
-    must_put(ctx, engine, b"x", b"1");
-    must_put(ctx, engine, b"z", b"2");
-    let snapshot = engine.snapshot(ctx).unwrap();
+fn near_seek<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
+    must_put(ctx.pb_ctx, engine, b"x", b"1");
+    must_put(ctx.pb_ctx, engine, b"z", b"2");
+    let snapshot = engine.snapshot(ctx.clone()).unwrap();
     let mut cursor = snapshot
         .iter(IterOptions::default(), ScanMode::Mixed)
         .unwrap();
@@ -418,16 +511,16 @@ fn near_seek<E: Engine>(ctx: &Context, engine: &E) {
     assert!(!cursor
         .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
         .unwrap());
-    must_delete(ctx, engine, b"x");
-    must_delete(ctx, engine, b"z");
+    must_delete(ctx.pb_ctx, engine, b"x");
+    must_delete(ctx.pb_ctx, engine, b"z");
 }
 
-fn cf<E: Engine>(ctx: &Context, engine: &E) {
-    assert_none_cf(ctx, engine, "default", b"key");
-    must_put_cf(ctx, engine, "default", b"key", b"value");
-    assert_has_cf(ctx, engine, "default", b"key", b"value");
-    assert_seek_cf(ctx, engine, "default", b"k", (b"key", b"value"));
-    must_delete_cf(ctx, engine, "default", b"key");
+fn cf<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
+    assert_none_cf(ctx.clone(), engine, "default", b"key");
+    must_put_cf(ctx.pb_ctx, engine, "default", b"key", b"value");
+    assert_has_cf(ctx.clone(), engine, "default", b"key", b"value");
+    assert_seek_cf(ctx.clone(), engine, "default", b"k", (b"key", b"value"));
+    must_delete_cf(ctx.pb_ctx, engine, "default", b"key");
     assert_none_cf(ctx, engine, "default", b"key");
 }
 

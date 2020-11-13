@@ -49,6 +49,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
                 TimeStamp::default(),
                 TimeStamp::default(),
                 Some(vec![]),
+                false,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -101,6 +102,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
                 TimeStamp::default(),
                 TimeStamp::default(),
                 Some(vec![]),
+                false,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -142,6 +144,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
                 TimeStamp::default(),
                 TimeStamp::default(),
                 Some(vec![]),
+                false,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -151,7 +154,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
         .unwrap();
 
     // The prewritten lock is not seen by the reader
-    assert_eq!(block_on(get_fut).unwrap(), None);
+    assert_eq!(block_on(get_fut).unwrap().0, None);
     // But we make sure in this case min_commit_ts is greater than start_ts.
     let res = prewrite_rx.recv().unwrap().unwrap();
     assert_eq!(res.min_commit_ts, 101.into());
@@ -190,6 +193,7 @@ macro_rules! lock_release_test {
                         TimeStamp::default(),
                         TimeStamp::default(),
                         Some(vec![]),
+                        false,
                         Context::default(),
                     ),
                     Box::new(move |res| {
@@ -266,6 +270,7 @@ fn test_no_memory_locks_after_max_commit_ts_error() {
                 TimeStamp::default(),
                 100.into(),
                 Some(vec![b"k2".to_vec()]),
+                false,
                 Context::default(),
             ),
             Box::new(move |res| {

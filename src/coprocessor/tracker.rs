@@ -3,8 +3,9 @@
 use kvproto::kvrpcpb;
 use kvproto::kvrpcpb::ScanDetailV2;
 
-use crate::storage::kv::{PerfStatisticsDelta, PerfStatisticsInstant};
+use crate::storage::kv::PerfStatisticsDelta;
 
+use engine_rocks::set_perf_level;
 use tikv_util::time::{self, Duration, Instant};
 
 use super::metrics::*;
@@ -46,7 +47,6 @@ enum TrackerState {
 pub struct Tracker {
     request_begin_at: Instant,
     item_begin_at: Instant,
-    perf_statistics_start: Option<PerfStatisticsInstant>, // The perf statistics when handle begins
 
     // Intermediate results
     current_stage: TrackerState,
@@ -73,8 +73,6 @@ impl Tracker {
         Tracker {
             request_begin_at: now,
             item_begin_at: now,
-            perf_statistics_start: None,
-
             current_stage: TrackerState::Initialized,
             wait_time: Duration::default(),
             schedule_wait_time: Duration::default(),
@@ -123,12 +121,16 @@ impl Tracker {
             self.current_stage == TrackerState::AllItemsBegan
                 || self.current_stage == TrackerState::ItemFinished
         );
+        set_perf_level(self.req_ctx.perf_level);
         self.item_begin_at = Instant::now_coarse();
-        self.perf_statistics_start = Some(PerfStatisticsInstant::new());
         self.current_stage = TrackerState::ItemBegan;
     }
 
-    pub fn on_finish_item(&mut self, some_storage_stats: Option<Statistics>) {
+    pub fn on_finish_item(
+        &mut self,
+        some_storage_stats: Option<Statistics>,
+        perf_statistics: PerfStatisticsDelta,
+    ) {
         assert_eq!(self.current_stage, TrackerState::ItemBegan);
         self.item_process_time = Instant::now_coarse() - self.item_begin_at;
         self.total_process_time += self.item_process_time;
@@ -136,10 +138,7 @@ impl Tracker {
             self.total_storage_stats.add(&storage_stats);
         }
         // Record delta perf statistics
-        if let Some(perf_stats) = self.perf_statistics_start.take() {
-            // TODO: We should never failed to `take()`?
-            self.total_perf_stats += perf_stats.delta();
-        }
+        self.total_perf_stats += perf_statistics;
         self.current_stage = TrackerState::ItemFinished;
         // TODO: Need to record time between Finish -> Begin Next?
     }
@@ -212,13 +211,14 @@ impl Tracker {
         let total_storage_stats = std::mem::take(&mut self.total_storage_stats);
 
         if time::duration_to_sec(self.req_lifetime) > SLOW_QUERY_LOWER_BOUND {
-            let some_table_id = self.req_ctx.first_range.as_ref().map(|range| {
+            let first_range = self.req_ctx.ranges.first();
+            let some_table_id = first_range.as_ref().map(|range| {
                 tidb_query_datatype::codec::table::decode_table_id(range.get_start())
                     .unwrap_or_default()
             });
 
             info!(#"slow_log", "slow-query";
-                "region_id" => self.req_ctx.context.get_region_id(),
+                "region_id" => &self.req_ctx.context.get_region_id(),
                 "remote_host" => &self.req_ctx.peer,
                 "total_lifetime" => ?self.req_lifetime,
                 "wait_time" => ?self.wait_time,
@@ -232,9 +232,15 @@ impl Tracker {
                 "scan.is_desc" => self.req_ctx.is_desc_scan,
                 "scan.processed" => total_storage_stats.write.processed_keys,
                 "scan.total" => total_storage_stats.write.total_op_count(),
-                "scan.ranges" => self.req_ctx.ranges_len,
-                "scan.range.first" => ?self.req_ctx.first_range,
-                self.total_perf_stats,
+                "scan.ranges" => self.req_ctx.ranges.len(),
+                "scan.range.first" => ?first_range,
+                "perf_stats.block_cache_hit_count" => self.total_perf_stats.0.block_cache_hit_count,
+                "perf_stats.block_read_count" => self.total_perf_stats.0.block_read_count,
+                "perf_stats.block_read_byte" => self.total_perf_stats.0.block_read_byte,
+                "perf_stats.internal_key_skipped_count"
+                    => self.total_perf_stats.0.internal_key_skipped_count,
+                "perf_stats.internal_delete_skipped_count"
+                    => self.total_perf_stats.0.internal_delete_skipped_count,
             );
         }
 
@@ -281,44 +287,9 @@ impl Tracker {
             .processed_keys
             .observe(total_storage_stats.write.processed_keys as f64);
 
-        // RocksDB perf stats
-        COPR_ROCKSDB_PERF_COUNTER_STATIC
-            .get(self.req_ctx.tag)
-            .internal_key_skipped_count
-            .inc_by(self.total_perf_stats.0.internal_key_skipped_count as i64);
-
-        COPR_ROCKSDB_PERF_COUNTER_STATIC
-            .get(self.req_ctx.tag)
-            .internal_delete_skipped_count
-            .inc_by(self.total_perf_stats.0.internal_delete_skipped_count as i64);
-
-        COPR_ROCKSDB_PERF_COUNTER_STATIC
-            .get(self.req_ctx.tag)
-            .block_cache_hit_count
-            .inc_by(self.total_perf_stats.0.block_cache_hit_count as i64);
-
-        COPR_ROCKSDB_PERF_COUNTER_STATIC
-            .get(self.req_ctx.tag)
-            .block_read_count
-            .inc_by(self.total_perf_stats.0.block_read_count as i64);
-
-        COPR_ROCKSDB_PERF_COUNTER_STATIC
-            .get(self.req_ctx.tag)
-            .block_read_byte
-            .inc_by(self.total_perf_stats.0.block_read_byte as i64);
-
-        COPR_ROCKSDB_PERF_COUNTER_STATIC
-            .get(self.req_ctx.tag)
-            .encrypt_data_nanos
-            .inc_by(self.total_perf_stats.0.encrypt_data_nanos as i64);
-
-        COPR_ROCKSDB_PERF_COUNTER_STATIC
-            .get(self.req_ctx.tag)
-            .decrypt_data_nanos
-            .inc_by(self.total_perf_stats.0.decrypt_data_nanos as i64);
-
         tls_collect_scan_details(self.req_ctx.tag, &total_storage_stats);
         tls_collect_read_flow(self.req_ctx.context.get_region_id(), &total_storage_stats);
+        tls_collect_perf_stats(self.req_ctx.tag, &self.total_perf_stats);
 
         let peer = self.req_ctx.context.get_peer();
         let region_id = self.req_ctx.context.get_region_id();
@@ -349,7 +320,7 @@ impl Drop for Tracker {
             self.on_begin_all_items();
         }
         if self.current_stage == TrackerState::ItemBegan {
-            self.on_finish_item(None);
+            self.on_finish_item(None, PerfStatisticsDelta::default());
         }
         if self.current_stage == TrackerState::AllItemsBegan
             || self.current_stage == TrackerState::ItemFinished

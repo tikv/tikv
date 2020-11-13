@@ -7,7 +7,7 @@ use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, ResolveLockReadPhase, ResponsePolicy, TypedCommand,
     WriteCommand, WriteContext, WriteResult,
 };
-use crate::storage::txn::{commit, Error, ErrorInner, Result};
+use crate::storage::txn::{cleanup, commit, Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot};
 use tikv_util::collections::HashMap;
 use txn_types::{Key, Lock, TimeStamp};
@@ -83,7 +83,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 .expect("txn status not found");
 
             let released = if commit_ts.is_zero() {
-                txn.rollback(current_key.clone())?
+                cleanup(&mut txn, current_key.clone(), TimeStamp::zero(), false)?
             } else if commit_ts > current_lock.ts {
                 commit(&mut txn, current_key.clone(), commit_ts)?
             } else {

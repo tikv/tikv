@@ -700,9 +700,7 @@ where
     ];
     if crate::util::bench_level() >= 2 {
         let mut additional_inputs: Vec<Box<dyn util::IntegratedBencher<M>>> = vec![
-            Box::new(util::NormalBencher::<MemStore>::new()),
             Box::new(util::BatchBencher::<MemStore>::new()),
-            Box::new(util::NormalBencher::<RocksStore>::new()),
             Box::new(util::BatchBencher::<RocksStore>::new()),
             Box::new(util::DAGBencher::<MemStore>::new(false)),
             Box::new(util::DAGBencher::<MemStore>::new(true)),
