@@ -27,6 +27,7 @@ pub fn pessimistic_prewrite<S: Snapshot>(
     }
     let mutation_type = mutation.mutation_type();
     let lock_type = LockType::from_mutation(&mutation);
+    let mut fallback_from_async_commit = false;
     let (key, value) = mutation.into_key_value();
 
     fail_point!("pessimistic_prewrite", |err| Err(
@@ -53,12 +54,19 @@ pub fn pessimistic_prewrite<S: Snapshot>(
             return Err(txn
                 .handle_non_pessimistic_lock_conflict(key, lock)
                 .unwrap_err());
-        } else {
-            if lock.lock_type != LockType::Pessimistic {
+        } else if lock.lock_type != LockType::Pessimistic {
+            // Allow to overwrite the primary lock to fallback from async commit.
+            if lock.use_async_commit && secondary_keys.is_none() {
+                info!("fallback from async commit"; "start_ts" => txn.start_ts);
+                fallback_from_async_commit = true;
+                // needn't clear pessimistic locks
+                false
+            } else {
                 // Duplicated command. No need to overwrite the lock and data.
                 MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
                 return Ok(lock.min_commit_ts);
             }
+        } else {
             // The lock is pessimistic and owned by this txn, go through to overwrite it.
             // The ttl and min_commit_ts of the lock may have been pushed forward.
             lock_ttl = std::cmp::max(lock_ttl, lock.ttl);
@@ -88,6 +96,7 @@ pub fn pessimistic_prewrite<S: Snapshot>(
         max_commit_ts,
         try_one_pc,
         has_pessimistic_lock,
+        fallback_from_async_commit,
     )
 }
 
@@ -214,5 +223,51 @@ pub mod tests {
             true,
         )
         .unwrap_err();
+    }
+
+    #[test]
+    fn test_fallback_from_async_commit() {
+        use super::super::tests::*;
+        use crate::storage::mvcc::MvccReader;
+        use kvproto::kvrpcpb::IsolationLevel;
+
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        must_acquire_pessimistic_lock(&engine, b"k", b"k", 10, 10);
+
+        must_pessimistic_prewrite_put_async_commit(
+            &engine,
+            b"k",
+            b"v",
+            b"k",
+            &Some(vec![vec![1]]),
+            10,
+            10,
+            true,
+            20,
+        );
+        must_pessimistic_prewrite_put(&engine, b"k", b"v", b"k", 10, 20, true);
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, false, IsolationLevel::Si);
+        let lock = reader.load_lock(&Key::from_raw(b"k")).unwrap().unwrap();
+        assert!(!lock.use_async_commit);
+        assert!(lock.secondaries.is_empty());
+
+        // deny overwrites with async commit prewrit
+        must_pessimistic_prewrite_put_async_commit(
+            &engine,
+            b"k",
+            b"v",
+            b"k",
+            &Some(vec![vec![1]]),
+            10,
+            10,
+            true,
+            20,
+        );
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, false, IsolationLevel::Si);
+        let lock = reader.load_lock(&Key::from_raw(b"k")).unwrap().unwrap();
+        assert!(!lock.use_async_commit);
+        assert!(lock.secondaries.is_empty());
     }
 }
