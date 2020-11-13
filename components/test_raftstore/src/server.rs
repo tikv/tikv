@@ -21,7 +21,7 @@ use tokio::runtime::Builder as TokioBuilder;
 use super::*;
 use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
@@ -36,7 +36,6 @@ use raftstore::store::{
 };
 use raftstore::Result;
 use security::SecurityManager;
-use tikv::config::{ConfigController, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::read_pool::ReadPool;
@@ -50,6 +49,10 @@ use tikv::server::{
     Server, ServerTransport,
 };
 use tikv::storage;
+use tikv::{
+    config::{ConfigController, TiKvConfig},
+    server::raftkv::ReplicaReadLockChecker,
+};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
@@ -120,13 +123,14 @@ pub struct ServerCluster {
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<AddressMap>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
+    env: Arc<Environment>,
 }
 
 impl ServerCluster {
     pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster {
         let env = Arc::new(
             EnvBuilder::new()
-                .cq_count(1)
+                .cq_count(2)
                 .name_prefix(thd_name!("server-cluster"))
                 .build(),
         );
@@ -135,7 +139,7 @@ impl ServerCluster {
         // We don't actually need to handle snapshot message, just create a dead worker to make it compile.
         let worker = LazyWorker::new("snap-worker");
         let conn_builder = ConnectionBuilder::new(
-            env,
+            env.clone(),
             Arc::default(),
             security_mgr,
             map.clone(),
@@ -155,6 +159,7 @@ impl ServerCluster {
             coprocessor_hooks: HashMap::default(),
             raft_client,
             concurrency_managers: HashMap::default(),
+            env,
         }
     }
 
@@ -261,11 +266,13 @@ impl Simulator for ServerCluster {
         )?;
         self.storages.insert(node_id, raft_engine);
 
+        ReplicaReadLockChecker::new(concurrency_manager.clone()).register(&mut coprocessor_host);
+
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         // Create import service.
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(dir, None).unwrap())
+            Arc::new(SSTImporter::new(dir, key_manager.clone()).unwrap())
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
@@ -293,6 +300,7 @@ impl Simulator for ServerCluster {
             &server_cfg,
             cop_read_pool.handle(),
             concurrency_manager.clone(),
+            PerfLevel::EnableCount,
         );
         let mut server = None;
         // Create Debug service.
@@ -323,6 +331,7 @@ impl Simulator for ServerCluster {
                 resolver.clone(),
                 snap_mgr.clone(),
                 gc_worker.clone(),
+                self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
             )
