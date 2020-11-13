@@ -160,7 +160,7 @@ struct TiKVEngines<ER: RaftEngine> {
 
 struct Servers<ER: RaftEngine> {
     lock_mgr: LockManager,
-    server: Server<resolve::PdStoreAddrResolver>,
+    server: Server,
     node: Node<RpcClient, ER>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
@@ -580,7 +580,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.config.coprocessor.perf_level,
             ),
             self.router.clone(),
-            self.resolver.clone(),
             snap_mgr.clone(),
             gc_worker.clone(),
             self.env.clone(),
@@ -637,7 +636,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         node.start(
             engines.engines.clone(),
-            server.transport(),
+            server.create_transport(&server_config, &self.security_mgr, self.resolver.clone()),
             snap_mgr,
             pd_worker,
             engines.store_meta.clone(),

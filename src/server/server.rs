@@ -44,15 +44,13 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
-pub struct Server<S: StoreAddrResolver + 'static> {
+pub struct Server {
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
     /// If the listening port is configured, the server will be started lazily.
     builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
     local_addr: SocketAddr,
-    // Transport.
-    trans: ServerTransport<S>,
     raft_router: Box<dyn RaftPeerRouter>,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
@@ -67,7 +65,7 @@ pub struct Server<S: StoreAddrResolver + 'static> {
     timer: Handle,
 }
 
-impl<S: StoreAddrResolver + 'static> Server<S> {
+impl Server {
     #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine, L: LockManager, T: RaftStoreRouter<RocksEngine> + Unpin>(
         cfg: &Arc<Config>,
@@ -75,7 +73,6 @@ impl<S: StoreAddrResolver + 'static> Server<S> {
         storage: Storage<E, L>,
         cop: Endpoint<E>,
         raft_router: T,
-        resolver: S,
         snap_mgr: SnapManager,
         gc_worker: GcWorker<E, T>,
         env: Arc<Environment>,
@@ -136,23 +133,10 @@ impl<S: StoreAddrResolver + 'static> Server<S> {
             Either::Left(sb)
         };
 
-        let conn_builder = ConnectionBuilder::new(
-            env.clone(),
-            cfg.clone(),
-            security_mgr.clone(),
-            resolver,
-            Box::new(raft_router.clone()),
-            lazy_worker.scheduler(),
-        );
-        let raft_client = RaftClient::new(conn_builder);
-
-        let trans = ServerTransport::new(raft_client);
-
         let svr = Server {
             env: Arc::clone(&env),
             builder_or_server: Some(builder),
             local_addr: addr,
-            trans,
             raft_router: Box::new(raft_router),
             snap_mgr,
             snap_worker: lazy_worker,
@@ -171,8 +155,23 @@ impl<S: StoreAddrResolver + 'static> Server<S> {
         self.debug_thread_pool.handle()
     }
 
-    pub fn transport(&self) -> ServerTransport<S> {
-        self.trans.clone()
+    pub fn create_transport<S: StoreAddrResolver + 'static>(
+        &self,
+        cfg: &Arc<Config>,
+        security_mgr: &Arc<SecurityManager>,
+        resolver: S,
+    ) -> ServerTransport<S> {
+        let conn_builder = ConnectionBuilder::new(
+            self.env.clone(),
+            cfg.clone(),
+            security_mgr.clone(),
+            resolver,
+            self.raft_router.clone_box(),
+            self.snap_worker.scheduler(),
+        );
+        let raft_client = RaftClient::new(conn_builder);
+
+        ServerTransport::new(raft_client)
     }
 
     /// Register a gRPC service.
@@ -491,10 +490,6 @@ mod tests {
             storage,
             cop,
             router.clone(),
-            MockResolver {
-                quick_fail: Arc::clone(&quick_fail),
-                addr: Arc::clone(&addr),
-            },
             SnapManager::new(""),
             gc_worker,
             env,
@@ -506,7 +501,14 @@ mod tests {
         server.build_and_bind().unwrap();
         server.start(cfg, security_mgr).unwrap();
 
-        let mut trans = server.transport();
+        let mut trans = server.create_transport(
+            &cfg,
+            &security_mgr,
+            MockResolver {
+                quick_fail: Arc::clone(&quick_fail),
+                addr: Arc::clone(&addr),
+            },
+        );
         router.report_unreachable(0, 0).unwrap();
         let mut resp = significant_msg_receiver.try_recv().unwrap();
         assert!(is_unreachable_to(&resp, 0, 0), "{:?}", resp);

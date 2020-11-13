@@ -100,7 +100,7 @@ impl StoreAddrResolver for AddressMap {
 
 struct ServerMeta {
     node: Node<TestPdClient, RocksEngine>,
-    server: Server<PdStoreAddrResolver>,
+    server: Server,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
@@ -328,7 +328,6 @@ impl Simulator for ServerCluster {
                 store.clone(),
                 cop.clone(),
                 sim_router.clone(),
-                resolver.clone(),
                 snap_mgr.clone(),
                 gc_worker.clone(),
                 self.env.clone(),
@@ -361,7 +360,7 @@ impl Simulator for ServerCluster {
         let mut server = server.unwrap();
         let addr = server.listening_addr();
         cfg.server.addr = format!("{}", addr);
-        let trans = server.transport();
+        let trans = server.create_transport(&server_cfg, &security_mgr, resolver.clone());
         let simulate_trans = SimulateTransport::new(trans);
         let server_cfg = Arc::new(cfg.server.clone());
         let apply_router = system.apply_router();
