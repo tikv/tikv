@@ -995,15 +995,22 @@ fn test_async_commit_check_txn_status() {
 
 #[test]
 fn test_read_index_check_memory_locks() {
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.hibernate_regions = false;
     cluster.run();
 
-    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
+    // make sure leader has been elected.
+    assert_eq!(cluster.must_get(b"k"), None);
+
+    let region = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(leader.get_id());
+
     let keys: Vec<_> = vec![b"k", b"l"]
         .into_iter()
         .map(|k| Key::from_raw(k))
         .collect();
-    let guards = block_on(cm.lock_keys(keys.iter()));
+    let guards = block_on(leader_cm.lock_keys(keys.iter()));
     let lock = Lock::new(
         LockType::Put,
         b"k".to_vec(),
@@ -1016,7 +1023,26 @@ fn test_read_index_check_memory_locks() {
     );
     guards[0].with_lock(|l| *l = Some(lock.clone()));
 
-    let (client, ctx) = build_client(&cluster);
+    // read on follower
+    let mut follower_peer = None;
+    let peers = region.get_peers();
+    for p in peers {
+        if p.get_id() != leader.get_id() {
+            follower_peer = Some(p.clone());
+            break;
+        }
+    }
+    let follower_peer = follower_peer.unwrap();
+    let addr = cluster.sim.rl().get_addr(follower_peer.get_store_id());
+
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(follower_peer);
 
     let read_index = |ranges: &[(&[u8], &[u8])]| {
         let mut req = ReadIndexRequest::default();
@@ -1038,17 +1064,17 @@ fn test_read_index_check_memory_locks() {
 
     let (resp, start_ts) = read_index(&[(b"l", b"yz")]);
     assert!(!resp.has_locked());
-    assert_eq!(cm.max_ts(), start_ts);
+    assert_eq!(leader_cm.max_ts(), start_ts);
 
     let (resp, start_ts) = read_index(&[(b"a", b"b"), (b"j", b"k0")]);
     assert_eq!(resp.get_locked(), &lock.into_lock_info(b"k".to_vec()));
-    assert_eq!(cm.max_ts(), start_ts);
+    assert_eq!(leader_cm.max_ts(), start_ts);
 
     drop(guards);
 
     let (resp, start_ts) = read_index(&[(b"a", b"z")]);
     assert!(!resp.has_locked());
-    assert_eq!(cm.max_ts(), start_ts);
+    assert_eq!(leader_cm.max_ts(), start_ts);
 }
 
 #[test]
