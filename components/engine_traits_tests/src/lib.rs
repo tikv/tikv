@@ -247,17 +247,18 @@ mod cf_names {
     }
 }
 
-mod engine_iter {
+mod iterator {
     use super::{default_engine};
-    use engine_traits::{Iterable, Iterator};
+    use engine_traits::{Iterable, Iterator, KvEngine};
     use engine_traits::SeekKey;
-    use engine_traits::SyncMutable;
     use std::panic::{self, AssertUnwindSafe};
 
-    #[test]
-    fn iter_empty() {
-        let db = default_engine();
-        let mut iter = db.engine.iterator().unwrap();
+    fn iter_empty<E, I, IF>(e: &E, i: IF)
+    where E: KvEngine,
+          I: Iterator,
+          IF: Fn(&E) -> I,
+    {
+        let mut iter = i(e);
 
         assert_eq!(iter.valid().unwrap(), false);
 
@@ -283,14 +284,27 @@ mod engine_iter {
     }
 
     #[test]
-    fn iter_forward() {
+    fn iter_empty_engine() {
         let db = default_engine();
+        iter_empty(&db.engine, |e| e.iterator().unwrap());
+    }
 
-        db.engine.put(b"a", b"a").unwrap();
-        db.engine.put(b"b", b"b").unwrap();
-        db.engine.put(b"c", b"c").unwrap();
+    #[test]
+    fn iter_empty_snapshot() {
+        let db = default_engine();
+        iter_empty(&db.engine, |e| e.snapshot().iterator().unwrap());
+    }
 
-        let mut iter = db.engine.iterator().unwrap();
+    fn iter_forward<E, I, IF>(e: &E, i: IF)
+    where E: KvEngine,
+          I: Iterator,
+          IF: Fn(&E) -> I,
+    {
+        e.put(b"a", b"a").unwrap();
+        e.put(b"b", b"b").unwrap();
+        e.put(b"c", b"c").unwrap();
+
+        let mut iter = i(e);
 
         assert!(!iter.valid().unwrap());
 
@@ -325,14 +339,27 @@ mod engine_iter {
     }
 
     #[test]
-    fn iter_reverse() {
+    fn iter_forward_engine() {
         let db = default_engine();
+        iter_forward(&db.engine, |e| e.iterator().unwrap());
+    }
 
-        db.engine.put(b"a", b"a").unwrap();
-        db.engine.put(b"b", b"b").unwrap();
-        db.engine.put(b"c", b"c").unwrap();
+    #[test]
+    fn iter_forward_snapshot() {
+        let db = default_engine();
+        iter_forward(&db.engine, |e| e.snapshot().iterator().unwrap());
+    }
 
-        let mut iter = db.engine.iterator().unwrap();
+    fn iter_reverse<E, I, IF>(e: &E, i: IF)
+    where E: KvEngine,
+          I: Iterator,
+          IF: Fn(&E) -> I,
+    {
+        e.put(b"a", b"a").unwrap();
+        e.put(b"b", b"b").unwrap();
+        e.put(b"c", b"c").unwrap();
+
+        let mut iter = i(e);
 
         assert!(!iter.valid().unwrap());
 
@@ -367,14 +394,27 @@ mod engine_iter {
     }
 
     #[test]
-    fn seek_to_key_then_forward() {
+    fn iter_reverse_engine() {
         let db = default_engine();
+        iter_reverse(&db.engine, |e| e.iterator().unwrap());
+    }
 
-        db.engine.put(b"a", b"a").unwrap();
-        db.engine.put(b"b", b"b").unwrap();
-        db.engine.put(b"c", b"c").unwrap();
+    #[test]
+    fn iter_reverse_snapshot() {
+        let db = default_engine();
+        iter_reverse(&db.engine, |e| e.snapshot().iterator().unwrap());
+    }
 
-        let mut iter = db.engine.iterator().unwrap();
+    fn seek_to_key_then_forward<E, I, IF>(e: &E, i: IF)
+    where E: KvEngine,
+          I: Iterator,
+          IF: Fn(&E) -> I,
+    {
+        e.put(b"a", b"a").unwrap();
+        e.put(b"b", b"b").unwrap();
+        e.put(b"c", b"c").unwrap();
+
+        let mut iter = i(e);
 
         assert!(iter.seek(SeekKey::Key(b"b")).unwrap());
 
@@ -394,14 +434,27 @@ mod engine_iter {
     }
 
     #[test]
-    fn seek_to_key_then_reverse() {
+    fn seek_to_key_then_forward_engine() {
         let db = default_engine();
+        seek_to_key_then_forward(&db.engine, |e| e.iterator().unwrap());
+    }
 
-        db.engine.put(b"a", b"a").unwrap();
-        db.engine.put(b"b", b"b").unwrap();
-        db.engine.put(b"c", b"c").unwrap();
+    #[test]
+    fn seek_to_key_then_forward_snapshot() {
+        let db = default_engine();
+        seek_to_key_then_forward(&db.engine, |e| e.snapshot().iterator().unwrap());
+    }
 
-        let mut iter = db.engine.iterator().unwrap();
+    fn seek_to_key_then_reverse<E, I, IF>(e: &E, i: IF)
+    where E: KvEngine,
+          I: Iterator,
+          IF: Fn(&E) -> I,
+    {
+        e.put(b"a", b"a").unwrap();
+        e.put(b"b", b"b").unwrap();
+        e.put(b"c", b"c").unwrap();
+
+        let mut iter = i(e);
 
         assert!(iter.seek(SeekKey::Key(b"b")).unwrap());
 
@@ -421,14 +474,27 @@ mod engine_iter {
     }
 
     #[test]
-    fn iter_forward_then_reverse() {
+    fn seek_to_key_then_reverse_engine() {
         let db = default_engine();
+        seek_to_key_then_reverse(&db.engine, |e| e.iterator().unwrap());
+    }
 
-        db.engine.put(b"a", b"a").unwrap();
-        db.engine.put(b"b", b"b").unwrap();
-        db.engine.put(b"c", b"c").unwrap();
+    #[test]
+    fn seek_to_key_then_reverse_snapshot() {
+        let db = default_engine();
+        seek_to_key_then_reverse(&db.engine, |e| e.snapshot().iterator().unwrap());
+    }
 
-        let mut iter = db.engine.iterator().unwrap();
+    fn iter_forward_then_reverse<E, I, IF>(e: &E, i: IF)
+    where E: KvEngine,
+          I: Iterator,
+          IF: Fn(&E) -> I,
+    {
+        e.put(b"a", b"a").unwrap();
+        e.put(b"b", b"b").unwrap();
+        e.put(b"c", b"c").unwrap();
+
+        let mut iter = i(e);
 
         assert!(!iter.valid().unwrap());
 
@@ -468,14 +534,27 @@ mod engine_iter {
     }
 
     #[test]
-    fn iter_reverse_then_forward() {
+    fn iter_forward_then_reverse_engine() {
         let db = default_engine();
+        iter_forward_then_reverse(&db.engine, |e| e.iterator().unwrap());
+    }
 
-        db.engine.put(b"a", b"a").unwrap();
-        db.engine.put(b"b", b"b").unwrap();
-        db.engine.put(b"c", b"c").unwrap();
+    #[test]
+    fn iter_forward_then_reverse_snapshot() {
+        let db = default_engine();
+        iter_forward_then_reverse(&db.engine, |e| e.snapshot().iterator().unwrap());
+    }
 
-        let mut iter = db.engine.iterator().unwrap();
+    fn iter_reverse_then_forward<E, I, IF>(e: &E, i: IF)
+    where E: KvEngine,
+          I: Iterator,
+          IF: Fn(&E) -> I,
+    {
+        e.put(b"a", b"a").unwrap();
+        e.put(b"b", b"b").unwrap();
+        e.put(b"c", b"c").unwrap();
+
+        let mut iter = i(e);
 
         assert!(!iter.valid().unwrap());
 
@@ -512,18 +591,31 @@ mod engine_iter {
         assert_eq!(iter.next().unwrap(), false);
 
         assert!(!iter.valid().unwrap());
+    }
+
+    #[test]
+    fn iter_reverse_then_forward_engine() {
+        let db = default_engine();
+        iter_reverse_then_forward(&db.engine, |e| e.iterator().unwrap());
+    }
+
+    #[test]
+    fn iter_reverse_then_forward_snapshot() {
+        let db = default_engine();
+        iter_reverse_then_forward(&db.engine, |e| e.snapshot().iterator().unwrap());
     }
 
     // When seek finds an exact key then seek_for_prev behaves just like seek
-    #[test]
-    fn seek_for_prev() {
-        let db = default_engine();
+    fn seek_for_prev<E, I, IF>(e: &E, i: IF)
+    where E: KvEngine,
+          I: Iterator,
+          IF: Fn(&E) -> I,
+    {
+        e.put(b"a", b"a").unwrap();
+        e.put(b"b", b"b").unwrap();
+        e.put(b"c", b"c").unwrap();
 
-        db.engine.put(b"a", b"a").unwrap();
-        db.engine.put(b"b", b"b").unwrap();
-        db.engine.put(b"c", b"c").unwrap();
-
-        let mut iter = db.engine.iterator().unwrap();
+        let mut iter = i(e);
 
         assert!(iter.seek_for_prev(SeekKey::Start).unwrap());
 
@@ -544,16 +636,29 @@ mod engine_iter {
         assert_eq!(iter.value(), b"c");
     }
 
+    #[test]
+    fn seek_for_prev_engine() {
+        let db = default_engine();
+        seek_for_prev(&db.engine, |e| e.iterator().unwrap());
+    }
+
+    #[test]
+    fn seek_for_prev_snapshot() {
+        let db = default_engine();
+        seek_for_prev(&db.engine, |e| e.snapshot().iterator().unwrap());
+    }
+
     // When Seek::Key doesn't find an exact match,
     // it still might succeed, but its behavior differs
     // based on whether `seek` or `seek_for_prev` is called.
-    #[test]
-    fn seek_key_miss() {
-        let db = default_engine();
+    fn seek_key_miss<E, I, IF>(e: &E, i: IF)
+    where E: KvEngine,
+          I: Iterator,
+          IF: Fn(&E) -> I,
+    {
+        e.put(b"c", b"c").unwrap();
 
-        db.engine.put(b"c", b"c").unwrap();
-
-        let mut iter = db.engine.iterator().unwrap();
+        let mut iter = i(e);
 
         assert!(!iter.valid().unwrap());
 
@@ -566,12 +671,25 @@ mod engine_iter {
     }
 
     #[test]
-    fn seek_key_prev_miss() {
+    fn seek_key_miss_engine() {
         let db = default_engine();
+        seek_key_miss(&db.engine, |e| e.iterator().unwrap());
+    }
 
-        db.engine.put(b"c", b"c").unwrap();
+    #[test]
+    fn seek_key_miss_snapshot() {
+        let db = default_engine();
+        seek_key_miss(&db.engine, |e| e.snapshot().iterator().unwrap());
+    }
 
-        let mut iter = db.engine.iterator().unwrap();
+    fn seek_key_prev_miss<E, I, IF>(e: &E, i: IF)
+    where E: KvEngine,
+          I: Iterator,
+          IF: Fn(&E) -> I,
+    {
+        e.put(b"c", b"c").unwrap();
+
+        let mut iter = i(e);
 
         assert!(!iter.valid().unwrap());
 
@@ -582,24 +700,21 @@ mod engine_iter {
         assert!(!iter.seek_for_prev(SeekKey::Key(b"b")).unwrap());
         assert!(!iter.valid().unwrap());
     }
-}
-
-mod misc {
-    use super::{default_engine};
-    use engine_traits::{KvEngine, SyncMutable, Peekable};
 
     #[test]
-    fn sync_basic() {
+    fn seek_key_prev_miss_engine() {
         let db = default_engine();
-        db.engine.put(b"foo", b"bar").unwrap();
-        db.engine.sync().unwrap();
-        let value = db.engine.get_value(b"foo").unwrap();
-        let value = value.expect("value");
-        assert_eq!(b"bar", &*value);
+        seek_key_prev_miss(&db.engine, |e| e.iterator().unwrap());
+    }
+
+    #[test]
+    fn seek_key_prev_miss_snapshot() {
+        let db = default_engine();
+        seek_key_prev_miss(&db.engine, |e| e.snapshot().iterator().unwrap());
     }
 }
 
-mod snapshot {
+mod snapshot_basic {
     use super::{default_engine, engine_cfs};
     use engine_traits::{KvEngine, SyncMutable, Peekable};
     use engine_traits::{ALL_CFS, CF_WRITE};
@@ -667,3 +782,19 @@ mod snapshot {
     }
 
 }
+
+mod misc {
+    use super::{default_engine};
+    use engine_traits::{KvEngine, SyncMutable, Peekable};
+
+    #[test]
+    fn sync_basic() {
+        let db = default_engine();
+        db.engine.put(b"foo", b"bar").unwrap();
+        db.engine.sync().unwrap();
+        let value = db.engine.get_value(b"foo").unwrap();
+        let value = value.expect("value");
+        assert_eq!(b"bar", &*value);
+    }
+}
+
