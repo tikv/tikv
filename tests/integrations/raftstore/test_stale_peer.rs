@@ -36,6 +36,7 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
     pd_client.must_add_peer(r1, new_peer(2, 2));
     pd_client.must_add_peer(r1, new_learner_peer(3, 3));
     pd_client.must_add_peer(r1, new_peer(3, 3));
