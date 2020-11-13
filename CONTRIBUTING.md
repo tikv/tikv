@@ -149,7 +149,7 @@ The TiKV team actively develops and maintains a bunch of dependencies used in Ti
 - [grpc-rs](https://github.com/tikv/grpc-rs): The gRPC library for Rust built on the gRPC C Core library and Rust Futures
 - [fail-rs](https://github.com/tikv/fail-rs): Fail points for Rust
 
-See more on [TiKV Community](https://github.com/tikv/community).
+See more in [TiKV Community](https://github.com/tikv/community).
 
 ### Format of the commit message
 
