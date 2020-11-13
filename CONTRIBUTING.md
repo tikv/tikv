@@ -90,8 +90,6 @@ cargo fmt
 make clippy
 ```
 
-See [Rustdoc of TiKV](https://tikv.github.io) for TiKV code documentation.
-
 See the [style doc](https://github.com/rust-lang/rfcs/blob/master/style-guide/README.md) and the [API guidelines](https://rust-lang-nursery.github.io/api-guidelines/) for details on the conventions.
 
 Please follow this style to make TiKV easy to review, maintain, and develop.
@@ -132,6 +130,8 @@ This is a rough outline of what a contributor's workflow looks like:
     You do not need to get re-review just for resolving conflicts, but you should request re-review if there are significant changes.
 - Our CI system automatically tests all pull requests.
 - Our bot will merge your PR. It can be summoned by commenting `/merge` or adding the `S: CanMerge` label (requires tests to pass and two approvals. You might have to ask your reviewer to do this).
+
+See [Rustdoc of TiKV](https://tikv.github.io) for TiKV code documentation.
 
 Thanks for your contributions!
 
