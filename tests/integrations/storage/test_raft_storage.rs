@@ -267,6 +267,7 @@ fn test_auto_gc() {
             config.ratio_threshold = 0.9;
             let storage = SyncTestStorageBuilder::from_engine(engine.clone())
                 .gc_config(config)
+                .start_gc(false)
                 .build()
                 .unwrap();
 
@@ -279,13 +280,13 @@ fn test_auto_gc() {
     for (id, storage) in &mut storages {
         let tx = finish_signal_tx.clone();
 
-        let mut cfg = AutoGcConfig::new_test_cfg(
+        let mut cfg = AutoGcConfig::new_test_cfg(*id);
+        cfg.post_a_round_of_gc = Some(Box::new(move || tx.send(()).unwrap()));
+        storage.start_auto_gc(
+            cfg,
             Arc::clone(&pd_client),
             region_info_accessors.remove(id).unwrap(),
-            *id,
         );
-        cfg.post_a_round_of_gc = Some(Box::new(move || tx.send(()).unwrap()));
-        storage.start_auto_gc(cfg);
     }
 
     assert_eq!(storages.len(), count);

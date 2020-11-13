@@ -7,10 +7,8 @@ use kvproto::import_sstpb::SstMeta;
 
 use crate::store::util::is_epoch_stale;
 use crate::store::{StoreMsg, StoreRouter};
-use engine_traits::KvEngine;
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
-use std::marker::PhantomData;
 use tikv_util::worker::Runnable;
 
 pub enum Task {
@@ -27,36 +25,32 @@ impl fmt::Display for Task {
     }
 }
 
-pub struct Runner<EK, C, S>
+pub struct Runner<C, S>
 where
-    EK: KvEngine,
-    S: StoreRouter<EK>,
+    S: StoreRouter,
 {
     store_id: u64,
     store_router: S,
     importer: Arc<SSTImporter>,
     pd_client: Arc<C>,
-    _engine: PhantomData<EK>,
 }
 
-impl<EK, C, S> Runner<EK, C, S>
+impl<C, S> Runner<C, S>
 where
-    EK: KvEngine,
     C: PdClient,
-    S: StoreRouter<EK>,
+    S: StoreRouter,
 {
     pub fn new(
         store_id: u64,
         store_router: S,
         importer: Arc<SSTImporter>,
         pd_client: Arc<C>,
-    ) -> Runner<EK, C, S> {
+    ) -> Runner<C, S> {
         Runner {
             store_id,
             store_router,
             importer,
             pd_client,
-            _engine: PhantomData,
         }
     }
 
@@ -105,11 +99,10 @@ where
     }
 }
 
-impl<EK, C, S> Runnable for Runner<EK, C, S>
+impl<C, S> Runnable for Runner<C, S>
 where
-    EK: KvEngine,
     C: PdClient,
-    S: StoreRouter<EK>,
+    S: StoreRouter,
 {
     type Task = Task;
 

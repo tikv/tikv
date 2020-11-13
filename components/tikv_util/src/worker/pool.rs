@@ -59,6 +59,7 @@ pub trait Runnable: Send {
         unimplemented!()
     }
     fn on_tick(&mut self) {}
+    fn before_start(&mut self) {}
     fn shutdown(&mut self) {}
 }
 
@@ -193,7 +194,7 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
         self.scheduler.stop();
     }
 
-    pub fn stop_worker(mut self) {
+    pub fn stop_worker(&mut self) {
         self.stop();
         self.worker.stop()
     }

@@ -397,7 +397,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let compacted_handler =
             Box::new(move |compacted_event: engine_rocks::RocksCompactedEvent| {
                 let ch = ch.lock().unwrap();
-                let event = StoreMsg::CompactedEvent(compacted_event);
+                let event = StoreMsg::CompactedEvent(Box::new(compacted_event));
                 if let Err(e) = ch.send_control(event) {
                     error!(?e; "send compaction finished event to raftstore failed");
                 }
@@ -431,19 +431,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         });
     }
 
-    fn init_gc_worker(
-        &mut self,
-    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>, RaftRouter<RocksEngine, ER>> {
-        let engines = self.engines.as_ref().unwrap();
-        let mut gc_worker = GcWorker::new(
-            engines.engine.clone(),
-            self.router.clone(),
-            self.config.gc.clone(),
-            self.pd_client.cluster_version(),
-        );
-        gc_worker
-            .start()
-            .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
+    fn init_gc_worker(&mut self) -> GcWorker {
+        let mut gc_worker = GcWorker::new(self.config.gc.clone(), self.pd_client.cluster_version());
         gc_worker
             .start_observe_lock_apply(self.coprocessor_host.as_mut().unwrap())
             .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
@@ -451,13 +440,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         gc_worker
     }
 
-    fn init_servers(
-        &mut self,
-        gc_worker: &GcWorker<
-            RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
-            RaftRouter<RocksEngine, ER>,
-        >,
-    ) -> Arc<ServerConfig> {
+    fn init_servers(&mut self, gc_worker: &GcWorker) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Gc,
@@ -652,13 +635,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         initial_metric(&self.config.metric);
 
         // Start auto gc
-        let auto_gc_config = AutoGcConfig::new(
+        let auto_gc_config = AutoGcConfig::new(node.id());
+
+        let safe_point = match gc_worker.start_auto_gc(
+            auto_gc_config,
             self.pd_client.clone(),
             self.region_info_accessor.clone(),
-            node.id(),
-        );
-
-        let safe_point = match gc_worker.start_auto_gc(auto_gc_config) {
+            engines.engine.clone(),
+            self.router.clone(),
+        ) {
             Err(e) => fatal!("failed to start auto_gc on storage, error: {}", e),
             Ok(safe_point) => safe_point,
         };
@@ -1115,7 +1100,7 @@ impl Stop for Worker {
 }
 
 impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
-    fn stop(self: Box<Self>) {
+    fn stop(mut self: Box<Self>) {
         self.stop_worker();
     }
 }

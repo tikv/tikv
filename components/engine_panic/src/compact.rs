@@ -58,7 +58,7 @@ impl CompactedEvent for PanicCompactedEvent {
     }
 
     fn calc_ranges_declined_bytes(
-        self,
+        &self,
         ranges: &BTreeMap<Vec<u8>, u64>,
         bytes_threshold: u64,
     ) -> Vec<(u64, u64)> {

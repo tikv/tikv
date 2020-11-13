@@ -77,7 +77,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        gc_worker: GcWorker<E, T>,
+        gc_worker: GcWorker,
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
@@ -297,8 +297,8 @@ pub mod test_router {
         }
     }
 
-    impl StoreRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
+    impl StoreRouter for TestRaftStoreRouter {
+        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
@@ -422,13 +422,7 @@ mod tests {
                 .build(),
         );
 
-        let mut gc_worker = GcWorker::new(
-            storage.get_engine(),
-            router.clone(),
-            Default::default(),
-            Default::default(),
-        );
-        gc_worker.start().unwrap();
+        let gc_worker = GcWorker::new(Default::default(), Default::default());
 
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(cfg);

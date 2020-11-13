@@ -4,7 +4,10 @@ use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, GetRequest, LockInfo};
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::router::RaftStoreBlackHole;
-use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
+use tikv::server::gc_worker::{
+    AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker, MockRegionInfoProvider,
+    MockSafePointProvider,
+};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
@@ -22,6 +25,7 @@ pub struct SyncTestStorageBuilder<E: Engine> {
     engine: E,
     config: Option<Config>,
     gc_config: Option<GcConfig>,
+    start_gc: bool,
 }
 
 impl SyncTestStorageBuilder<RocksEngine> {
@@ -30,6 +34,7 @@ impl SyncTestStorageBuilder<RocksEngine> {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: None,
             gc_config: None,
+            start_gc: true,
         }
     }
 }
@@ -40,6 +45,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
             engine,
             config: None,
             gc_config: None,
+            start_gc: true,
         }
     }
 
@@ -53,19 +59,29 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         self
     }
 
+    pub fn start_gc(mut self, start: bool) -> Self {
+        self.start_gc = start;
+        self
+    }
+
     pub fn build(mut self) -> Result<SyncTestStorage<E>> {
         let mut builder =
             TestStorageBuilder::from_engine_and_lock_mgr(self.engine.clone(), DummyLockManager {});
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
-        let mut gc_worker = GcWorker::new(
-            self.engine,
-            RaftStoreBlackHole,
-            self.gc_config.unwrap_or_default(),
-            Default::default(),
-        );
-        gc_worker.start()?;
+        let gc_worker = GcWorker::new(self.gc_config.unwrap_or_default(), Default::default());
+        if self.start_gc {
+            gc_worker
+                .start_auto_gc(
+                    AutoGcConfig::new(1),
+                    MockSafePointProvider::default(),
+                    MockRegionInfoProvider::default(),
+                    self.engine,
+                    RaftStoreBlackHole,
+                )
+                .unwrap();
+        }
 
         Ok(SyncTestStorage {
             store: builder.build()?,
@@ -79,16 +95,26 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 /// Only used for test purpose.
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine> {
-    gc_worker: GcWorker<E, RaftStoreBlackHole>,
+    gc_worker: GcWorker,
     store: Storage<E, DummyLockManager>,
 }
 
 impl<E: Engine> SyncTestStorage<E> {
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider>(
         &mut self,
-        cfg: AutoGcConfig<S, R>,
+        cfg: AutoGcConfig,
+        safe_point_provider: S,
+        region_info_provider: R,
     ) {
-        self.gc_worker.start_auto_gc(cfg).unwrap();
+        self.gc_worker
+            .start_auto_gc(
+                cfg,
+                safe_point_provider,
+                region_info_provider,
+                self.get_engine(),
+                RaftStoreBlackHole,
+            )
+            .unwrap();
     }
 
     pub fn get_storage(&self) -> Storage<E, DummyLockManager> {

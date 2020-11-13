@@ -467,10 +467,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     }
 }
 
-pub enum StoreMsg<EK>
-where
-    EK: KvEngine,
-{
+pub enum StoreMsg {
     RaftMessage(RaftMessage),
 
     ValidateSSTResult {
@@ -488,7 +485,7 @@ where
     },
 
     // Compaction finished event
-    CompactedEvent(EK::CompactedEvent),
+    CompactedEvent(Box<dyn CompactedEvent>),
     Tick(StoreTick),
     Start {
         store: metapb::Store,
@@ -501,10 +498,7 @@ where
     UpdateReplicationMode(ReplicationStatus),
 }
 
-impl<EK> fmt::Debug for StoreMsg<EK>
-where
-    EK: KvEngine,
-{
+impl fmt::Debug for StoreMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
