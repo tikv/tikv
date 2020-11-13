@@ -14,6 +14,8 @@ const MEM_LIMIT_IN_BYTES: &str = "memory.limit_in_bytes";
 const CPU_SUBSYS: &str = "cpu";
 const CPU_QUOTA: &str = "cpu.cfs_quota_us";
 const CPU_PERIOD: &str = "cpu.cfs_period_us";
+const CPUSET_SUBSYS: &str = "cpuset";
+const CPUSET_CPUS: &str = "cpuset.cpus";
 
 const MOUNTINFO_SEP: &str = " ";
 const OPTIONS_SEP: &str = ",";
