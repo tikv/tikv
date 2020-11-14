@@ -7,6 +7,7 @@ use std::time::Duration;
 use grpcio::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
+use tokio::time::delay_for;
 
 use pd_client::{validate_endpoints, Error as PdError, PdClient, RegionStat, RpcClient};
 use raftstore::store;
@@ -28,11 +29,11 @@ async fn test_retry_rpc_client() {
     server.stop();
     let child = tokio::spawn(async move {
         let cfg = new_config(m_eps);
-        assert_eq!(RpcClient::new(&cfg, None, m_mgr).is_ok(), true);
+        assert!(RpcClient::new(&cfg, None, m_mgr).is_ok());
     });
-    tokio::time::delay_for(Duration::from_millis(500)).await;
+    delay_for(Duration::from_millis(500)).await;
     server.start(&mgr, eps);
-    assert_eq!(child.await.is_ok(), true);
+    assert!(child.await.is_ok());
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -60,9 +61,9 @@ async fn test_rpc_client() {
     region.mut_peers().push(peer.clone());
     debug!("bootstrap region {:?}", region);
 
-    client
+    assert!(client
         .bootstrap_cluster(store.clone(), region.clone())
-        .unwrap();
+        .is_ok());
     assert_eq!(client.is_cluster_bootstrapped().unwrap(), true);
 
     let tmp_stores = client.get_all_stores(false).unwrap();
@@ -105,27 +106,27 @@ async fn test_rpc_client() {
         RegionStat::default(),
         None,
     ));
-    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
 
     let region_info = client.get_region_info(region_key).unwrap();
     assert_eq!(region_info.region, region);
     assert_eq!(region_info.leader.unwrap(), peer);
 
-    client
+    assert!(client
         .store_heartbeat(pdpb::StoreStats::default())
         .await
-        .unwrap();
-    client
+        .is_ok());
+    assert!(client
         .ask_batch_split(metapb::Region::default(), 1)
         .await
-        .unwrap();
-    client
+        .is_ok());
+    assert!(client
         .report_batch_split(vec![metapb::Region::default(), metapb::Region::default()])
         .await
-        .unwrap();
+        .is_ok());
 
     let region_info = client.get_region_info(region_key).unwrap();
-    client.scatter_region(region_info).unwrap();
+    assert!(client.scatter_region(region_info).is_ok());
 }
 
 #[tokio::test]
@@ -142,7 +143,7 @@ async fn test_get_tombstone_stores() {
     let region_id = client.alloc_id().unwrap();
     let mut region = metapb::Region::default();
     region.set_id(region_id);
-    client.bootstrap_cluster(store.clone(), region).unwrap();
+    assert!(client.bootstrap_cluster(store.clone(), region).is_ok());
 
     all_stores.push(store);
     assert_eq!(client.is_cluster_bootstrapped().unwrap(), true);
@@ -177,9 +178,9 @@ async fn test_get_tombstone_stores() {
     s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
     assert_eq!(s, all_stores);
 
-    client.get_store(store_id).await.unwrap();
-    client.get_store(99).await.unwrap_err();
-    client.get_store(199).await.unwrap_err();
+    assert!(client.get_store(store_id).await.is_ok());
+    assert!(client.get_store(99).await.is_err());
+    assert!(client.get_store(199).await.is_err());
 }
 
 #[test]
@@ -226,7 +227,7 @@ async fn test_retry() {
     let client = new_client(eps, None);
 
     for _ in 0..3 {
-        client.get_region_by_id(1).await.unwrap();
+        assert!(client.get_region_by_id(1).await.is_ok());
     }
 }
 
@@ -240,7 +241,7 @@ async fn test_not_retry() {
 
     let client = new_client(eps, None);
 
-    client.get_region_by_id(1).await.unwrap_err();
+    assert!(client.get_region_by_id(1).await.is_err());
 }
 
 #[tokio::test]
@@ -280,7 +281,7 @@ async fn restart_leader(mgr: SecurityManager) {
     let mut region = metapb::Region::default();
     region.set_id(region_id);
     region.mut_peers().push(peer);
-    client.bootstrap_cluster(store, region.clone()).unwrap();
+    assert!(client.bootstrap_cluster(store, region.clone()).is_ok());
 
     let region = client
         .get_region_by_id(region.get_id())
@@ -293,7 +294,7 @@ async fn restart_leader(mgr: SecurityManager) {
     server.start(&mgr, eps);
 
     // RECONNECT_INTERVAL_SEC is 1s.
-    tokio::time::delay_for(Duration::from_secs(1)).await;
+    delay_for(Duration::from_secs(1)).await;
 
     let region = client.get_region_by_id(region.get_id()).await.unwrap();
     assert_eq!(region.unwrap().get_id(), region_id);
@@ -335,7 +336,7 @@ async fn test_change_leader_async() {
             assert!(counter.load(Ordering::SeqCst) >= 1);
             return;
         }
-        tokio::time::delay_for(LeaderChange::get_leader_interval()).await;
+        delay_for(LeaderChange::get_leader_interval()).await;
     }
 
     panic!("failed, leader should changed");
@@ -350,7 +351,7 @@ async fn test_region_heartbeat_on_leader_change() {
     let client = new_client(eps, None);
     let (tx, rx) = mpsc::channel();
     tokio::spawn(client.handle_region_heartbeat_response(1, move |resp| {
-        tx.send(resp).unwrap();
+        assert!(tx.send(resp).is_ok());
     }));
     let region = metapb::Region::default();
     let peer = metapb::Peer::default();
@@ -362,12 +363,11 @@ async fn test_region_heartbeat_on_leader_change() {
         stat.clone(),
         None,
     ));
-    rx.recv_timeout(LeaderChange::get_leader_interval())
-        .unwrap();
+    assert!(rx.recv_timeout(LeaderChange::get_leader_interval()).is_ok());
 
-    for count in 1..=2 {
+    for count in &[1, 2] {
         let mut leader = client.get_leader();
-        for _ in 0..count {
+        for _ in 0..*count {
             loop {
                 let _ = client.get_region_by_id(1).await;
                 let new = client.get_leader();
@@ -376,7 +376,7 @@ async fn test_region_heartbeat_on_leader_change() {
                     info!("leader changed!");
                     break;
                 }
-                tokio::time::delay_for(LeaderChange::get_leader_interval()).await;
+                delay_for(LeaderChange::get_leader_interval()).await;
             }
         }
         tokio::spawn(client.region_heartbeat(
@@ -386,8 +386,7 @@ async fn test_region_heartbeat_on_leader_change() {
             stat.clone(),
             None,
         ));
-        rx.recv_timeout(LeaderChange::get_leader_interval())
-            .unwrap();
+        assert!(rx.recv_timeout(LeaderChange::get_leader_interval()).is_ok());
     }
 }
 
@@ -411,7 +410,7 @@ async fn test_periodical_update() {
             assert!(counter.load(Ordering::SeqCst) >= 1);
             return;
         }
-        tokio::time::delay_for(LeaderChange::get_leader_interval()).await;
+        delay_for(LeaderChange::get_leader_interval()).await;
     }
 
     panic!("failed, leader should changed");
@@ -451,16 +450,16 @@ async fn test_cluster_version() {
     // Correct version string.
     set_cluster_version("5.0.0");
     emit_heartbeat().await;
-    assert_eq!(cluster_version.get().unwrap(), v_500,);
+    assert_eq!(cluster_version.get().unwrap(), v_500);
 
     // Version can't go backwards.
     set_cluster_version("4.99");
     emit_heartbeat().await;
-    assert_eq!(cluster_version.get().unwrap(), v_500,);
+    assert_eq!(cluster_version.get().unwrap(), v_500);
 
     // After reconnect the version should be still accessable.
     client.reconnect().unwrap();
-    assert_eq!(cluster_version.get().unwrap(), v_500,);
+    assert_eq!(cluster_version.get().unwrap(), v_500);
 
     // Version can go forwards.
     set_cluster_version("5.0.1");
