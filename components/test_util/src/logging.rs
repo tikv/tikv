@@ -1,11 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::env;
-use std::fmt;
 use std::fs::File;
-use std::io;
 use std::io::prelude::*;
-use std::sync::Mutex;
+use std::sync::{Mutex, Once};
+use std::{env, fmt, io};
 
 use slog::{self, Drain, OwnedKVList, Record};
 
@@ -95,40 +93,43 @@ impl Drop for CaseTraceLogger {
 
 // A help function to initial logger.
 pub fn init_log_for_test() {
-    let output = env::var("LOG_FILE").ok();
-    let level = tikv_util::logger::get_level_by_string(
-        &env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()),
-    )
-    .unwrap();
-    let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
-    // We don't mind set it multiple times.
-    // We hardly ever read rocksdb log in tests.
-    let drainer = CaseTraceLogger {
-        f: writer,
-        skip_tags: vec![
-            "rocksdb_log",
-            "raftdb_log",
-            "rocksdb_log_header",
-            "raftdb_log_header",
-        ],
-    };
+    static START: Once = Once::new();
+    START.call_once(|| {
+        let output = env::var("LOG_FILE").ok();
+        let level = tikv_util::logger::get_level_by_string(
+            &env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()),
+        )
+        .unwrap();
+        let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
+        // We don't mind set it multiple times.
+        // We hardly ever read rocksdb log in tests.
+        let drainer = CaseTraceLogger {
+            f: writer,
+            skip_tags: vec![
+                "rocksdb_log",
+                "raftdb_log",
+                "rocksdb_log_header",
+                "raftdb_log_header",
+            ],
+        };
 
-    // Default disabled log targets for test.
-    let disabled_targets = vec!["tokio_core".to_owned(), "tokio_reactor".to_owned()];
+        // Default disabled log targets for test.
+        let disabled_targets = vec!["tokio_core".to_owned(), "tokio_reactor".to_owned()];
 
-    // CaseTraceLogger relies on test's thread name, however slog_async has
-    // its own thread, and the name is "".
-    // TODO: Enable the slog_async when the [Custom test frameworks][1] is mature,
-    //       and hook the slog_async logger to every test cases.
-    //
-    // [1]: https://github.com/rust-lang/rfcs/blob/master/text/2318-custom-test-frameworks.md
-    tikv_util::logger::init_log(
-        drainer,
-        level,
-        false, // disable async drainer
-        true,  // init std log
-        disabled_targets,
-        0,
-    )
-    .unwrap()
+        // CaseTraceLogger relies on test's thread name, however slog_async has
+        // its own thread, and the name is "".
+        // TODO: Enable the slog_async when the [Custom test frameworks][1] is mature,
+        //       and hook the slog_async logger to every test cases.
+        //
+        // [1]: https://github.com/rust-lang/rfcs/blob/master/text/2318-custom-test-frameworks.md
+        tikv_util::logger::init_log(
+            drainer,
+            level,
+            false, // disable async drainer
+            true,  // init std log
+            disabled_targets,
+            0,
+        )
+        .unwrap();
+    });
 }
