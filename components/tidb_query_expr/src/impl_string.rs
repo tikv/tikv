@@ -1,14 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use regex::Regex;
-
 use std::str;
 use tidb_query_codegen::rpn_fn;
 
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::error::Error;
-use tidb_query_datatype::codec::mysql::{Duration as MyDuration, Time, MAX_FSP};
+use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
 use tidb_query_datatype::expr::EvalContext;
 use tidb_query_datatype::*;
 
@@ -232,12 +230,9 @@ pub fn add_string_and_duration(
     arg1: &Duration,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let s = std::str::from_utf8(arg0).unwrap();
-    if is_duration(s) {
-        let arg0 = match MyDuration::parse(ctx, arg0, MAX_FSP) {
-            Ok(arg0) => arg0,
-            Err(_) => return Ok(writer.write(None)),
-        };
+    let duration = Duration::parse(ctx, arg0, MAX_FSP);
+    if duration.is_ok() {
+        let arg0 = duration.unwrap();
         let overflow = Error::overflow("STRING", &format!("({} - {})", &arg0, &arg1));
         let tmp_dur = arg0.checked_add(*arg1).ok_or(overflow)?;
         let dur = match tmp_dur.subsec_micros() {
@@ -268,12 +263,9 @@ pub fn sub_string_and_duration(
     arg1: &Duration,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let s = std::str::from_utf8(arg0).unwrap();
-    if is_duration(s) {
-        let arg0 = match MyDuration::parse(ctx, arg0, MAX_FSP) {
-            Ok(arg0) => arg0,
-            Err(_) => return Ok(writer.write(None)),
-        };
+    let duration = Duration::parse(ctx, arg0, MAX_FSP);
+    if duration.is_ok() {
+        let arg0 = duration.unwrap();
         let overflow = Error::overflow("STRING", &format!("({} - {})", &arg0, &arg1));
         let tmp_dur = arg0.checked_sub(*arg1).ok_or(overflow)?;
         let dur = match tmp_dur.subsec_micros() {
@@ -294,16 +286,6 @@ pub fn sub_string_and_duration(
         _ => res.maximize_fsp(),
     };
     Ok(writer.write(Some(res.to_string().into_bytes())))
-}
-
-// is_duration returns a boolean indicating whether the str matches the format of duration.
-// See https://dev.mysql.com/doc/refman/5.7/en/time.html
-#[inline]
-fn is_duration(s: &str) -> bool {
-    let re =
-        Regex::new(r"^\s*[-]?(((\d{1,2}\s+)?0*\d{0,3}(:0*\d{1,2}){0,2})|(\d{1,7}))?(\.\d*)?\s*$")
-            .unwrap();
-    re.is_match(s)
 }
 
 // when target_len is 0, return Some(0), means the pad function should return empty string
@@ -1585,25 +1567,6 @@ mod tests {
                 .evaluate(ScalarFuncSig::Rpad)
                 .unwrap();
             assert_eq!(output, expect_output);
-        }
-    }
-
-    #[test]
-    fn test_is_duration() {
-        let cases = vec![
-            ("110:00:00", true),
-            ("aa:bb:cc", false),
-            ("1 01:00:00", true),
-            ("01:00:00.999999", true),
-            ("071231235959.999999", false),
-            ("20171231235959.999999", false),
-            ("2017-01-01 01:01:01.11", false),
-            ("07-12-31 23:59:59.999999", false),
-            ("2007-12-31 23:59:59.999999", false),
-        ];
-        for (arg, exp) in cases {
-            let got = is_duration(arg);
-            assert_eq!(got, exp);
         }
     }
 

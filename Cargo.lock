@@ -4578,7 +4578,6 @@ dependencies = [
  "profiler",
  "protobuf",
  "rand",
- "regex",
  "safemem",
  "static_assertions",
  "tidb_query_codegen",
