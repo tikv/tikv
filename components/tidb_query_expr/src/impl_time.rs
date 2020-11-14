@@ -184,30 +184,18 @@ pub fn sub_datetime_and_duration(
     Ok(Some(res))
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn from_days(ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<DateTime>> {
-    arg.cloned().map_or(Ok(None), |daynr: Int| {
-        let time = DateTime::from_days(ctx, daynr as u32)?;
-        Ok(Some(time))
-    })
+pub fn from_days(ctx: &mut EvalContext, arg: &Int) -> Result<Option<DateTime>> {
+    let time = DateTime::from_days(ctx, *arg as u32)?;
+    Ok(Some(time))
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn make_date(
-    ctx: &mut EvalContext,
-    year: Option<&Int>,
-    day: Option<&Int>,
-) -> Result<Option<DateTime>> {
-    if year.is_none() {
-        return Ok(None);
-    }
-    if day.is_none() {
-        return Ok(None);
-    }
-    let mut year = *year.unwrap();
-    let mut day = *day.unwrap();
+pub fn make_date(ctx: &mut EvalContext, year: &Int, day: &Int) -> Result<Option<DateTime>> {
+    let mut year = *year;
+    let mut day = *day;
     if day <= 0 || year < 0 || year > 9999 || day > 366 * 9999 {
         return Ok(None);
     }
@@ -361,13 +349,9 @@ pub fn period_diff(p1: Option<&Int>, p2: Option<&Int>) -> Result<Option<Int>> {
     }
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn last_day(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<DateTime>> {
-    if t.is_none() {
-        return Ok(None);
-    }
-    let t = t.as_ref().unwrap();
+pub fn last_day(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<DateTime>> {
     if t.month() == 0 {
         return ctx
             .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
