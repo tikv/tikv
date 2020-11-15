@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksWriteBatch};
-use engine_traits::{Mutable, WriteBatchExt};
+use engine_traits::{Mutable, WriteBatchExt, WriteBatch};
 use tempfile::Builder;
 use test::Bencher;
 
@@ -16,7 +16,7 @@ fn writebatch(db: &Arc<DB>, round: usize, batch_keys: usize) {
             let k = format!("key_round{}_key{}", r, i);
             batch.put(k.as_bytes(), v).unwrap();
         }
-        db.c().write(&batch).unwrap()
+        batch.write(db.c()).unwrap()
     }
 }
 

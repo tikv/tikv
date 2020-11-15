@@ -175,7 +175,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_traits::{KvEngine, Mutable, WriteBatchExt, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{KvEngine, Mutable, WriteBatchExt, ALL_CFS, CF_DEFAULT, WriteBatch};
     use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
@@ -208,7 +208,7 @@ mod tests {
             let k = keys::raft_log_key(region_id, i);
             raft_wb.put(&k, b"entry").unwrap();
         }
-        raft_db.write(&raft_wb).unwrap();
+        raft_wb.write(&raft_db).unwrap();
 
         let tbls = vec![
             (Task::gc(region_id, 0, 10), 10, (0, 10), (10, 100)),

@@ -7,6 +7,7 @@ use crate::{util, RocksSstWriter};
 use engine_traits::{
     CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions, Iterable,
     Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder, WriteBatchExt, ALL_CFS,
+    WriteBatch,
 };
 use rocksdb::Range as RocksRange;
 use tikv_util::keybuilder::KeyBuilder;
@@ -88,12 +89,12 @@ impl RocksEngine {
             for key in data.iter() {
                 wb.delete_cf(cf, key)?;
                 if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                    self.write(&wb)?;
+                    wb.write(self)?;
                     wb.clear();
                 }
             }
             if wb.count() > 0 {
-                self.write(&wb)?;
+                wb.write(self)?;
             }
         }
         Ok(())
@@ -114,13 +115,13 @@ impl RocksEngine {
         while it_valid {
             wb.delete_cf(cf, it.key())?;
             if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                self.write(&wb)?;
+                wb.write(self)?;
                 wb.clear();
             }
             it_valid = it.next()?;
         }
         if wb.count() > 0 {
-            self.write(&wb)?;
+            wb.write(self)?;
         }
         self.sync_wal()?;
         Ok(())
@@ -177,7 +178,7 @@ impl MiscExt for RocksEngine {
                 for r in ranges.iter() {
                     wb.delete_range_cf(cf, r.start_key, r.end_key)?;
                 }
-                self.write(&wb)?;
+                wb.write(self)?;
             }
             DeleteStrategy::DeleteByKey => {
                 for r in ranges {
@@ -394,7 +395,7 @@ mod tests {
                 wb.put_cf(cf, k, v).unwrap();
             }
         }
-        db.write(&wb).unwrap();
+        wb.write(&db).unwrap();
         check_data(&db, ALL_CFS, kvs.as_slice());
 
         // Delete all in ranges.
@@ -585,7 +586,7 @@ mod tests {
         for &(k, v) in kvs.as_slice() {
             wb.put_cf(cf, k, v).unwrap();
         }
-        db.write(&wb).unwrap();
+        wb.write(&db).unwrap();
         check_data(&db, &[cf], kvs.as_slice());
 
         // Delete all in ["k2", "k4").

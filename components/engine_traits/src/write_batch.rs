@@ -12,9 +12,7 @@ pub trait WriteBatchExt: Sized {
     const WRITE_BATCH_MAX_KEYS: usize;
 
     fn support_write_batch_vec(&self) -> bool;
-    fn write(&self, wb: &Self::WriteBatch) -> Result<()> {
-        wb.write_opt(self, &WriteOptions::default())
-    }
+
     fn write_batch(&self) -> Self::WriteBatch;
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch;
 }
@@ -49,4 +47,7 @@ pub trait Mutable: Send {
 pub trait WriteBatch<E: WriteBatchExt + Sized>: Mutable {
     fn with_capacity(e: &E, cap: usize) -> Self;
     fn write_opt(&self, e: &E, opts: &WriteOptions) -> Result<()>;
+    fn write(&self, e: &E) -> Result<()> {
+        self.write_opt(e, &WriteOptions::default())
+    }
 }

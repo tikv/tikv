@@ -20,7 +20,7 @@ use encryption::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT, WriteBatch,
 };
 use pd_client::PdClient;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
@@ -1070,8 +1070,8 @@ impl<T: Simulator> Cluster<T> {
             kv_wb.put(k, v).unwrap();
             Ok(true)
         })
-        .unwrap();
-        self.engines[&store_id].kv.write(&kv_wb).unwrap();
+            .unwrap();
+        kv_wb.write(&self.engines[&store_id].kv).unwrap();
     }
 
     pub fn restore_raft(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
@@ -1092,7 +1092,7 @@ impl<T: Simulator> Cluster<T> {
             Ok(true)
         })
         .unwrap();
-        self.engines[&store_id].raft.write(&raft_wb).unwrap();
+        raft_wb.write(&self.engines[&store_id].raft).unwrap();
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {

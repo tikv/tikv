@@ -190,14 +190,14 @@ impl RaftEngine for RocksEngine {
             let key = keys::raft_log_key(raft_group_id, idx);
             raft_wb.delete(&key)?;
             if raft_wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                self.write(&raft_wb)?;
+                raft_wb.write(self)?;
                 raft_wb.clear();
             }
         }
 
         // TODO: disable WAL here.
         if !Mutable::is_empty(&raft_wb) {
-            self.write(&raft_wb)?;
+            raft_wb.write(self)?;
         }
         Ok((to - from) as usize)
     }

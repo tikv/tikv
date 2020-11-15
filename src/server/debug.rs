@@ -1905,12 +1905,12 @@ mod tests {
         for &(cf, ref k, ref v, _) in &kv {
             wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
         }
-        db.c().write(&wb).unwrap();
+        wb.write(db.c()).unwrap();
         // Fix problems.
         let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"l").unwrap();
         let mut wb = db.c().write_batch();
         checker.check_mvcc(&mut wb, None).unwrap();
-        db.c().write(&wb).unwrap();
+        wb.write(db.c()).unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
             let data = db
@@ -1954,7 +1954,7 @@ mod tests {
             let value = key.to_vec();
             wb.put(&data_key, &value).unwrap();
         }
-        debugger.engines.kv.write(&wb).unwrap();
+        wb.write(&debugger.engines.kv).unwrap();
 
         let check = |result: Result<_>, expected: &[&[u8]]| {
             assert_eq!(

@@ -963,7 +963,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         })?;
 
         if !kv_wb.is_empty() {
-            self.engines.kv.write(&kv_wb).unwrap();
+            kv_wb.write(&self.engines.kv).unwrap();
             self.engines.kv.sync_wal().unwrap();
         }
         if !raft_wb.is_empty() {

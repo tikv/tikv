@@ -21,7 +21,7 @@ impl<K: KvEngine, R: RaftEngine> Engines<K, R> {
     }
 
     pub fn write_kv(&self, wb: &K::WriteBatch) -> Result<()> {
-        self.kv.write(wb)
+        wb.write(&self.kv)
     }
 
     pub fn write_kv_opt(&self, wb: &K::WriteBatch, opts: &WriteOptions) -> Result<()> {

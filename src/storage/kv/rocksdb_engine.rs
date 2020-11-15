@@ -13,7 +13,7 @@ use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, ReadOptions, SeekKey,
-    WriteBatchExt,
+    WriteBatchExt, WriteBatch,
 };
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
@@ -267,7 +267,7 @@ pub fn write_modifies(kv_engine: &BaseRocksEngine, modifies: Vec<Modify>) -> Res
             return Err(box_err!("{}", msg));
         }
     }
-    kv_engine.write(&wb)?;
+    wb.write(&kv_engine)?;
     Ok(())
 }
 
