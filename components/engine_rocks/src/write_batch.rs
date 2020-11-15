@@ -71,7 +71,7 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
         e.write_batch_with_cap(cap)
     }
 
-    fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
+    fn write_opt(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
         debug_assert_eq!(
             self.get_db().path(),
             e.as_inner().path(),
@@ -97,7 +97,7 @@ impl Mutable for RocksWriteBatch {
         self.wb.is_empty()
     }
 
-    fn should_write_to_engine(&self) -> bool {
+    fn should_write_opt(&self) -> bool {
         self.wb.count() > RocksEngine::WRITE_BATCH_MAX_KEYS
     }
 
@@ -202,7 +202,7 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
         RocksWriteBatchVec::new(e.as_inner().clone(), WRITE_BATCH_LIMIT, cap)
     }
 
-    fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
+    fn write_opt(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
         debug_assert_eq!(
             self.get_db().path(),
             e.as_inner().path(),
@@ -234,7 +234,7 @@ impl Mutable for RocksWriteBatchVec {
         self.wbs[0].is_empty()
     }
 
-    fn should_write_to_engine(&self) -> bool {
+    fn should_write_opt(&self) -> bool {
         self.index >= WRITE_BATCH_MAX_BATCH
     }
 
@@ -315,7 +315,7 @@ mod tests {
     use tempfile::Builder;
 
     #[test]
-    fn test_should_write_to_engine() {
+    fn test_should_write_opt() {
         let path = Builder::new()
             .prefix("test-should-write-to-engine")
             .tempdir()
@@ -335,17 +335,17 @@ mod tests {
         for _i in 0..RocksEngine::WRITE_BATCH_MAX_KEYS {
             wb.put(b"aaa", b"bbb").unwrap();
         }
-        assert!(!wb.should_write_to_engine());
+        assert!(!wb.should_write_opt());
         wb.put(b"aaa", b"bbb").unwrap();
-        assert!(wb.should_write_to_engine());
+        assert!(wb.should_write_opt());
         let mut wb = RocksWriteBatchVec::with_capacity(&engine, 1024);
         for _i in 0..WRITE_BATCH_MAX_BATCH * WRITE_BATCH_LIMIT {
             wb.put(b"aaa", b"bbb").unwrap();
         }
-        assert!(!wb.should_write_to_engine());
+        assert!(!wb.should_write_opt());
         wb.put(b"aaa", b"bbb").unwrap();
-        assert!(wb.should_write_to_engine());
+        assert!(wb.should_write_opt());
         wb.clear();
-        assert!(!wb.should_write_to_engine());
+        assert!(!wb.should_write_opt());
     }
 }

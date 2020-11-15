@@ -28,7 +28,7 @@ impl WriteBatch<PanicEngine> for PanicWriteBatch {
         panic!()
     }
 
-    fn write_to_engine(&self, _: &PanicEngine, _: &WriteOptions) -> Result<()> {
+    fn write_opt(&self, _: &PanicEngine, _: &WriteOptions) -> Result<()> {
         panic!()
     }
 }
@@ -43,7 +43,7 @@ impl Mutable for PanicWriteBatch {
     fn is_empty(&self) -> bool {
         panic!()
     }
-    fn should_write_to_engine(&self) -> bool {
+    fn should_write_opt(&self) -> bool {
         panic!()
     }
 

@@ -763,7 +763,7 @@ where
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        kv_wb.write_to_engine(&ctx.engines.kv, &write_opts)?;
+        kv_wb.write_opt(&ctx.engines.kv, &write_opts)?;
         ctx.engines.raft.consume(&mut raft_wb, true)?;
 
         if self.get_store().is_initialized() && !keep_data {
