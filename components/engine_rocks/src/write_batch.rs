@@ -18,28 +18,13 @@ impl WriteBatchExt for RocksEngine {
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        debug_assert_eq!(
-            wb.get_db().path(),
-            self.as_inner().path(),
-            "mismatched db path"
-        );
-        let opt: RocksWriteOptions = opts.into();
-        self.as_inner()
-            .write_opt(wb.as_inner(), &opt.into_raw())
-            .map_err(Error::Engine)
+        use engine_traits::WriteBatch;
+        wb.write_to_engine(self, opts)
     }
 
     fn write_vec_opt(&self, wb: &RocksWriteBatchVec, opts: &WriteOptions) -> Result<()> {
-        let opt: RocksWriteOptions = opts.into();
-        if wb.index > 0 {
-            self.as_inner()
-                .multi_batch_write(wb.as_inner(), &opt.into_raw())
-                .map_err(Error::Engine)
-        } else {
-            self.as_inner()
-                .write_opt(&wb.wbs[0], &opt.into_raw())
-                .map_err(Error::Engine)
-        }
+        use engine_traits::WriteBatch;
+        wb.write_to_engine(self, opts)
     }
 
     fn support_write_batch_vec(&self) -> bool {
@@ -97,7 +82,15 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
     }
 
     fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
-        e.write_opt(self, opts)
+        debug_assert_eq!(
+            self.get_db().path(),
+            e.as_inner().path(),
+            "mismatched db path"
+        );
+        let opt: RocksWriteOptions = opts.into();
+        e.as_inner()
+            .write_opt(self.as_inner(), &opt.into_raw())
+            .map_err(Error::Engine)
     }
 }
 
@@ -220,7 +213,21 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
     }
 
     fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
-        e.write_vec_opt(self, opts)
+        debug_assert_eq!(
+            self.get_db().path(),
+            e.as_inner().path(),
+            "mismatched db path"
+        );
+        let opt: RocksWriteOptions = opts.into();
+        if self.index > 0 {
+            e.as_inner()
+                .multi_batch_write(self.as_inner(), &opt.into_raw())
+                .map_err(Error::Engine)
+        } else {
+            e.as_inner()
+                .write_opt(&self.wbs[0], &opt.into_raw())
+                .map_err(Error::Engine)
+        }
     }
 }
 
