@@ -267,7 +267,7 @@ pub fn write_modifies(kv_engine: &BaseRocksEngine, modifies: Vec<Modify>) -> Res
             return Err(box_err!("{}", msg));
         }
     }
-    wb.write(&kv_engine)?;
+    wb.write()?;
     Ok(())
 }
 

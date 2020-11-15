@@ -89,12 +89,12 @@ impl RocksEngine {
             for key in data.iter() {
                 wb.delete_cf(cf, key)?;
                 if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                    wb.write(self)?;
+                    wb.write()?;
                     wb.clear();
                 }
             }
             if wb.count() > 0 {
-                wb.write(self)?;
+                wb.write()?;
             }
         }
         Ok(())
@@ -115,13 +115,13 @@ impl RocksEngine {
         while it_valid {
             wb.delete_cf(cf, it.key())?;
             if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                wb.write(self)?;
+                wb.write()?;
                 wb.clear();
             }
             it_valid = it.next()?;
         }
         if wb.count() > 0 {
-            wb.write(self)?;
+            wb.write()?;
         }
         self.sync_wal()?;
         Ok(())
@@ -178,7 +178,7 @@ impl MiscExt for RocksEngine {
                 for r in ranges.iter() {
                     wb.delete_range_cf(cf, r.start_key, r.end_key)?;
                 }
-                wb.write(self)?;
+                wb.write()?;
             }
             DeleteStrategy::DeleteByKey => {
                 for r in ranges {
@@ -395,7 +395,7 @@ mod tests {
                 wb.put_cf(cf, k, v).unwrap();
             }
         }
-        wb.write(&db).unwrap();
+        wb.write().unwrap();
         check_data(&db, ALL_CFS, kvs.as_slice());
 
         // Delete all in ranges.
@@ -586,7 +586,7 @@ mod tests {
         for &(k, v) in kvs.as_slice() {
             wb.put_cf(cf, k, v).unwrap();
         }
-        wb.write(&db).unwrap();
+        wb.write().unwrap();
         check_data(&db, &[cf], kvs.as_slice());
 
         // Delete all in ["k2", "k4").

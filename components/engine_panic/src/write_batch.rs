@@ -28,7 +28,7 @@ impl WriteBatch<PanicEngine> for PanicWriteBatch {
         panic!()
     }
 
-    fn write_opt(&self, _: &PanicEngine, _: &WriteOptions) -> Result<()> {
+    fn write_opt(&self, _: &WriteOptions) -> Result<()> {
         panic!()
     }
 }

@@ -469,7 +469,7 @@ where
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
             self.kv_wb()
-                .write_opt(&self.engine, &write_opts)
+                .write_opt(&write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });

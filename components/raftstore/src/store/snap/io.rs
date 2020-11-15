@@ -158,9 +158,9 @@ where
 
     let mut wb = db.write_batch();
     let mut write_to_db =
-        |db: &E, batch: &mut Vec<(Vec<u8>, Vec<u8>)>| -> Result<(), EngineError> {
+        |batch: &mut Vec<(Vec<u8>, Vec<u8>)>| -> Result<(), EngineError> {
             batch.iter().try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))?;
-            wb.write(&db)?;
+            wb.write()?;
             wb.clear();
             callback(batch);
             batch.clear();
@@ -178,7 +178,7 @@ where
         let key = box_try!(decoder.decode_compact_bytes());
         if key.is_empty() {
             if !batch.is_empty() {
-                box_try!(write_to_db(db, &mut batch));
+                box_try!(write_to_db(&mut batch));
             }
             return Ok(());
         }
@@ -186,7 +186,7 @@ where
         batch_data_size += key.len() + value.len();
         batch.push((key, value));
         if batch_data_size >= batch_size {
-            box_try!(write_to_db(db, &mut batch));
+            box_try!(write_to_db(&mut batch));
             batch_data_size = 0;
         }
     }

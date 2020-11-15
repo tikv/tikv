@@ -1071,7 +1071,7 @@ impl<T: Simulator> Cluster<T> {
             Ok(true)
         })
             .unwrap();
-        kv_wb.write(&self.engines[&store_id].kv).unwrap();
+        kv_wb.write().unwrap();
     }
 
     pub fn restore_raft(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
@@ -1092,7 +1092,7 @@ impl<T: Simulator> Cluster<T> {
             Ok(true)
         })
         .unwrap();
-        raft_wb.write(&self.engines[&store_id].raft).unwrap();
+        raft_wb.write().unwrap();
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {

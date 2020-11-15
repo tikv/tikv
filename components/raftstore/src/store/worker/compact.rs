@@ -278,7 +278,7 @@ mod tests {
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        wb.write(&db).unwrap();
+        wb.write().unwrap();
         db.flush_cf(CF_DEFAULT, true).unwrap();
 
         // Generate another SST file has the same content with first SST file.
@@ -288,7 +288,7 @@ mod tests {
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        wb.write(&db).unwrap();
+        wb.write().unwrap();
         db.flush_cf(CF_DEFAULT, true).unwrap();
 
         // Get the total SST files size.

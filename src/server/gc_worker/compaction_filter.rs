@@ -269,7 +269,7 @@ impl WriteCompactionFilter {
 
     fn flush_pending_writes_if_need(&mut self) {
         if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT {
-            self.write_batch.write(&self.engine).unwrap();
+            self.write_batch.write().unwrap();
             self.write_batch.clear();
         }
     }
@@ -331,7 +331,7 @@ thread_local! {
 impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
         if !self.write_batch.is_empty() {
-            self.write_batch.write(&self.engine).unwrap();
+            self.write_batch.write().unwrap();
             self.write_batch.clear();
         }
         self.engine.sync_wal().unwrap();

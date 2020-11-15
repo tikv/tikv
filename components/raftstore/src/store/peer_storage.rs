@@ -1724,8 +1724,8 @@ mod tests {
         ctx.apply_state
             .set_applied_index(ents.last().unwrap().get_index());
         ctx.save_apply_state_to(&mut kv_wb).unwrap();
-        ready_ctx.raft_wb.write(&store.engines.raft).unwrap();
-        kv_wb.write(&store.engines.kv).unwrap();
+        ready_ctx.raft_wb.write().unwrap();
+        kv_wb.write().unwrap();
         store.raft_state = ctx.raft_state;
         store.apply_state = ctx.apply_state;
         store
@@ -1736,7 +1736,7 @@ mod tests {
         let mut ready_ctx = ReadyContext::new(store);
         store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
-        ready_ctx.raft_wb.write(&store.engines.raft).unwrap();
+        ready_ctx.raft_wb.write().unwrap();
         store.raft_state = ctx.raft_state;
     }
 
@@ -1838,8 +1838,8 @@ mod tests {
         let mut kv_wb = store.engines.kv.write_batch();
         let mut raft_wb = store.engines.raft.write_batch();
         store.clear_meta(&mut kv_wb, &mut raft_wb).unwrap();
-        kv_wb.write(&store.engines.kv).unwrap();
-        raft_wb.write(&store.engines.raft).unwrap();
+        kv_wb.write().unwrap();
+        raft_wb.write().unwrap();
 
         assert_eq!(0, get_meta_key_count(&store));
     }
@@ -1945,7 +1945,7 @@ mod tests {
             if res.is_ok() {
                 let mut kv_wb = store.engines.kv.write_batch();
                 ctx.save_apply_state_to(&mut kv_wb).unwrap();
-                kv_wb.write(&store.engines.kv).unwrap();
+                kv_wb.write().unwrap();
             }
         }
     }
@@ -2054,8 +2054,8 @@ mod tests {
         ctx.apply_state.set_applied_index(7);
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
         ctx.save_apply_state_to(&mut kv_wb).unwrap();
-        kv_wb.write(&s.engines.kv).unwrap();
-        ready_ctx.raft_wb.write(&s.engines.raft).unwrap();
+        kv_wb.write().unwrap();
+        ready_ctx.raft_wb.write().unwrap();
         s.apply_state = ctx.apply_state;
         s.raft_state = ctx.raft_state;
         ctx = InvokeContext::new(&s);
@@ -2063,7 +2063,7 @@ mod tests {
         compact_raft_log(&s.tag, &mut ctx.apply_state, 7, term).unwrap();
         kv_wb = s.engines.kv.write_batch();
         ctx.save_apply_state_to(&mut kv_wb).unwrap();
-        kv_wb.write(&s.engines.kv).unwrap();
+        kv_wb.write().unwrap();
         s.apply_state = ctx.apply_state;
 
         let (tx, rx) = channel();

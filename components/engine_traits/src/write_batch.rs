@@ -46,8 +46,8 @@ pub trait Mutable: Send {
 
 pub trait WriteBatch<E: WriteBatchExt + Sized>: Mutable {
     fn with_capacity(e: &E, cap: usize) -> Self;
-    fn write_opt(&self, e: &E, opts: &WriteOptions) -> Result<()>;
-    fn write(&self, e: &E) -> Result<()> {
-        self.write_opt(e, &WriteOptions::default())
+    fn write_opt(&self, opts: &WriteOptions) -> Result<()>;
+    fn write(&self) -> Result<()> {
+        self.write_opt(&WriteOptions::default())
     }
 }

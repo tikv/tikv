@@ -71,14 +71,9 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
         e.write_batch_with_cap(cap)
     }
 
-    fn write_opt(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
-        debug_assert_eq!(
-            self.get_db().path(),
-            e.as_inner().path(),
-            "mismatched db path"
-        );
+    fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
         let opt: RocksWriteOptions = opts.into();
-        e.as_inner()
+        self.get_db()
             .write_opt(self.as_inner(), &opt.into_raw())
             .map_err(Error::Engine)
     }
@@ -202,19 +197,14 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
         RocksWriteBatchVec::new(e.as_inner().clone(), WRITE_BATCH_LIMIT, cap)
     }
 
-    fn write_opt(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
-        debug_assert_eq!(
-            self.get_db().path(),
-            e.as_inner().path(),
-            "mismatched db path"
-        );
+    fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
         let opt: RocksWriteOptions = opts.into();
         if self.index > 0 {
-            e.as_inner()
+            self.get_db()
                 .multi_batch_write(self.as_inner(), &opt.into_raw())
                 .map_err(Error::Engine)
         } else {
-            e.as_inner()
+            self.get_db()
                 .write_opt(&self.wbs[0], &opt.into_raw())
                 .map_err(Error::Engine)
         }
