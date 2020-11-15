@@ -20,3 +20,11 @@ impl Default for Config {
         }
     }
 }
+
+impl Config {
+    pub fn new(max_batch_size: usize) -> Self {
+        let mut cfg = Self::default();
+        cfg.max_batch_size = max_batch_size;
+        cfg
+    }
+}
