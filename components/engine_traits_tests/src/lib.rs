@@ -944,6 +944,91 @@ mod read_consistency {
     }
 }
 
+mod write_batch {
+    use super::{default_engine};
+    use engine_traits::{Mutable, Peekable, WriteBatchExt, SyncMutable, WriteBatch};
+
+    #[test]
+    fn write_batch_put() {
+        let db = default_engine();
+
+        let mut wb = db.engine.write_batch();
+
+        wb.put(b"a", b"aa").unwrap();
+
+        wb.write().unwrap();
+
+        assert_eq!(db.engine.get_value(b"a").unwrap().unwrap(), b"aa");
+    }
+
+    #[test]
+    fn write_batch_delete() {
+        let db = default_engine();
+
+        db.engine.put(b"a", b"aa").unwrap();
+
+        let mut wb = db.engine.write_batch();
+
+        wb.delete(b"a").unwrap();
+
+        wb.write().unwrap();
+
+        assert!(db.engine.get_value(b"a").unwrap().is_none());
+    }
+
+    #[ignore]
+    #[test]
+    fn write_batch_write_twice_1() {
+        let db = default_engine();
+
+        let mut wb = db.engine.write_batch();
+
+        wb.put(b"a", b"aa").unwrap();
+
+        wb.write().unwrap();
+        wb.write().unwrap();
+
+        assert_eq!(db.engine.get_value(b"a").unwrap().unwrap(), b"aa");
+    }
+
+    #[ignore]
+    #[test]
+    fn write_batch_write_twice_2() {
+        let db = default_engine();
+
+        let mut wb = db.engine.write_batch();
+
+        wb.put(b"a", b"aa").unwrap();
+
+        wb.write().unwrap();
+
+        db.engine.put(b"a", b"b").unwrap();
+        assert_eq!(db.engine.get_value(b"a").unwrap().unwrap(), b"b");
+
+        wb.write().unwrap();
+
+        assert_eq!(db.engine.get_value(b"a").unwrap().unwrap(), b"aa");
+    }
+
+    #[ignore]
+    #[test]
+    fn write_batch_write_twice_3() {
+        let db = default_engine();
+
+        let mut wb = db.engine.write_batch();
+
+        wb.put(b"a", b"aa").unwrap();
+
+        wb.write().unwrap();
+        db.engine.put(b"a", b"b").unwrap();
+        wb.put(b"b", b"bb").unwrap();
+        wb.write().unwrap();
+
+        assert_eq!(db.engine.get_value(b"a").unwrap().unwrap(), b"aa");
+        assert_eq!(db.engine.get_value(b"b").unwrap().unwrap(), b"bb");
+    }
+}
+
 mod misc {
     use super::{default_engine};
     use engine_traits::{KvEngine, SyncMutable, Peekable};
