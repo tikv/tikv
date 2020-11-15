@@ -3,7 +3,7 @@ use crate::{RocksEngine, RocksWriteBatch};
 use engine_traits::{Error, RaftEngine, RaftLogBatch, Result};
 use engine_traits::{
     Iterable, KvEngine, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt, WriteOptions,
-    CF_DEFAULT,
+    CF_DEFAULT, WriteBatch,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
@@ -111,7 +111,7 @@ impl RaftEngine for RocksEngine {
         let bytes = batch.data_size();
         let mut opts = WriteOptions::default();
         opts.set_sync(sync_log);
-        self.write_opt(batch, &opts)?;
+        batch.write_to_engine(self, &opts)?;
         batch.clear();
         Ok(bytes)
     }

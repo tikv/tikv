@@ -12,7 +12,7 @@ use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
     RangePropertiesExt, SeekKey, TableProperties, TablePropertiesCollection, TablePropertiesExt,
-    WriteOptions,
+    WriteOptions, WriteBatch,
 };
 use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
@@ -343,7 +343,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         if errors.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            box_try!(db.write_opt(&wb, &write_opts));
+            box_try!(wb.write_to_engine(&db, &write_opts));
         }
         Ok(errors)
     }
@@ -377,7 +377,7 @@ impl<ER: RaftEngine> Debugger<ER> {
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        db.write_opt(&wb, &write_opts).unwrap();
+        wb.write_to_engine(&db, &write_opts).unwrap();
         Ok(errors)
     }
 
@@ -618,7 +618,7 @@ impl<ER: RaftEngine> Debugger<ER> {
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(self.engines.kv.write_opt(&wb, &write_opts));
+        box_try!(wb.write_to_engine(&self.engines.kv, &write_opts));
         Ok(())
     }
 
@@ -693,7 +693,7 @@ impl<ER: RaftEngine> Debugger<ER> {
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(self.engines.kv.write_opt(&kv_wb, &write_opts));
+        box_try!(kv_wb.write_to_engine(&self.engines.kv, &write_opts));
         box_try!(self.engines.raft.consume(&mut raft_wb, true));
         Ok(())
     }
@@ -844,7 +844,7 @@ fn recover_mvcc_for_range(
         if !read_only {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            box_try!(db.c().write_opt(&wb, &write_opts));
+            box_try!(wb.write_to_engine(db.c(), &write_opts));
         } else {
             v1!("thread {}: skip write {} rows", thread_index, batch_size);
         }
@@ -1700,8 +1700,8 @@ mod tests {
             mock_region_state(&mut wb2, 13, &[]);
         }
 
-        raft_engine.write_opt(&wb1, &WriteOptions::new()).unwrap();
-        kv_engine.write_opt(&wb2, &WriteOptions::new()).unwrap();
+        wb1.write_to_engine(&raft_engine, &WriteOptions::new()).unwrap();
+        wb2.write_to_engine(&kv_engine, &WriteOptions::new()).unwrap();
 
         let bad_regions = debugger.bad_regions().unwrap();
         assert_eq!(bad_regions.len(), 4);

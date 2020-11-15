@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteOptions};
+use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteOptions, WriteBatch};
 use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
@@ -763,7 +763,7 @@ where
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
+        kv_wb.write_to_engine(&ctx.engines.kv, &write_opts)?;
         ctx.engines.raft.consume(&mut raft_wb, true)?;
 
         if self.get_store().is_initialized() && !keep_data {

@@ -11,11 +11,10 @@ pub trait WriteBatchExt: Sized {
 
     const WRITE_BATCH_MAX_KEYS: usize;
 
-    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()>;
     fn write_vec_opt(&self, wb: &Self::WriteBatchVec, opts: &WriteOptions) -> Result<()>;
     fn support_write_batch_vec(&self) -> bool;
     fn write(&self, wb: &Self::WriteBatch) -> Result<()> {
-        self.write_opt(wb, &WriteOptions::default())
+        wb.write_to_engine(self, &WriteOptions::default())
     }
     fn write_batch(&self) -> Self::WriteBatch;
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch;
