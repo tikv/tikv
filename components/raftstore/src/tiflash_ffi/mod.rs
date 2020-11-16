@@ -6,6 +6,7 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use kvproto::{kvrpcpb, metapb, raft_cmdpb};
+use protobuf::Message;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
@@ -56,6 +57,12 @@ impl TiFlashRaftProxy {
 
 type TiFlashRaftProxyPtr = *const TiFlashRaftProxy;
 
+#[repr(C)]
+pub struct CppStrVecView {
+    view: *const BaseBuffView,
+    len: u64,
+}
+
 #[no_mangle]
 pub extern "C" fn ffi_handle_get_proxy_status(proxy_ptr: TiFlashRaftProxyPtr) -> u8 {
     unsafe { (*proxy_ptr).status.load(Ordering::SeqCst) }
@@ -77,18 +84,30 @@ pub extern "C" fn ffi_encryption_method(proxy_ptr: TiFlashRaftProxyPtr) -> u8 {
 }
 
 #[no_mangle]
-pub extern "C" fn ffi_read_index(
+pub extern "C" fn ffi_batch_read_index(
     proxy_ptr: TiFlashRaftProxyPtr,
-    req_str: BaseBuffView,
-) -> TiFlashRawString {
-    use protobuf::Message;
-
+    view: CppStrVecView,
+) -> *const u8 {
     unsafe {
-        let mut req = kvrpcpb::ReadIndexRequest::default();
-        req.merge_from_bytes(req_str.to_slice()).unwrap();
-        let resp = (*proxy_ptr).read_index_client.read_index(req);
-        get_tiflash_server_helper()
-            .gen_cpp_string(ProtoMsgBaseBuff::new(&resp).buff_view.to_slice())
+        let mut req_vec = Vec::with_capacity(view.len as usize);
+        for i in 0..view.len as usize {
+            let mut req = kvrpcpb::ReadIndexRequest::default();
+            let p = &*view.view.offset(i as isize);
+            req.merge_from_bytes(p.to_slice()).unwrap();
+            req_vec.push(req);
+        }
+        let resp = (*proxy_ptr).read_index_client.batch_read_index(req_vec);
+        let mut resp_str = Vec::with_capacity(resp.len());
+        let res = get_tiflash_server_helper().gen_batch_read_index_res(resp.len() as u64);
+        for (r, region_id) in &resp {
+            resp_str.push(ProtoMsgBaseBuff::new(r));
+            get_tiflash_server_helper().insert_batch_read_index_resp(
+                res,
+                resp_str.last().unwrap().buff_view.to_slice(),
+                *region_id,
+            );
+        }
+        res
     }
 }
 
@@ -287,7 +306,7 @@ pub struct TiFlashRaftProxyHelper {
         extern "C" fn(TiFlashRaftProxyPtr, BaseBuffView, BaseBuffView) -> FileEncryptionInfoRes,
     handle_rename_file:
         extern "C" fn(TiFlashRaftProxyPtr, BaseBuffView, BaseBuffView) -> FileEncryptionInfoRes,
-    handle_read_index: extern "C" fn(TiFlashRaftProxyPtr, BaseBuffView) -> TiFlashRawString,
+    handle_batch_read_index: extern "C" fn(TiFlashRaftProxyPtr, CppStrVecView) -> *const u8,
 }
 
 impl TiFlashRaftProxyHelper {
@@ -302,7 +321,7 @@ impl TiFlashRaftProxyHelper {
             handle_delete_file: ffi_handle_delete_file,
             handle_link_file: ffi_handle_link_file,
             handle_rename_file: ffi_handle_rename_file,
-            handle_read_index: ffi_read_index,
+            handle_batch_read_index: ffi_batch_read_index,
         }
     }
 }
@@ -639,6 +658,8 @@ pub struct TiFlashServerHelper {
     apply_pre_handled_snapshot: extern "C" fn(TiFlashServerPtr, *const u8, u32),
     handle_get_table_sync_status: extern "C" fn(TiFlashServerPtr, u64) -> CppStrWithView,
     gc_raw_cpp_ptr: extern "C" fn(TiFlashServerPtr, *const u8, u32),
+    gen_batch_read_index_res: extern "C" fn(cap: u64) -> *const u8,
+    insert_batch_read_index_resp: extern "C" fn(*const u8, BaseBuffView, u64),
 }
 
 unsafe impl Send for TiFlashServerHelper {}
@@ -700,7 +721,7 @@ impl TiFlashServerHelper {
     pub fn check(&self) {
         assert_eq!(std::mem::align_of::<Self>(), std::mem::align_of::<u64>());
         const MAGIC_NUMBER: u32 = 0x13579BDF;
-        const VERSION: u32 = 401000;
+        const VERSION: u32 = 401002;
 
         if self.magic_number != MAGIC_NUMBER {
             eprintln!(
@@ -777,5 +798,13 @@ impl TiFlashServerHelper {
             len: buff.len() as u64,
         })
         .into_raw()
+    }
+
+    fn gen_batch_read_index_res(&self, cap: u64) -> *const u8 {
+        (self.gen_batch_read_index_res)(cap)
+    }
+
+    fn insert_batch_read_index_resp(&self, data: *const u8, buf: &[u8], region_id: u64) {
+        (self.insert_batch_read_index_resp)(data, buf.into(), region_id)
     }
 }
