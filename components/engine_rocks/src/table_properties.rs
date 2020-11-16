@@ -9,7 +9,7 @@ use engine_traits::{
     TableProperties, TablePropertiesCollectionIter, TablePropertiesKey, UserCollectedProperties,
 };
 use engine_traits::{TablePropertiesCollection, TablePropertiesExt};
-use rocksdb::table_properties_rc as raw;
+use rocksdb::table_properties_rc as rc;
 use std::ops::Deref;
 
 impl TablePropertiesExt for RocksEngine {
@@ -35,10 +35,10 @@ impl TablePropertiesExt for RocksEngine {
     }
 }
 
-pub struct RocksTablePropertiesCollection(raw::TablePropertiesCollection);
+pub struct RocksTablePropertiesCollection(rc::TablePropertiesCollection);
 
 impl RocksTablePropertiesCollection {
-    fn from_raw(raw: raw::TablePropertiesCollection) -> RocksTablePropertiesCollection {
+    fn from_raw(raw: rc::TablePropertiesCollection) -> RocksTablePropertiesCollection {
         RocksTablePropertiesCollection(raw)
     }
 }
@@ -60,7 +60,7 @@ impl
     }
 }
 
-pub struct RocksTablePropertiesCollectionIter(raw::TablePropertiesCollectionIter);
+pub struct RocksTablePropertiesCollectionIter(rc::TablePropertiesCollectionIter);
 
 impl
     TablePropertiesCollectionIter<
@@ -81,7 +81,7 @@ impl Iterator for RocksTablePropertiesCollectionIter {
     }
 }
 
-pub struct RocksTablePropertiesKey(raw::TablePropertiesKey);
+pub struct RocksTablePropertiesKey(rc::TablePropertiesKey);
 
 impl TablePropertiesKey for RocksTablePropertiesKey {}
 
@@ -93,7 +93,7 @@ impl Deref for RocksTablePropertiesKey {
     }
 }
 
-pub struct RocksTableProperties(raw::TableProperties);
+pub struct RocksTableProperties(rc::TableProperties);
 
 impl TableProperties<RocksUserCollectedProperties> for RocksTableProperties {
     fn num_entries(&self) -> u64 {
@@ -106,7 +106,7 @@ impl TableProperties<RocksUserCollectedProperties> for RocksTableProperties {
 }
 
 #[repr(transparent)]
-pub struct RocksUserCollectedProperties(raw::UserCollectedProperties);
+pub struct RocksUserCollectedProperties(rc::UserCollectedProperties);
 
 impl UserCollectedProperties for RocksUserCollectedProperties {
     fn get(&self, index: &[u8]) -> Option<&[u8]> {
