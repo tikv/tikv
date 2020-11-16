@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
 use test_raftstore::*;
 use test_util;
 
@@ -54,13 +53,8 @@ fn test_server_partition_write() {
 fn test_secure_connect() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.security = test_util::new_security_cfg(None);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-    let r1 = cluster.run_conf_change();
-
-    pd_client.must_add_peer(r1, new_peer(2, 2));
-    pd_client.must_add_peer(r1, new_learner_peer(3, 3));
-    pd_client.must_add_peer(r1, new_peer(3, 3));
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
 
     let (key, value) = (b"k1", b"v1");
     cluster.must_put(key, value);
