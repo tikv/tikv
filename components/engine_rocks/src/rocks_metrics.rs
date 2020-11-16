@@ -972,6 +972,18 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
             }
         }
 
+        if let Some(v) = crate::util::get_limiter_ratio_base(engine, handle) {
+            STORE_ENGINE_LIMITER_RATIO_BASE_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
+
+        if let Some(v) = crate::util::get_limiter_ratio_delta(engine, handle) {
+            STORE_ENGINE_LIMITER_RATIO_DELTA_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
+
         // Num immutable mem-table
         if let Some(v) = crate::util::get_num_immutable_mem_table(engine, handle) {
             STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC
@@ -1172,6 +1184,16 @@ lazy_static! {
         "tikv_engine_titandb_blob_file_discardable_ratio",
         "Size of obsolete blob file",
         &["db", "cf", "ratio"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_LIMITER_RATIO_BASE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_limiter_ratio_base",
+        "Limiter ratio base",
+        &["db", "cf"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_LIMITER_RATIO_DELTA_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_limiter_ratio_delta",
+        "Limiter ratio delta",
+        &["db", "cf"]
     ).unwrap();
 }
 

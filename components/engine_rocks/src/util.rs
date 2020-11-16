@@ -155,6 +155,14 @@ pub fn get_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64
     engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)
 }
 
+pub fn get_limiter_ratio_base(engine: &DB, handle: &CFHandle) -> Option<u64> {
+    engine.get_property_int_cf(handle, ROCKSDB_LIMITER_RATIO_BASE)
+}
+
+pub fn get_limiter_ratio_delta(engine: &DB, handle: &CFHandle) -> Option<u64> {
+    engine.get_property_int_cf(handle, ROCKSDB_LIMITER_RATIO_DELTA)
+}
+
 pub struct FixedSuffixSliceTransform {
     pub suffix_len: usize,
 }
