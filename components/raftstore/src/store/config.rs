@@ -254,7 +254,7 @@ impl Default for Config {
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
-            store_batch_system: BatchSystemConfig::new(1024),
+            store_batch_system: BatchSystemConfig::default(),
             future_poll_size: 1,
             hibernate_regions: true,
             hibernate_timeout: ReadableDuration::minutes(10),
