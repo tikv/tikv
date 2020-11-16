@@ -8,6 +8,7 @@ use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
+use raft::eraftpb;
 
 use super::*;
 use crate::store::CasualRouter;
@@ -145,6 +146,11 @@ impl_box_observer!(
     RegionChangeObserver,
     WrappedRegionChangeObserver
 );
+impl_box_observer!(
+    BoxReadIndexObserver,
+    ReadIndexObserver,
+    WrappedReadIndexObserver
+);
 impl_box_observer_g!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
 impl_box_observer_g!(
     BoxConsistencyCheckObserver,
@@ -166,6 +172,7 @@ where
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver<E>>>,
+    read_index_observers: Vec<Entry<BoxReadIndexObserver>>,
     // TODO: add endpoint
 }
 
@@ -180,6 +187,7 @@ impl<E: KvEngine> Default for Registry<E> {
             role_observers: Default::default(),
             region_change_observers: Default::default(),
             cmd_observers: Default::default(),
+            read_index_observers: Default::default(),
         }
     }
 }
@@ -236,6 +244,10 @@ impl<E: KvEngine> Registry<E> {
 
     pub fn register_cmd_observer(&mut self, priority: u32, rlo: BoxCmdObserver<E>) {
         push!(priority, rlo, self.cmd_observers);
+    }
+
+    pub fn register_read_index_observer(&mut self, priority: u32, rio: BoxReadIndexObserver) {
+        push!(priority, rio, self.read_index_observers);
     }
 }
 
@@ -530,6 +542,12 @@ impl<E: KvEngine> CoprocessorHost<E> {
             .observer
             .inner()
             .on_flush_apply(engine)
+    }
+
+    pub fn on_step_read_index(&self, msg: &mut eraftpb::Message) {
+        for step_ob in &self.registry.read_index_observers {
+            step_ob.observer.inner().on_step(msg);
+        }
     }
 
     pub fn shutdown(&self) {

@@ -12,7 +12,7 @@ use futures::future::{self, FutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{StreamExt, TryStreamExt};
 
-use grpcio::{CallOption, EnvBuilder, Result as GrpcResult, WriteFlags};
+use grpcio::{CallOption, EnvBuilder, Environment, Result as GrpcResult, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
@@ -36,13 +36,19 @@ pub struct RpcClient {
 }
 
 impl RpcClient {
-    pub fn new(cfg: &Config, security_mgr: Arc<SecurityManager>) -> Result<RpcClient> {
-        let env = Arc::new(
-            EnvBuilder::new()
-                .cq_count(CQ_COUNT)
-                .name_prefix(thd_name!(CLIENT_PREFIX))
-                .build(),
-        );
+    pub fn new(
+        cfg: &Config,
+        shared_env: Option<Arc<Environment>>,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Result<RpcClient> {
+        let env = shared_env.unwrap_or_else(|| {
+            Arc::new(
+                EnvBuilder::new()
+                    .cq_count(CQ_COUNT)
+                    .name_prefix(thd_name!(CLIENT_PREFIX))
+                    .build(),
+            )
+        });
 
         // -1 means the max.
         let retries = match cfg.retry_max_count {

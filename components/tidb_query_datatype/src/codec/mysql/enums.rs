@@ -1,13 +1,30 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::cmp::Ordering;
+use std::sync::Arc;
 use tikv_util::buffer_vec::BufferVec;
 
 #[derive(Clone, Debug)]
 pub struct Enum {
-    // TODO: Optimize me using Arc or others to prevent deep clone
-    data: BufferVec,
+    data: Arc<BufferVec>,
 
     // MySQL Enum is 1-based index, value == 0 means this enum is ''
     value: usize,
+}
+
+impl Enum {
+    pub fn new(data: Arc<BufferVec>, value: usize) -> Self {
+        Self { data, value }
+    }
+    pub fn value(&self) -> usize {
+        self.value
+    }
+    pub fn as_ref(&self) -> EnumRef<'_> {
+        EnumRef {
+            data: &self.data,
+            value: self.value,
+        }
+    }
 }
 
 impl ToString for Enum {
@@ -59,6 +76,15 @@ pub struct EnumRef<'a> {
     value: usize,
 }
 
+impl<'a> EnumRef<'a> {
+    pub fn new(data: &'a BufferVec, value: usize) -> Self {
+        Self { data, value }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.value == 0
+    }
+}
+
 impl<'a> Eq for EnumRef<'a> {}
 
 impl<'a> PartialEq for EnumRef<'a> {
@@ -88,15 +114,39 @@ mod tests {
         let cases = vec![(vec!["a", "b", "c"], 1, "a"), (vec!["a", "b", "c"], 3, "c")];
 
         for (data, value, expect) in cases {
-            let mut e = Enum {
-                data: BufferVec::new(),
+            let mut buf = BufferVec::new();
+            for v in data {
+                buf.push(v)
+            }
+
+            let e = Enum {
+                data: Arc::new(buf),
                 value,
             };
-            for v in data {
-                e.data.push(v);
-            }
 
             assert_eq!(e.to_string(), expect.to_string())
         }
+    }
+
+    #[test]
+    fn test_is_empty() {
+        let mut buf = BufferVec::new();
+        for v in vec!["a", "b", "c"] {
+            buf.push(v)
+        }
+
+        let s = Enum {
+            data: Arc::new(buf),
+            value: 1,
+        };
+
+        assert!(!s.as_ref().is_empty());
+
+        let s = Enum {
+            data: s.data.clone(),
+            value: 0,
+        };
+
+        assert!(s.as_ref().is_empty());
     }
 }
