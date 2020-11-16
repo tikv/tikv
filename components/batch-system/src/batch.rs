@@ -314,17 +314,16 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
             }
             let mut fsm_cnt = batch.normals.len();
-            while batch.normals.len() < self.max_batch_size {
+            while batch.normals.len() < self.max_batch_size
+                && self.handler.processed_messages() < self.max_batch_size
+            {
                 if let Ok(fsm) = self.fsm_receiver.try_recv() {
                     run = batch.push(fsm);
                 }
                 // If we receive a ControlFsm, break this cycle and call `end`. Because ControlFsm
                 // may change state of the handler, we shall deal with it immediately after
                 // calling `begin` of `Handler`.
-                if !run
-                    || fsm_cnt >= batch.normals.len()
-                    || self.handler.processed_messages() > self.max_batch_size
-                {
+                if !run || fsm_cnt >= batch.normals.len() {
                     break;
                 }
                 let len = self.handler.handle_normal(&mut batch.normals[fsm_cnt]);

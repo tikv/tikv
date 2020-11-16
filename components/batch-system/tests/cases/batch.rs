@@ -20,14 +20,12 @@ fn test_batch() {
     let tx_ = tx.clone();
     let r = router.clone();
     router
-        .send_control(Message::Callback(Box::new(
-            move |_: &mut Runner, _: &HandleMetrics| {
-                let (tx, runner) = Runner::new(10);
-                let mailbox = BasicMailbox::new(tx, runner);
-                r.register(1, mailbox);
-                tx_.send(1).unwrap();
-            },
-        )))
+        .send_control(Message::Callback(Box::new(move |_, _| {
+            let (tx, runner) = Runner::new(10);
+            let mailbox = BasicMailbox::new(tx, runner);
+            r.register(1, mailbox);
+            tx_.send(1).unwrap();
+        })))
         .unwrap();
     assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(1));
     // sleep to wait Batch-System to finish calling end().
@@ -35,7 +33,7 @@ fn test_batch() {
     router
         .send(
             1,
-            Message::Callback(Box::new(move |_: &mut Runner, _: &HandleMetrics| {
+            Message::Callback(Box::new(move |_, _| {
                 tx.send(2).unwrap();
             })),
         )
@@ -64,14 +62,12 @@ fn test_process_count() {
         let r = router.clone();
         let tx_ = tx.clone();
         router
-            .send_control(Message::Callback(Box::new(
-                move |_: &mut Runner, _: &HandleMetrics| {
-                    let (tx, runner) = Runner::new(100);
-                    let mailbox = BasicMailbox::new(tx, runner);
-                    r.register(addr, mailbox);
-                    tx_.send(1).unwrap();
-                },
-            )))
+            .send_control(Message::Callback(Box::new(move |_, _| {
+                let (tx, runner) = Runner::new(100);
+                let mailbox = BasicMailbox::new(tx, runner);
+                r.register(addr, mailbox);
+                tx_.send(1).unwrap();
+            })))
             .unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(1));
     }
@@ -81,12 +77,12 @@ fn test_process_count() {
     router
         .send(
             1,
-            Message::Callback(Box::new(move |_: &mut Runner, _: &HandleMetrics| {
+            Message::Callback(Box::new(move |_, _| {
                 let _ = rx1.recv();
             })),
         )
         .unwrap();
-    for _ in 0..cfg.max_batch_size {
+    for _ in 0..cfg.max_batch_size - 1 {
         router.send(1, Message::Loop(1)).unwrap();
     }
     let (tx2, rx2) = mpsc::unbounded();
@@ -114,27 +110,30 @@ fn test_process_count() {
         .send(
             2,
             Message::Callback(Box::new(move |_: &mut Runner, m: &HandleMetrics| {
-                assert_eq!(max_batch_size, m.processed_count)
+                assert_eq!(max_batch_size - 1, m.processed_count)
             })),
         )
         .unwrap();
 
     router.send(3, Message::Loop(1)).unwrap();
+
     let (tx4, rx4) = mpsc::unbounded();
-    // The 4th region will notify batch-system and make it aware that the processed count has exceed
-    // max_batch_size
+    let (tx5, rx5) = mpsc::unbounded();
+
+    // The 4th region will enter this poll loop. If it is processed in this poll loop, the
+    // batch-system thread will block before executing `end()` so that `Arc<Mutex<HandleMetrics>>`
+    // will not add `processed_count` of local object.
     router
         .send(
             4,
             Message::Callback(Box::new(move |_, _| {
                 tx4.send(()).unwrap();
+                let _ = rx5.recv();
             })),
         )
         .unwrap();
     tx2.send(()).unwrap();
     let _ = rx4.recv();
-    assert_eq!(
-        cfg.max_batch_size + 1,
-        metrics.lock().unwrap().processed_count
-    );
+    assert_eq!(cfg.max_batch_size, metrics.lock().unwrap().processed_count);
+    tx5.send(()).unwrap();
 }
