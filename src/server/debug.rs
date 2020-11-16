@@ -556,64 +556,68 @@ impl<ER: RaftEngine> Debugger<ER> {
         store_ids: Vec<u64>,
         region_ids: Option<Vec<u64>>,
     ) -> Result<()> {
-        let store_id = self.get_store_id()?;
-        if store_ids.iter().any(|&s| s == store_id) {
-            let msg = format!("Store {} in the failed list", store_id);
-            return Err(Error::Other(msg.into()));
-        }
-        let mut wb = self.engines.kv.write_batch();
         let store_ids = HashSet::<u64>::from_iter(store_ids);
 
-        {
-            let remove_stores = |key: &[u8], value: &[u8], kv_wb: &mut RocksWriteBatch| {
-                let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
-                if suffix_type != keys::REGION_STATE_SUFFIX {
-                    return Ok(());
-                }
+        let self_store_id = self.get_store_id()?;
+        if store_ids.iter().any(|&s| s == self_store_id) {
+            let msg = format!("Store {} in the failed list", self_store_id);
+            return Err(Error::Other(msg.into()));
+        }
 
-                let mut region_state = RegionLocalState::default();
-                box_try!(region_state.merge_from_bytes(value));
-                if region_state.get_state() == PeerState::Tombstone {
-                    return Ok(());
-                }
-
-                let mut new_peers = region_state.get_region().get_peers().to_owned();
-                new_peers.retain(|peer| !store_ids.contains(&peer.get_store_id()));
-
-                let region_id = region_state.get_region().get_id();
-                let old_peers = region_state.mut_region().take_peers();
-                info!(
-                    "peers changed";
-                    "region_id" => region_id,
-                    "old_peers" => ?old_peers,
-                    "new_peers" => ?new_peers,
-                );
-                // We need to leave epoch untouched to avoid inconsistency.
-                region_state.mut_region().set_peers(new_peers.into());
-                box_try!(kv_wb.put_msg_cf(CF_RAFT, key, &region_state));
-                Ok(())
-            };
-
-            if let Some(region_ids) = region_ids {
-                let kv = &self.engines.kv;
-                for region_id in region_ids {
-                    let key = keys::region_state_key(region_id);
-                    if let Some(value) = box_try!(kv.get_value_cf(CF_RAFT, &key)) {
-                        box_try!(remove_stores(&key, &value, &mut wb));
-                    } else {
-                        let msg = format!("No such region {} on the store", region_id);
-                        return Err(Error::Other(msg.into()));
-                    }
-                }
-            } else {
-                box_try!(self.engines.kv.scan_cf(
-                    CF_RAFT,
-                    keys::REGION_META_MIN_KEY,
-                    keys::REGION_META_MAX_KEY,
-                    false,
-                    |key, value| remove_stores(key, value, &mut wb).map(|_| true)
-                ));
+        let mut wb = self.engines.kv.write_batch();
+        let remove_stores = |key: &[u8], value: &[u8], kv_wb: &mut RocksWriteBatch| {
+            let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
+            if suffix_type != keys::REGION_STATE_SUFFIX {
+                return Ok(());
             }
+
+            let mut region_state = RegionLocalState::default();
+            box_try!(region_state.merge_from_bytes(value));
+            if region_state.get_state() == PeerState::Tombstone {
+                return Ok(());
+            }
+
+            let mut new_peers = region_state.get_region().get_peers().to_owned();
+            new_peers.retain(|peer| !store_ids.contains(&peer.get_store_id()));
+
+            let region_id = region_state.get_region().get_id();
+            let old_peers = region_state.mut_region().take_peers();
+            info!(
+                "peers changed";
+                "region_id" => region_id,
+                "old_peers" => ?old_peers,
+                "new_peers" => ?new_peers,
+            );
+            // We need to leave epoch untouched to avoid inconsistency.
+            region_state.mut_region().set_peers(new_peers.into());
+            box_try!(kv_wb.put_msg_cf(CF_RAFT, key, &region_state));
+            Ok(())
+        };
+
+        if let Some(region_ids) = region_ids {
+            let kv = &self.engines.kv;
+            for region_id in region_ids {
+                let key = keys::region_state_key(region_id);
+                if let Some(value) = box_try!(kv.get_value_cf(CF_RAFT, &key)) {
+                    box_try!(remove_stores(&key, &value, &mut wb));
+                } else {
+                    let msg = format!("No such region {} on the store", region_id);
+                    return Err(Error::Other(msg.into()));
+                }
+            }
+        } else {
+            box_try!(self.engines.kv.scan_cf(
+                CF_RAFT,
+                keys::REGION_META_MIN_KEY,
+                keys::REGION_META_MAX_KEY,
+                false,
+                |key, value| remove_stores(key, value, &mut wb).map(|_| true)
+            ));
+        }
+
+        for store_id in &store_ids {
+            let key = keys::unsafe_removed_store_key(*store_id);
+            wb.put_cf(CF_RAFT, &key, b"");
         }
 
         let mut write_opts = WriteOptions::new();

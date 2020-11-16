@@ -34,6 +34,7 @@ pub const DATA_MAX_KEY: &[u8] = &[DATA_PREFIX + 1];
 // Following keys are all local keys, so the first byte must be 0x01.
 pub const STORE_IDENT_KEY: &[u8] = &[LOCAL_PREFIX, 0x01];
 pub const PREPARE_BOOTSTRAP_KEY: &[u8] = &[LOCAL_PREFIX, 0x02];
+
 // We save two types region data in DB, for raft and other meta data.
 // When the store starts, we should iterate all region meta data to
 // construct peer, no need to travel large raft data, so we separate them
@@ -42,10 +43,20 @@ pub const REGION_RAFT_PREFIX: u8 = 0x02;
 pub const REGION_RAFT_PREFIX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX];
 pub const REGION_RAFT_MIN_KEY: &[u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX];
 pub const REGION_RAFT_MAX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX + 1];
+
 pub const REGION_META_PREFIX: u8 = 0x03;
 pub const REGION_META_PREFIX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
 pub const REGION_META_MIN_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
 pub const REGION_META_MAX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX + 1];
+
+/// If majority peers of a given region fail, it can't recover with rest minority peers.
+/// So we can use `tikv-ctl unsafe-recover remove-fail-stores` to remove those failed
+/// replicas from the region's configuration. To resolve https://github.com/tikv/tikv/issues/6107,
+/// we store removed store ids in Raft CF.
+pub const UNSAFE_REMOVED_STORES_PREFIX: u8 = 0x04;
+pub const UNSAFE_REMOVED_STORES_PREFIX_KEY: &[u8] = &[LOCAL_PREFIX, UNSAFE_REMOVED_STORES_PREFIX];
+pub const UNSAFE_REMOVED_STORES_MIN_KEY: &[u8] = &[LOCAL_PREFIX, UNSAFE_REMOVED_STORES_PREFIX];
+pub const UNSAFE_REMOVED_STORES_MAX_KEY: &[u8] = &[LOCAL_PREFIX, UNSAFE_REMOVED_STORES_PREFIX + 1];
 
 // Following are the suffix after the local prefix.
 // For region id
@@ -197,6 +208,14 @@ pub fn region_meta_prefix(region_id: u64) -> [u8; 10] {
 
 pub fn region_state_key(region_id: u64) -> [u8; 11] {
     make_region_meta_key(region_id, REGION_STATE_SUFFIX)
+}
+
+/// Get the key for unsafe removed store `store_id`.
+pub fn unsafe_removed_store_key(store_id: u64) -> [u8; 10] {
+    let mut key = [0; 10];
+    key[0..2].copy_from_slice(UNSAFE_REMOVED_STORES_PREFIX_KEY);
+    BigEndian::write_u64(&mut key[2..10], store_id);
+    key
 }
 
 pub fn validate_data_key(key: &[u8]) -> bool {
