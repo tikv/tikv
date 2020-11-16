@@ -21,6 +21,7 @@ pub macro match_template_collator($t:tt, $($tail:tt)*) {
             Utf8Mb4BinNoPadding => CollatorUtf8Mb4BinNoPadding,
             Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
             Utf8Mb4UnicodeCi => CollatorUtf8Mb4UnicodeCi,
+            Latin1BIN => CollatorLatin1Bin,
         ],
         $($tail)*
     }
