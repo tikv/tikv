@@ -1971,4 +1971,53 @@ mod tests {
         assert_eq!(l.min_commit_ts, 75.into());
         assert_eq!(l.rollback_ts, vec![75.into()]);
     }
+
+    #[test]
+    fn test_overlapped_ts_commit_before_rollback() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k1, v1) = (b"key1", b"v1");
+        let (k2, v2) = (b"key2", b"v2");
+        let key2 = k2.to_vec();
+        let secondaries = Some(vec![key2.clone()]);
+
+        // T1, start_ts = 10, commit_ts = 20; write k1, k2
+        must_prewrite_put_async_commit(&engine, k1, v1, k1, &secondaries, 10, 0);
+        must_prewrite_put_async_commit(&engine, k2, v2, k1, &secondaries, 10, 0);
+        must_commit(&engine, k1, 10, 20);
+        must_commit(&engine, k2, 10, 20);
+
+        let w = must_written(&engine, k1, 10, 20, WriteType::Put);
+        assert!(!w.has_overlapped_rollback);
+
+        // T2, start_ts = 20
+        must_acquire_pessimistic_lock(&engine, k2, k2, 20, 25);
+        must_pessimistic_prewrite_put(&engine, k2, v2, k2, 20, 25, true);
+
+        must_cleanup(&engine, k2, 20, 0);
+
+        let w = must_written(&engine, k2, 10, 20, WriteType::Put);
+        assert!(w.has_overlapped_rollback);
+        must_get(&engine, k2, 30, v2);
+    }
+
+    #[test]
+    fn test_overlapped_ts_prewrite_before_rollback() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k1, v1) = (b"key1", b"v1");
+        let (k2, v2) = (b"key2", b"v2");
+        let key2 = k2.to_vec();
+        let secondaries = Some(vec![key2.clone()]);
+
+        // T1, start_ts = 10
+        must_prewrite_put_async_commit(&engine, k1, v1, k1, &secondaries, 10, 0);
+        must_prewrite_put_async_commit(&engine, k2, v2, k1, &secondaries, 10, 0);
+
+        // T2, start_ts = 20
+        must_prewrite_put_err(&engine, k2, v2, k2, 20);
+        must_cleanup(&engine, k2, 20, 0);
+
+        // commit T1
+        must_commit(&engine, k1, 10, 20);
+        must_commit(&engine, k2, 10, 20);
+    }
 }
